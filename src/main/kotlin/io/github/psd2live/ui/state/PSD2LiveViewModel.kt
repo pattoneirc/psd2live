@@ -5710,7 +5710,18 @@ class PSD2LiveViewModel : AutoCloseable {
 		updateState { it.copy(showExportPsdDialog = false) }
 	}
 
-	/** The last export through a neutral target, shown with its loss report in the export dialog. */
+	/** Opens the export dialog of one neutral target (File > Export as). */
+	fun openOtherExport(targetId: String) {
+		if (_state.value.previewModel == null) return
+		_otherExportResult.value = null
+		updateState { it.copy(otherExportTarget = targetId) }
+	}
+
+	fun closeOtherExport() {
+		updateState { it.copy(otherExportTarget = null, focusCanvasRequest = it.focusCanvasRequest + 1) }
+	}
+
+	/** The last export through a neutral target, shown with its loss report in that target's dialog. */
 	private val _otherExportResult = MutableStateFlow<kotlinx.serialization.json.JsonObject?>(null)
 	internal val otherExportResult: StateFlow<kotlinx.serialization.json.JsonObject?> = _otherExportResult.asStateFlow()
 
@@ -5719,6 +5730,31 @@ class PSD2LiveViewModel : AutoCloseable {
 		val preview = _state.value.previewModel ?: return emptyList()
 		return runCatching { io.github.psd2live.core.RigIrCompiler.compile(preview).clips.map { it.id to it.name } }.getOrDefault(emptyList())
 	}
+
+	/** Settings changed in an export-as dialog, by target and key, kept while the app runs; the rest stay at their defaults. */
+	private val otherExportEdits = androidx.compose.runtime.mutableStateMapOf<Pair<String, String>, String>()
+
+	internal fun otherExportSetting(target: io.github.psd2live.format.compile.ExportTarget, key: String): String? =
+		otherExportEdits[target.id to key]
+
+	/** Sets one of [target]'s settings; null restores its default. */
+	internal fun setOtherExportSetting(target: io.github.psd2live.format.compile.ExportTarget, key: String, value: String?) {
+		if (value == null) otherExportEdits.remove(target.id to key) else otherExportEdits[target.id to key] = value
+	}
+
+	/** The settings to send for [target]: only the ones the user changed. */
+	internal fun otherExportSettings(target: io.github.psd2live.format.compile.ExportTarget): Map<String, String> =
+		target.settings.mapNotNull { setting -> otherExportEdits[target.id to setting.key]?.let { setting.key to it } }.toMap()
+
+	/** The neutral targets offered beside the Cubism export. */
+	internal fun otherExportTargets(): List<io.github.psd2live.format.compile.ExportTarget> =
+		io.github.psd2live.core.ExportService.registry(exportConfig()).targets.filter { it.id != "moc3" && it.id != "cmo3" }
+
+	/** What [target]'s settings start from before the user changes them: the project's export settings where it reads them. */
+	internal fun exportTargetDefaults(target: io.github.psd2live.format.compile.ExportTarget): Map<String, String> =
+		io.github.psd2live.core.ExportService.options(target, "model", exportConfig()).settings
+
+	private fun exportConfig(): PipelineConfig = _state.value.previewModel?.config ?: PipelineConfig()
 
 	/** Exports the committed rig through [targetId] into a folder named after the target under the output path. */
 	internal fun exportOtherFormat(targetId: String, settings: Map<String, String>) {

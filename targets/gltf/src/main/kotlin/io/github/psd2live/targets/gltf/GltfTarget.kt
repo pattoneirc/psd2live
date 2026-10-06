@@ -25,6 +25,10 @@ public class GltfTarget(private val evaluator: GeometryEvaluator) : ExportTarget
 	override val family: TargetFamily = TargetFamily.RIG
 	override val description: String = "glTF 2.0 binary with morph targets (.glb)"
 	override val capabilities: CapabilityProfile = CapabilityProfile(parameterGrid = 1, timeline = true)
+	override val settings: List<TargetSetting> = listOf(
+		TargetSetting.CLIPS, TargetSetting.Number("clip_fps", 30.0, 1.0, 120.0, 1.0, 0),
+		TargetSetting.Number("pixels_per_meter", 1000.0, 1.0, 100000.0, 100.0, 0), TargetSetting.SAMPLE_PAIRS,
+	)
 
 	/** Layers stack this far apart, in meters, so depth sorting keeps the draw order. */
 	private val layerGap = 0.0005f

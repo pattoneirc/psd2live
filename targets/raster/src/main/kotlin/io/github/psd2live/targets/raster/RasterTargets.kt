@@ -43,7 +43,7 @@ public class RasterTargets(private val renderer: FrameRenderer) {
 
 	private fun video(format: Video): ExportTarget = target(format.id, format.label, extraLoss = if (format.alpha) null else
 		LossEntry("*", Feature.TEXTURE_SIZE, Handling.APPROXIMATED, note = "${format.id} has no alpha; frames are composited over the background"),
-		opaqueBackground = !format.alpha) { frames, options, clip, fps ->
+		opaqueBackground = !format.alpha, extraSettings = listOf(TargetSetting.Text("ffmpeg", "path to ffmpeg"))) { frames, options, clip, fps ->
 		val bytes = encode(ffmpeg(options), format, frames, fps)
 		val write: (OutputSink) -> Unit = { sink -> sink.write("${options.baseName}.${format.extension}", bytes) }
 		write
@@ -126,12 +126,18 @@ public class RasterTargets(private val renderer: FrameRenderer) {
 
 	private fun target(
 		id: String, description: String, extraLoss: LossEntry? = null, opaqueBackground: Boolean = false,
+		extraSettings: List<TargetSetting> = emptyList(),
 		writer: (List<RasterImage>, ExportOptions, Clip?, Float) -> (OutputSink) -> Unit,
 	): ExportTarget = object : ExportTarget {
 		override val id: String = id
 		override val family: TargetFamily = TargetFamily.RASTER
 		override val description: String = description
 		override val capabilities: CapabilityProfile = CapabilityProfile(structure = false)
+		override val settings: List<TargetSetting> = listOf(
+			TargetSetting.ClipChoice("clip", rest = false), TargetSetting.Number("fps", null, 1.0, 120.0, 1.0, 0),
+			TargetSetting.Number("size", 1024.0, 16.0, 8192.0, 64.0, 0), TargetSetting.Flag("physics", true),
+			TargetSetting.Text("background", "AARRGGBB"),
+		) + extraSettings
 		override fun plan(ir: RigIR, options: ExportOptions): LoweredExport {
 			val clip = options.setting("clip")?.let { wanted -> ir.clips.firstOrNull { it.id == wanted } ?: throw IllegalArgumentException("Unknown clip: $wanted") }
 				?: ir.clips.firstOrNull()

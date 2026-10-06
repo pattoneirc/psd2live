@@ -23,6 +23,10 @@ public class PosedPsdTarget(private val renderer: FrameRenderer) : ExportTarget 
 	override val family: TargetFamily = TargetFamily.TIMELINE
 	override val description: String = "Layered PSD at a pose"
 	override val capabilities: CapabilityProfile = CapabilityProfile(structure = false)
+	override val settings: List<TargetSetting> = listOf(
+		TargetSetting.ClipChoice("clip", rest = true), TargetSetting.Number("time", 0.0, 0.0, 3600.0, 0.1, 2),
+		TargetSetting.Text("pose", "ParamAngleX=20,ParamEyeLOpen=0"), TargetSetting.Number("scale", 1.0, 0.25, 2.0, 0.25, 2),
+	)
 
 	override fun plan(ir: RigIR, options: ExportOptions): LoweredExport {
 		val clip = options.setting("clip")?.let { wanted -> ir.clips.firstOrNull { it.id == wanted } ?: throw IllegalArgumentException("Unknown clip: $wanted") }

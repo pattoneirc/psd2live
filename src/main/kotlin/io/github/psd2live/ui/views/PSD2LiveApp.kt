@@ -318,6 +318,7 @@ fun FrameWindowScope.PSD2LiveApp(
 			state.showProjectLocationDialog ||
 			state.showExportDialog ||
 			state.showExportPsdDialog ||
+			state.otherExportTarget != null ||
 			state.showSettingsDialog ||
 			state.projectSaveError != null ||
 			state.errorMessage != null ||
@@ -526,6 +527,7 @@ fun FrameWindowScope.PSD2LiveApp(
 						onReexportPsd = { if (hasInput && !isBusy) viewModel.openExportPsdDialog() },
 						onOpenOutput = { openFolder(state.outputPath) },
 						onShowExport = { if (hasInput && !isBusy) viewModel.openExportDialog() },
+						onExportAs = { if (hasInput && !isBusy) viewModel.openOtherExport(it) },
 						onClose = onCloseRequest,
 						onSetLanguage = { viewModel.setLanguage(it) },
 						onZoomIn = { viewModel.zoomIn() },
@@ -696,6 +698,7 @@ fun FrameWindowScope.PSD2LiveApp(
 			onDismiss = { viewModel.closeExportDialog() },
 		)
 		ExportPsdDialog(state, viewModel, window)
+		io.github.psd2live.ui.components.OtherFormatExportDialog(state, viewModel, onChooseOutput = chooseOutputFolder)
 
 		if (!state.showProjectLocationDialog && state.projectSaveError != null) {
 			ModalDialog(

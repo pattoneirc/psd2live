@@ -30,6 +30,11 @@ public object Moc3Target : ExportTarget {
 		physics = PhysicsSupport.PARAMETER_PENDULUM, blendModes = ColorBlend.entries.toSet(),
 		masks = MaskSupport.TEXTURE_ALPHA, keyedDrawOrder = true, glue = true,
 	)
+	override val settings: List<TargetSetting> = listOf(
+		TargetSetting.Flag("physics", true), TargetSetting.Flag("user_data", true), TargetSetting.Flag("display_info", true),
+		TargetSetting.Flag("hidden_parts", true), TargetSetting.Flag("hidden_meshes", true), TargetSetting.Flag("guide_parts", false),
+		TargetSetting.Number("pixels_per_unit", null, 1.0, 100000.0, 1.0, 0),
+	)
 
 	public fun options(options: ExportOptions): Moc3ExportOptions = Moc3ExportOptions(
 		exportHiddenParts = options.flag("hidden_parts", true),

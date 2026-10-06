@@ -381,6 +381,8 @@ data class PSD2LiveState(
     val showProjectLocationDialog: Boolean = false,
     val showExportDialog: Boolean = false,
     val showExportPsdDialog: Boolean = false,
+    /** The neutral export target whose dialog is open, or null. */
+    val otherExportTarget: String? = null,
     val isExportingPsd: Boolean = false,
     val projectOpenGeneration: Long = 0,
     val projectEditVersion: Long = 0,

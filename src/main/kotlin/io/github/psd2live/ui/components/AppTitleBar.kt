@@ -139,6 +139,8 @@ fun AppTitleBar(
 	onReexportPsd: () -> Unit,
 	onOpenOutput: () -> Unit,
 	onShowExport: () -> Unit,
+	/** Opens the export dialog of one neutral target, by id (File > Export as). */
+	onExportAs: (String) -> Unit = {},
 	onClose: () -> Unit,
 	onSetLanguage: (AppLanguage) -> Unit,
 	onZoomIn: () -> Unit = {},
@@ -267,79 +269,86 @@ fun AppTitleBar(
 						}
 					} else null,
 				) {
-					// 1. 工程管理 (Project)
-					AppMenuHeader(tr("menu.file.category.project"))
-					AppMenuItem(text = tr("project.open"), shortcut = keymap.labelFor(ShortcutAction.OPEN_PROJECT), enabled = !isBusy, onClick = { activeMenu = null; onOpenProject() })
-					AppMenuItem(text = tr("project.save"), shortcut = keymap.labelFor(ShortcutAction.SAVE_PROJECT), enabled = hasInput, onClick = { activeMenu = null; onSaveProject() })
-					AppMenuItem(text = tr("project.saveAs"), shortcut = keymap.labelFor(ShortcutAction.SAVE_PROJECT_AS), enabled = hasInput, onClick = { activeMenu = null; onSaveProjectAs() })
+					// Project
+					AppMenuItem(text = tr("project.open"), shortcut = keymap.labelFor(ShortcutAction.OPEN_PROJECT), enabled = !isBusy, onHover = { activeSubmenu = null }, onClick = { activeMenu = null; onOpenProject() })
+					AppMenuItem(text = tr("project.save"), shortcut = keymap.labelFor(ShortcutAction.SAVE_PROJECT), enabled = hasInput, onHover = { activeSubmenu = null }, onClick = { activeMenu = null; onSaveProject() })
+					AppMenuItem(text = tr("project.saveAs"), shortcut = keymap.labelFor(ShortcutAction.SAVE_PROJECT_AS), enabled = hasInput, onHover = { activeSubmenu = null }, onClick = { activeMenu = null; onSaveProjectAs() })
 
 					AppMenuSeparator()
 
-					AppMenuHeader(tr("cmo3.menu"))
-					AppMenuItem(text = tr("cmo3.replace"), enabled = !isBusy, onClick = { activeMenu = null; onReplaceCmo3() })
-					AppMenuItem(text = tr("cmo3.new"), enabled = !isBusy, onClick = { activeMenu = null; onNewCmo3() })
-					AppMenuSeparator()
-					// 2. PSD 原画 (Source PSD)
-					AppMenuHeader(tr("menu.file.category.psd"))
-					AppMenuItem(
-						text = tr("menu.file.openPsd"),
-						shortcut = keymap.labelFor(ShortcutAction.OPEN_PSD),
-						highlighted = tutorialHighlightTarget == TutorialTargetId.FILE_IMPORT,
-						modifier = Modifier.tutorialTarget(TutorialTargetId.FILE_IMPORT),
-						onClick = {
-							activeMenu = null
-							onOpenPsd()
-						},
-					)
-					AppMenuItem(
-						text = tr("menu.file.reanalyze"),
-						shortcut = keymap.labelFor(ShortcutAction.REANALYZE),
-						enabled = hasInput && !isBusy,
-						onClick = {
-							activeMenu = null
-							onReanalyze()
-						},
-					)
-					AppMenuItem(
-						text = tr("menu.file.reexportPsd"),
-						shortcut = keymap.labelFor(ShortcutAction.REEXPORT_PSD),
-						enabled = hasInput && !isBusy,
-						onClick = {
-							activeMenu = null
-							onReexportPsd()
-						},
-					)
+					// Import: a new project from a PSD or a cmo3, or a cmo3 over the current one.
+					AppSubmenuItem(
+						text = tr("menu.file.import"),
+						isOpen = activeSubmenu == "import" ||
+							tutorialMenuForce == "file" && tutorialHighlightTarget == TutorialTargetId.FILE_IMPORT,
+						onOpen = { activeSubmenu = "import" },
+						onDismiss = { if (activeSubmenu == "import") activeSubmenu = null },
+					) {
+						AppMenuItem(
+							text = tr("menu.file.openPsd"),
+							shortcut = keymap.labelFor(ShortcutAction.OPEN_PSD),
+							highlighted = tutorialHighlightTarget == TutorialTargetId.FILE_IMPORT,
+							modifier = Modifier.tutorialTarget(TutorialTargetId.FILE_IMPORT),
+							onClick = { activeMenu = null; activeSubmenu = null; onOpenPsd() },
+						)
+						AppMenuItem(text = tr("cmo3.new"), enabled = !isBusy, onClick = { activeMenu = null; activeSubmenu = null; onNewCmo3() })
+						AppMenuSeparator()
+						AppMenuItem(text = tr("cmo3.replace"), enabled = !isBusy, onClick = { activeMenu = null; activeSubmenu = null; onReplaceCmo3() })
+						AppMenuItem(
+							text = tr("menu.file.reanalyze"),
+							shortcut = keymap.labelFor(ShortcutAction.REANALYZE),
+							enabled = hasInput && !isBusy,
+							onClick = { activeMenu = null; activeSubmenu = null; onReanalyze() },
+						)
+					}
 
 					AppMenuSeparator()
 
-					// 3. 模型导出 (Model Export)
-					AppMenuHeader(tr("menu.file.category.export"))
+					// Export: the Live2D model, then every other format by kind.
 					AppMenuItem(
 						text = tr("menu.file.export"),
 						shortcut = keymap.labelFor(ShortcutAction.GENERATE),
 						enabled = hasInput && !isBusy,
 						highlighted = tutorialHighlightTarget == TutorialTargetId.FILE_EXPORT,
 						modifier = Modifier.tutorialTarget(TutorialTargetId.FILE_EXPORT),
-						onClick = {
-							activeMenu = null
-							onShowExport()
-						},
+						onHover = { activeSubmenu = null },
+						onClick = { activeMenu = null; onShowExport() },
 					)
+					AppSubmenuItem(
+						text = tr("menu.file.exportAs"),
+						isOpen = activeSubmenu == "exportAs",
+						onOpen = { activeSubmenu = "exportAs" },
+						onDismiss = { if (activeSubmenu == "exportAs") activeSubmenu = null },
+					) {
+						exportMenuGroups.forEachIndexed { index, (group, targets) ->
+							if (index > 0) AppMenuSeparator()
+							AppMenuHeader(tr(group))
+							for (target in targets) AppMenuItem(
+								text = tr("export.menu.$target"),
+								enabled = hasInput && !isBusy,
+								onClick = { activeMenu = null; activeSubmenu = null; onExportAs(target) },
+							)
+						}
+						AppMenuItem(
+							text = tr("export.menu.sourcePsd"),
+							shortcut = keymap.labelFor(ShortcutAction.REEXPORT_PSD),
+							enabled = hasInput && !isBusy,
+							onClick = { activeMenu = null; activeSubmenu = null; onReexportPsd() },
+						)
+					}
 					AppMenuItem(
 						text = tr("menu.file.openOutput"),
 						enabled = canOpenOutput,
-						onClick = {
-							activeMenu = null
-							onOpenOutput()
-						},
+						onHover = { activeSubmenu = null },
+						onClick = { activeMenu = null; onOpenOutput() },
 					)
 
 					AppMenuSeparator()
 
-					// 4. 系统 / 退出 (Lifecycle)
 					AppMenuItem(
 						text = tr("menu.file.exit"),
 						shortcut = "Alt+F4",
+						onHover = { activeSubmenu = null },
 						onClick = {
 							activeMenu = null
 							onClose()

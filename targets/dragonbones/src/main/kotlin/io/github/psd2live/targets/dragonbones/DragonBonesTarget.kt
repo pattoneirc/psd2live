@@ -26,6 +26,9 @@ public class DragonBonesTarget(private val evaluator: GeometryEvaluator) : Expor
 	override val id: String = "dragonbones"
 	override val family: TargetFamily = TargetFamily.RIG
 	override val description: String = "DragonBones 5.5 skeleton (JSON + atlas)"
+	override val settings: List<TargetSetting> = listOf(
+		TargetSetting.CLIPS, TargetSetting.Number("frame_rate", 60.0, 1.0, 120.0, 1.0, 0), TargetSetting.KEY_TOLERANCE, TargetSetting.SAMPLE_PAIRS,
+	)
 	override val capabilities: CapabilityProfile = CapabilityProfile(
 		bones = true, skinning = true, timeline = true,
 		blendModes = setOf(ColorBlend.NORMAL, ColorBlend.ADD, ColorBlend.ADD_PREMULTIPLIED, ColorBlend.MULTIPLY, ColorBlend.MULTIPLY_PREMULTIPLIED,

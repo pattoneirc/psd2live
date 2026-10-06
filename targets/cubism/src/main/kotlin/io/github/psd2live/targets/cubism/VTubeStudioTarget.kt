@@ -16,6 +16,7 @@ public object VTubeStudioTarget : ExportTarget {
 	override val family: TargetFamily = TargetFamily.RIG
 	override val description: String = "VTube Studio model (moc3 + vtube.json)"
 	override val capabilities: CapabilityProfile = Moc3Target.capabilities
+	override val settings: List<TargetSetting> get() = Moc3Target.settings
 
 	/** One tracking input driving a parameter over its whole range. */
 	private class Mapping(

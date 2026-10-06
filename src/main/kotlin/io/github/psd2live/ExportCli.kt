@@ -2,6 +2,7 @@ package io.github.psd2live
 
 import io.github.psd2live.core.ExportService
 import io.github.psd2live.core.PipelineConfig
+import io.github.psd2live.format.compile.TargetSetting
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 
@@ -22,7 +23,11 @@ Writes the target's files and <base>.<target>.report.json, which lists what the 
 	fun run(arguments: List<String>): Int {
 		val registry = ExportService.registry(PipelineConfig())
 		if (arguments.first() == "targets") {
-			registry.targets.forEach { println("%-14s %-7s %s".format(it.id, it.family.name.lowercase(), it.description)) }
+			registry.targets.forEach { target ->
+				val note = if (target.id in ExportService.experimental) " (experimental)" else ""
+				println("%-14s %-7s %s%s".format(target.id, target.family.name.lowercase(), target.description, note))
+				if (target.settings.isNotEmpty()) println(" ".repeat(23) + "--set " + target.settings.joinToString("  ", transform = ::usage))
+			}
 			return 0
 		}
 		val rest = arguments.drop(1)
@@ -78,4 +83,14 @@ Writes the target's files and <base>.<target>.report.json, which lists what the 
 			1
 		}
 	}
+
+	/** One setting as `key=<values> (default)`. */
+	private fun usage(setting: TargetSetting): String = when (setting) {
+		is TargetSetting.ClipChoice -> "${setting.key}=<clip id>" + if (setting.rest) "" else " (first clip)"
+		is TargetSetting.Flag -> "${setting.key}=true|false (${setting.default})"
+		is TargetSetting.Number -> "${setting.key}=${number(setting.min)}..${number(setting.max)} (${setting.default?.let(::number) ?: "auto"})"
+		is TargetSetting.Text -> "${setting.key}=<${setting.hint}>"
+	}
+
+	private fun number(value: Double): String = if (value % 1.0 == 0.0) value.toLong().toString() else value.toString()
 }

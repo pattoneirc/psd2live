@@ -27,6 +27,12 @@ internal object ExportService {
 		runCatching { P2lRuntime.load()?.let(::NativeGeometryEvaluator) }.getOrNull() ?: IrGeometryEvaluator
 	}
 
+	/**
+	 * Skeletal-animation targets that bake parameters into additive animations. Their combined poses still differ
+	 * visibly from the editor, so the editor's menu leaves them out; the command line marks them experimental.
+	 */
+	val experimental: Set<String> = setOf("spine", "dragonbones", "gltf")
+
 	fun registry(config: PipelineConfig): ExportRegistry = ExportRegistry(listOf(
 		Moc3Target,
 		Cmo3Target { BezierWarp.configureEditor(it, config.rigEdits) },

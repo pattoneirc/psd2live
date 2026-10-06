@@ -25,6 +25,7 @@ public class Cmo3Target(
 	override val id: String = "cmo3"
 	override val family: TargetFamily = TargetFamily.RIG
 	override val description: String = "Cubism Editor project (.cmo3)"
+	override val settings: List<TargetSetting> = listOf(TargetSetting.Text("timestamp", "epoch milliseconds"))
 	override val capabilities: CapabilityProfile = CapabilityProfile(
 		warpLattice = true, parameterGrid = 3, blendShapes = true, timeline = false,
 		physics = PhysicsSupport.PARAMETER_PENDULUM, blendModes = ColorBlend.entries.toSet(),

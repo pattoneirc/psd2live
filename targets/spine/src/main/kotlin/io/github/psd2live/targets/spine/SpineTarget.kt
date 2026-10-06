@@ -43,6 +43,10 @@ public class SpineTarget(private val evaluator: GeometryEvaluator) : ExportTarge
 	override val id: String = "spine"
 	override val family: TargetFamily = TargetFamily.RIG
 	override val description: String = "Spine 4.2 skeleton (JSON or binary + atlas)"
+	override val settings: List<TargetSetting> = listOf(
+		TargetSetting.Flag("binary", false), TargetSetting.CLIPS, TargetSetting.Number("clip_fps", 15.0, 1.0, 60.0, 1.0, 0),
+		TargetSetting.KEY_TOLERANCE, TargetSetting.SAMPLE_PAIRS,
+	)
 	override val capabilities: CapabilityProfile = CapabilityProfile(
 		bones = true, skinning = true, warpLattice = false, parameterGrid = 0, blendShapes = false, timeline = true,
 		physics = PhysicsSupport.CONSTRAINT, blendModes = setOf(ColorBlend.NORMAL, ColorBlend.ADD, ColorBlend.MULTIPLY, ColorBlend.SCREEN),

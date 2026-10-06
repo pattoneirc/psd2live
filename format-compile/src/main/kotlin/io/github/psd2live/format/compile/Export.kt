@@ -73,6 +73,31 @@ public data class ExportOptions(
 	public fun flag(key: String, default: Boolean): Boolean = settings[key]?.toBooleanStrictOrNull() ?: default
 }
 
+/** One key a target reads from [ExportOptions.settings], declared so hosts can offer it without knowing the target. */
+public sealed interface TargetSetting {
+	public val key: String
+
+	/** A clip id. With [rest], leaving it out poses the rig at rest; otherwise it falls back to the first clip. */
+	public data class ClipChoice(override val key: String, val rest: Boolean) : TargetSetting
+
+	public data class Flag(override val key: String, val default: Boolean) : TargetSetting
+
+	/** A number in [min]..[max]; a null [default] means the target derives it (e.g. from the clip). */
+	public data class Number(
+		override val key: String, val default: Double?, val min: Double, val max: Double, val step: Double, val decimals: Int,
+	) : TargetSetting
+
+	/** Free text, such as a pose list or a tool path; [hint] describes the format. */
+	public data class Text(override val key: String, val hint: String) : TargetSetting
+
+	/** Settings several baking targets share. */
+	public companion object {
+		public val CLIPS: TargetSetting = Flag("clips", true)
+		public val KEY_TOLERANCE: TargetSetting = Number("key_tolerance", 0.25, 0.0, 10.0, 0.05, 2)
+		public val SAMPLE_PAIRS: TargetSetting = Number("sample_pairs", 48.0, 0.0, 1000.0, 8.0, 0)
+	}
+}
+
 /** Receives exported files by relative path. Exporters never touch the file system directly. */
 public fun interface OutputSink {
 	public fun write(path: String, bytes: ByteArray)
@@ -94,6 +119,8 @@ public interface ExportTarget {
 	public val capabilities: CapabilityProfile
 	/** File extension or a short description for UIs, e.g. "moc3 + model3.json". */
 	public val description: String
+	/** The settings [plan] reads; keys outside this list are ignored. */
+	public val settings: List<TargetSetting> get() = emptyList()
 	public fun plan(ir: RigIR, options: ExportOptions): LoweredExport
 }
 

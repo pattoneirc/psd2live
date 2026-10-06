@@ -54,7 +54,7 @@ The Linux native preview does not support pure Wayland without XWayland, aarch64
 
 ## Quick start
 
-1. **Import a PSD** with **File → Import PSD…** (`Ctrl+Shift+O`) or drop it on the window. The Start screen opens next: set the model presets with the Minimal / Default / Full quick choices (Default includes loose clothing simulation) and tick the layers holding several disconnected parts (such as both legs) to split by mesh. Reopen it later from Tools → Start Screen….
+1. **Import a PSD** with **File → Import → New project from PSD…** (`Ctrl+Shift+O`) or drop it on the window. The Start screen opens next: set the model presets with the Minimal / Default / Full quick choices (Default includes loose clothing simulation) and tick the layers holding several disconnected parts (such as both legs) to split by mesh. Reopen it later from Tools → Start Screen….
 2. **Check the classification** in the Layers table: part type, side and variant settings. Correct anything that was misread.
 3. **Preview and refine** in the Preview workspace, then adjust in the Edit, Rigging, Animation and Physics workspaces as needed.
 4. **Save and export**: `Ctrl+S` saves a `.psd2live` project; `Ctrl+G` opens export settings for `.cmo3` and / or the `.moc3` bundle.
@@ -83,7 +83,7 @@ See [PSD preparation and naming](spec/PSD_LAYER_SPEC.md) for the full name table
 | `.model3.json` + `.moc3` + textures, physics, motions | Runtime bundle; deliver together and load from `.model3.json` |
 | `.psd2live.json` | Export diagnostics, not a project |
 
-Export targets Cubism 3.0 – 5.0 (default 5.0); features the target cannot express are downgraded and reported. A successful export does not guarantee identical results in every runtime, so check the model in the target editor and runtime before delivery. Support boundaries are described in the [runtime and export reference](../zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md) (Chinese). Through the neutral rig IR the model also exports to a Spine 4.2 skeleton, a layered PSD at a pose, PNG sequences, sprite sheets and GIF, each with a loss report; see [export targets](../zh/spec/EXPORT_TARGETS.md) (Chinese).
+Export targets Cubism 3.0 – 5.0 (default 5.0); features the target cannot express are downgraded and reported. A successful export does not guarantee identical results in every runtime, so check the model in the target editor and runtime before delivery. Support boundaries are described in the [runtime and export reference](../zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md) (Chinese). Through the neutral rig IR the model also exports to a VTube Studio model, the PSD2Live runtime rig and web player, a layered PSD at a pose, PNG sequences, sprite sheets, GIF and video, each with a loss report; see [export targets](../zh/spec/EXPORT_TARGETS.md) (Chinese).
 
 The built-in renderer needs no official SDK. [Cubism native preview](guide/CUBISM_SDK_SETUP.md) is optional and lets you compare against the official runtime's rendering and physics.
 
