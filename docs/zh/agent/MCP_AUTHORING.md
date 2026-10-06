@@ -22,7 +22,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `workspace_get_operation` | `id` | 读取单项 schema、字段说明与执行元数据 |
 | `workspace_apply_edits` | `state`、`edits`（1–128 项），可选 `summary` | 后台有序编辑同一候选文档，全部成功后提交一个历史节点；返回任务句柄，成员支持情况见 `batchable` |
 | `workspace_preview_edits` | `state`、`edits`（1–128 项），共用请求上下文 | 后台试运行几何作者编辑，返回候选 revision 与诊断；不发布文档、姿态、历史或资源 |
-| `workspace_inspect` | `request` 内 `scope` / `target` | scope 为 `project/settings/preview/objects/layers/parameters/physics/swings/paths/simulations/vertex_groups`；图层摘要包含有效网格配置 |
+| `workspace_inspect` | `request` 内 `scope` / `target` | scope 为 `project/settings/preview/objects/layers/parameters/physics/swings/paths/simulations/vertex_groups`；图层摘要包含有效网格配置；工程已加载时 `project` 带 `quality.overrides`：未按记录生效的生成结果覆盖（冲突 / 孤立，均为 warning）的观察报告 |
 | `layer_classify` | `request` 内 `state`、`layer_id` 及分类字段 | 后台更新既有源图层的类型、部件、侧别、参数关联和切换 ID；省略的字段保持捕获时的原值 |
 | `layer_mesh_update` | `request` 内 `state`、`layer_id`、`changes` 或 `reset` | 后台逐图层覆盖或重置自适应网格参数；用 `workspace_inspect scope=layers` 读取当前值 |
 | `source_sample_color` | `layer_id`、`x`、`y` | 读取源图层在画布整数坐标的 RGBA；不改变文档或历史 |

@@ -66,6 +66,9 @@ internal fun WorkspaceQueries.inspect(a: JsonObject): JsonObject {
                 snapshot.selectedLayerId?.let { put("selection", it) }
                 put("layers", snapshot.layers.count { !it.deleted }); put("parameters", snapshot.parameters.size)
                 snapshot.persistenceError?.let { put("persistenceError", it) }
+                if (snapshot.loaded) putJsonObject("quality") {
+                    put("overrides", io.github.psd2live.core.quality.GeneratedOverrideQuality.report(queries.generatedOverrideIssues()))
+                }
             }
             "physics" -> { put("fps", queries.physicsFps()); put("groups", JsonArray(queries.listPhysics().map { it.toJson() })) }
             "swings" -> put("swings", JsonArray(queries.listSwings().map { it.toJson() }))

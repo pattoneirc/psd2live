@@ -245,15 +245,18 @@ data class RigEditOverlay(
 		}
 	}
 
-	fun applyTo(base: PuppetModel): PuppetModel = replay(base, authoredOnly = false)
+	fun applyTo(base: PuppetModel): PuppetModel = replay(base, authoredOnly = false).model
+
+	/** [applyTo], with what the generated overrides could not apply as recorded. */
+	internal fun applyToReporting(base: PuppetModel): GeneratedOverrides.Outcome = replay(base, authoredOnly = false)
 
 	/**
 	 * The rig after the legacy edits and the whole journal, before any swing or simulation writes its
 	 * keyforms: the authored state a split materializes into its parts.
 	 */
-	fun authored(base: PuppetModel): PuppetModel = replay(base, authoredOnly = true)
+	fun authored(base: PuppetModel): PuppetModel = replay(base, authoredOnly = true).model
 
-	private fun replay(base: PuppetModel, authoredOnly: Boolean): PuppetModel {
+	private fun replay(base: PuppetModel, authoredOnly: Boolean): GeneratedOverrides.Outcome {
 		// Generated axes do not exist until swing/simulation materialization. Replay their panel
 		// placement and links afterwards, including moves of another parameter relative to them.
 		val generatedIds = swingEdits.flatMap { it.parameterIds }.toSet() +
@@ -308,12 +311,14 @@ data class RigEditOverlay(
 				else -> RigAuthoringJournal.replay(model, command)
 			}
 		}
-		if (authoredOnly) return model
+		if (authoredOnly) return GeneratedOverrides.Outcome(model, emptyList())
 		// Swings and simulations write their keyforms onto the replayed rig, in the document graph's order.
 		model = DocumentGenerators.generate(model, this)
 		// Edits of generated keyforms merge with what the generators produce now.
-		model = GeneratedOverrides.applyAll(model, authoringJournal).model
-		return RigStructureEdits.replay(model, generatedPanelEdits + deferredJournalEdits).withParametersSyncedFromTree()
+		val overrides = if (authoringJournal.none(GeneratedOverrides::isOverride)) GeneratedOverrides.Outcome(model, emptyList())
+			else GeneratedOverrides.applyAll(model, authoringJournal, ArtPrimitiveJournal.replacementDrawables(this).keys)
+		model = overrides.model
+		return GeneratedOverrides.Outcome(RigStructureEdits.replay(model, generatedPanelEdits + deferredJournalEdits).withParametersSyncedFromTree(), overrides.issues)
 	}
 
 	fun upsert(edit: RigParameterEdit): RigEditOverlay {
@@ -370,7 +375,8 @@ data class RigEditOverlay(
 internal fun BuiltRig.withRigEdits(overlay: RigEditOverlay, layerVisibility: Map<String, Boolean> = emptyMap(),
                                  drawOrderOverrides: Map<String, Float> = emptyMap()): BuiltRig {
 	if (overlay == RigEditOverlay.Empty) return withDrawOrderOverrides(drawOrderOverrides)
-	var model = overlay.applyTo(puppet)
+	val replayed = overlay.applyToReporting(puppet)
+	var model = replayed.model
 	val bounds = sourceBoundsByDrawableId.toMutableMap()
 	val layers = layerIdByDrawableId.toMutableMap()
 	val pages = pageByDrawableId.toMutableMap()
@@ -425,7 +431,8 @@ internal fun BuiltRig.withRigEdits(overlay: RigEditOverlay, layerVisibility: Map
 		if (model.drawables.any { it.id.raw == id }) bounds[id] = Bounds(numbers[0], numbers[1], numbers[2], numbers[3])
 	}
 	model = ArtPrimitiveJournal.pruneAtlas(model, overlay)
-	return copy(puppet = model, sourceBoundsByDrawableId = bounds, layerIdByDrawableId = layers, pageByDrawableId = pages)
+	return copy(puppet = model, sourceBoundsByDrawableId = bounds, layerIdByDrawableId = layers, pageByDrawableId = pages,
+		overrideIssues = replayed.issues)
         .withDrawOrderOverrides(drawOrderOverrides)
 }
 

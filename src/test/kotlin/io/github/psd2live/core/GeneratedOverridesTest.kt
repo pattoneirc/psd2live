@@ -1,6 +1,7 @@
 package io.github.psd2live.core
 
 import io.github.psd2live.application.WorkspaceDocumentEdits
+import io.github.psd2live.core.quality.GeneratedOverrideQuality
 import io.github.psd2live.project.WorkspaceDocument
 import io.github.psd2live.project.WorkspaceSettingsCodec
 import kotlinx.serialization.json.*
@@ -71,6 +72,19 @@ class GeneratedOverridesTest {
 			stronger.authoringJournal.filterNot { it.getValue("op").jsonPrimitive.content == GeneratedOverrides.OP }).applyTo(initial.rig.puppet),
 			stronger.swingEdits), stronger.authoringJournal)
 		assertEquals(1, outcome.conflicts.size, outcome.conflicts.toString())
+		// The replay reports the conflict with its counts; the quality report turns it into a warning by its code.
+		val conflict = stronger.applyToReporting(initial.rig.puppet).issues.single()
+		assertEquals(GeneratedOverrideIssue(GeneratedOverrideIssueKind.CONFLICT, "swing:back", "warp:$warpId", key, 1, cell.size / 2), conflict)
+		val conflictReport = GeneratedOverrideQuality.report(listOf(conflict))
+		assertTrue(conflictReport.getValue("can_proceed").jsonPrimitive.boolean)
+		assertEquals("accept_with_diagnostics", conflictReport.getValue("decision").jsonPrimitive.content)
+		val finding = conflictReport.getValue("findings").jsonArray.single().jsonObject
+		assertEquals("GENERATED_OVERRIDE_CONFLICT", finding.getValue("code").jsonPrimitive.content)
+		assertEquals("warning", finding.getValue("severity").jsonPrimitive.content)
+		assertEquals(1, finding.getValue("evidence").jsonObject.getValue("points").jsonPrimitive.int)
+		assertEquals(cell.size / 2, finding.getValue("evidence").jsonObject.getValue("total").jsonPrimitive.int)
+		// The built rig carries what the replay reported.
+		assertEquals(listOf(conflict), initial.rig.withRigEdits(stronger).overrideIssues)
 
 		// Without the swing there is no generated cell: the override changes nothing and reports itself.
 		val removed = authored.rigEdits.copy(swingEdits = emptyList())
@@ -78,6 +92,36 @@ class GeneratedOverridesTest {
 		assertEquals(warpOf(overlay.copy(swingEdits = emptyList()).applyTo(initial.rig.puppet), warpId).geometryGrid!!.cells.size,
 			warpOf(plain, warpId).geometryGrid!!.cells.size)
 		assertTrue(GeneratedOverrides.applyAll(plain, removed.authoringJournal).conflicts.single().contains("no generated keyform"))
+		val orphaned = removed.applyToReporting(initial.rig.puppet).issues.single()
+		assertEquals(GeneratedOverrideIssueKind.ORPHANED, orphaned.kind)
+		assertEquals(GeneratedOverrideOrphanReason.MISSING_KEYFORM, orphaned.reason)
+		assertEquals("warp:$warpId", orphaned.target)
+		assertEquals(cell.size / 2, orphaned.points)
+		val orphanFinding = GeneratedOverrideQuality.report(listOf(orphaned)).getValue("findings").jsonArray.single().jsonObject
+		assertEquals("GENERATED_OVERRIDE_ORPHANED", orphanFinding.getValue("code").jsonPrimitive.content)
+		assertEquals("warning", orphanFinding.getValue("severity").jsonPrimitive.content)
+		assertEquals("missing_keyform", orphanFinding.getValue("evidence").jsonObject.getValue("reason").jsonPrimitive.content)
+
+		// A replay with the override applying cleanly, and one without overrides, report nothing.
+		assertTrue(authored.rigEdits.applyToReporting(initial.rig.puppet).issues.isEmpty())
+		assertTrue(overlay.applyToReporting(initial.rig.puppet).issues.isEmpty())
+		val clean = GeneratedOverrideQuality.report(emptyList())
+		assertEquals("accept", clean.getValue("decision").jsonPrimitive.content)
+		assertTrue(clean.getValue("findings").jsonArray.isEmpty())
+	}
+
+	@Test fun anOverrideOfASupersededMeshReportsTheSplit() {
+		val model = initial.rig.puppet
+		val mesh = model.drawables.first { it.mesh != null }
+		val zeros = JsonArray(List(mesh.mesh!!.vertexCount * 2) { JsonPrimitive(0f) })
+		val override = buildJsonObject {
+			put("op", GeneratedOverrides.OP); put("generator", "sim:cloth"); put("target", "mesh:${mesh.id.raw}")
+			putJsonObject("key") { put("ParamSimCloth", 1f) }; put("base", zeros); put("points", zeros)
+		}
+		val superseded = GeneratedOverrides.applyAll(model, listOf(override), setOf(mesh.id.raw)).issues.single()
+		assertEquals(GeneratedOverrideIssueKind.ORPHANED, superseded.kind)
+		assertEquals(GeneratedOverrideOrphanReason.SUPERSEDED, superseded.reason)
+		assertEquals(GeneratedOverrideOrphanReason.MISSING_KEYFORM, GeneratedOverrides.applyAll(model, listOf(override)).issues.single().reason)
 	}
 
 	@Test fun anOrdinaryLatticeEditOfASwungCellCannotReplay() {

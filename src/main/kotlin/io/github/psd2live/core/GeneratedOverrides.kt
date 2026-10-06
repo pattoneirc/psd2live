@@ -6,6 +6,37 @@ import org.umamo.runtime.model.*
 import kotlin.math.abs
 
 /**
+ * What an override did not do as recorded. Orphaned: the generated keyform it edits is gone or has another
+ * shape, so it changes nothing. Conflict: the generator and the override both moved some of the form's control
+ * points or vertices, and the override's values were kept.
+ */
+enum class GeneratedOverrideIssueKind(val wire: String) { ORPHANED("orphaned"), CONFLICT("conflict") }
+
+/** Why an override is orphaned; null for a conflict. */
+enum class GeneratedOverrideOrphanReason(val wire: String) { MISSING_KEYFORM("missing_keyform"), SHAPE_MISMATCH("shape_mismatch"), SUPERSEDED("superseded") }
+
+/** One override's issue: [points] of the form's [total] points in conflict, or every point of an orphaned one. */
+data class GeneratedOverrideIssue(
+	val kind: GeneratedOverrideIssueKind,
+	val generator: String,
+	/** `warp:<id>` or `mesh:<id>`, as the override records it. */
+	val target: String,
+	val key: Map<String, Float>,
+	val points: Int,
+	val total: Int,
+	val reason: GeneratedOverrideOrphanReason? = null,
+) {
+	val id: String get() = target.substringAfter(':')
+
+	/** A plain English line for logs and tests; reports and the UI use the fields, never this text. */
+	fun describe(): String = when (kind) {
+		GeneratedOverrideIssueKind.CONFLICT -> "$id: $points of $total ${if (target.startsWith("warp:")) "control points" else "vertices"} at $key changed in both the generator and the override; the override is kept"
+		GeneratedOverrideIssueKind.ORPHANED -> if (reason == GeneratedOverrideOrphanReason.SHAPE_MISMATCH) "$id: override at $key no longer matches the ${if (target.startsWith("warp:")) "lattice" else "mesh"}"
+			else "$id: override at $key has no generated keyform"
+	}
+}
+
+/**
  * A user's edit of generator output, kept across regeneration by a three-way merge.
  *
  * Swings and baked simulations own the keyforms their parameters add: a swing those of its axes on its target
@@ -99,7 +130,9 @@ internal object GeneratedOverrides {
 		return grid.cells.firstOrNull { it.coordinate.contentEquals(coordinate) }
 	}
 
-	class Outcome(val model: PuppetModel, val conflicts: List<String>)
+	class Outcome(val model: PuppetModel, val issues: List<GeneratedOverrideIssue>) {
+		val conflicts: List<String> get() = issues.map(GeneratedOverrideIssue::describe)
+	}
 
 	/**
 	 * Applies [command] to a generated [model]. A model without the generated cell (before the generators ran,
@@ -109,21 +142,24 @@ internal object GeneratedOverrides {
 		val target = command.getValue("target").jsonPrimitive.content
 		val kind = target.substringBefore(':')
 		val id = target.substringAfter(':')
+		val generator = command["generator"]?.jsonPrimitive?.contentOrNull.orEmpty()
 		val key = command.getValue("key").jsonObject.mapValues { it.value.jsonPrimitive.float }
 		val base = command.getValue("base").jsonArray.map { it.jsonPrimitive.float }
 		val points = command.getValue("points").jsonArray.map { it.jsonPrimitive.float }
 		require(kind == "warp" || kind == "mesh") { "Unknown override target: $target" }
 		require(base.size == points.size && points.size % 2 == 0 && points.all(Float::isFinite) && base.all(Float::isFinite)) { "Invalid override form" }
+		fun orphaned(reason: GeneratedOverrideOrphanReason) = Outcome(model, listOf(GeneratedOverrideIssue(GeneratedOverrideIssueKind.ORPHANED, generator, target, key, points.size / 2, points.size / 2, reason)))
 		val current = (if (kind == "warp") warpCell(model, id, key)?.form?.controlPoints else meshCell(model, id, key)?.form?.positionDeltas)
-			?: return Outcome(model, listOf("$id: override at $key has no generated keyform"))
-		if (current.size != points.size) return Outcome(model, listOf("$id: override at $key no longer matches the ${if (kind == "warp") "lattice" else "mesh"}"))
+			?: return orphaned(GeneratedOverrideOrphanReason.MISSING_KEYFORM)
+		if (current.size != points.size) return orphaned(GeneratedOverrideOrphanReason.SHAPE_MISMATCH)
 		fun pairs(values: List<Float>) = (0 until values.size / 2).associateWith { values[it * 2] to values[it * 2 + 1] }
 		val merged = ThreeWayMerge.merge(pairs(base), pairs(current.toList()), pairs(points)) { a, b ->
 			a != null && b != null && abs(a.first - b.first) <= EPS && abs(a.second - b.second) <= EPS
 		}
 		val result = FloatArray(current.size)
 		for ((index, point) in merged.merged) { result[index * 2] = point.first; result[index * 2 + 1] = point.second }
-		val conflicts = merged.conflicts.map { "$id: ${if (kind == "warp") "control point" else "vertex"} $it at $key changed in both the generator and the override; the override is kept" }
+		val issues = if (merged.conflicts.isEmpty()) emptyList()
+			else listOf(GeneratedOverrideIssue(GeneratedOverrideIssueKind.CONFLICT, generator, target, key, merged.conflicts.size, points.size / 2))
 		val next = if (kind == "warp") {
 			val warp = warp(model, id)!!
 			val grid = warp.geometryGrid!!
@@ -137,18 +173,25 @@ internal object GeneratedOverrides {
 			model.withReplacedGeometryGrid(KeyformOwner.Drawable(drawable.id),
 				KeyformGrid(grid.axes, grid.cells.map { if (it === cell) KeyformCell(it.coordinate, MeshDeltaForm(result)) else it }))
 		}
-		return Outcome(next, conflicts)
+		return Outcome(next, issues)
 	}
 
-	/** Every override in [journal], applied in order to the generated [model]. */
-	fun applyAll(model: PuppetModel, journal: List<JsonObject>): Outcome {
+	/**
+	 * Every override in [journal], applied in order to the generated [model]. An orphaned override on a mesh a
+	 * split superseded ([superseded]) reports that reason instead of a missing keyform.
+	 */
+	fun applyAll(model: PuppetModel, journal: List<JsonObject>, superseded: Set<String> = emptySet()): Outcome {
 		var current = model
-		val conflicts = ArrayList<String>()
+		val issues = ArrayList<GeneratedOverrideIssue>()
 		for (command in journal) if (isOverride(command)) {
 			val outcome = apply(current, command)
-			current = outcome.model; conflicts += outcome.conflicts
+			current = outcome.model
+			issues += outcome.issues.map { issue ->
+				if (issue.kind == GeneratedOverrideIssueKind.ORPHANED && issue.reason == GeneratedOverrideOrphanReason.MISSING_KEYFORM && issue.target.startsWith("mesh:") && issue.id in superseded)
+					issue.copy(reason = GeneratedOverrideOrphanReason.SUPERSEDED) else issue
+			}
 		}
-		return Outcome(current, conflicts)
+		return Outcome(current, issues)
 	}
 
 	private const val EPS = 1e-4f

@@ -143,6 +143,7 @@ internal class WorkspaceReadSession(
         return WorkspaceSettingsCodec.encode(WorkspaceSettingsCodec.decode(document.settings).copy(meshOverrides = document.meshOverrides))
     }
     override fun listSwings(): List<RigSwingEdit> = capture().document.rigEdits.swingEdits
+    override fun generatedOverrideIssues(): List<GeneratedOverrideIssue> = read.runtime.capture?.model?.rig?.overrideIssues.orEmpty()
     override fun listSimulations(): List<io.github.psd2live.core.sim.RigSimEdit> = capture().document.rigEdits.simEdits
     override fun physicsFps(): Int = capture().document.rigEdits.physicsFps
     override fun previewSession(): JsonObject = PreviewSessions.encode(pose)

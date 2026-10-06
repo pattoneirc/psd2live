@@ -30,7 +30,8 @@ internal object WorkspaceInspectionResultSchemas {
         "motions" to s.array(s.obj(shapeFields, shapeFields.keys - "flip"), 1, 2))
     private val swing = s.obj(swingFields, setOf("id", "name", "targets", "fulcrum", "preset", "motions"))
     private val projectFields = mapOf("loaded" to s.boolean(), "busy" to s.boolean(), "canvas" to s.array(s.integer(1), 0, 2),
-        "selection" to s.handle(), "layers" to s.integer(0), "parameters" to s.integer(0), "persistenceError" to s.string())
+        "selection" to s.handle(), "layers" to s.integer(0), "parameters" to s.integer(0), "persistenceError" to s.string(),
+        "quality" to s.obj(mapOf("overrides" to WorkspaceQualitySchemas.generatedOverrides)))
     private val objectRowFields = mapOf("target" to s.handle(), "name" to s.string(), "parentId" to s.nullable(s.handle()), "layerId" to s.handle())
     private val layer = s.obj(mapOf("id" to s.handle(), "name" to s.string(), "visible" to s.boolean(),
         "role" to s.choices(*SemanticTag.entries.map { it.name.lowercase() }.toTypedArray()),

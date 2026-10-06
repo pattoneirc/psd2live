@@ -48,6 +48,37 @@ class WorkspaceInspectionContractsTest {
         assertEquals(JsonNull, unloaded.getValue("project_id"))
     }
 
+    @Test fun projectScopeReportsGeneratedOverridesThatDidNotApply() = runBlocking<Unit> {
+        val runtime = runtime(); val seed = seed(runtime)
+        val clean = WorkspaceReadSession(runtime.read()).inspect(buildJsonObject { put("scope", "project") })
+        validateOperationSchema(clean, schema)
+        val cleanReport = clean.getValue("quality").jsonObject.getValue("overrides").jsonObject
+        assertEquals(2, cleanReport.getValue("version").jsonPrimitive.int)
+        assertEquals("overrides", cleanReport.getValue("domain").jsonPrimitive.content)
+        assertTrue(cleanReport.getValue("findings").jsonArray.isEmpty())
+
+        // An override whose generated keyform does not exist changes nothing and reports as orphaned.
+        val mesh = seed.model.rig.puppet.drawables.first { it.mesh != null }
+        val vertices = mesh.mesh!!.vertexCount
+        val override = buildJsonObject {
+            put("op", "generated_override"); put("generator", "swing:gone"); put("target", "mesh:${mesh.id.raw}")
+            putJsonObject("key") { put("ParamSwingGone", 1f) }
+            put("base", JsonArray(List(vertices * 2) { JsonPrimitive(0f) })); put("points", JsonArray(List(vertices * 2) { JsonPrimitive(1f) }))
+        }
+        val document = seed.document.copy(rigEdits = seed.document.rigEdits.copy(authoringJournal = seed.document.rigEdits.authoringJournal + override))
+        runtime.install(seed.state, seed.projectId, document, builder.build(document), discardUnsaved = true)
+        val result = WorkspaceReadSession(runtime.read()).inspect(buildJsonObject { put("scope", "project") })
+        validateOperationSchema(result, schema)
+        val report = result.getValue("quality").jsonObject.getValue("overrides").jsonObject
+        assertTrue(report.getValue("can_proceed").jsonPrimitive.boolean)
+        val finding = report.getValue("findings").jsonArray.single().jsonObject
+        assertEquals("GENERATED_OVERRIDE_ORPHANED", finding.getValue("code").jsonPrimitive.content)
+        assertEquals("mesh:${mesh.id.raw}", finding.getValue("target").jsonPrimitive.content)
+        val evidence = finding.getValue("evidence").jsonObject
+        assertEquals("swing:gone", evidence.getValue("generator").jsonPrimitive.content)
+        assertEquals(vertices, evidence.getValue("points").jsonPrimitive.int)
+    }
+
     @Test fun sparseV1SettingsExposeDefaultsAndAuthoritativeMeshOverridesWithoutChangingTheSavedDocument() = runBlocking<Unit> {
         val runtime = runtime(); val seed = seed(runtime)
         val layer = seed.document.source.layers.single().id.raw

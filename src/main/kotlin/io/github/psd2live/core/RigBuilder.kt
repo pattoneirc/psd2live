@@ -111,6 +111,8 @@ data class BuiltRig(
 	 * art is packed differently. Null for a rig that was not generated (an imported model).
 	 */
 	val unbound: PuppetModel? = null,
+	/** What the document's generated overrides could not apply as recorded, from the last replay. */
+	val overrideIssues: List<GeneratedOverrideIssue> = emptyList(),
 )
 
 internal data class MeshData(

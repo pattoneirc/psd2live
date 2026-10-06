@@ -1249,6 +1249,8 @@ class DesktopWorkspace(
 
     override fun listSwings() = captureQueries().listSwings()
 
+    override fun generatedOverrideIssues() = captureQueries().generatedOverrideIssues()
+
     override fun listSimulations() = captureQueries().listSimulations()
 
     private suspend fun simulationCommand(operation: WorkspaceDocumentOperation, expectedState: String, summary: String,

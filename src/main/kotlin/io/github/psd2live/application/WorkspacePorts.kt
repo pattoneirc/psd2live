@@ -60,6 +60,8 @@ interface WorkspaceQueries : WorkspaceStatePort {
     fun reportSimulation(id: String, hold: Float, release: Float, wind: Pair<Float, Float>?,
                          progress: (Float) -> Unit = noSamplingProgress, cancelled: () -> Boolean = noSamplingCancellation): JsonObject
     fun listSwings(): List<RigSwingEdit>
+    /** Generated overrides of the captured model that did not apply as recorded, in journal order. */
+    fun generatedOverrideIssues(): List<io.github.psd2live.core.GeneratedOverrideIssue>
 }
 
 /** Capture once before composing a response; the returned queries never revisit live state. */

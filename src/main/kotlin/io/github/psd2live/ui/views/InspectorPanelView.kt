@@ -50,6 +50,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import io.github.psd2live.core.GeneratedOverrideIssue
+import io.github.psd2live.core.GeneratedOverrideIssueKind
+import io.github.psd2live.core.GeneratedOverrideOrphanReason
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.CanvasEditor
 import io.github.psd2live.ui.components.ColorPickerPopupContent
@@ -104,6 +107,9 @@ internal fun InspectorPanelView(
 
     val selectedDeformer = puppet?.deformers?.firstOrNull { it.id.raw == selectedDeformerId }
     val selectedDrawable = puppet?.drawables?.firstOrNull { it.id.raw == layerDrawableId || it.id.raw == selectedLayerId }
+    // Overrides the last replay could not apply as recorded: the badge counts them all, the section lists the selection's.
+    val overrideIssues = state.previewModel?.rig?.overrideIssues.orEmpty()
+    var showAllOverrideIssues by remember { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxSize().background(colors.panelBackground)) {
         // What is being inspected, and on which canvas when there are several.
@@ -117,6 +123,16 @@ internal fun InspectorPanelView(
             if (state.activeWorkspace.canvases.size > 1) {
                 PanelToolbarText(viewModel.canvasTitle(state.activeCanvas), modifier = Modifier.widthIn(max = 108.dp))
             }
+            if (overrideIssues.isNotEmpty()) {
+                PanelToolbarText(
+                    tr("inspector.overrides.badge", overrideIssues.size),
+                    color = colors.warning,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(3.dp))
+                        .clickable { showAllOverrideIssues = !showAllOverrideIssues }
+                        .padding(horizontal = 4.dp),
+                )
+            }
         }
         Column(
             modifier = Modifier
@@ -125,6 +141,12 @@ internal fun InspectorPanelView(
                 .verticalScroll(rememberScrollState())
                 .padding(vertical = 6.dp, horizontal = 6.dp),
         ) {
+            val selectedId = selectedDeformer?.id?.raw ?: selectedDrawable?.id?.raw
+            val shownIssues = if (showAllOverrideIssues) overrideIssues else overrideIssues.filter { it.id == selectedId }
+            if (puppet != null && shownIssues.isNotEmpty()) {
+                GeneratedOverrideIssueList(shownIssues, puppet)
+                Spacer(modifier = Modifier.height(6.dp))
+            }
             when {
                 selectedDeformer is Deformer.Warp -> {
                     WarpDeformerInspector(
@@ -344,6 +366,27 @@ private fun InspectorSectionBox(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             content()
+        }
+    }
+}
+
+/** Generated overrides that did not apply as recorded, localized from their kind and reason codes. */
+@Composable
+private fun GeneratedOverrideIssueList(issues: List<GeneratedOverrideIssue>, puppet: org.umamo.runtime.model.PuppetModel) {
+    val colors = LocalToolColors.current
+    val typography = LocalToolTypography.current
+    InspectorSectionBox(tr("inspector.overrides.title")) {
+        issues.forEach { issue ->
+            val name = puppet.deformers.firstOrNull { it.id.raw == issue.id }?.name
+                ?: puppet.drawables.firstOrNull { it.id.raw == issue.id }?.name ?: issue.id
+            val key = issue.key.toSortedMap().entries.joinToString(", ") { (id, value) -> "$id=$value" }
+            val text = when (issue.kind) {
+                GeneratedOverrideIssueKind.CONFLICT ->
+                    tr("inspector.overrides.conflict", name, key, issue.points, issue.total, issue.generator)
+                GeneratedOverrideIssueKind.ORPHANED -> tr("inspector.overrides.orphaned", name, key, issue.generator,
+                    tr("inspector.overrides.reason.${(issue.reason ?: GeneratedOverrideOrphanReason.MISSING_KEYFORM).wire}"))
+            }
+            Text(text = text, style = typography.caption.copy(fontSize = 10.5.sp), color = colors.warning)
         }
     }
 }
