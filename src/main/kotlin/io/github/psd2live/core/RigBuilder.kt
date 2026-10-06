@@ -105,6 +105,12 @@ data class BuiltRig(
 	val faceRadiusY: Float,
 	val warnings: List<String>,
 	val initialHeadAngleZ: Float = 0f,
+	/**
+	 * The generator's output before [UvBinding] and the skeleton: texture coordinates are layer offsets
+	 * and the atlas has no placements, so it - and a content hash of it - does not change when the same
+	 * art is packed differently. Null for a rig that was not generated (an imported model).
+	 */
+	val unbound: PuppetModel? = null,
 )
 
 internal data class MeshData(
@@ -495,8 +501,8 @@ object RigBuilder {
 		if (!config.mouthOutlineEnabled || config.meshOnly || aperture == null) return emptyList()
 		return (0..1).mapNotNull { side ->
 			val lipLayer = generatedLips[MouthLipLayer.idFor(layer.source.id.raw, side)] ?: return@mapNotNull null
-			val lipPlacement = atlas.placementByLayerId[lipLayer.source.id.raw] ?: return@mapNotNull null
-			val lipPage = atlas.pages[lipPlacement.page].image
+			// Only a ribbon whose layer has texture is built; where it landed is the binding's business.
+			if (lipLayer.source.id.raw !in atlas.placementByLayerId) return@mapNotNull null
 			val (lip, path) = mouthOutline(
 				owner,
 				data,
@@ -505,9 +511,6 @@ object RigBuilder {
 				config,
 				side,
 				lipLayer,
-				lipPlacement,
-				lipPage.width,
-				lipPage.height,
 				headSpace,
 			)
 			MouthLip(lip, owner.id, lipLayer, path, neutralLipBounds(data, aperture, config, side, headSpace, lipLayer.bounds))
@@ -814,9 +817,6 @@ object RigBuilder {
 				parentId = if (shouldBuildDeformers) parentId else null,
 				parentFrame = parentFrame,
 				headSpace = context.headSpaceFor(layer),
-				placement = placement,
-				pageWidth = atlas.pages[placement.page].image.width,
-				pageHeight = atlas.pages[placement.page].image.height,
 				config = config,
 				meshCache = meshCache,
 			)
@@ -841,7 +841,8 @@ object RigBuilder {
 					?: (orderedLayers.size - drawIndex).toFloat()).coerceIn(0f, 1000f),
 				opacity = layer.source.opacity.coerceIn(0f, 1f),
 				isVisible = layerVisibility(config, layer.source.id.raw, layer.source.visible),
-				texturePage = placement.page,
+				// Unbound: UvBinding names the page with the uvs.
+				texturePage = 0,
 				atlasTileId = PuppetSourceAtlas.tileIdFor(layer.source.id.raw),
 			)
 			drawables += drawable
@@ -853,7 +854,7 @@ object RigBuilder {
 				lip.path?.let { builtDeformPaths += it }
 				classifiedByDrawable[lip.drawable.id] = lip.layer
 				lipOwnerById[lip.drawable.id] = drawable.id
-				pageByDrawable[lip.drawable.id.raw] = lip.drawable.texturePage
+				pageByDrawable[lip.drawable.id.raw] = atlas.placementByLayerId.getValue(lip.layer.source.id.raw).page
 				layerIdByDrawable[lip.drawable.id.raw] = lip.layer.source.id.raw
 				sourceBoundsByDrawable[lip.drawable.id.raw] = lip.neutralBounds
 			}
@@ -948,8 +949,10 @@ object RigBuilder {
 		val standardIds = StandardParameters.all.map { it.id }.toSet()
 		val uniqueCustomParams = customParams.filter { it.id !in standardIds }
 		val parameterTree = parameterTree(uniqueCustomParams)
-		val (puppetAtlas, artSources) = PuppetSourceAtlas.build(inputAnalysis, atlas)
-		val puppet = PuppetModel(
+		// Geometry is generated against the art alone: tiles without placements, offsets for uvs.
+		val (unboundAtlas, artSources) = UvBinding.unboundAtlas(inputAnalysis,
+			inputAnalysis.layers.map { it.source.id.raw }.filter { it in atlas.placementByLayerId })
+		val unbound = PuppetModel(
 			parameters = StandardParameters.all + uniqueCustomParams,
 			parts = parts,
 			deformers = withFaceLean(deformers, config.rigTuning),
@@ -968,10 +971,13 @@ object RigBuilder {
 			worldOriginY = -analysis.source.heightPx * 0.5f,
 			// Compatibility baseline comes from the export dialog's SDK target.
 			runtimeTarget = config.runtimeTarget,
-			atlas = puppetAtlas,
+			atlas = unboundAtlas,
 			sources = artSources,
 			deformPaths = builtDeformPaths,
 		).withDerivedRenderRoot().let { withoutLegacyHairSway(it, config) }
+		// The skeleton still bakes the bound rig: it refines meshes by interpolating their uvs, and doing
+		// that on offsets and binding afterwards would round the new vertices' uvs differently.
+		val puppet = UvBinding.bind(unbound, inputAnalysis, atlas) { classifiedByDrawable[it.id] }.puppet
 		val faceCenterCanvas = faceRig.coordinateSpace.toCanvas(faceRig.centerX, faceRig.centerY)
 		val skeletonPuppet = config.rigEdits.skeleton?.takeIf { it.enabled && shouldBuildDeformers }
 			?.let { SkeletonRig.generate(puppet, it, context.bodyFrame, handEditedTopology(config), context.stance) } ?: puppet
@@ -986,6 +992,7 @@ object RigBuilder {
 			faceRig.radiusY,
 			warnings,
 			faceRig.initialAngleZ,
+			unbound,
 		)
 	}
 
@@ -1021,11 +1028,8 @@ object RigBuilder {
 	/** A mesh a paint commit replaces, with the atlas slice its texture coordinates were sampled from. */
 	internal class ReplacedMesh internal constructor(
 		val mesh: DrawableMesh,
-		val placement: AtlasPlacement?,
-		val pageWidth: Int,
-		val pageHeight: Int,
-		/** The layer's source bounds in canvas pixels at the time that mesh was built. */
-		val sourceBounds: Bounds,
+		/** The texture the mesh's stored uvs address, or null when the atlas holds no slice for it. */
+		val texture: LayerTexture?,
 	)
 
 	/**
@@ -1069,13 +1073,10 @@ object RigBuilder {
 			parentId,
 			parentFrame,
 			headSpace,
-			placement,
-			pageWidth,
-			pageHeight,
 			config,
 			meshCache = null,
 		)
-		val lips = mouthLips(
+		val unboundLips = mouthLips(
 			owner,
 			layer,
 			parts.data,
@@ -1086,7 +1087,14 @@ object RigBuilder {
 			generatedLips,
 			config,
 		)
-		return RebuiltDrawable(parts.mesh, parts.geometryGrid, lips)
+		// The rebuilt pieces come out unbound; the commit splices them into a bound rig.
+		val lips = unboundLips.map { lip ->
+			val lipPlacement = atlas.placementByLayerId.getValue(lip.layer.source.id.raw)
+			val lipPage = atlas.pages[lipPlacement.page].image
+			val mesh = UvBinding.bindMesh(requireNotNull(lip.drawable.mesh), lip.layer, lipPlacement, lipPage.width, lipPage.height)
+			MouthLip(lip.drawable.copy(mesh = mesh, texturePage = lipPlacement.page), lip.ownerId, lip.layer, lip.path, lip.neutralBounds)
+		}
+		return RebuiltDrawable(UvBinding.bindMesh(parts.mesh, layer, placement, pageWidth, pageHeight), parts.geometryGrid, lips)
 	}
 
 	/**
@@ -1123,18 +1131,17 @@ object RigBuilder {
 	 *         slope and is reported as unresolved rather than as an inverted frame.
 	 */
 	private fun meshNormalizationFrame(previous: ReplacedMesh): Bounds? {
-		val placement = previous.placement ?: return null
+		val texture = previous.texture ?: return null
 		val vertices = previous.mesh.positions.size / 2
 		if (vertices < 3 || previous.mesh.uvs.size < vertices * 2) return null
-		val textureScaleX = placement.scaleX.coerceAtLeast(1f)
-		val textureScaleY = placement.scaleY.coerceAtLeast(1f)
+		val canvas = texture.toCanvas(previous.mesh.uvs)
 		val canvasX = DoubleArray(vertices)
 		val canvasY = DoubleArray(vertices)
 		val localX = DoubleArray(vertices)
 		val localY = DoubleArray(vertices)
 		for (vertex in 0 until vertices) {
-			canvasX[vertex] = (previous.sourceBounds.left + (previous.mesh.uvs[vertex * 2] * previous.pageWidth - placement.x) / textureScaleX).toDouble()
-			canvasY[vertex] = (previous.sourceBounds.top + (previous.mesh.uvs[vertex * 2 + 1] * previous.pageHeight - placement.y) / textureScaleY).toDouble()
+			canvasX[vertex] = canvas[vertex * 2].toDouble()
+			canvasY[vertex] = canvas[vertex * 2 + 1].toDouble()
 			localX[vertex] = previous.mesh.positions[vertex * 2].toDouble()
 			localY[vertex] = previous.mesh.positions[vertex * 2 + 1].toDouble()
 		}
@@ -1182,9 +1189,6 @@ object RigBuilder {
 		parentId: DeformerId?,
 		parentFrame: Bounds,
 		headSpace: HeadCoordinateSpace?,
-		placement: AtlasPlacement,
-		pageWidth: Int,
-		pageHeight: Int,
 		config: PipelineConfig,
 		meshCache: PreviewMeshCache?,
 	): LayerMeshParts {
@@ -1192,9 +1196,6 @@ object RigBuilder {
 			layer,
 			parentFrame,
 			headSpace,
-			placement,
-			pageWidth,
-			pageHeight,
 			config,
 			meshCache,
 			MeshResolution.unitScale(config, context.analysis.source),
@@ -1202,7 +1203,7 @@ object RigBuilder {
 		val outlineMouth = config.mouthOutlineEnabled && !config.meshOnly &&
 			layer.semantic.tag in setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN)
 		val meshData = if (outlineMouth) {
-			mouthContourMesh(originalMeshData, layer, parentFrame, headSpace, placement, pageWidth, pageHeight)
+			mouthContourMesh(originalMeshData, layer, parentFrame, headSpace)
 		} else originalMeshData
 		val mesh = if (parentId != null) {
 			meshData.mesh
@@ -1962,9 +1963,6 @@ object RigBuilder {
 		layer: ClassifiedLayer,
 		parentFrame: Bounds,
 		headSpace: HeadCoordinateSpace?,
-		placement: AtlasPlacement,
-		atlasWidth: Int,
-		atlasHeight: Int = atlasWidth,
 		config: PipelineConfig,
 		meshCache: PreviewMeshCache?,
 		unitScale: Float,
@@ -1977,7 +1975,7 @@ object RigBuilder {
 		// Authored tooth layers may contain several disconnected teeth. Keep their complete texture;
 		// the mouth clipping id supplies the visible boundary.
 		if (layer.semantic.tag in setOf(SemanticTag.TOOTH_T, SemanticTag.TOOTH_B)) {
-			return buildRectangularFallbackMesh(layer, parentFrame, headSpace, placement, atlasWidth, atlasHeight, effectiveSpacing)
+			return buildRectangularFallbackMesh(layer, parentFrame, headSpace, effectiveSpacing)
 		}
 		val adaptive = if (meshCache != null) meshCache.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings, unitScale)
 		else AdaptiveMeshGenerator.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings, unitScale)
@@ -1996,12 +1994,13 @@ object RigBuilder {
 				positions[index + 1] = normalizeY(rigPoint.second, parentFrame)
 				canvas[index] = rigPoint.first
 				canvas[index + 1] = rigPoint.second
-				uvs[index] = (placement.x + localX * placement.scaleX) / atlasWidth
-				uvs[index + 1] = (placement.y + localY * placement.scaleY) / atlasHeight
+				// Layer offsets, bound to the atlas by UvBinding.
+				uvs[index] = localX
+				uvs[index + 1] = localY
 			}
 			return MeshData(DrawableMesh(positions, uvs, adaptive.indices), canvas)
 		}
-		return buildRectangularFallbackMesh(layer, parentFrame, headSpace, placement, atlasWidth, atlasHeight, effectiveSpacing)
+		return buildRectangularFallbackMesh(layer, parentFrame, headSpace, effectiveSpacing)
 	}
 
 	internal fun meshSettings(layer: ClassifiedLayer, config: PipelineConfig): Pair<MeshSettings, Float> {
@@ -2040,9 +2039,6 @@ object RigBuilder {
 		layer: ClassifiedLayer,
 		parentFrame: Bounds,
 		headSpace: HeadCoordinateSpace?,
-		placement: AtlasPlacement,
-		atlasWidth: Int,
-		atlasHeight: Int = atlasWidth,
 		effectiveSpacing: Float,
 	): MeshData {
 		val width = max(1, layer.source.raster.width)
@@ -2065,8 +2061,8 @@ object RigBuilder {
 				positions[vertex * 2 + 1] = normalizeY(rigPoint.second, parentFrame)
 				canvas[vertex * 2] = rigPoint.first
 				canvas[vertex * 2 + 1] = rigPoint.second
-				uvs[vertex * 2] = (placement.x + u * width * placement.scaleX) / atlasWidth
-				uvs[vertex * 2 + 1] = (placement.y + v * height * placement.scaleY) / atlasHeight
+				uvs[vertex * 2] = u * width
+				uvs[vertex * 2 + 1] = v * height
 				vertex++
 			}
 		}
@@ -2371,7 +2367,7 @@ object RigBuilder {
 
     // Shared columns guarantee that the fill and both lip ribbons interpolate identical curves.
     private fun mouthContourMesh(data: MeshData, layer: ClassifiedLayer, frame: Bounds,
-                                 space: HeadCoordinateSpace?, placement: AtlasPlacement, atlasWidth: Int, atlasHeight: Int = atlasWidth): MeshData {
+                                 space: HeadCoordinateSpace?): MeshData {
         val columns = MouthContour.uniformColumns(data, MouthContour.DEFAULT_SEGMENTS)
         if (columns.size < 2) return data
         val positions = FloatArray(columns.size * 6)
@@ -2390,8 +2386,8 @@ object RigBuilder {
                 val canvas = space?.toCanvas(col.x, y) ?: (col.x to y)
                 val localX = (canvas.first - layer.source.bounds.left).coerceIn(0f, width)
                 val localY = (canvas.second - layer.source.bounds.top).coerceIn(0f, height)
-                uvs[j] = (placement.x + localX * placement.scaleX) / atlasWidth
-                uvs[j + 1] = (placement.y + localY * placement.scaleY) / atlasHeight
+                uvs[j] = localX
+                uvs[j + 1] = localY
             }
         }
         val indices = (0 until columns.lastIndex).flatMap { i -> (0..1).flatMap { row ->
@@ -2413,9 +2409,6 @@ object RigBuilder {
         config: PipelineConfig,
         side: Int,
         layer: ClassifiedLayer,
-        placement: AtlasPlacement,
-        pageWidth: Int,
-        pageHeight: Int,
         space: HeadCoordinateSpace?,
     ): Pair<Drawable, DeformPath?> {
         val columns = MouthContour.uniformColumns(data, MouthContour.DEFAULT_SEGMENTS)
@@ -2437,8 +2430,9 @@ object RigBuilder {
             val canvas = space?.toCanvas(rx, ry) ?: (rx to ry)
             val localX = (canvas.first - layer.source.bounds.left).coerceIn(0f, texWidth)
             val localY = (canvas.second - layer.source.bounds.top).coerceIn(0f, texHeight)
-            uvs[i] = (placement.x + localX * placement.scaleX) / pageWidth
-            uvs[i + 1] = (placement.y + localY * placement.scaleY) / pageHeight
+            // Layer offsets: UvBinding addresses them to the ribbon's atlas slice.
+            uvs[i] = localX
+            uvs[i + 1] = localY
         }
         val geometry = grid(mouthAxes()) { values ->
             val transformed = path.map { p ->
@@ -2453,7 +2447,7 @@ object RigBuilder {
             name = layer.source.name,
             mesh = DrawableMesh(positions, uvs, indices),
             geometryGrid = geometry,
-            texturePage = placement.page,
+            texturePage = 0,
             atlasTileId = PuppetSourceAtlas.tileIdFor(layer.source.id.raw),
             blendMode = BlendMode.Normal,
             isVisible = layerVisibility(config, layer.source.id.raw, layer.source.visible),

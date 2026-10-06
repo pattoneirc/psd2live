@@ -124,23 +124,16 @@ internal object RigGenerationSource {
             val next = requireNotNull(to.placementByLayerId[layerId]) { "Current atlas layer is missing" }
             val oldBounds = oldLayers.getValue(layerId).source.bounds
             val newBounds = newLayers.getValue(layerId).source.bounds
-            fun slice(atlas: PackedAtlas, placement: AtlasPlacement, bounds: LayerBounds): AtlasSlice {
+            fun slice(atlas: PackedAtlas, placement: AtlasPlacement, bounds: LayerBounds): LayerTexture {
                 val page = atlas.pages[placement.page]
-                return AtlasSlice(placement, page.image.width, page.image.height,
-                    Bounds(bounds.left.toFloat(), bounds.top.toFloat(),
-                        (bounds.left + bounds.width).toFloat(), (bounds.top + bounds.height).toFloat()))
+                return LayerTexture.packed(bounds, placement, page.image.width, page.image.height)
             }
             val before = slice(from, old, oldBounds)
             val after = slice(to, next, newBounds)
             val sameAddress = old == next && oldBounds == newBounds &&
                 from.pages[old.page].image.width == to.pages[next.page].image.width &&
                 from.pages[old.page].image.height == to.pages[next.page].image.height
-            val uvs = if (sameAddress) mesh.uvs else FloatArray(mesh.uvs.size).also { values ->
-                for (index in values.indices step 2) {
-                    values[index] = after.uvX(before.canvasX(mesh.uvs[index]))
-                    values[index + 1] = after.uvY(before.canvasY(mesh.uvs[index + 1]))
-                }
-            }
+            val uvs = if (sameAddress) mesh.uvs else before.remap(mesh.uvs, after)
             pages[drawable.id.raw] = next.page
             drawable.copy(mesh = DrawableMesh(mesh.positions, uvs, mesh.indices), texturePage = next.page)
         }

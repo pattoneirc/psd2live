@@ -268,12 +268,7 @@ internal object Cmo3ModelImport {
                 val mesh = drawable.mesh ?: return@map drawable.copy(texturePage = placement.page + offset,
                     atlasTileId = PuppetSourceAtlas.tileIdFor(id, PAINT_SOURCE_ID))
                 val page = atlas.pages[placement.page].image
-                val uvs = FloatArray(mesh.positions.size)
-                val canvas = mesh.positions
-                for (index in uvs.indices step 2) {
-                    uvs[index] = (placement.x + (canvas[index] - layer.bounds.left) * placement.scaleX) / page.width
-                    uvs[index + 1] = (placement.y + (canvas[index + 1] - layer.bounds.top) * placement.scaleY) / page.height
-                }
+                val uvs = LayerTexture.packed(layer.bounds, placement, page.width, page.height).toUvs(mesh.positions)
                 pages[drawable.id.raw] = placement.page + offset
                 drawable.copy(mesh = org.umamo.runtime.model.DrawableMesh(mesh.positions, uvs, mesh.indices),
                     texturePage = placement.page + offset, atlasTileId = PuppetSourceAtlas.tileIdFor(id, PAINT_SOURCE_ID))

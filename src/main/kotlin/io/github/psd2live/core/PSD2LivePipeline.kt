@@ -102,7 +102,8 @@ class PSD2LivePipeline {
         ids += SourcePartitionJournal.commands(config.rigEdits).flatMap(SourcePartitionJournal::pieces)
             .map { it.getValue("id").jsonPrimitive.content }
         if (ids.isEmpty()) return rig
-        return rig.copy(puppet = rig.puppet.withDrawablesDeleted(ids.mapTo(HashSet()) { DrawableId(it) }),
+        val deleted = ids.mapTo(HashSet()) { DrawableId(it) }
+        return rig.copy(puppet = rig.puppet.withDrawablesDeleted(deleted), unbound = rig.unbound?.withDrawablesDeleted(deleted),
             layerIdByDrawableId = rig.layerIdByDrawableId - ids, sourceBoundsByDrawableId = rig.sourceBoundsByDrawableId - ids,
             pageByDrawableId = rig.pageByDrawableId - ids)
     }

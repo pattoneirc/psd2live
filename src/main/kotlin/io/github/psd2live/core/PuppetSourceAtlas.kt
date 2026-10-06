@@ -9,7 +9,6 @@ import org.umamo.runtime.model.AtlasTile
 import org.umamo.runtime.model.AtlasTileId
 import org.umamo.runtime.model.PuppetAtlas
 import org.umamo.runtime.model.SourceLayerRef
-import org.umamo.runtime.model.AtlasPlacement as UmamoAtlasPlacement
 
 /**
  * Bridges PSD2Live's packed atlas into Umamo's document-side [PuppetAtlas] / [ArtSource] model so
@@ -26,12 +25,27 @@ internal object PuppetSourceAtlas {
 		sourceName: String = "artwork.psd",
 		sourceIdRaw: String = SOURCE_ID_RAW,
 	): Pair<PuppetAtlas, List<ArtSource>> {
+		val (puppetAtlas, sources) = build(analysis, atlas.placementByLayerId, sourceName, sourceIdRaw)
+		return puppetAtlas.copy(pages = atlas.pages.map { page -> AtlasPage(page.image.width, page.image.height) }) to sources
+	}
+
+	/**
+	 * The tiles and source inventory of [placements]' layers, in its order. A null placement leaves the
+	 * tile unplaced, which is how an unbound rig ([UvBinding]) lists its art without any packing. The
+	 * atlas has no pages; the packed-atlas overload adds them.
+	 */
+	fun build(
+		analysis: PipelineAnalysis,
+		placements: Map<String, AtlasPlacement?>,
+		sourceName: String = "artwork.psd",
+		sourceIdRaw: String = SOURCE_ID_RAW,
+	): Pair<PuppetAtlas, List<ArtSource>> {
 		val sourceId = ArtSourceId(sourceIdRaw)
 		val layersById = analysis.layers.associateBy { it.source.id.raw }
 		val inventory = ArrayList<ArtSourceLayer>()
 		val tiles = ArrayList<AtlasTile>()
 		val seen = LinkedHashSet<String>()
-		for ((layerId, placement) in atlas.placementByLayerId) {
+		for ((layerId, placement) in placements) {
 			if (!seen.add(layerId)) continue
 			val layer = layersById[layerId] ?: continue
 			val source = layer.source
@@ -50,14 +64,7 @@ internal object PuppetSourceAtlas {
 				name = source.name,
 				width = source.raster.width,
 				height = source.raster.height,
-				placement = UmamoAtlasPlacement(
-					pageIndex = placement.page,
-					positionX = placement.x.toFloat(),
-					positionY = placement.y.toFloat(),
-					scaleX = placement.scaleX,
-					scaleY = placement.scaleY,
-					rotationDegrees = 0f,
-				),
+				placement = placement?.let(LayerTexture::tilePlacement),
 				source = SourceLayerRef(
 					sourceId = sourceId,
 					layerKey = source.id.raw,
@@ -65,8 +72,7 @@ internal object PuppetSourceAtlas {
 				),
 			)
 		}
-		val pages = atlas.pages.map { page -> AtlasPage(page.image.width, page.image.height) }
-		val puppetAtlas = PuppetAtlas(pages = pages, tiles = tiles, storedUvsAddressPages = true)
+		val puppetAtlas = PuppetAtlas(pages = emptyList(), tiles = tiles, storedUvsAddressPages = true)
 		val artSource = ArtSource(
 			id = sourceId,
 			name = sourceName,

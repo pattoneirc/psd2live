@@ -203,35 +203,13 @@ internal object RasterMeshJournal {
 
     /** Page and tile UVs both lower to source canvas pixels, including rotated/scaled atlas tiles. */
     internal class TextureCoordinates(val model: PuppetModel, drawable: Drawable) {
-        private val tile = model.atlas.tiles.single { it.id == drawable.atlasTileId }
-        private val reference = requireNotNull(tile.source) { "Mesh migration requires source artwork" }
-        val sourceId = reference.sourceId
-        val layer = model.sources.single { it.id == reference.sourceId }.layers.single { it.key == reference.layerKey }
-        private val placement = tile.placement
-        private val page = placement?.let { model.atlas.pages[it.pageIndex] }
+        private val resolved = LayerTexture.of(model, drawable)
+        val texture: LayerTexture get() = resolved.texture
+        val sourceId = resolved.sourceId
+        val layer = resolved.layer
 
-        init { require(tile.width > 0 && tile.height > 0 && layer.width > 0 && layer.height > 0) { "Invalid mesh migration artwork dimensions" } }
+        fun toCanvas(uvs: FloatArray): FloatArray = resolved.texture.toCanvas(uvs)
 
-        fun toCanvas(uvs: FloatArray): FloatArray = FloatArray(uvs.size).also { result ->
-            for (index in uvs.indices step 2) {
-                val pixel = if (model.atlas.storedUvsAddressPages) {
-                    requireNotNull(layerPixelOf(requireNotNull(placement), uvs[index] * requireNotNull(page).width, uvs[index + 1] * page.height))
-                } else floatArrayOf(uvs[index] * tile.width, uvs[index + 1] * tile.height)
-                result[index] = layer.left + pixel[0] * layer.width / tile.width
-                result[index + 1] = layer.top + pixel[1] * layer.height / tile.height
-            }
-        }
-
-        fun toUvs(canvas: FloatArray): FloatArray = FloatArray(canvas.size).also { result ->
-            for (index in canvas.indices step 2) {
-                val x = (canvas[index] - layer.left) * tile.width / layer.width
-                val y = (canvas[index + 1] - layer.top) * tile.height / layer.height
-                val uv = if (model.atlas.storedUvsAddressPages) {
-                    val pixel = atlasPixelOf(requireNotNull(placement), x, y)
-                    floatArrayOf(pixel[0] / requireNotNull(page).width, pixel[1] / page.height)
-                } else floatArrayOf(x / tile.width, y / tile.height)
-                result[index] = uv[0]; result[index + 1] = uv[1]
-            }
-        }
+        fun toUvs(canvas: FloatArray): FloatArray = resolved.texture.toUvs(canvas)
     }
 }

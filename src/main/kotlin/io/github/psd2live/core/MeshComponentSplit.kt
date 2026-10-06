@@ -114,11 +114,11 @@ internal object MeshComponentSplit {
 
     fun detect(mesh: DrawableMesh, source: SourceLayer, placement: AtlasPlacement, pageWidth: Int, pageHeight: Int,
                checkpoint: () -> Unit = {}): Plan? {
-        val scaleX = placement.scaleX.coerceAtLeast(1f)
-        val scaleY = placement.scaleY.coerceAtLeast(1f)
-        val local = FloatArray(mesh.uvs.size) { i ->
-            (mesh.uvs[i] * (if (i % 2 == 0) pageWidth else pageHeight) -
-                (if (i % 2 == 0) placement.x else placement.y)) / (if (i % 2 == 0) scaleX else scaleY)
+        val texture = LayerTexture.packed(LayerTexture.generatorSpace(0, 0, source.raster.width, source.raster.height), placement, pageWidth, pageHeight)
+        val local = FloatArray(mesh.uvs.size)
+        for (index in 0 until mesh.uvs.size - 1 step 2) {
+            val raster = texture.rasterOfUv(mesh.uvs[index], mesh.uvs[index + 1])
+            local[index] = raster[0]; local[index + 1] = raster[1]
         }
         return detect(mesh, source, local, checkpoint)
     }

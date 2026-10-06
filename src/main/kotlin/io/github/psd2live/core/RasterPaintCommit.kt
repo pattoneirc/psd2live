@@ -11,44 +11,17 @@ import org.umamo.runtime.model.*
 import java.awt.image.BufferedImage
 
 /**
- * One layer's slice of the packed atlas, with the source bounds it was cropped from.
- *
- * A mesh's texture coordinates address the slice, not the canvas, so repacking has to translate them
- * through canvas pixels: `uv -> canvas -> uv`. That round trip is what keeps a drawable on the same
- * pixels after its layer was re-cropped, which is why the atlas convention lives in one place.
- */
-internal class AtlasSlice(
-    val placement: io.github.psd2live.core.AtlasPlacement,
-    val pageWidth: Int,
-    val pageHeight: Int,
-    /** The layer's source bounds in canvas pixels when this slice was packed. */
-    val sourceBounds: Bounds,
-) {
-    private val scaleX get() = placement.scaleX.coerceAtLeast(1f)
-    private val scaleY get() = placement.scaleY.coerceAtLeast(1f)
-
-    fun canvasX(uv: Float): Float = sourceBounds.left + (uv * pageWidth - placement.x) / scaleX
-    fun canvasY(uv: Float): Float = sourceBounds.top + (uv * pageHeight - placement.y) / scaleY
-    fun uvX(canvasX: Float): Float = (placement.x + (canvasX - sourceBounds.left) * scaleX) / pageWidth
-    fun uvY(canvasY: Float): Float = (placement.y + (canvasY - sourceBounds.top) * scaleY) / pageHeight
-}
-
-/**
  * The painted layer's box in canvas pixels, as the float box the rig math works in. The two are
  * easy to confuse: a [Bounds] holds edges, a [LayerBounds] holds a width and a height.
  */
 private fun LayerBounds.toBounds(): Bounds =
 	Bounds(left.toFloat(), top.toFloat(), (left + width).toFloat(), (top + height).toFloat())
 
-/** Re-addresses a mesh's texture coordinates from one slice of the atlas to another. */
-private fun remapUvs(mesh: DrawableMesh, from: AtlasSlice, to: AtlasSlice): FloatArray {
-    val uvs = FloatArray(mesh.uvs.size)
-    for (index in mesh.uvs.indices step 2) {
-        uvs[index] = to.uvX(from.canvasX(mesh.uvs[index]))
-        uvs[index + 1] = to.uvY(from.canvasY(mesh.uvs[index + 1]))
-    }
-    return uvs
-}
+/**
+ * Re-addresses a mesh's texture coordinates from one slice of the atlas to another, through canvas
+ * units: that round trip keeps a drawable on the same pixels after its layer was re-cropped.
+ */
+private fun remapUvs(mesh: DrawableMesh, from: LayerTexture, to: LayerTexture): FloatArray = from.remap(mesh.uvs, to)
 
 /** Shared raster/atlas/mesh preparation. Adapters own gestures, prompts and durable submission. */
 internal object RasterPaintCommit {
@@ -239,29 +212,16 @@ internal object RasterPaintCommit {
 
         /** One layer's slice of [atlas], or null when it holds none. An unknown [bounds] reads as the
          *  canvas origin, which leaves the texture coordinates translated but unscaled. */
-        fun sliceOf(atlas: PackedAtlas, drawableId: String, layerId: String, bounds: LayerBounds?): AtlasSlice? {
+        fun sliceOf(atlas: PackedAtlas, drawableId: String, layerId: String, bounds: LayerBounds?): LayerTexture? {
             val placement = findPlacement(atlas, drawableId, layerId) ?: return null
             val page = atlas.pages.getOrNull(placement.page)
-            return AtlasSlice(
-                placement = placement,
-                pageWidth = page?.image?.width ?: placement.width,
-                pageHeight = page?.image?.height ?: placement.height,
-                sourceBounds = bounds?.let { Bounds(it.left.toFloat(), it.top.toFloat(), (it.left + it.width).toFloat(), (it.top + it.height).toFloat()) }
-                    ?: Bounds(0f, 0f, 0f, 0f),
-            )
+            return LayerTexture.packed(bounds, placement, page?.image?.width ?: placement.width, page?.image?.height ?: placement.height)
         }
 
         /** The mesh a rebuild replaces, described so the frame its parent deformer expects can be
          *  recovered from the geometry itself - the only source left for an imported or hand-made rig. */
         fun replacedMesh(mesh: DrawableMesh, atlas: PackedAtlas, drawableId: String, layerId: String, bounds: LayerBounds): RigBuilder.ReplacedMesh {
-            val slice = sliceOf(atlas, drawableId, layerId, bounds)
-            return RigBuilder.ReplacedMesh(
-                mesh = mesh,
-                placement = slice?.placement,
-                pageWidth = slice?.pageWidth ?: 1,
-                pageHeight = slice?.pageHeight ?: 1,
-                sourceBounds = slice?.sourceBounds ?: Bounds(0f, 0f, 0f, 0f),
-            )
+            return RigBuilder.ReplacedMesh(mesh = mesh, texture = sliceOf(atlas, drawableId, layerId, bounds))
         }
 
         val targetPlacement = findPlacement(newAtlas, targetDrawable?.id?.raw ?: targetLid, targetClassified?.source?.id?.raw ?: targetLid)
@@ -359,10 +319,10 @@ internal object RasterPaintCommit {
                         null
                     }
                     oldMesh != null && oldSlice != null && newSlice != null -> {
-                        updatedPageByDrawableId[drawable.id.raw] = newSlice.placement.page
+                        updatedPageByDrawableId[drawable.id.raw] = newSlice.page
                         drawable.copy(
                             mesh = DrawableMesh(oldMesh.positions, remapUvs(oldMesh, oldSlice, newSlice), oldMesh.indices),
-                            texturePage = newSlice.placement.page,
+                            texturePage = newSlice.page,
                         )
                     }
                     else -> drawable

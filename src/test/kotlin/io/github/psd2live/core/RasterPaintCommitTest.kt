@@ -160,12 +160,11 @@ class RasterPaintCommitTest {
             buildJsonArray { add(VertexGroupJournal.encode(group)) }, MutationAuthor.USER).capture.model
     }
 
-    private fun slice(preview: RigPreviewModel, layerId: String): AtlasSlice {
+    private fun slice(preview: RigPreviewModel, layerId: String): LayerTexture {
         val placement = preview.atlas.placementByLayerId.getValue(layerId)
         val page = preview.atlas.pages[placement.page].image
         val bounds = preview.analysis.source.layers.single { it.id.raw == layerId }.bounds
-        return AtlasSlice(placement, page.width, page.height, Bounds(bounds.left.toFloat(), bounds.top.toFloat(),
-            (bounds.left + bounds.width).toFloat(), (bounds.top + bounds.height).toFloat()))
+        return LayerTexture.packed(bounds, placement, page.width, page.height)
     }
 
     @Test fun recropWithoutRebuildPreservesAuthoredRigAndAtlasCanvasAddresses() = runBlocking<Unit> {
@@ -189,10 +188,8 @@ class RasterPaintCommitTest {
             assertEquals(prior.parentDeformerId, next.parentDeformerId)
             assertEquals(before.rig.sourceBoundsByDrawableId[prior.id.raw], after.rig.sourceBoundsByDrawableId[next.id.raw])
             val from = slice(before, id); val to = slice(after, id)
-            for (index in prior.mesh!!.uvs.indices step 2) {
-                assertEquals(from.canvasX(prior.mesh!!.uvs[index]), to.canvasX(next.mesh!!.uvs[index]), 0.0001f)
-                assertEquals(from.canvasY(prior.mesh!!.uvs[index + 1]), to.canvasY(next.mesh!!.uvs[index + 1]), 0.0001f)
-            }
+            val priorCanvas = from.toCanvas(prior.mesh!!.uvs); val nextCanvas = to.toCanvas(next.mesh!!.uvs)
+            for (index in priorCanvas.indices) assertEquals(priorCanvas[index], nextCanvas[index], 0.0001f)
             assertContentEquals(oldPixels.getValue(id), before.analysis.source.layers.single { it.id.raw == id }.raster.rgba)
         }
         assertContentEquals(oldPixels.getValue("art1"), after.analysis.source.layers.single { it.id.raw == "art1" }.raster.rgba)
