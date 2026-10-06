@@ -91,6 +91,15 @@ internal class BodyStance private constructor(
 
 	private val strength = strength.coerceIn(0f, 4f).toDouble()
 
+	/** Every input of the stance, printed canonically, for content-hash cache keys of what it shapes. */
+	internal val contentKey: String = buildString {
+		append(character).append('|').append(torso.centerX).append(',').append(torso.shoulderY).append(',')
+			.append(torso.waistY).append(',').append(torso.halfWidth).append('|')
+		for (leg in legs) append(leg.side).append(':').append(leg.hipX).append(',').append(leg.hipY).append(',').append(leg.kneeX).append(',')
+			.append(leg.kneeY).append(',').append(leg.ankleX).append(',').append(leg.ankleY).append(',').append(leg.floorY).append(';')
+		append('|').append(legsFrame).append('|').append(this@BodyStance.strength).append('|').append(tuning)
+	}
+
 	// The [tuning] in the units the motion is worked out in: degrees, shares of a length, and lengths.
 	/** Hips sideways at full Body X, lowered at full Body Y down and raised at full up, in leg lengths. */
 	val hipShift = tuning.hipShift / 100.0

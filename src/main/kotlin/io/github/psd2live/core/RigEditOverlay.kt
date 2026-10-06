@@ -296,7 +296,8 @@ data class RigEditOverlay(
 				model = RigAuthoringJournal.replay(model, command)
 			}
 		}
-		model = io.github.psd2live.core.sim.SimGenerator.apply(SwingGenerator.apply(model, swingEdits), simEdits)
+		// Swings and simulations write their keyforms onto the replayed rig, in the document graph's order.
+		model = DocumentGenerators.generate(model, this)
 		// Edits of generated keyforms merge with what the generators produce now.
 		model = GeneratedOverrides.applyAll(model, authoringJournal).model
 		return RigStructureEdits.replay(model, generatedPanelEdits + deferredJournalEdits).withParametersSyncedFromTree()

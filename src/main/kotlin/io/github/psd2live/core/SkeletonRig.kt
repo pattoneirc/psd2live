@@ -153,6 +153,33 @@ internal object SkeletonRig {
 	}
 
 	/**
+	 * Baked skeletons by the content hash of their inputs. Skinning takes seconds on a full figure while
+	 * hashing the rig before it takes milliseconds, so a rebuild with an unchanged skeleton and base rig -
+	 * an undo, a history checkout, an export after the preview, a classification change elsewhere and back -
+	 * reuses the bake. Rigs are large; only the last few are kept.
+	 */
+	private val generated = io.github.psd2live.format.compile.document.GenerationCache<PuppetModel>(capacity = 4)
+
+	/** [apply] through the generation cache. The key covers every input, including the names' language. */
+	fun generate(
+		base: PuppetModel,
+		spec: SkeletonSpec,
+		frame: Bounds,
+		lockedTopology: Set<String> = emptySet(),
+		stance: BodyStance? = null,
+	): PuppetModel {
+		if (!spec.enabled || base.deformers.none { it.id == bodyId } || limbBones(spec).isEmpty()) return base
+		val key = io.github.psd2live.format.compile.document.ContentHash.of("skeleton", io.github.psd2live.targets.cubism.PuppetIr.toIr(base),
+			spec.toJson(), frame, lockedTopology.sorted(), stance?.contentKey, io.github.psd2live.i18n.I18n.currentLanguage.tag)
+		return generated.getOrPut(key) { apply(base, spec, frame, lockedTopology, stance) }
+	}
+
+	/** Hits and misses of the skeleton cache, for tests and measurements. */
+	internal val cacheHits: Int get() = generated.hits
+	internal val cacheMisses: Int get() = generated.misses
+	internal fun clearCache() = generated.clear()
+
+	/**
 	 * Bakes [spec] into [base]. [frame] is the character bounds the body warp spans, and [stance] how the
 	 * figure stands, which places the leg poses; without one it is read off the skeleton. Meshes in
 	 * [lockedTopology] keep their vertices: they carry hand-made topology edits that replay by vertex

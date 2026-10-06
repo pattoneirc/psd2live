@@ -106,6 +106,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `RuntimeConformanceTool` | Rust 运行时的参考数据：随机模型（Warp、旋转、嵌套、稀疏网格、混合形、Glue、通道、部件）、样例与本地工程在随机姿势下的编辑器求值结果，以及随机摆锤组和样例物理的逐帧轨迹；用 `runtime/` 中的 `p2lrt-conformance` 比较 | `runtime-conformance/<用例>/`、`runtime-physics/<用例>/` |
 | `WarpProbeTool` | 编辑器求值器的黑盒探测：Warp 映射（格子内外）、Warp 下的旋转框架、翻转、混合形、稀疏网格，供运行时独立实现对照 | `warp-probe/*.tsv` |
 | `SwingCostTool` | tml 上两个摆动的生成耗时、朴素哈希其输入的耗时与全部编辑重放耗时，用于判断生成器是否值得接入生成缓存 | `swing-cost/report.txt` |
+| `GeneratorCostTool` | 各生成器（Rig 生成有无骨架、骨架烘焙缓存前后、物理组目录、生成动作缓存前后、Rig IR 编译、模拟烘焙与写回）的耗时，及对其输入做内容哈希的耗时；`PSD2LIVE_SAMPLE` 指定样例 | `generator-cost/report.txt` |
 | `ExportGoldenTool` | `tml`、`ds` 的无骨架、自动骨架和自定义动作三种变体的全部导出文件摘要（cmo3 取读回后降级为 moc3 的摘要），用于逐字节对比重构前后的导出；`PSD2LIVE_GOLDEN_LABEL` 指定输出名 | `export-golden/<名称>.txt` |
 | `CommitPerfTool.profile` / `.desktop` | 单次作者提交的耗时：`profile` 走应用层命令边界并按阶段拆分（修订号、配置解码、重建、几何检查）；`desktop` 走桌面视图模型与适配器，连续提交网格顶点编辑和画笔笔触，报告提交耗时与界面线程最长停顿。可配合 `JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` 采样 | `commit-perf/report.txt`、`desktop.txt` |
 

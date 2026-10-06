@@ -109,7 +109,19 @@ object MotionPresets {
 		skeleton: SkeletonSpec?,
 		settings: MotionPresetSettings = MotionPresetSettings(),
 		exclude: Set<String> = emptySet(),
-	): List<MotionTrack> {
+	): List<MotionTrack> = generated.getOrPut(io.github.psd2live.format.compile.document.ContentHash.of("motion", name.lowercase(),
+		skeleton?.toJson(), settings.values.toSortedMap(), settings.deleted, settings.disabled, exclude.sorted())) {
+		generate(name, skeleton, settings, exclude)
+	}
+
+	/**
+	 * Generated tracks by the content hash of their inputs. The skeleton presets solve the figure frame by
+	 * frame, which takes far longer than hashing the skeleton, and every rebuild compiles every preset.
+	 */
+	private val generated = io.github.psd2live.format.compile.document.GenerationCache<List<MotionTrack>>(capacity = 64)
+	internal fun clearCache() = generated.clear()
+
+	private fun generate(name: String, skeleton: SkeletonSpec?, settings: MotionPresetSettings, exclude: Set<String>): List<MotionTrack> {
 		val key = name.lowercase()
 		val speed = settings.of(name, SPEED)
 		val tracks = when (key) {

@@ -16,7 +16,8 @@ import java.util.WeakHashMap
  * geometry rig (meshes, skeleton skinning, deformers) is identical across paint commits and is the
  * dominant rebuild cost. The key holds every generation input exactly; the only relaxation is the
  * point payload of `canvas_geometry` journal entries, which no generation stage reads (it is replayed
- * afterwards onto the generated base). Entry order and ids stay in the key.
+ * afterwards onto the generated base), and generated overrides, which merge after every generator.
+ * Entry order and ids stay in the key.
  */
 internal class GeneratedGeometryCache {
 	internal class Entry(val atlas: PackedAtlas, val rig: BuiltRig)
@@ -63,8 +64,9 @@ internal class GeneratedGeometryCache {
 
 		private fun withoutGeometryPoints(config: PipelineConfig): PipelineConfig {
 			val journal = config.rigEdits.authoringJournal
-			if (journal.none { it.isCanvasGeometry() }) return config
-			return config.copy(rigEdits = config.rigEdits.copy(authoringJournal = journal.map { command ->
+			if (journal.none { it.isCanvasGeometry() || GeneratedOverrides.isOverride(it) }) return config
+			// Generated overrides merge after every generator, so no generation stage reads them either.
+			return config.copy(rigEdits = config.rigEdits.copy(authoringJournal = journal.filterNot(GeneratedOverrides::isOverride).map { command ->
 				if (command.isCanvasGeometry()) JsonObject(command - "points") else command
 			}))
 		}

@@ -974,7 +974,7 @@ object RigBuilder {
 		).withDerivedRenderRoot().let { withoutLegacyHairSway(it, config) }
 		val faceCenterCanvas = faceRig.coordinateSpace.toCanvas(faceRig.centerX, faceRig.centerY)
 		val skeletonPuppet = config.rigEdits.skeleton?.takeIf { it.enabled && shouldBuildDeformers }
-			?.let { SkeletonRig.apply(puppet, it, context.bodyFrame, handEditedTopology(config), context.stance) } ?: puppet
+			?.let { SkeletonRig.generate(puppet, it, context.bodyFrame, handEditedTopology(config), context.stance) } ?: puppet
 		return BuiltRig(
 			skeletonPuppet,
 			pageByDrawable,
@@ -1010,6 +1010,13 @@ object RigBuilder {
 		config.rigEdits.authoringJournal
 			.filter { it["op"]?.jsonPrimitive?.contentOrNull == "canvas_topology" }
 			.mapNotNullTo(HashSet()) { it["id"]?.jsonPrimitive?.contentOrNull }
+
+	/**
+	 * The id of a deform path the builder generates on [drawable]: derived from the mesh and the path's role,
+	 * so every build of the same rig names it the same and a content hash of the rig is stable.
+	 */
+	internal fun generatedPathId(drawable: DrawableId, role: String): String =
+		UUID.nameUUIDFromBytes("psd2live:generated-path:${drawable.raw}:$role".encodeToByteArray()).toString()
 
 	/** A mesh a paint commit replaces, with the atlas slice its texture coordinates were sampled from. */
 	internal class ReplacedMesh internal constructor(
@@ -2341,7 +2348,7 @@ object RigBuilder {
         if (upperPoints.size < 2 || lowerPoints.size < 2) return emptyList()
         return listOf(
             DeformPath(
-                id = UUID.randomUUID().toString(),
+                id = generatedPathId(drawableId, "upper"),
                 drawableId = drawableId,
                 points = upperPoints,
                 width = DeformPath.DEFAULT_WIDTH,
@@ -2350,7 +2357,7 @@ object RigBuilder {
                 editLevel = 2,
             ),
             DeformPath(
-                id = UUID.randomUUID().toString(),
+                id = generatedPathId(drawableId, "lower"),
                 drawableId = drawableId,
                 points = lowerPoints,
                 width = DeformPath.DEFAULT_WIDTH,
@@ -2469,7 +2476,7 @@ object RigBuilder {
             }
             if (points.size >= 2) {
                 DeformPath(
-                    id = UUID.randomUUID().toString(),
+                    id = generatedPathId(lipDrawable.id, "lip"),
                     drawableId = lipDrawable.id,
                     points = points,
                     width = DeformPath.DEFAULT_WIDTH,

@@ -45,6 +45,20 @@ class GeneratorsTest {
 		assertEquals(4, runs, "the least recently used entry was evicted")
 	}
 
+	@Test fun aSlowMissDoesNotHoldUpOtherKeys() {
+		val cache = GenerationCache<String>()
+		val value = cache.getOrPut("slow") {
+			// Another thread looks up and fills a different key while this one is still computing.
+			var other: String? = null
+			val thread = Thread { other = cache.getOrPut("fast") { "fast" } }
+			thread.start(); thread.join(5_000)
+			assertEquals("fast", other, "the other key was served while the miss computed")
+			"slow"
+		}
+		assertEquals("slow", value)
+		assertEquals("slow", cache.getOrPut("slow") { error("cached") })
+	}
+
 	@Test fun mergesKeepUntouchedSidesAndReportRealConflicts() {
 		val base = mapOf("a" to 1, "b" to 1, "c" to 1, "d" to 1, "gone" to 1)
 		val generated = mapOf("a" to 2, "b" to 1, "c" to 3, "d" to 5, "new" to 7)

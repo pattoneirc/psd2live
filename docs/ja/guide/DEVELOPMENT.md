@@ -104,6 +104,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `RuntimeConformanceTool` | Rust ランタイムの参照データ：ランダムなモデル（ワープ、回転、入れ子、疎なキーフォーム、ブレンドシェイプ、グルー、チャンネル、パーツ）、サンプル、ローカルのプロジェクトをランダムなポーズでエディタが評価した結果と、ランダムな振り子グループとサンプルの物理のフレームごとの軌跡。`runtime/` の `p2lrt-conformance` で比較する | `runtime-conformance/<ケース>/`、`runtime-physics/<ケース>/` |
 | `WarpProbeTool` | エディタの評価器のブラックボックス探査：格子内外のワープ写像、ワープ下の回転フレーム、反転、ブレンドシェイプ、疎なキーフォーム。ランタイムの独立実装の照合用 | `warp-probe/*.tsv` |
 | `SwingCostTool` | tml での 2 つのスイングの生成時間、その入力の単純なハッシュ時間、編集全体の再生時間。生成器に生成キャッシュを付ける価値があるかの判断に使う | `swing-cost/report.txt` |
+| `GeneratorCostTool` | 各生成器（スケルトンの有無による Rig 生成、スケルトンのベイクのキャッシュ前後、物理グループ一覧、生成モーションのキャッシュ前後、Rig IR のコンパイル、シミュレーションのベイクと書き戻し）の時間と、その入力のコンテンツハッシュ時間。`PSD2LIVE_SAMPLE` でサンプルを指定 | `generator-cost/report.txt` |
 | `ExportGoldenTool` | `tml` と `ds` の、スケルトンなし・自動スケルトン・作成したモーションの 3 種での全書き出しファイルのダイジェスト（cmo3 は読み戻して moc3 に下げたもの）。リファクタリング前後の書き出しをバイト単位で比較する。`PSD2LIVE_GOLDEN_LABEL` で出力名を指定 | `export-golden/<名前>.txt` |
 | `SimBakeBenchmark` | `tml` の後ろ髪をいくつかの設定で焼き込み、フィットに使わなかった動きでシミュレーションと書き出し結果を比較 | 標準出力 |
 | `CommitPerfTool.profile` / `.desktop` | 1 回の編集コミットにかかる時間。`profile` はアプリケーション層のコマンド境界を通し、段階別（リビジョン、設定のデコード、再構築、ジオメトリ検査）に分けて計測。`desktop` はデスクトップのビューモデルとアダプタを通してメッシュ頂点編集とブラシのストロークを続けてコミットし、コミット時間と UI スレッドの最長停止を報告。`JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` と併用してサンプリング可能 | `commit-perf/report.txt`、`desktop.txt` |

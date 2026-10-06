@@ -33,18 +33,23 @@ class GeneratorCostTool {
 
 		// The rig builder with and without the skeleton stage, meshes cached as in the editor.
 		report("rig builder, no skeleton", time(5) { RigBuilder.build(plain.analysis, plain.atlas, plain.config, pipeline.meshCache) })
-		report("rig builder, with skeleton", time(5) { RigBuilder.build(skeletal.analysis, skeletal.atlas, skeletal.config, pipeline.meshCache) })
+		report("rig builder, with skeleton, uncached", time(3) { SkeletonRig.clearCache(); RigBuilder.build(skeletal.analysis, skeletal.atlas, skeletal.config, pipeline.meshCache) })
+		report("rig builder, with skeleton, cached", time(5) { RigBuilder.build(skeletal.analysis, skeletal.atlas, skeletal.config, pipeline.meshCache) })
 		val beforeSkeleton = RigBuilder.build(plain.analysis, plain.atlas, plain.config, pipeline.meshCache).puppet
 		report("skeleton input hash (puppet IR + spec)", time { ContentHash.of(PuppetIr.toIr(beforeSkeleton), built.spec.toJson()) })
-		report("full preview build, with skeleton", time(3) { pipeline.buildPreview(plain.analysis, skeletal.config) })
+		report("full preview build, with skeleton, cached", time(3) { pipeline.buildPreview(plain.analysis, skeletal.config) })
 
 		// Generators that rerun on every replay: physics catalog and generated motions.
 		val parameterIds = skeletal.rig.puppet.parameters.mapTo(linkedSetOf()) { it.id.raw }
 		report("physics catalog", time { PhysicsCatalog.active(skeletal.analysis, skeletal.config, parameterIds) })
 		report("physics input hash", time { ContentHash.of(skeletal.config.rigEdits.physicsEdits.map { it.toJson() }, parameterIds, skeletal.config) })
-		report("generated motions (all presets)", time {
-			for (name in listOf("Idle", "Blink", "Nod", "Shake") + SkeletonMotions.presets.map { it.name })
-				MotionPresets.tracks(name, skeletal.config.rigEdits.skeleton, MotionPresetSettings(), emptySet())
+		val presets = listOf("Idle", "Blink", "Nod", "Shake") + SkeletonMotions.presets.map { it.name }
+		report("generated motions (all presets), uncached", time {
+			MotionPresets.clearCache()
+			for (name in presets) MotionPresets.tracks(name, skeletal.config.rigEdits.skeleton, MotionPresetSettings(), emptySet())
+		})
+		report("generated motions (all presets), cached", time {
+			for (name in presets) MotionPresets.tracks(name, skeletal.config.rigEdits.skeleton, MotionPresetSettings(), emptySet())
 		})
 		report("rig IR compile (physics + motions + IR)", time(5) { RigIrCompiler.compile(skeletal) })
 

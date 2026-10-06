@@ -72,20 +72,28 @@ public class GeneratorGraph(nodes: List<GeneratorNode>) {
 	}
 }
 
-/** Generator outputs by the content hash of their inputs; a bounded, least-recently-used store. */
-public class GenerationCache<V>(private val capacity: Int = 64) {
+/**
+ * Generator outputs by the content hash of their inputs; a bounded, least-recently-used store. Values must be
+ * immutable: every caller with the same key shares one. A miss computes outside the lock, so a slow generator
+ * does not hold up lookups of other keys; two threads missing the same key at once may both compute it.
+ */
+public class GenerationCache<V : Any>(private val capacity: Int = 64) {
 	private val entries = object : LinkedHashMap<String, V>(16, 0.75f, true) {
 		override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, V>?): Boolean = size > capacity
 	}
 	public var hits: Int = 0; private set
 	public var misses: Int = 0; private set
 
-	@Synchronized
 	public fun getOrPut(key: String, compute: () -> V): V {
-		entries[key]?.let { hits++; return it }
-		misses++
-		return compute().also { entries[key] = it }
+		synchronized(this) {
+			entries[key]?.let { hits++; return it }
+			misses++
+		}
+		val value = compute()
+		synchronized(this) { return entries.getOrPut(key) { value } }
 	}
+
+	public fun clear(): Unit = synchronized(this) { entries.clear() }
 }
 
 /**

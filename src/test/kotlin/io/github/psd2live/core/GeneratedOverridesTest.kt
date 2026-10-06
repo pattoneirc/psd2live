@@ -97,7 +97,7 @@ class GeneratedOverridesTest {
 		val generated = overlay.applyTo(initial.rig.puppet)
 		val (key, _) = swungCell(generated, warpId)
 		val atDefault = key + ("ParamSwingBack" to 0f)
-		val captured = GeneratedOverrides.capture(generated, overlay.swingEdits, edit(warpId, atDefault, FloatArray(4)))
+		val captured = GeneratedOverrides.capture(generated, overlay, edit(warpId, atDefault, FloatArray(4)))
 		assertEquals("canvas_geometry", captured.single().jsonObject.getValue("op").jsonPrimitive.content)
 	}
 }
