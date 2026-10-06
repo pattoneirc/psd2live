@@ -125,12 +125,13 @@ class WorkspaceAuthoredLayerDeletionTest {
     }
 
     @Test fun depthRearOrFrontDeletionPreservesTheOtherSliceMotionAndRestoresTheWeld() = runBlocking<Unit> {
-        for (layer in listOf("first", "front")) {
+        for (layer in listOf("back", "front")) {
             val runtime = fixture(); val authored = author(runtime)
             val depth = WorkspacePartitionCommands(runtime).execute(authored.projectId, authored.state,
                 listOf(WorkspaceDocumentOperation("source_split_depth", buildJsonObject {
                     put("source_id", mesh(authored.model, "first").id.raw); put("middle_ids", JsonArray(listOf(JsonPrimitive(mesh(authored.model, "third").id.raw))))
                     put("front_layer_id", "front"); put("front_mesh_id", "FrontMesh"); put("glue_id", "DepthWeld")
+                    put("back_layer_id", "back"); put("back_mesh_id", "BackMesh")
                 })), "Depth", MutationAuthor.USER).commit.capture
             val removed = mesh(depth.model, layer).id
             val deleted = WorkspaceLayerCommands(runtime).execute(depth.projectId, depth.state, deletion(layer), "Delete slice", MutationAuthor.USER).commit.capture

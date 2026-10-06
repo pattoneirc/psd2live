@@ -1,12 +1,14 @@
 package io.github.psd2live.application
 
-import io.github.psd2live.core.DepthSplit
-import io.github.psd2live.core.RigLayerDeletion
+import io.github.psd2live.core.*
 import io.github.psd2live.project.*
 import kotlinx.serialization.json.*
 import java.util.UUID
 
-/** Depth slices clone authored motion in journal order, rather than repartitioning the mesh. */
+/**
+ * Depth slices. A generated model gets two new primitives, back and front, that replace the source mesh and its
+ * layer; an imported CMO3 model keeps the legacy copy, which clones the source in journal order.
+ */
 internal object WorkspaceDepthSplitEdits {
     val supported = setOf("source_split_depth")
 
@@ -18,11 +20,33 @@ internal object WorkspaceDepthSplitEdits {
         require(document.source.layers.none { it.id.raw == frontId }) { "Front layer ID already exists: $frontId" }
         val decoded = document.config()
         val config = if ("drawOrderOverrides" in document.settings) decoded else decoded.copy(drawOrderOverrides = model.config.drawOrderOverrides)
-        val prepared = DepthSplit.prepare(model, config, request.getValue("source_id").jsonPrimitive.content,
-            request.getValue("middle_ids").jsonArray.map { it.jsonPrimitive.content }, frontId,
-            request["front_mesh_id"]?.jsonPrimitive?.content ?: "ArtMeshDepth_${UUID.randomUUID()}",
-            request["glue_id"]?.jsonPrimitive?.content ?: "GlueDepth_${UUID.randomUUID()}",
-            request["names"]?.jsonArray?.map { it.jsonPrimitive.content }, work::checkpoint)
+        val sourceId = request.getValue("source_id").jsonPrimitive.content
+        val middleIds = request.getValue("middle_ids").jsonArray.map { it.jsonPrimitive.content }
+        val frontMeshId = request["front_mesh_id"]?.jsonPrimitive?.content ?: "ArtMeshDepth_${UUID.randomUUID()}"
+        val glueId = request["glue_id"]?.jsonPrimitive?.content ?: "GlueDepth_${UUID.randomUUID()}"
+        val names = request["names"]?.jsonArray?.map { it.jsonPrimitive.content }
+        if (config.rigEdits.importedCmo3 == null) {
+            val backId = request["back_layer_id"]?.jsonPrimitive?.content ?: "depth-back:${UUID.randomUUID()}"
+            require(document.source.layers.none { it.id.raw == backId }) { "Back layer ID already exists: $backId" }
+            val backMeshId = request["back_mesh_id"]?.jsonPrimitive?.content ?: "ArtMeshDepthBack_${UUID.randomUUID()}"
+            val slices = DepthSplit.materialize(model, config, sourceId, middleIds, backId, backMeshId, frontId, frontMeshId, glueId,
+                names, work::checkpoint)
+            work.progress(0.75f, "Preserving depth slice bindings")
+            val frozen = WorkspaceLayerInsertionEdits.freeze(document, model)
+            val placed = WorkspaceArtPrimitives.replaceLayer(frozen, model, slices.sourceLayerId, listOf(slices.front, slices.back),
+                listOf(Side.NONE, Side.NONE))
+            val overlay = MeshGenerationBaseline.preserve(frozen.rigEdits.copy(simEdits = slices.simulations.simEdits), model.config)
+            return placed.copy(
+                layerOverrides = placed.layerOverrides + listOf(slices.back.id.raw, slices.front.id.raw).associateWith { slices.classification },
+                layerVisibility = placed.layerVisibility + listOf(slices.back.id.raw, slices.front.id.raw).associateWith {
+                    document.layerVisibility[slices.sourceLayerId] ?: slices.visible
+                },
+                parentOverrides = placed.parentOverrides + listOf(slices.back.id.raw, slices.front.id.raw).associateWith { slices.parent },
+                settings = JsonObject(placed.settings + ("drawOrderOverrides" to JsonObject(slices.drawOrderOverrides.mapValues { JsonPrimitive(it.value) }))),
+                rigEdits = overlay.copy(authoringJournal = overlay.authoringJournal + slices.record,
+                    splitDrawableIds = overlay.splitDrawableIds + mapOf(slices.back.id.raw to backMeshId, slices.front.id.raw to frontMeshId)))
+        }
+        val prepared = DepthSplit.prepare(model, config, sourceId, middleIds, frontId, frontMeshId, glueId, names, work::checkpoint)
         work.progress(0.75f, "Preserving depth slice bindings")
         val front = prepared.source.layers.single { it.id.raw == frontId }
         return document.copy(source = WorkspaceSourceArt(document.source.widthPx, document.source.heightPx,

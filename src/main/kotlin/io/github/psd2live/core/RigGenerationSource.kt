@@ -30,9 +30,15 @@ internal object RigGenerationSource {
         val lipInputs = geometry.copy(layers = geometry.layers.filter { it.source !is MouthLipLayer }.map { layer ->
             meshSources[layer.source.id.raw]?.let { source -> CharacterAnalyzer.classify(source, textureConfig) } ?: layer
         })
+        val owned = ArtPrimitiveJournal.ownedLayers(config.rigEdits)
+        val superseded = ArtPrimitiveJournal.supersededLayers(config.rigEdits)
+        val primitiveCoverage = ArtPrimitiveJournal.coverage(config.rigEdits)
+        fun gone(id: String) = id !in current && superseded.any { id == it || id.startsWith("$it:") }
         val generated = (if (RigGenerationBaseline.present(config.rigEdits))
             RigGenerationTextures.layers(config.meshSource ?: input.source, textureConfig) else
             MouthLipLayers.prepare(lipInputs, textureConfig).layers.filter { it.source is MouthLipLayer })
+            // Primitive layers are never generated, so they own no ribbons; a superseded mouth keeps its ribbons.
+            .filterNot { layer -> (layer.source as? MouthLipLayer)?.ownerId?.let { it in owned } == true }
             .associateBy { it.source.id.raw }
         val textures = geometry.copy(source = input.source, preview = input.preview, layers = geometry.layers.map { layer ->
             // Keeping a generated ribbon's mesh also keeps its generated raster and contour.
@@ -46,6 +52,9 @@ internal object RigGenerationSource {
                 }
                 val covered = padded(source, lip.bounds)
                 layer.copy(source = MouthLipLayer(lip.ownerId, lip.side, owner, covered.raster, covered.bounds))
+            } else if (gone(layer.source.id.raw)) {
+                // Superseded by an art primitive: only journal entries before that record address it.
+                layer.copy(source = ArtPrimitiveJournal.placeholder(layer.source), opaquePixels = 1)
             } else {
                 val artwork = current[layer.source.id.raw] ?: current.entries
                     .filter { layer.source.id.raw.startsWith("${it.key}:") }.maxByOrNull { it.key.length }?.value
@@ -67,6 +76,10 @@ internal object RigGenerationSource {
                 LayerRaster(lip.raster.width, lip.raster.height, ByteArray(lip.raster.rgba.size)), lip.bounds)
             val covered = creationCoverage[lip.id.raw]?.let { padded(source, it) } ?: source
             layer.copy(source = MouthLipLayer(lip.ownerId, lip.side, owner, covered.raster, covered.bounds), opaquePixels = layer.opaquePixels.coerceAtLeast(1))
+        } + primitiveCoverage.mapNotNull { (id, coverage) ->
+            // Primitive layers are textured, never generated. A superseded one keeps a transparent tile.
+            val artwork = current[id]?.let { padded(it, coverage) } ?: if (id in superseded) ArtPrimitiveJournal.placeholder(id, id, coverage) else null
+            artwork?.let { CharacterAnalyzer.classify(it, textureConfig).let { classified -> classified.copy(opaquePixels = classified.opaquePixels.coerceAtLeast(1)) } }
         })
         return Analyses(geometry, textures)
     }
@@ -89,9 +102,20 @@ internal object RigGenerationSource {
         }
         val previous = reference.layers.associateBy { it.id.raw }
         val partitions = partitionCoverage(overlay)
+        val owned = ArtPrimitiveJournal.ownedLayers(overlay)
+        val superseded = ArtPrimitiveJournal.supersededLayers(overlay)
+        val currentById = current.layers.associateBy { it.id.raw }
+        // A superseded layer still generates, in the slot its replacements hold, so the frames and identities
+        // the journal was written against stay the same up to the record that removes it.
+        val restored = reference.layers.filter { it.id.raw in superseded && it.id.raw !in owned && it.id.raw !in currentById }.map { layer ->
+            val order = ArtPrimitiveJournal.anchorOrder(overlay, layer.id.raw, currentById) ?: layer.order
+            object : SourceLayer by layer { override val order = order }
+        }
         // Current metadata and newly added layers remain authoritative; existing raster shapes stay fixed.
         return object : SourceArt by current {
-            override val layers = current.layers.map { layer ->
+            override val layers = (if (owned.isEmpty() && restored.isEmpty()) current.layers else
+                current.layers.filterNot { it.id.raw in owned } + restored).map { layer ->
+                if (layer.id.raw in superseded && layer.id.raw !in currentById) return@map layer
                 partitions[layer.id.raw]?.let { coverage ->
                     val old = previous[layer.id.raw]?.bounds ?: layer.bounds
                     val left = minOf(old.left, coverage.left); val top = minOf(old.top, coverage.top)

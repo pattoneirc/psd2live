@@ -87,39 +87,44 @@ class WorkspacePartitionCommandsTest {
             val result = WorkspacePartitionCommands(runtime).execute(before.projectId, before.state,
                 listOf(operation(operation)), "Bound partition", MutationAuthor.USER).commit.capture
             assertTrue(result.model.rig.puppet.drawables.none { it.id == sourceId })
-            val journal = SourcePartitionJournal.commands(result.document.rigEdits).single()
-            val records = SourcePartitionJournal.pieces(journal)
+            assertTrue(result.document.source.layers.none { it.id.raw == "islands" })
+            assertFalse("islands" in result.document.deletedLayerIds)
+            val journal = ArtPrimitiveJournal.commands(result.document.rigEdits).single()
+            assertEquals(listOf(sourceId.raw), journal.getValue("supersedes").jsonArray.map { it.jsonPrimitive.content })
+            val records = ArtPrimitiveJournal.primitives(journal)
+            assertTrue(SourcePartitionJournal.commands(result.document.rigEdits).isEmpty())
             val body = result.document.rigEdits.simEdits.single()
             assertEquals(records.map { it.getValue("id").jsonPrimitive.content }, body.targets)
             assertFalse(sourceId.raw in body.bake!!.vertexCounts)
             val evaluator = org.umamo.render.eval.CpuDeformationEvaluator()
             val replayed = builder.build(result.document)
+            val originalMesh = original.mesh!!
+            val originalGroup = before.model.rig.puppet.vertexGroups.single { it.drawableId == sourceId && it.name == "Pins" }.weights
             for (record in records) {
                 val id = DrawableId(record.getValue("id").jsonPrimitive.content)
                 val actual = result.model.rig.puppet.drawables.single { it.id == id }
                 assertTrue(actual.isVisible)
                 assertEquals(actual.mesh!!.vertexCount, body.bake.vertexCounts[id.raw])
-                fun interpolate(values: FloatArray, stride: Int): FloatArray = record.getValue("sources").jsonArray.flatMap { row ->
-                    val s = row.jsonArray
-                    (0 until stride).map { axis -> if (s.size == 1) values[s[0].jsonPrimitive.int * stride + axis] else
-                        (0..2).sumOf { k -> values[s[k].jsonPrimitive.int * stride + axis].toDouble() * s[k + 3].jsonPrimitive.float }.toFloat() }
-                }.toFloatArray()
+                // Vertices kept from the original carry its keyforms, blend shapes and weights unchanged.
+                val kept = (0 until actual.mesh!!.vertexCount).mapNotNull { vertex -> (0 until originalMesh.vertexCount).firstOrNull { old ->
+                    originalMesh.positions[old * 2] == actual.mesh!!.positions[vertex * 2] && originalMesh.positions[old * 2 + 1] == actual.mesh!!.positions[vertex * 2 + 1]
+                }?.let { vertex to it } }
+                assertTrue(kept.isNotEmpty())
                 assertEquals(original.geometryGrid!!.axes.map { it.parameterId }, actual.geometryGrid!!.axes.map { it.parameterId })
                 original.geometryGrid!!.cells.zip(actual.geometryGrid!!.cells).forEach { (old, next) ->
-                    val expected = interpolate(old.form.positionDeltas, 2)
-                    assertEquals(expected.size, next.form.positionDeltas.size)
-                    expected.indices.forEach { assertEquals(expected[it], next.form.positionDeltas[it], 0.00001f) }
+                    assertEquals(actual.mesh!!.vertexCount * 2, next.form.positionDeltas.size)
+                    kept.forEach { (vertex, from) -> for (axis in 0..1)
+                        assertEquals(old.form.positionDeltas[from * 2 + axis], next.form.positionDeltas[vertex * 2 + axis], 0.00001f) }
                 }
                 assertEquals(original.blendShapes.size, actual.blendShapes.size)
                 original.blendShapes.zip(actual.blendShapes).forEach { (old, next) -> old.forms.zip(next.forms).forEach { (a, b) ->
                     if (a == null) assertNull(b) else {
-                        val expected = interpolate(a.positionDeltas, 2); assertNotNull(b)
-                        expected.indices.forEach { assertEquals(expected[it], b.positionDeltas[it], 0.00001f) }
+                        assertNotNull(b)
+                        kept.forEach { (vertex, from) -> for (axis in 0..1) assertEquals(a.positionDeltas[from * 2 + axis], b.positionDeltas[vertex * 2 + axis], 0.00001f) }
                     }
                 } }
                 val weights = result.model.rig.puppet.vertexGroups.single { it.drawableId == id && it.name == "Pins" }.weights
-                val expectedWeights = interpolate(before.model.rig.puppet.vertexGroups.single { it.drawableId == sourceId && it.name == "Pins" }.weights, 1)
-                weights.indices.forEach { assertEquals(expectedWeights[it], weights[it], 0.00001f) }
+                kept.forEach { (vertex, from) -> assertEquals(originalGroup[from], weights[vertex], 0.00001f) }
                 for (value in listOf(-1f, 0f, 1f)) {
                     val pose = mapOf(ParameterId("PartitionAxis") to value, ParameterId("PartitionMode") to value * 20f)
                     val a = evaluator.evaluate(result.model.rig.puppet, pose); val b = evaluator.evaluate(replayed.rig.puppet, pose)
@@ -240,7 +245,12 @@ class WorkspacePartitionCommandsTest {
         val evaluation = org.umamo.render.eval.CpuDeformationEvaluator().evaluate(result.model.rig.puppet, emptyMap())
         val old = org.umamo.render.eval.CpuDeformationEvaluator().evaluate(before.model.rig.puppet, emptyMap())
         assertContentEquals(old.worldPositions.getValue(other.id), evaluation.worldPositions.getValue(other.id))
-        val record = SourcePartitionJournal.commands(result.document.rigEdits).single()
+        // The same partition as a legacy record, replayed under its old rules on the generated original.
+        val plan = WorkspacePartitionEdits.componentPlan(before.model, "islands")!!
+        val geometry = SourcePartitionGeometry.components(source.mesh!!, Cmo3ModelImport.textureCanvas(before.model, source), plan.ownerByVertex, 2)
+        val record = SourcePartitionJournal.encode(before.model.rig.puppet, source.id, listOf("first", "second"),
+            listOf("first", "second").map { result.document.rigEdits.splitDrawableIds.getValue(it) }, listOf("First", "Second"), geometry)
+        assertTrue(ArtPrimitiveJournal.commands(result.document.rigEdits).single().getValue("glues").jsonObject.getValue("replaced").jsonArray.size == 1)
         SourcePartitionJournal.pieces(record).forEach { piece ->
             val id = DrawableId(piece.getValue("id").jsonPrimitive.content)
             piece.getValue("sources").jsonArray.forEachIndexed { index, row ->
@@ -314,7 +324,8 @@ class WorkspacePartitionCommandsTest {
             assertEquals(puppet.drawables.map { it.id }, replayed.drawables.map { it.id })
             puppet.drawables.forEach { mesh -> assertContentEquals(mesh.mesh!!.positions, replayed.drawables.single { it.id == mesh.id }.mesh!!.positions) }
             assertEquals(query, session.sourceMeshComponents("islands"))
-            assertFalse(WorkspaceReadSession(runtime.read()).sourceMeshComponents("islands").getValue("can_split").jsonPrimitive.boolean)
+            val superseded = assertFailsWith<IllegalArgumentException> { WorkspaceReadSession(runtime.read()).sourceMeshComponents("islands") }
+            assertTrue("first" in superseded.message!! && "second" in superseded.message!!)
             runtime.checkout(before.projectId, result.mutation.state!!, before.historyHead)
             assertContentEquals(oldPixels, runtime.capture().document.source.layers.first().raster.rgba)
             runtime.checkout(before.projectId, runtime.capture().state, result.mutation.historyNodeId)
@@ -360,7 +371,8 @@ class WorkspacePartitionCommandsTest {
         assertEquals(2, runtime.history().selections.size)
         assertEquals("user", runtime.history().selections.last().node.actor)
         assertEquals(listOf("first", "second", "third", "fourth"), result.mutation.affectedLayerIds)
-        assertEquals(setOf("islands", "other"), result.commit.capture.document.deletedLayerIds)
+        assertEquals(emptySet(), result.commit.capture.document.deletedLayerIds)
+        assertEquals(listOf("first", "second", "third", "fourth"), result.commit.capture.document.source.layers.map { it.id.raw })
         assertEquals(4, result.commit.capture.model.rig.puppet.drawables.size)
         assertPartitionDeformers(before.model.baseRig.puppet.deformers, result.commit.capture.model.baseRig.puppet.deformers)
         val rebuilt = builder.build(result.commit.capture.document)

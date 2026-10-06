@@ -92,7 +92,8 @@ class PSD2LivePipeline {
 			.map { it.getValue("layer_id").jsonPrimitive.content }
 		val generationConfig = baselineConfig.copy(parentOverrides = config.parentOverrides - createdLayers)
 		val atlas = AtlasLayout.pack(analyses.textures.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress, previousAtlas)
-		if (config.generationSource == null) return GeneratedBase(analyses.textures, atlas,
+		val visible = ArtPrimitiveJournal.visibleAnalysis(analyses.textures, config.rigEdits)
+		if (config.generationSource == null) return GeneratedBase(visible, atlas,
 			withoutCreatedMeshes(RigBuilder.build(analyses.geometry, atlas, generationConfig, meshCache), config))
 		val geometry = generatedGeometry.getOrPut(analyses.geometry.source, generationConfig, baselineConfig) {
 			val geometryAtlas = AtlasLayout.pack(analyses.geometry.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
@@ -108,7 +109,7 @@ class PSD2LivePipeline {
 		val rig = synchronized(boundBases) { boundBases[key] } ?: withoutCreatedMeshes(
 			RigGenerationSource.repack(geometry.rig, analyses.geometry, geometry.atlas, analyses.textures, atlas), config)
 			.also { synchronized(boundBases) { boundBases[key] = it } }
-		return GeneratedBase(analyses.textures, atlas, rig)
+		return GeneratedBase(visible, atlas, rig)
 	}
 
 	private data class BoundBaseKey(val geometry: GeneratedGeometryCache.Entry, val placements: Map<String, AtlasPlacement>,

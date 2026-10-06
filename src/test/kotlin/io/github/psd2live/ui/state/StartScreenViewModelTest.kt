@@ -122,7 +122,9 @@ class StartScreenViewModelTest {
                 }
                 val state = vm.state.value
                 assertEquals(setOf("deco-a", "deco-b"), state.analysis!!.layers.map { it.source.name }.toSet())
-                assertTrue(layerId in state.deletedLayerIds)
+                // The parts replace the split layer; it is neither listed nor soft-deleted.
+                assertFalse(layerId in state.deletedLayerIds)
+                assertTrue(state.analysis!!.source.layers.none { it.id.raw == layerId })
                 assertFalse(state.motionSkeleton)
                 assertFalse(state.mouthOutlineEnabled)
                 assertFalse(state.physicsEyeJelly)

@@ -32,6 +32,7 @@ internal object WorkspaceDocumentEdits {
               rasterWork: WorkspaceRasterWork = WorkspaceRasterWork.Direct,
               assetResources: WorkspaceAssetWorkflow? = null): WorkspaceDocument {
         val request = operation.request
+        WorkspaceArtPrimitives.requireCurrentReferences(document.rigEdits, request)
         return when (operation.operation) {
             WorkspaceDrawOrderEdits.OP -> WorkspaceDrawOrderEdits.apply(document, model, request)
             in WorkspaceCanvasWeightEdits.supported -> WorkspaceCanvasWeightEdits.apply(operation, document, model)

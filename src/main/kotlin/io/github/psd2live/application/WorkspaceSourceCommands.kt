@@ -51,10 +51,10 @@ internal fun registerSourceCommands(catalog: WorkspaceCommands, workspace: Works
         }, required = listOf("state", "layer_id", "names")),
         "asset_split_depth" to WorkspaceCommandSchema(properties = buildJsonObject {
             put("state", text)
-            putJsonObject("source_id") { put("type", "string"); put("minLength", 1); put("description", "Raw drawable ID of the rear mesh to copy; inspect objects first") }
+            putJsonObject("source_id") { put("type", "string"); put("minLength", 1); put("description", "Raw drawable ID of the mesh to slice; inspect objects first") }
             putJsonObject("middle_ids") { put("type", "array"); put("items", text); put("minItems", 1); put("uniqueItems", true)
                 put("description", "Raw IDs of meshes to place between the rear and new front slices") }
-            for (field in listOf("front_layer_id", "front_mesh_id", "glue_id")) putJsonObject(field) {
+            for (field in listOf("front_layer_id", "front_mesh_id", "back_layer_id", "back_mesh_id", "glue_id")) putJsonObject(field) {
                 put("type", "string"); put("minLength", 1); put("description", "Optional unique new ID; omit to allocate one")
             }
             putJsonObject("names") { put("type", "array"); put("items", text); put("minItems", 2); put("maxItems", 2); put("uniqueItems", true)
@@ -62,7 +62,9 @@ internal fun registerSourceCommands(catalog: WorkspaceCommands, workspace: Works
         }, required = listOf("state", "source_id", "middle_ids"))
     )
     for ((name, schema) in specs) catalog.register(name, if (name == "asset_split_depth")
-        "Create an independently paintable front copy of one authored mesh, joined by directional Glue. Keep the original mesh and its motion; put middle meshes between the two slices. Channels, keyforms, paths and weights are copied in journal order; draw-order animation is replaced by fixed slice order. Imported CMO3 models are unsupported. IDs are raw, without mesh: prefixes."
+        "Split one authored mesh into independently paintable back and front slices joined by directional Glue, with middle meshes between them. The source mesh and its layer are replaced by the two new slices (new layer and mesh IDs; back_* fields name the back), which carry its channels, keyforms, blend shapes, paths and weights; the back takes its Glues, masks and simulation targets, and the front follows the back. Draw-order animation is replaced by fixed slice order. Only undo returns to the source; later references to its IDs fail naming the slices. Imported CMO3 models are unsupported. IDs are raw, without mesh: prefixes."
+        else if (name == "asset_split_artwork" || name == "asset_split_components")
+            "Split a source layer into parts (by a canvas polygon, or by its current mesh islands as source_get_components lists them). The parts replace the layer: each becomes its own source layer and mesh carrying the original's keyforms, channels, blend shapes, paths, weights, Glue and simulation targets at this point, and the original leaves the source art. layer_restore cannot bring it back; only undo returns to it, and later references to its IDs fail naming the parts. On an imported CMO3 model the original is soft-deleted instead."
         else "Generic source artwork editing", schema,
         hints = WorkspaceCommandHints(readOnlyHint = false, destructiveHint = false, openWorldHint = false)) { request ->
         val arguments = request.arguments

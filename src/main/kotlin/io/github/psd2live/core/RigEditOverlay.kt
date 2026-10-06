@@ -245,7 +245,15 @@ data class RigEditOverlay(
 		}
 	}
 
-	fun applyTo(base: PuppetModel): PuppetModel {
+	fun applyTo(base: PuppetModel): PuppetModel = replay(base, authoredOnly = false)
+
+	/**
+	 * The rig after the legacy edits and the whole journal, before any swing or simulation writes its
+	 * keyforms: the authored state a split materializes into its parts.
+	 */
+	fun authored(base: PuppetModel): PuppetModel = replay(base, authoredOnly = true)
+
+	private fun replay(base: PuppetModel, authoredOnly: Boolean): PuppetModel {
 		// Generated axes do not exist until swing/simulation materialization. Replay their panel
 		// placement and links afterwards, including moves of another parameter relative to them.
 		val generatedIds = swingEdits.flatMap { it.parameterIds }.toSet() +
@@ -300,6 +308,7 @@ data class RigEditOverlay(
 				else -> RigAuthoringJournal.replay(model, command)
 			}
 		}
+		if (authoredOnly) return model
 		// Swings and simulations write their keyforms onto the replayed rig, in the document graph's order.
 		model = DocumentGenerators.generate(model, this)
 		// Edits of generated keyforms merge with what the generators produce now.
@@ -382,6 +391,26 @@ internal fun BuiltRig.withRigEdits(overlay: RigEditOverlay, layerVisibility: Map
 			}
 			continue
 		}
+		if (op == ArtPrimitiveJournal.OP) {
+			for (id in command.getValue("supersedes").jsonArray.map { it.jsonPrimitive.content }) {
+				layers -= id; bounds -= id; pages -= id
+			}
+			for (primitive in ArtPrimitiveJournal.primitives(command)) {
+				val id = primitive.getValue("id").jsonPrimitive.content
+				val drawable = model.drawables.singleOrNull { it.id.raw == id } ?: continue
+				layers[id] = primitive.getValue("layer_id").jsonPrimitive.content
+				layerVisibility[layers.getValue(id)]?.let { visible ->
+					model = model.copy(drawables = model.drawables.map { if (it.id.raw == id) it.copy(isVisible = visible) else it })
+				}
+				pages[id] = drawable.texturePage
+				val edges = primitive.getValue("neutral_bounds").jsonArray.map { it.jsonPrimitive.float }
+				require(edges.size == 4 && edges.all(Float::isFinite) && edges[2] >= edges[0] && edges[3] >= edges[1]) {
+					"Invalid art primitive neutral bounds"
+				}
+				bounds[id] = Bounds(edges[0], edges[1], edges[2], edges[3])
+			}
+			continue
+		}
 		if (op != RasterMeshJournal.OP && op != RasterMeshCreation.OP && op != RigMeshActivation.OP) continue
 		val id = command.getValue("id").jsonPrimitive.content
 		if ((op == RasterMeshCreation.OP || op == RigMeshActivation.OP) && model.drawables.any { it.id.raw == id }) {
@@ -395,6 +424,7 @@ internal fun BuiltRig.withRigEdits(overlay: RigEditOverlay, layerVisibility: Map
 		}
 		if (model.drawables.any { it.id.raw == id }) bounds[id] = Bounds(numbers[0], numbers[1], numbers[2], numbers[3])
 	}
+	model = ArtPrimitiveJournal.pruneAtlas(model, overlay)
 	return copy(puppet = model, sourceBoundsByDrawableId = bounds, layerIdByDrawableId = layers, pageByDrawableId = pages)
         .withDrawOrderOverrides(drawOrderOverrides)
 }

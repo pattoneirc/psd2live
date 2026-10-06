@@ -66,6 +66,24 @@ internal object SourcePartitionJournal {
         require(source.parentDeformerId?.raw == command.getValue("parent").jsonPrimitive.contentOrNull) {
             "Partition parent changed: ${source.id.raw}"
         }
+        return partition(model, command) { clone, canvas ->
+            val tileId = requireNotNull(clone.atlasTileId)
+            val tile = model.atlas.tiles.single { it.id == tileId }
+            val placed = clone.copy(texturePage = requireNotNull(tile.placement).pageIndex)
+            placed to RasterMeshJournal.TextureCoordinates(model, placed).toUvs(canvas)
+        }.model
+    }
+
+    /** The pieces of a partition, the replacements of each Glue touching the source in order, and the cut followers. */
+    class Partitioned(val model: PuppetModel, val ids: List<DrawableId>, val glueGroups: List<List<Glue>>, val followers: List<Glue>)
+
+    /**
+     * Applies [command] to [model] without checking it against a regenerated source. [uvs] gives each piece's
+     * stored texture coordinates from its canvas ones; a materialized split keeps the canvas coordinates.
+     */
+    fun partition(model: PuppetModel, command: JsonObject, uvs: (Drawable, FloatArray) -> Pair<Drawable, FloatArray>): Partitioned {
+        val source = model.drawables.single { it.id.raw == command.getValue("source").jsonPrimitive.content }
+        val mesh = requireNotNull(source.mesh)
         val records = pieces(command)
         val ids = records.map { DrawableId(it.getValue("id").jsonPrimitive.content) }
         require(ids.size >= 2 && ids.distinct().size == ids.size && model.drawables.none { it.id in ids }) { "Invalid partition identities" }
@@ -77,14 +95,13 @@ internal object SourcePartitionJournal {
             val id = ids[index]
             val tileId = PuppetSourceAtlas.tileIdFor(record.getValue("layer_id").jsonPrimitive.content,
                 command["texture_source_id"]?.jsonPrimitive?.content ?: PuppetSourceAtlas.SOURCE_ID_RAW)
-            val tile = model.atlas.tiles.single { it.id == tileId }
-            val placement = requireNotNull(tile.placement)
-            val clone = source.copy(id = id, name = record.getValue("name").jsonPrimitive.content,
-                atlasTileId = tileId, texturePage = placement.pageIndex, textureSourceId = null,
+            val unplaced = source.copy(id = id, name = record.getValue("name").jsonPrimitive.content,
+                atlasTileId = tileId, textureSourceId = null,
                 isVisible = record.getValue("visible").jsonPrimitive.boolean)
             val points = record.getValue("points").jsonArray.map { it.jsonPrimitive.float }.toFloatArray()
             val canvas = record.getValue("texture_canvas").jsonArray.map { it.jsonPrimitive.float }.toFloatArray()
-            val replacement = DrawableMesh(points, RasterMeshJournal.TextureCoordinates(model, clone).toUvs(canvas),
+            val (clone, textured) = uvs(unplaced, canvas)
+            val replacement = DrawableMesh(points, textured,
                 record.getValue("triangles").jsonArray.map { it.jsonPrimitive.int }.toIntArray())
             RasterMeshJournal.validateMesh(replacement)
             val sources = sources(record)
@@ -101,7 +118,7 @@ internal object SourcePartitionJournal {
             }
             current = current.copy(deformPaths = current.deformPaths + paths)
         }
-        val glues = model.glues.flatMap { glue ->
+        val glues = model.glues.map { glue ->
             if (glue.meshA != source.id && glue.meshB != source.id) listOf(glue) else {
                 val groups = glueGroups(glue, source.id, owners)
                 groups.mapIndexed { index, (group, pairs) ->
@@ -121,11 +138,12 @@ internal object SourcePartitionJournal {
         }
         val followers = if (command["follow_cut_vertices"]?.jsonPrimitive?.boolean == true)
             cutVertexFollowers(source.id, ids, records.map(::sources), owners, oldToNew) else emptyList()
-        return current.copy(glues = glues + followers,
+        return Partitioned(current.copy(glues = glues.flatten() + followers,
             drawables = current.drawables.map { drawable -> drawable.copy(maskedBy = drawable.maskedBy.flatMap {
                 if (it == source.id) ids else listOf(it)
             }) }, parts = current.parts.map { it.copy(children = children(it.children)) }, rootChildren = children(current.rootChildren))
-            .withDerivedRenderRoot()
+            .withDerivedRenderRoot(), ids, glues.filterIndexed { index, _ -> model.glues[index].let { it.meshA == source.id || it.meshB == source.id } },
+            followers)
     }
 
     /** New cut vertices follow the already welded triangle, in exactly its rendered affine space.

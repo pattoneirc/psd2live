@@ -46,6 +46,7 @@ internal class WorkspaceReadSession(
     override fun sourceMeshComponents(layerId: String): JsonObject {
         val captured = capture()
         val model = captured.model
+        WorkspaceArtPrimitives.requireCurrent(captured.document.rigEdits, layerId)
         val source = captured.document.source.layers.firstOrNull { it.id.raw == layerId }
             ?: model.analysis.layers.firstOrNull { it.source.id.raw == layerId }?.source
             ?: throw IllegalArgumentException("Source layer not found: $layerId")

@@ -74,10 +74,13 @@ class DepthSplitWorkflowTest {
                 assertEquals(frontId, vm.canvasEditor.paintSession?.layerId)
                 assertEquals(names.size + 1, split.rig.puppet.drawables.size)
                 assertEquals(1, split.rig.puppet.glues.size)
-                assertEquals(1, split.config.rigEdits.authoringJournal.count { it["op"]?.jsonPrimitive?.contentOrNull == DepthSplit.OP })
-                val back = split.rig.puppet.drawables.single { it.id.raw == sourceId }
+                assertEquals(1, split.config.rigEdits.authoringJournal.count { it["op"]?.jsonPrimitive?.contentOrNull == io.github.psd2live.core.ArtPrimitiveJournal.OP })
+                // Both slices replace the source mesh and layer.
+                assertTrue(split.rig.puppet.drawables.none { it.id.raw == sourceId })
+                assertTrue(split.analysis.source.layers.none { it.id.raw == created.affectedLayerIds.first() })
+                val back = split.rig.puppet.drawables.single { it.id == split.rig.puppet.glues.single().meshA }
                 val front = split.rig.puppet.drawables.single { split.rig.layerIdByDrawableId[it.id.raw] == frontId }
-                assertEquals(sourceId, split.rig.puppet.glues.single().meshA.raw)
+                assertEquals(front.id, split.rig.puppet.glues.single().meshB)
                 middleIds.forEach { id ->
                     val middle = split.rig.puppet.drawables.single { it.id.raw == id }
                     assertTrue(back.drawOrder < middle.drawOrder && middle.drawOrder < front.drawOrder)

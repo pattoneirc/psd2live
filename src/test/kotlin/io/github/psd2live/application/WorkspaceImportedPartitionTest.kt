@@ -115,7 +115,17 @@ class WorkspaceImportedPartitionTest {
             }
             assertEquals(before, runtime.capture()); assertEquals(history, runtime.history())
             val result = WorkspacePartitionCommands(runtime).execute(before.projectId, before.state, listOf(split), "Partition", MutationAuthor.AGENT).commit.capture
-            val command = SourcePartitionJournal.commands(result.document.rigEdits).single()
+            val command = if (imported) SourcePartitionJournal.commands(result.document.rigEdits).single() else {
+                // Materialized parts: the same partition as a legacy record names each vertex's ancestry.
+                assertTrue(result.document.source.layers.none { it.id.raw == "art" })
+                assertEquals(listOf(original.id.raw), ArtPrimitiveJournal.commands(result.document.rigEdits).single()
+                    .getValue("supersedes").jsonArray.map { it.jsonPrimitive.content })
+                val layer = before.model.rig.layerIdByDrawableId.getValue(original.id.raw)
+                val plan = if (kind == "source_split_components") WorkspacePartitionEdits.componentPlan(before.model, layer) else null
+                SourcePartitionJournal.encode(before.model.rig.puppet, original.id, listOf("one", "two"),
+                    listOf("one", "two").map { result.document.rigEdits.splitDrawableIds.getValue(it) }, listOf("One", "Two"),
+                    WorkspacePartitionEdits.geometry(before.model, original, plan, split.request, 2))
+            }
             val evaluator = CpuDeformationEvaluator()
             for (shape in listOf(-1f, -0.35f, 0f, 0.45f, 1f)) {
                 val pose = mapOf(ParameterId("Shape") to shape)

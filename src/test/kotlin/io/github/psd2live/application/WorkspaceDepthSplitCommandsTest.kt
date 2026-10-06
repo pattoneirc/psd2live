@@ -32,6 +32,7 @@ class WorkspaceDepthSplitCommandsTest {
         put("source_id", mesh(model, "collar").id.raw)
         put("middle_ids", JsonArray(listOf(mesh(model, "neck").id.raw).map(::JsonPrimitive)))
         put("front_layer_id", "depth-front"); put("front_mesh_id", "DepthFront"); put("glue_id", "DepthWeld")
+        put("back_layer_id", "depth-back"); put("back_mesh_id", "DepthBack")
         put("names", JsonArray(listOf("Rear", "Front").map(::JsonPrimitive)))
     })
     private fun input(runtime: WorkspaceRuntime<RigPreviewModel>, edit: WorkspaceDocumentOperation) = JsonObject(edit.request + buildJsonObject {
@@ -65,20 +66,27 @@ class WorkspaceDepthSplitCommandsTest {
         val authored = commands.execute(root.projectId, root.state, "Author source", edits, MutationAuthor.USER).capture
         assertTrue(WorkspacePartitionEdits.wouldDiscardEdits(authored.model, "collar"))
         val pixels = authored.document.source.layers.first().raster.rgba.copyOf()
-        val result = WorkspacePartitionCommands(runtime).execute(authored.projectId, authored.state, listOf(operation(runtime)), "Depth slices", MutationAuthor.USER)
-        assertEquals(listOf("depth-front"), result.mutation.affectedLayerIds)
+        val split = operation(runtime)
+        val result = WorkspacePartitionCommands(runtime).execute(authored.projectId, authored.state, listOf(split), "Depth slices", MutationAuthor.USER)
+        assertEquals(listOf("depth-front", "depth-back"), result.mutation.affectedLayerIds)
+        assertEquals(listOf("depth-front", "depth-back", "neck", "other"), result.commit.capture.document.source.layers.map { it.id.raw })
+        assertFalse("collar" in result.commit.capture.document.deletedLayerIds)
         assertEquals(listOf("layer:depth-front", "mesh:DepthFront", "glue:DepthWeld").toSet(),
-            WorkspaceDocumentCommands.mutationResult(authored, result.commit, "Depth slices", listOf(operation(runtime))).affectedObjectIds
+            WorkspaceDocumentCommands.mutationResult(authored, result.commit, "Depth slices", listOf(split)).affectedObjectIds
                 .filter { it in setOf("layer:depth-front", "mesh:DepthFront", "glue:DepthWeld") }.toSet())
         assertEquals(3, runtime.history().selections.size)
-        assertContentEquals(pixels, result.commit.capture.document.source.layers.first().raster.rgba)
-        assertNotSame(authored.document.source.layers.first().raster.rgba, result.commit.capture.document.source.layers.last().raster.rgba)
-        assertContentEquals(pixels, result.commit.capture.document.source.layers.last().raster.rgba)
+        for (slice in listOf("depth-front", "depth-back")) {
+            val raster = result.commit.capture.document.source.layers.single { it.id.raw == slice }.raster.rgba
+            assertNotSame(authored.document.source.layers.first().raster.rgba, raster); assertContentEquals(pixels, raster)
+        }
         val replayed = builder.build(result.commit.capture.document)
         assertPartitionDeformers(authored.model.baseRig.puppet.deformers, result.commit.capture.model.baseRig.puppet.deformers)
         for (model in listOf(result.commit.capture.model, replayed)) {
-            val back = mesh(model, "collar"); val front = mesh(model, "depth-front"); val middle = mesh(model, "neck")
-            assertEquals("DepthFront", front.id.raw); assertEquals(back.parentDeformerId, front.parentDeformerId)
+            val back = mesh(model, "depth-back"); val front = mesh(model, "depth-front"); val middle = mesh(model, "neck")
+            assertEquals("DepthFront", front.id.raw); assertEquals("DepthBack", back.id.raw); assertEquals(back.parentDeformerId, front.parentDeformerId)
+            assertTrue(model.rig.puppet.drawables.none { it.id == source.id })
+            assertEquals("DepthBack", model.rig.puppet.glues.single { it.id == "OldWeld" }.meshA.raw)
+            assertEquals("OldPath", model.rig.puppet.deformPaths.single { it.drawableId == back.id }.id)
             assertTrue(back.drawOrder < middle.drawOrder && middle.drawOrder < front.drawOrder)
             val weld = model.rig.puppet.glues.single { it.id == "DepthWeld" }
             assertTrue(weld.pairs.all { it.indexA == it.indexB && it.weightA == 0f && it.weightB == 1f })
@@ -88,7 +96,9 @@ class WorkspaceDepthSplitCommandsTest {
             for (value in listOf(-1f, 0f, 1f)) {
                 val pose = mapOf(ParameterId("DepthAxis") to value, StandardParameters.ANGLE_X to value * 20)
                 val before = evaluator.evaluate(authored.model.rig.puppet, pose); val after = evaluator.evaluate(model.rig.puppet, pose)
-                before.worldPositions.forEach { (id, vertices) -> vertices.indices.forEach { assertEquals(vertices[it], after.worldPositions.getValue(id)[it], 0.0001f) } }
+                before.worldPositions.forEach { (id, vertices) -> val now = if (id == source.id) back.id else id
+                    vertices.indices.forEach { assertEquals(vertices[it], after.worldPositions.getValue(now)[it], 0.0001f) } }
+                assertEquals(before.opacity.getValue(source.id), after.opacity.getValue(back.id))
                 assertContentEquals(after.worldPositions.getValue(back.id), after.worldPositions.getValue(front.id))
                 assertEquals(after.opacity.getValue(back.id), after.opacity.getValue(front.id))
             }
@@ -111,8 +121,8 @@ class WorkspaceDepthSplitCommandsTest {
         assertEquals(2, runtime.history().selections.size)
         val front = result.capture.document.source.layers.single { it.id.raw == "depth-front" }
         assertTrue(front.raster.rgba.indices.filter { it % 4 == 3 }.all { front.raster.rgba[it] == 0.toByte() })
-        assertContentEquals(before.document.source.layers.first().raster.rgba, result.capture.document.source.layers.first().raster.rgba)
-        assertContentEquals(mesh(before.model, "collar").mesh!!.positions, mesh(result.capture.model, "collar").mesh!!.positions)
+        assertContentEquals(before.document.source.layers.first().raster.rgba, result.capture.document.source.layers.single { it.id.raw == "depth-back" }.raster.rgba)
+        assertContentEquals(mesh(before.model, "collar").mesh!!.positions, mesh(result.capture.model, "depth-back").mesh!!.positions)
         val replayed = builder.build(result.capture.document)
         assertContentEquals(mesh(result.capture.model, "depth-front").mesh!!.positions, mesh(replayed, "depth-front").mesh!!.positions)
         assertDepthGlues(result.capture.model.rig.puppet.glues, replayed.rig.puppet.glues)
@@ -125,11 +135,12 @@ class WorkspaceDepthSplitCommandsTest {
         runtime.execute(root.projectId, root.state, "Inputs", MutationAuthor.USER, listOf(WorkspaceDocumentEdit { _, _ -> document }))
         val before = runtime.capture()
         val result = WorkspacePartitionCommands(runtime).execute(before.projectId, before.state, listOf(operation(runtime)), "Copy", MutationAuthor.USER).commit.capture
-        assertEquals(listOf("collar", "neck", "other", "depth-front"), result.document.source.layers.map { it.id.raw })
+        assertEquals(listOf("depth-front", "depth-back", "neck", "other"), result.document.source.layers.map { it.id.raw })
         assertEquals(before.document.deletedLayerIds, result.document.deletedLayerIds)
         assertEquals(before.document.generationSource, result.document.generationSource); assertEquals(before.document.meshSource, result.document.meshSource)
         assertEquals(before.document.meshOverrides.getValue("collar"), result.document.meshOverrides.getValue("depth-front"))
-        assertContentEquals(mesh(before.model, "collar").mesh!!.positions, mesh(result.model, "collar").mesh!!.positions)
+        assertEquals(before.document.meshOverrides.getValue("collar"), result.document.meshOverrides.getValue("depth-back"))
+        assertContentEquals(mesh(before.model, "collar").mesh!!.positions, mesh(result.model, "depth-back").mesh!!.positions)
     }
 
     @Test fun mouthOwnerAndDerivedLipDepthCopiesCreateOnlyTheSelectedMeshAndRetainMouthMotion() = runBlocking<Unit> {
@@ -146,20 +157,26 @@ class WorkspaceDepthSplitCommandsTest {
                 ("source_id" to JsonPrimitive(source.id.raw))))
             val committed = WorkspacePartitionCommands(runtime).execute(before.projectId, before.state,
                 listOf(edit), "Mouth slices", MutationAuthor.USER).commit.capture
+            val back = DrawableId("DepthBack")
             for (model in listOf(committed.model, builder.build(committed.document))) {
-                assertEquals(before.model.rig.puppet.drawables.map { it.id }.toSet() + DrawableId("DepthFront"),
+                assertEquals(before.model.rig.puppet.drawables.map { it.id }.toSet() - source.id + DrawableId("DepthFront") + back,
                     model.rig.puppet.drawables.map { it.id }.toSet())
-                assertEquals(before.model.analysis.layers.count { it.source is MouthLipLayer },
+                // A sliced ribbon is replaced by its slices; slicing the mouth keeps the ribbons generated from it.
+                assertEquals(before.model.analysis.layers.count { it.source is MouthLipLayer } - (if (sourceLayerId == "collar") 0 else 1),
                     model.analysis.layers.count { it.source is MouthLipLayer })
+                fun opaque(analysis: PipelineAnalysis) = analysis.layers.filter { it.source is MouthLipLayer && it.source.id.raw != sourceLayerId }
+                    .associate { layer -> layer.source.id.raw to layer.source.raster.rgba.indices.count { it % 4 == 3 && layer.source.raster.rgba[it] != 0.toByte() } }
+                assertEquals(opaque(before.model.analysis), opaque(model.analysis))
                 val evaluator = CpuDeformationEvaluator()
                 for (open in listOf(0f, 0.5f, 1f)) {
                     val pose = mapOf(StandardParameters.MOUTH_OPEN to open)
                     val original = evaluator.evaluate(before.model.rig.puppet, pose)
                     val actual = evaluator.evaluate(model.rig.puppet, pose)
                     original.worldPositions.forEach { (id, positions) ->
-                        positions.indices.forEach { assertEquals(positions[it], actual.worldPositions.getValue(id)[it], 0.0001f) }
+                        val now = if (id == source.id) back else id
+                        positions.indices.forEach { assertEquals(positions[it], actual.worldPositions.getValue(now)[it], 0.0001f) }
                     }
-                    assertContentEquals(actual.worldPositions.getValue(source.id), actual.worldPositions.getValue(DrawableId("DepthFront")))
+                    assertContentEquals(actual.worldPositions.getValue(back), actual.worldPositions.getValue(DrawableId("DepthFront")))
                 }
             }
             WorkspaceDocumentCommands(runtime).execute(committed.projectId, committed.state, "Erase front",
@@ -168,7 +185,7 @@ class WorkspaceDepthSplitCommandsTest {
                 })), MutationAuthor.USER)
             val erased = builder.build(runtime.capture().document)
             assertEquals(committed.model.rig.puppet.drawables.map { it.id }.toSet(), erased.rig.puppet.drawables.map { it.id }.toSet())
-            assertContentEquals(source.mesh!!.positions, mesh(erased, sourceLayerId).mesh!!.positions)
+            assertContentEquals(source.mesh!!.positions, mesh(erased, "depth-back").mesh!!.positions)
         }
     }
 
@@ -234,7 +251,7 @@ class WorkspaceDepthSplitCommandsTest {
                 assertEquals("completed", terminal.getValue("status").jsonPrimitive.content)
                 val result = terminal.getValue("result").jsonObject; validateOperationSchema(result, definition.jobResultSchema!!)
                 assertEquals(runtime.capture().state, result.getValue("state").jsonPrimitive.content)
-                assertEquals(listOf("depth-front"), result.getValue("layers").jsonArray.map { it.jsonPrimitive.content })
+                assertEquals(listOf("depth-front", "depth-back"), result.getValue("layers").jsonArray.map { it.jsonPrimitive.content })
                 assertEquals("DepthFront", mesh(runtime.capture().model, "depth-front").id.raw)
                 assertEquals(job.getValue("id"), operations.registry.invoke("source_split_depth", request, agent).data.getValue("id")); assertEquals(terminal, operations.wait(job))
             }

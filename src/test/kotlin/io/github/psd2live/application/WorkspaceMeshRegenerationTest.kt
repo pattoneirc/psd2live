@@ -165,7 +165,7 @@ class WorkspaceMeshRegenerationTest {
                     listOf(0 to 0, 96 to 0, 96 to 30, 0 to 30).forEach { (x, y) -> add(buildJsonArray { add(x); add(y) }) }
                 }
             })), "Partition", MutationAuthor.USER).commit.capture
-        assertFalse(MeshGenerationBaseline.present(partition.document.rigEdits))
+        assertTrue(MeshGenerationBaseline.present(partition.document.rigEdits))
         val drawable = target(partition.model, "Top")
         val authored = commands.execute(partition.projectId, partition.state, "Vertex form", listOf(
             WorkspaceDocumentOperation("parameter_create", buildJsonObject { put("parameter_id", "Shape"); put("name", "Shape"); put("min", -1); put("max", 1) }),
@@ -227,12 +227,13 @@ class WorkspaceMeshRegenerationTest {
         val split = commands.execute(before.projectId, before.state, "Depth", listOf(WorkspaceDocumentOperation("source_split_depth", buildJsonObject {
             put("source_id", target(before.model).id.raw); putJsonArray("middle_ids") { add(target(before.model, "other").id.raw) }
             put("front_layer_id", "front"); put("front_mesh_id", "Front"); put("glue_id", "DepthGlue")
+            put("back_layer_id", "back"); put("back_mesh_id", "Back")
             putJsonArray("names") { add("Rear"); add("Front") }
         })), MutationAuthor.USER).capture
         val changed = commands.execute(before.projectId, split.state, "Depth mesh settings", listOf(WorkspaceDocumentOperation("settings_update", buildJsonObject {
             putJsonObject("changes") { put("meshOuterMargin", 5); put("meshInteriorDensity", 6) }
         })), MutationAuthor.AGENT).capture
-        val puppet = changed.model.rig.puppet; val back = puppet.drawables.single { it.id == target(before.model).id }; val front = puppet.drawables.single { it.id.raw == "Front" }
+        val puppet = changed.model.rig.puppet; val back = puppet.drawables.single { it.id.raw == "Back" }; val front = puppet.drawables.single { it.id.raw == "Front" }
         assertEquals(back.parentDeformerId, front.parentDeformerId)
         val glue = puppet.glues.single { it.id == "DepthGlue" }
         assertTrue(glue.pairs.isNotEmpty()); assertTrue(glue.pairs.all { it.weightA == 0f && it.weightB == 1f })

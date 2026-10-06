@@ -68,6 +68,11 @@ class WorkspaceDepthSplitIntegrationTest {
             val gui = workspace.currentPuppet()!!; val frontId = vm.state.value.selectedLayerId!!
             val frontMesh = vm.state.value.previewModel!!.rig.layerIdByDrawableId.entries.single { it.value == frontId }.key
             val glueId = gui.glues.single().id!!
+            // Both slices are new: the source mesh and layer are gone, the back takes their place.
+            val backMesh = gui.glues.single().meshA.raw
+            val backLayer = vm.state.value.previewModel!!.rig.layerIdByDrawableId.getValue(backMesh)
+            assertTrue(gui.drawables.none { it.id.raw == source })
+            assertTrue(vm.state.value.previewModel!!.analysis.source.layers.none { it.id.raw == layers[0] })
             assertEquals("user", workspace.history().nodes.last().actor)
             assertEquals(root.historyHeadNodeId, workspace.history().nodes.last().parentId)
             val frame = WorkspaceModelViewRequest(parameters = mapOf("DepthAxis" to 1f), frame = WorkspaceViewFrame.CanvasRect(Bounds(0f, 0f, 32f, 32f)),
@@ -77,14 +82,15 @@ class WorkspaceDepthSplitIntegrationTest {
             val result = call("source_split_depth", buildJsonObject {
                 put("source_id", source); put("middle_ids", JsonArray(listOf(JsonPrimitive(middle))))
                 put("front_layer_id", frontId); put("front_mesh_id", frontMesh); put("glue_id", glueId)
-                put("names", JsonArray(listOf(gui.drawables.single { it.id.raw == source }.name, gui.drawables.single { it.id.raw == frontMesh }.name).map(::JsonPrimitive)))
+                put("back_layer_id", backLayer); put("back_mesh_id", backMesh)
+                put("names", JsonArray(listOf(gui.drawables.single { it.id.raw == backMesh }.name, gui.drawables.single { it.id.raw == frontMesh }.name).map(::JsonPrimitive)))
             })
-            assertEquals(listOf(frontId), result.getValue("layers").jsonArray.map { it.jsonPrimitive.content })
+            assertEquals(listOf(frontId, backLayer), result.getValue("layers").jsonArray.map { it.jsonPrimitive.content })
             assertPartitionDeformers(gui.deformers, workspace.currentPuppet()!!.deformers)
             assertContentEquals(guiPng, workspace.renderModel(frame).png)
             call("source_paint_clear", buildJsonObject { put("layer_id", frontId); put("rebuild_mesh", true) })
             val before = workspace.currentPuppet()!!; val png = workspace.renderModel(frame).png
-            assertContentEquals(original.drawables.single { it.id.raw == source }.mesh!!.positions, before.drawables.single { it.id.raw == source }.mesh!!.positions)
+            assertContentEquals(original.drawables.single { it.id.raw == source }.mesh!!.positions, before.drawables.single { it.id.raw == backMesh }.mesh!!.positions)
             val archive = temporary.resolve("depth.psd2live")
             call("project_save_as", buildJsonObject { put("path", archive.toString()) }); val nodes = workspace.history().nodes
             call("project_open", buildJsonObject { put("path", archive.toString()) })
@@ -121,7 +127,7 @@ class WorkspaceDepthSplitIntegrationTest {
 
             // Imported slices use the same GUI candidate, public command and retained-model export.
             val importedBase = workspace.currentPuppet()!!
-            vm.requestDepthSplit(source); assertNotNull(vm.pendingDepthSplit); vm.confirmDepthSplit(middle)
+            vm.requestDepthSplit(backMesh); assertNotNull(vm.pendingDepthSplit); vm.confirmDepthSplit(middle)
             withTimeout(10000) { vm.state.first { !it.workspaceEditBusy && it.previewModel!!.rig.puppet.drawables.size == importedBase.drawables.size + 1 } }
             assertNull(vm.state.value.errorMessage)
             val importedGui = workspace.currentPuppet()!!
@@ -133,9 +139,9 @@ class WorkspaceDepthSplitIntegrationTest {
             assertEquals(imported.historyHeadNodeId, workspace.history().nodes.last().parentId)
             workspace.checkoutHistory(imported.historyHeadNodeId!!, MutationAuthor.USER)
             val importedResult = call("source_split_depth", buildJsonObject {
-                put("source_id", source); put("middle_ids", JsonArray(listOf(JsonPrimitive(middle))))
+                put("source_id", backMesh); put("middle_ids", JsonArray(listOf(JsonPrimitive(middle))))
                 put("front_layer_id", importedFrontLayer); put("front_mesh_id", importedFrontMesh); put("glue_id", importedGlue)
-                put("names", JsonArray(listOf(importedGui.drawables.single { it.id.raw == source }.name,
+                put("names", JsonArray(listOf(importedGui.drawables.single { it.id.raw == backMesh }.name,
                     importedGui.drawables.single { it.id.raw == importedFrontMesh }.name).map(::JsonPrimitive)))
             })
             assertEquals(listOf(importedFrontLayer), importedResult.getValue("layers").jsonArray.map { it.jsonPrimitive.content })

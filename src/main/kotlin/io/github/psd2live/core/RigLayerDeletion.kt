@@ -10,7 +10,7 @@ internal object RigLayerDeletion {
     const val OP = "layer_membership"
 
     private fun replaysBeforeFiltering(config: PipelineConfig) = config.rigEdits.authoringJournal.any {
-        it["op"]?.jsonPrimitive?.contentOrNull in setOf(RasterMeshCreation.OP, DepthSplit.OP, SourcePartitionJournal.OP, OP)
+        it["op"]?.jsonPrimitive?.contentOrNull in setOf(RasterMeshCreation.OP, DepthSplit.OP, SourcePartitionJournal.OP, ArtPrimitiveJournal.OP, OP)
     }
 
     fun deferred(config: PipelineConfig) = config.deletedLayerIds.isNotEmpty() &&

@@ -15,6 +15,7 @@
 | 骨架与动作缓存 | `core/SkeletonRig.generate`、`core/MotionPresets.tracks` | 骨架烘焙与生成动作按输入内容哈希接入 `GenerationCache` |
 | 重放检查点 | `core/ReplayCheckpoints` | 按基础 Rig 实例与日志前缀内容缓存重放的中间模型；追加只重放新条目，撤销命中已有检查点 |
 | 生成器复用 | `core/DocumentGenerators`（`GeneratorReuse`） | 摆动与模拟声明对象级读取；读取不变时把上次输出作为补丁套用，不重新生成 |
+| 拆分物化 | `core/ArtPrimitiveJournal`、`application/WorkspaceArtPrimitives` | 拆分把原图层的当前状态写成部件的 `art_primitive` 记录，原图层离开源图；见[拆分物化](#拆分物化画元记录-art_primitive) |
 | 工程格式 v2 | `project/ProjectFormatV2` | 每个修订拆为按内容寻址、带 schema 版本的文档节点；v1 打开后在下次保存时迁移，见[工程格式](PROJECT_FORMAT.md) |
 
 `format-compile` 中的四个框架部分为 MIT，不依赖任何 GPL 模块。
@@ -138,6 +139,44 @@
 - 几何提交中 moc3 整模重编与几何安全检查原是主要部分。缓存旁车文本与动作列表、改写 moc3 写出并缩小几何检查范围后，同一场景热态提交约 37 ms（不含历史存储写入约 27 ms 与原生重载）：运行时重建约 27 ms（其中 moc3 打包约 20 ms，主要是逐网格关键形降级、静止网格换到画布空间和约 7 MB 的写出；重放约 5–8 ms），几何检查约 4 ms，候选准备与网格规范化约 3 ms；
 - 绘画和换图由纹理集打包和 PNG 编码主导，且候选准备与重建各做一遍（此为基线）。
 - 纹理集改为规范布局 + 页面配方缓存 + 条带预览 PNG、绘画候选不再打包之后（见上文“纹理集与绘画”），同一台机器在并发负载下前后对比（两次运行的绝对值都高于上表的空闲机数字）：小图层绘画提交中位约 2.5 s → 约 0.35 s（稳定后约 0.3 s），其中候选准备约 1.5 s → 约 0.17 s、提交内重建约 1.2 s → 约 0.2 s；同形状换图约 2.1 s → 约 0.3 s；镜像换图并重建网格约 3.1 s → 约 0.45–0.8 s；带骨架的完整重建（骨架命中）约 1.0–1.6 s → 约 0.25–0.4 s。整页预览条带编码约 20 ms（规范 PNG 约 0.5 s，只在导出时生成）；两遍分析合计约 0.2 s → 约 0.03–0.06 s。导出文件与改动前逐字节相同（`ExportGoldenTool`）；预览包除纹理页 PNG 编码外不变。
+
+## 拆分物化：画元记录 `art_primitive`
+
+此前的拆分（`canvas_source_partition`、`canvas_depth_split`）把原图层留在源图中并软删除，重放时先逐位重新生成原网格（核对几何指纹与父级），再在记录位置把它的绑定复制到部件。这有三个问题：生成规则一变，旧记录就无法重放；纹理集仍打包原图层，CMO3 导出带着它的像素；“恢复全部”会把原图层带回来。现在拆分把原图层**物化**为部件：部件是唯一的绘制对象，原图层不再存在，只能撤销回拆分前。
+
+**记录**（日志条目，版本 1）：
+
+| 字段 | 内容 |
+| --- | --- |
+| `op`、`v`、`origin` | `art_primitive`、`1`、`split`（多边形/连通块）或 `depth`（前后分层） |
+| `texture_source_id` | 部件贴图所在的源（生成模型为 `art-0`） |
+| `supersedes`、`supersedes_layers` | 在此位置删除的网格 ID 与其源图层 ID |
+| `replace` | 被取代网格 → 部件网格，用于部件树中的位置；未给 `masks` 时也用于其他网格的遮罩 |
+| `masks` | 可选，被取代网格作为遮罩时改由哪些部件承担（前后分层只用后层） |
+| `primitives` | 每个部件一项：`id`、`layer_id`、`source_id`、`source_bounds`（贴图须覆盖的画布矩形）、`neutral_bounds`、名称、父级、部件、混合模式、静态材质与显隐、遮罩、`user_data`；父级空间顶点 `positions`、`triangles`、画布单位纹理坐标 `canvas_uvs`；所用参数定义、几何关键形 `geometry`、通道关键形 `channels`、混合形 `blends`（含限制曲线）、路径 `paths`、顶点组 `vertex_groups` |
+| `glues` | `replaced`：按模型顺序，每个接触被取代网格的 Glue 对应的替换 Glue；`appended`：追加在最后的 Glue（连通块拆分的切点跟随、前后分层的方向 Glue） |
+| `depth` | 仅前后分层：`back`、`front` 图层 ID 与 `glue_id`；`DepthSplit.isFrontLayer` 据此让前层绘画保留拓扑 |
+
+**重放**（`ArtPrimitiveJournal.replay`，纯函数，可被重放检查点缓存）：缺失的参数按记录创建；删除 `supersedes` 中的网格，部件在原网格的列表与部件树位置就位（原网格已不存在时加入记录的部件或根）；其他网格的遮罩按 `masks`/`replace` 改写；接触被取代网格的 Glue 依次换成 `replaced` 中的对应项（数量与当前不符时，删除全部接触 Glue 后按顺序追加替换项），再追加 `appended`；被取代网格的路径与顶点组删除，部件的路径与顶点组按记录写入。重放不读取被取代网格的几何，也不核对其指纹。纹理坐标存画布单位（与 `canvas_mesh_create`、`canvas_mesh_rebuild` 一致），重放时经当前纹理集换算：绘画会重新裁剪图层矩形，同一画布点仍对应同一像素。
+
+**拆分时捕获的状态**：`RigEditOverlay.authored` 给出旧格式编辑与整条日志之后、摆动和模拟写回之前的模型；部件取自该模型，因此摆动与模拟生成的轴不写入记录。连通块/多边形部件的顶点、关键形、混合形、路径、顶点组与 Glue 按原分区算法迁移；模拟目标、烘焙偏移与 Glue 角色转到部件（前后分层转到后层），之后由模拟照常写回。
+
+**生成输入**：拆分冻结生成输入（`generationSource`），原图层只留在其中。生成时：
+
+- 被取代的生成图层仍参与基础 Rig 生成，排在其替换图层在当前源图中的位置（取替换图层的最高 `order`），因此其他图层的绘制顺序、变形器框架和 ID 与拆分前一致，记录之前的日志照常重放；
+- 部件所在图层由记录拥有，不进入基础生成；它们的当前像素按 `source_bounds` 补透明覆盖后打包；
+- 被取代图层在纹理集中只占 1×1 透明占位，供记录之前的日志条目寻址；记录重放后，`BuiltRig.withRigEdits` 从 Rig 的纹理集图块和美术清单中删除它，预览分析也不再列出它，导出的 CMO3 因而没有该图层；
+- 嘴部被分层时，其生成的嘴唇保留；分层的若是嘴唇本身，则该嘴唇被取代。
+
+**部件之后的编辑**：部件是普通源图层，可绘画、删除/恢复、再拆分（被拆分的部件同样被取代）。修改部件的网格设置时由 `MaterializedMeshRebuild` 追加 `canvas_mesh_rebuild`，迁移关键形与绑定。部件不再随生成规则自动重新生成。
+
+**拥有关系**：部件属于编辑日志节点（`journal` 拥有的 `rig:authored`），不在生成器依赖图中单列；摆动与模拟照常读取它们。被取代网格上原有的 `generated_override` 失去目标后按孤立报告。
+
+**引用被取代的 ID**：文档操作中引用字段（`layer_id`、`target`、`source_id`、`middle_ids`、`meshes` 等）指向被取代的图层或网格时，返回错误并列出取代它的当前 ID（跨多次拆分逐级展开）；`source_get_components` 同样。`layer_restore` 不能带回原图层（它不在 `deletedLayerIds` 中）。
+
+**兼容**：旧的 `canvas_source_partition`、`canvas_depth_split` 按原规则重放，打开时不升级；`LegacySplitReplayTest` 用旧版本保存的工程核对各历史节点重放后的 IR 哈希与旧版本一致，旧工程中的软删除原图层仍可恢复，旧工程上的新拆分按物化规则进行。导入 CMO3 模型的拆分仍使用旧规则（原图层软删除）。记录目前内联在日志中，没有使用 v2 的载荷节点。
+
+**测试**：`WorkspaceMaterializedSplitTest` 覆盖拆分后的保存/重开 IR 一致、纹理集与 CMO3 中没有原图层、恢复不能带回、撤销可以、拆分前的关键形/混合形/路径/顶点组/Glue 保留在部件上、部件再拆分、部件网格设置重建，以及前后分层。
 
 ## 后续
 

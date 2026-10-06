@@ -47,6 +47,7 @@ internal object RigAuthoringJournal {
         RigBezierJournal.OP -> RigBezierJournal.replay(model, edit)
         DepthSplit.OP -> DepthSplit.apply(model, edit)
         SourcePartitionJournal.OP -> SourcePartitionJournal.apply(model, edit)
+        ArtPrimitiveJournal.OP -> ArtPrimitiveJournal.replay(model, edit)
         RasterMeshJournal.OP -> RasterMeshJournal.replay(model, edit)
         RasterMeshCreation.OP -> RasterMeshCreation.replay(model, edit)
         "canvas_geometry", "canvas_topology", "canvas_create_warp", "canvas_create_rotation", "canvas_create_glue", "canvas_glue_edit" -> CanvasEdits.apply(model, edit)
@@ -176,7 +177,7 @@ internal object RigAuthoringJournal {
                 VertexGroupJournal.RULE -> VertexGroupJournal.compileRule(current, command)
                 // Absolute points from the producer become sparse deltas against the geometry shown here.
                 "canvas_geometry" -> CanvasGeometryJournal.encode(current, command)
-                GeneratedOverrides.OP, DepthSplit.OP, MeshGenerationBaseline.OP, RigGenerationBaseline.OP, RigGenerationScaffold.OP, RigGenerationJournal.OP, RigGenerationFrames.OP, RigMeshActivation.OP, RigWarpTopology.OP, RigBezierJournal.OP, SourcePartitionJournal.OP, RasterMeshJournal.OP, RasterMeshCreation.OP, "parameter_keys", "set", "copy", "delete", "warp", "structure", "path_delete", VertexGroupJournal.PUT, VertexGroupJournal.DELETE, "canvas_topology", "canvas_create_warp", "canvas_create_rotation", "canvas_create_glue", "canvas_glue_edit" -> command
+                GeneratedOverrides.OP, DepthSplit.OP, MeshGenerationBaseline.OP, RigGenerationBaseline.OP, RigGenerationScaffold.OP, RigGenerationJournal.OP, RigGenerationFrames.OP, RigMeshActivation.OP, RigWarpTopology.OP, RigBezierJournal.OP, SourcePartitionJournal.OP, ArtPrimitiveJournal.OP, RasterMeshJournal.OP, RasterMeshCreation.OP, "parameter_keys", "set", "copy", "delete", "warp", "structure", "path_delete", VertexGroupJournal.PUT, VertexGroupJournal.DELETE, "canvas_topology", "canvas_create_warp", "canvas_create_rotation", "canvas_create_glue", "canvas_glue_edit" -> command
                 else -> error("Unknown authoring operation: $op")
             }
             // Ask against the model *before* this command is applied: the question is whether the slot

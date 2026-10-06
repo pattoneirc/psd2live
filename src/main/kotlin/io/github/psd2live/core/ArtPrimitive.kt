@@ -38,10 +38,11 @@ class ArtPrimitiveMesh(
  * does not regenerate, such as the parts of a split layer or a newly created mesh. Ordinary layers
  * stay generated from the source art; only primitives the document owns are recorded this way.
  *
- * Placeholder for the planned `art_primitive` journal record, which generalises the
- * `canvas_mesh_create` record. Nothing reads or writes it yet. The edit payloads ([keyforms],
- * [blendShapes], [paths], [vertexGroups], [glue], [simulationTargets]) keep their journal JSON
- * shape until they get typed counterparts.
+ * A typed view of the `art_primitive` journal record that [ArtPrimitiveJournal] reads and writes as
+ * JSON; nothing builds this class yet. The record stores canvas-unit texture coordinates rather than
+ * [ArtPrimitiveMesh.luv], so a paint that re-crops the layer keeps every vertex on the same pixel. The
+ * edit payloads ([keyforms], [blendShapes], [paths], [vertexGroups], [glue], [simulationTargets]) keep
+ * their journal JSON shape until they get typed counterparts.
  *
  * @property id The drawable this primitive defines.
  * @property layerId The source layer whose pixels the primitive shows.

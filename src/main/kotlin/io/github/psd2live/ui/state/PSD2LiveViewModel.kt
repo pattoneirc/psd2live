@@ -1323,8 +1323,10 @@ class PSD2LiveViewModel : AutoCloseable {
             setErrorMessage(tr("editor.depthSplit.changed")); return
         }
         val port: io.github.psd2live.application.WorkspaceSourcePort = workspaceBackend ?: return
+        val frontLayerId = "depth:${java.util.UUID.randomUUID()}"
         val request = kotlinx.serialization.json.buildJsonObject {
             put("source_id", offer.sourceId)
+            put("front_layer_id", frontLayerId)
             put("middle_ids", kotlinx.serialization.json.JsonArray(middleIds.map { kotlinx.serialization.json.JsonPrimitive(it) }))
             val name = offer.preview.rig.puppet.drawables.single { it.id.raw == offer.sourceId }.name
             put("names", kotlinx.serialization.json.JsonArray(listOf(tr("editor.depthSplit.backName", name),
@@ -1337,8 +1339,8 @@ class PSD2LiveViewModel : AutoCloseable {
                     offer.expected.projectId, offer.expected.state, MutationAuthor.USER)) {
                     port.splitDepth(requireNotNull(offer.expected.state), request)
                 }
-                val frontLayerId = result.affectedLayerIds.single()
-                revealCanvasLayers(result.state, offer.workspaceId, offer.canvasId, listOf(frontLayerId))
+                // Both slices replace the source layer; the front is the one to paint.
+                revealCanvasLayers(result.state, offer.workspaceId, offer.canvasId, result.affectedLayerIds)
                 updateCanvasPresentation(offer.workspaceId, offer.canvasId, CanvasMode.EDIT) {
                     it.copy(selectedLayerId = frontLayerId, selectedLayerIds = setOf(frontLayerId), selectedDeformerId = null)
                 }

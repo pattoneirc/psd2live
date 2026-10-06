@@ -55,7 +55,9 @@ internal object WorkspacePartitionEdits {
         work.progress(0.05f, "Preparing source partition")
         val request = operation.request
         val id = request.getValue("layer_id").jsonPrimitive.content
-        val migrate = model.config.rigEdits.importedCmo3 != null || MeshGenerationBaseline.present(document.rigEdits) || wouldDiscardEdits(model, id)
+        WorkspaceArtPrimitives.requireCurrent(document.rigEdits, id)
+        val imported = model.config.rigEdits.importedCmo3 != null
+        val migrate = imported || MeshGenerationBaseline.present(document.rigEdits) || wouldDiscardEdits(model, id)
         val source = document.source.layers.firstOrNull { it.id.raw == id }
             ?: model.analysis.layers.firstOrNull { it.source.id.raw == id }?.source
             ?: throw IllegalArgumentException("Source layer not found: $id")
@@ -85,16 +87,10 @@ internal object WorkspacePartitionEdits {
             plan.pieces(names, pieceIds, work::checkpoint)
         }
         work.progress(0.75f, "Preserving partition generation context")
+        if (!imported) return materialize(document, model, id, pieces, sides, names, componentPlan, request, work)
         if (!migrate) return install(document, model, id, pieces, sides)
         val drawable = model.rig.puppet.drawables.single { model.rig.layerIdByDrawableId[it.id.raw] == id || it.id.raw == id }
-        val mesh = requireNotNull(drawable.mesh)
-        val canvas = Cmo3ModelImport.textureCanvas(model, drawable)
-        val geometry = if (componentPlan != null) SourcePartitionGeometry.components(mesh, canvas,
-            componentPlan.ownerByVertex, pieces.size, work::checkpoint) else {
-            SourcePartitionGeometry.polygon(mesh, canvas, request.getValue("polygon").jsonArray.map {
-                val pair = it.jsonArray; pair[0].jsonPrimitive.double to pair[1].jsonPrimitive.double
-            }, work::checkpoint)
-        }
+        val geometry = geometry(model, drawable, componentPlan, request, pieces.size, work)
         val frozen = WorkspaceLayerInsertionEdits.freeze(document, model)
         var next = install(frozen, model, id, pieces, sides)
         val ids = pieces.map { next.rigEdits.splitDrawableIds.getValue(it.id.raw) }
@@ -108,6 +104,50 @@ internal object WorkspacePartitionEdits {
                     overlay.importedLayerIds + ids.zip(pieces.map { it.id.raw })))
         work.checkpoint()
         return next
+    }
+
+    fun geometry(model: RigPreviewModel, drawable: org.umamo.runtime.model.Drawable, componentPlan: MeshComponentSplit.Plan?,
+                 request: JsonObject, count: Int, work: WorkspaceRasterWork = WorkspaceRasterWork.Direct): SourcePartitionGeometry.Plan {
+        val mesh = requireNotNull(drawable.mesh)
+        val canvas = Cmo3ModelImport.textureCanvas(model, drawable)
+        return if (componentPlan != null) SourcePartitionGeometry.components(mesh, canvas,
+            componentPlan.ownerByVertex, count, work::checkpoint) else {
+            SourcePartitionGeometry.polygon(mesh, canvas, request.getValue("polygon").jsonArray.map {
+                val pair = it.jsonArray; pair[0].jsonPrimitive.double to pair[1].jsonPrimitive.double
+            }, work::checkpoint)
+        }
+    }
+
+    /**
+     * The parts become the only drawables: each is an `art_primitive` carrying the original's authored state at
+     * this point, and the original leaves the source art. Only undo returns to it.
+     */
+    private fun materialize(document: WorkspaceDocument, model: RigPreviewModel, id: String, pieces: List<WorkspaceSourceLayer>,
+                            sides: List<Side>, names: List<String>, componentPlan: MeshComponentSplit.Plan?, request: JsonObject,
+                            work: WorkspaceRasterWork): WorkspaceDocument {
+        val drawable = model.rig.puppet.drawables.single { model.rig.layerIdByDrawableId[it.id.raw] == id || it.id.raw == id }
+        val geometry = geometry(model, drawable, componentPlan, request, pieces.size, work)
+        val frozen = WorkspaceLayerInsertionEdits.freeze(document, model)
+        val pieceIds = WorkspaceArtPrimitives.allocate(frozen, model, pieces)
+        work.checkpoint()
+        val authored = model.config.rigEdits.authored(model.baseRig.puppet)
+        val legacy = SourcePartitionJournal.encode(authored, drawable.id, pieces.map { it.id.raw }, pieceIds, names, geometry,
+            followCutVertices = componentPlan == null)
+        val partitioned = SourcePartitionJournal.partition(authored, legacy) { clone, canvas -> clone to canvas }
+        work.checkpoint()
+        val primitives = partitioned.ids.mapIndexed { index, pieceId ->
+            val piece = partitioned.model.drawables.single { it.id == pieceId }
+            val canvas = requireNotNull(piece.mesh).uvs
+            ArtPrimitiveJournal.encodePrimitive(partitioned.model, piece, pieces[index].id.raw, PuppetSourceAtlas.SOURCE_ID_RAW,
+                ArtPrimitiveJournal.coverage(pieces[index].bounds, canvas), ArtPrimitiveJournal.canvasBounds(canvas))
+        }
+        val record = ArtPrimitiveJournal.encode("split", PuppetSourceAtlas.SOURCE_ID_RAW, listOf(drawable.id), listOf(id),
+            mapOf(drawable.id to partitioned.ids), primitives, partitioned.glueGroups, partitioned.followers)
+        val overlay = SourcePartitionJournal.migrateSimulations(MeshGenerationBaseline.preserve(frozen.rigEdits, model.config),
+            authored, drawable.id.raw, pieceIds, geometry)
+        val placed = WorkspaceArtPrimitives.replaceLayer(frozen, model, id, pieces, sides)
+        return placed.copy(rigEdits = overlay.copy(authoringJournal = overlay.authoringJournal + record,
+            splitDrawableIds = overlay.splitDrawableIds + pieces.map { it.id.raw }.zip(pieceIds)))
     }
 
     private fun install(document: WorkspaceDocument, model: RigPreviewModel, id: String,
