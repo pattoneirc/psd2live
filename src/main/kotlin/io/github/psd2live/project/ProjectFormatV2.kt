@@ -175,7 +175,7 @@ internal object ProjectFormatV2 {
 			"source" -> layersHaveRect(value)
 			in sourceParts.values -> value.values.any { layersHaveRect(it as? JsonObject) }
 			"layers" -> "textureOverrides" in value
-			"settings" -> (value["settings"] as? JsonObject)?.containsKey(WorkspaceSettingsCodec.ATLAS) == true
+			"settings" -> (value["settings"] as? JsonObject)?.let { it.containsKey(WorkspaceSettingsCodec.ATLAS) || it.containsKey(AtlasArrangementCodec.KEY) } == true
 			else -> false
 		}
 		return if (newer) NODE_SCHEMA_TEXTURES else NODE_SCHEMA

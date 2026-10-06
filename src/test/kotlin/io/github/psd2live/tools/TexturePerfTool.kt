@@ -57,7 +57,7 @@ class TexturePerfTool {
 			fun edit(round: Int): WorkspaceTextureEdit = when (round % 4) {
 				0 -> WorkspaceTextureEdit.SetTile(layer, TexturePin(0, 2000 + round * 4, 3000))
 				1 -> WorkspaceTextureEdit.SetPixelDensity(listOf(layer), if (round % 8 == 1) 2f else null)
-				2 -> WorkspaceTextureEdit.Pack(keepPins = round % 8 == 2)
+				2 -> WorkspaceTextureEdit.Pack(byMesh = round % 8 == 2)
 				else -> WorkspaceTextureEdit.SetBudget(padding = if (round % 8 == 3) 4 else 2)
 			}
 			repeat(12) { round ->

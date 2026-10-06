@@ -56,13 +56,19 @@ sealed interface WorkspaceTextureEdit {
         override val operation get() = "atlas_set_tile"
     }
 
-    /** Changes the atlas budget; omitted values keep the current effective budget's. */
-    data class SetBudget(val pageSize: Int? = null, val maxPages: Int? = null, val padding: Int? = null) : WorkspaceTextureEdit {
+    /**
+     * Changes the atlas budget; omitted values keep the current effective budget's. [auto] true arranges the
+     * atlas on every build again (dropping the stored arrangement); false keeps the layout it has now.
+     */
+    data class SetBudget(val pageSize: Int? = null, val maxPages: Int? = null, val padding: Int? = null, val auto: Boolean? = null) : WorkspaceTextureEdit {
         override val operation get() = "atlas_set_budget"
     }
 
-    /** Clears every pin unless [keepPins], and drops overrides of layers that no longer exist; the layout is canonical. */
-    data class Pack(val keepPins: Boolean = false) : WorkspaceTextureEdit {
+    /**
+     * Arranges the atlas once and keeps the result: by the meshes' footprints when [byMesh], else by tile
+     * rectangles; only [layerIds] move when given. Overrides of layers that no longer exist are dropped.
+     */
+    data class Pack(val byMesh: Boolean = true, val layerIds: List<String>? = null) : WorkspaceTextureEdit {
         override val operation get() = "atlas_pack"
     }
 }
@@ -89,7 +95,10 @@ data class WorkspaceAtlasTile(
     /** The layer's density override, 1 by default. */
     val density: Float,
     val locked: Boolean,
+    /** A pin of the automatic layout holds the tile in place. */
     val pinned: Boolean,
+    /** The stored arrangement placed the tile by its meshes' footprint, which may reach into other tiles' rectangles. */
+    val shaped: Boolean = false,
 )
 
 data class WorkspaceAtlasPage(val index: Int, val width: Int, val height: Int, val tileCount: Int, val occupancy: Float)
@@ -101,6 +110,8 @@ data class WorkspaceAtlasSnapshot(
     val fit: Float,
     val notices: List<String>,
     val tiles: List<WorkspaceAtlasTile>,
+    /** Whether the atlas arranges itself on every build; false when it keeps a stored arrangement. */
+    val auto: Boolean = true,
 )
 
 /** One layer's committed texture: where it sits on the canvas, its pixels, its override and its tile. */
@@ -135,7 +146,7 @@ class WorkspaceTextureView internal constructor(private val capture: WorkspaceCa
         val placement = model.atlas.placementByLayerId[id] ?: return null
         val override = document.textureOverrides[id] ?: TextureOverride()
         return WorkspaceAtlasTile(id, placement.page, placement.x, placement.y, placement.width, placement.height,
-            placement.scaleX, placement.scaleY, override.density ?: 1f, override.lock, override.pin != null)
+            placement.scaleX, placement.scaleY, override.density ?: 1f, override.lock, override.pin != null, id in model.atlas.footprints)
     }
 
     fun layer(layerId: String): WorkspaceLayerTexture {
@@ -157,7 +168,10 @@ class WorkspaceTextureView internal constructor(private val capture: WorkspaceCa
             WorkspaceAtlasPage(index, page.image.width, page.image.height, onPage.size,
                 if (area == 0L) 0f else (onPage.sumOf { it.width.toLong() * it.height } / area.toDouble()).toFloat().coerceIn(0f, 1f))
         }
-        return WorkspaceAtlasSnapshot(document.config().effectiveAtlasBudget(), pages, model.atlas.fit, model.atlas.notices, tiles)
+        val overflow = WorkspaceAtlasFootprints.overflowing(model)
+        val notices = model.atlas.notices + if (overflow.isEmpty()) emptyList() else listOf("Meshes of " + overflow.joinToString() +
+            " reach beyond the footprint they were arranged by; arrange the atlas again so their tiles keep clear of their neighbours.")
+        return WorkspaceAtlasSnapshot(document.config().effectiveAtlasBudget(), pages, model.atlas.fit, notices, tiles, !model.atlas.arranged)
     }
 
     /** The page's canonical PNG, byte for byte what exports write. */
@@ -165,6 +179,9 @@ class WorkspaceTextureView internal constructor(private val capture: WorkspaceCa
         require(page in model.atlas.pages.indices) { "Atlas page $page does not exist; the atlas has ${model.atlas.pages.size} page(s)" }
         return model.atlas.pages[page].png
     }
+
+    /** The mesh footprint [layerId]'s tile was arranged by, or null when it owns its whole rectangle. */
+    fun footprint(layerId: String): TextureFootprint? = model.atlas.footprints[layerId]
 
     /** The layer ids of the tiles on [page]. */
     fun pageLayers(page: Int): List<String> = model.atlas.placementByLayerId.filterValues { it.page == page }.keys.sorted()
@@ -214,8 +231,9 @@ internal object WorkspaceTextureEdits {
                     TexturePin(it.getValue("page").jsonPrimitive.int, it.getValue("x").jsonPrimitive.int, it.getValue("y").jsonPrimitive.int)
                 }
             })
-            "atlas_set_budget" -> WorkspaceTextureEdit.SetBudget(int("page_size"), int("max_pages"), int("padding"))
-            "atlas_pack" -> WorkspaceTextureEdit.Pack(request["keep_pins"]?.jsonPrimitive?.boolean ?: false)
+            "atlas_set_budget" -> WorkspaceTextureEdit.SetBudget(int("page_size"), int("max_pages"), int("padding"), request["auto"]?.jsonPrimitive?.boolean)
+            "atlas_pack" -> WorkspaceTextureEdit.Pack((request["shape"]?.jsonPrimitive?.content ?: "mesh") == "mesh",
+                request["layer_ids"]?.jsonArray?.map { it.jsonPrimitive.content })
             else -> throw IllegalArgumentException("Not a texture operation: ${operation.operation}")
         }
     }
@@ -227,7 +245,7 @@ internal object WorkspaceTextureEdits {
             is WorkspaceTextureEdit.ReplaceImage -> replace(document, model, edit, checkCancelled)
             is WorkspaceTextureEdit.SetPixelDensity -> density(document, model, edit)
             is WorkspaceTextureEdit.SetTile -> tile(document, model, edit)
-            is WorkspaceTextureEdit.SetBudget -> budget(document, edit)
+            is WorkspaceTextureEdit.SetBudget -> budget(document, model, edit)
             is WorkspaceTextureEdit.Pack -> pack(document, model, edit)
         }
     }
@@ -236,8 +254,12 @@ internal object WorkspaceTextureEdits {
     fun changedLayers(edit: WorkspaceTextureEdit, before: WorkspaceDocument, after: WorkspaceDocument): List<String> = when (edit) {
         is WorkspaceTextureEdit.SetCanvasRect -> listOf(edit.layerId).filter { before.source !== after.source }
         is WorkspaceTextureEdit.ReplaceImage -> listOf(edit.layerId).filter { before.source !== after.source }
-        is WorkspaceTextureEdit.SetTile -> listOf(edit.layerId).filter { before.textureOverrides[it] != after.textureOverrides[it] }
-        else -> (before.textureOverrides.keys + after.textureOverrides.keys).filter { before.textureOverrides[it] != after.textureOverrides[it] }.sorted()
+        else -> {
+            val a = AtlasArrangementCodec.decode(before.settings)?.tiles.orEmpty(); val b = AtlasArrangementCodec.decode(after.settings)?.tiles.orEmpty()
+            val ids = (before.textureOverrides.keys + after.textureOverrides.keys).filter { before.textureOverrides[it] != after.textureOverrides[it] } +
+                (a.keys + b.keys).filter { a[it] != b[it] }
+            if (edit is WorkspaceTextureEdit.SetTile) listOf(edit.layerId).filter { it in ids } else ids.distinct().sorted()
+        }
     }
 
     /** A source layer the document holds and has not deleted. */
@@ -314,6 +336,11 @@ internal object WorkspaceTextureEdits {
         return withOverrides(document, overrides)
     }
 
+    /**
+     * Moves [edit]'s tile to its spot, or releases it to free space. The spot is stored in the atlas arrangement;
+     * an automatically arranged atlas is first kept as it is, so the move does not reflow the other tiles. With
+     * no arrangement, releasing clears a pin set by an earlier build.
+     */
     private fun tile(document: WorkspaceDocument, model: RigPreviewModel, edit: WorkspaceTextureEdit.SetTile): WorkspaceDocument {
         requireTextureLayer(document, model, edit.layerId)
         edit.pin?.let { pin ->
@@ -323,29 +350,62 @@ internal object WorkspaceTextureEdits {
             val pageSize = model.atlas.pages.firstOrNull()?.image?.width ?: budget.pageSize
             require(pin.x < pageSize && pin.y < pageSize) { "Pin lies outside the ${pageSize}px page" }
         }
+        val stored = AtlasArrangementCodec.decode(document.settings)
         val overrides = document.textureOverrides.toMutableMap()
-        put(overrides, edit.layerId, (overrides[edit.layerId] ?: TextureOverride()).copy(pin = edit.pin))
-        return withOverrides(document, overrides)
+        overrides[edit.layerId]?.let { put(overrides, edit.layerId, it.copy(pin = null)) }
+        val cleared = withOverrides(document, overrides)
+        if (stored == null && edit.pin == null) return cleared
+        val arrangement = stored ?: AtlasLayout.frozen(model.atlas)
+        val tiles = arrangement.tiles.toMutableMap()
+        val pin = edit.pin
+        if (pin == null) tiles.remove(edit.layerId)
+        else tiles[edit.layerId] = ArrangedTile(pin.page, pin.x, pin.y, tiles[edit.layerId]?.footprint ?: model.atlas.footprints[edit.layerId])
+        return withArrangement(cleared, arrangement.copy(tiles = tiles))
     }
 
-    private fun budget(document: WorkspaceDocument, edit: WorkspaceTextureEdit.SetBudget): WorkspaceDocument {
-        require(edit.pageSize != null || edit.maxPages != null || edit.padding != null) { "Give page_size, max_pages or padding" }
+    /** Changes the budget and, with [WorkspaceTextureEdit.SetBudget.auto], whether the atlas arranges itself. */
+    private fun budget(document: WorkspaceDocument, model: RigPreviewModel, edit: WorkspaceTextureEdit.SetBudget): WorkspaceDocument {
+        require(edit.pageSize != null || edit.maxPages != null || edit.padding != null || edit.auto != null) { "Give page_size, max_pages, padding or auto" }
         edit.pageSize?.let { require(it in pageSizes) { "page_size must be a power of two in 256..16384" } }
         edit.maxPages?.let { require(it in 1..64) { "max_pages must lie in 1..64" } }
         edit.padding?.let { require(it in 0..32) { "padding must lie in 0..32" } }
         val stored = WorkspaceSettingsCodec.decodeAtlasBudget(document.settings)
         val current = stored ?: WorkspaceSettingsCodec.atlasBudget(document.settings)
         val next = AtlasBudget(edit.pageSize ?: current.pageSize, edit.maxPages ?: current.maxPages, edit.padding ?: current.padding)
-        if (next == current) return document
-        return document.copy(settings = JsonObject(document.settings + (WorkspaceSettingsCodec.ATLAS to WorkspaceSettingsCodec.encodeAtlasBudget(next))))
+        val budgeted = if (next == current) document
+            else document.copy(settings = JsonObject(document.settings + (WorkspaceSettingsCodec.ATLAS to WorkspaceSettingsCodec.encodeAtlasBudget(next))))
+        val arranged = AtlasArrangementCodec.decode(document.settings)
+        return when (edit.auto) {
+            true -> withArrangement(budgeted, null)
+            // Turning the automatic arrangement off keeps the layout the atlas has now.
+            false -> if (arranged != null) budgeted else withArrangement(budgeted, AtlasLayout.frozen(model.atlas))
+            null -> budgeted
+        }
     }
 
+    /**
+     * Arranges the atlas once and stores the result ([AtlasLayout.arrange]): by the meshes' footprints, so
+     * tiles nest wherever their meshes leave room, or by their rectangles. Only [WorkspaceTextureEdit.Pack.layerIds]
+     * move when given. Pins of the automatic layout are dropped, as are overrides of layers that no longer exist.
+     */
     private fun pack(document: WorkspaceDocument, model: RigPreviewModel, edit: WorkspaceTextureEdit.Pack): WorkspaceDocument {
+        edit.layerIds?.let { ids ->
+            require(ids.isNotEmpty() && ids.distinct().size == ids.size) { "Give unique layer ids to arrange" }
+            ids.forEach { require(it in model.atlas.placementByLayerId) { "Layer $it has no atlas tile" } }
+        }
         val known = document.source.layers.mapTo(HashSet()) { it.id.raw } + model.analysis.layers.map { it.source.id.raw }
-        val overrides = document.textureOverrides.filterKeys { it in known }.mapValues { (_, value) ->
-            if (edit.keepPins) value else value.copy(pin = null)
-        }.filterValues { !it.isDefault }
-        return withOverrides(document, overrides.toMutableMap())
+        val overrides = document.textureOverrides.filterKeys { it in known }.mapValues { (_, value) -> value.copy(pin = null) }
+            .filterValues { !it.isDefault }
+        val cleaned = withOverrides(document, overrides.toMutableMap())
+        val footprints = if (edit.byMesh) WorkspaceAtlasFootprints.of(model) else emptyMap()
+        val arrangement = AtlasLayout.arrange(model.analysis.layers, cleaned.config(), footprints, model.atlas, edit.layerIds?.toSet())
+            ?: throw IllegalArgumentException("The textures do not fit the atlas budget even at the smallest scale; raise the page size or page count")
+        return withArrangement(cleaned, arrangement)
+    }
+
+    private fun withArrangement(document: WorkspaceDocument, arrangement: AtlasArrangement?): WorkspaceDocument {
+        if (arrangement == AtlasArrangementCodec.decode(document.settings)) return document
+        return document.copy(settings = AtlasArrangementCodec.with(document.settings, arrangement))
     }
 
     private fun put(overrides: MutableMap<String, TextureOverride>, id: String, value: TextureOverride) {
@@ -415,5 +475,54 @@ internal object WorkspaceTextureEdits {
     fun decodeFile(path: Path, checkCancelled: () -> Unit): LayerRaster {
         val image = LayerImport.decodeRasterFile(path.toFile(), checkCancelled)
         return LayerRaster(image.width, image.height, image.rgba)
+    }
+}
+
+/** The cells of each tile's raster its meshes cover, from the meshes' texture coordinates on the current atlas. */
+internal object WorkspaceAtlasFootprints {
+    /** A footprint holds at most this many cells across, so a dense raster stays a small record. */
+    private const val MAX_CELLS = 192
+
+    private class Covered(val rasterWidth: Int, val rasterHeight: Int, val triangles: MutableList<FloatArray> = ArrayList())
+
+    /** Every textured mesh's triangles in its layer's raster pixels, by layer. */
+    private fun covered(model: RigPreviewModel): Map<String, Covered> {
+        val atlas = model.atlas
+        val out = LinkedHashMap<String, Covered>()
+        for (drawable in model.rig.puppet.drawables) {
+            val mesh = drawable.mesh ?: continue
+            val layerId = model.rig.layerIdByDrawableId[drawable.id.raw] ?: continue
+            val at = atlas.placementByLayerId[layerId] ?: continue
+            val page = atlas.pages.getOrNull(at.page)?.image ?: continue
+            val covered = out.getOrPut(layerId) {
+                Covered(Math.round(at.width / at.scaleX).coerceAtLeast(1), Math.round(at.height / at.scaleY).coerceAtLeast(1))
+            }
+            val uv = mesh.uvs; val indices = mesh.indices
+            for (t in 0 until indices.size - 2 step 3) covered.triangles += FloatArray(6) { k ->
+                val vertex = indices[t + k / 2]
+                if (k % 2 == 0) (uv[vertex * 2] * page.width - at.x) / at.scaleX else (uv[vertex * 2 + 1] * page.height - at.y) / at.scaleY
+            }
+        }
+        return out
+    }
+
+    private fun cell(width: Int, height: Int) = maxOf(AtlasArrange.CELL, (maxOf(width, height) + MAX_CELLS - 1) / MAX_CELLS)
+
+    fun of(model: RigPreviewModel): Map<String, TextureFootprint> = covered(model).mapNotNull { (id, covered) ->
+        AtlasArrange.footprint(covered.rasterWidth, covered.rasterHeight, cell(covered.rasterWidth, covered.rasterHeight), covered.triangles)?.let { id to it }
+    }.toMap()
+
+    /** Names of layers whose meshes now cover cells outside the footprint their tile was arranged by. */
+    fun overflowing(model: RigPreviewModel): List<String> {
+        if (model.atlas.footprints.isEmpty()) return emptyList()
+        val names = model.analysis.layers.associate { it.source.id.raw to it.source.name }
+        return covered(model).mapNotNull { (id, covered) ->
+            val stored = model.atlas.footprints[id] ?: return@mapNotNull null
+            val now = AtlasArrange.footprint(covered.rasterWidth, covered.rasterHeight, stored.cell, covered.triangles) ?: return@mapNotNull null
+            if (now.columns != stored.columns || now.rows != stored.rows) return@mapNotNull names[id] ?: id
+            val outside = now.bits.clone() as java.util.BitSet
+            outside.andNot(stored.bits)
+            if (outside.isEmpty) null else names[id] ?: id
+        }.sorted()
     }
 }

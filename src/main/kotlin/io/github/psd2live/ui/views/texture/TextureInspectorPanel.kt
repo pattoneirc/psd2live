@@ -168,14 +168,6 @@ private fun DensitySection(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, lay
 			leadingIcon = { IconLock(locked = locked, tint = if (locked) colors.accent else colors.textMuted) }, showCheckWhenSelected = false,
 			tooltip = tr("texture.inspector.lockHint"))
 	}
-	val single = layers.singleOrNull()
-	val tile = single?.tile
-	if (single != null && tile?.pinned == true) {
-		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-			Text(tr("texture.inspector.pinnedAt", tile.page + 1, tile.x, tile.y), style = typography.caption.copy(fontSize = 11.sp), color = colors.warning)
-			CompactButton(tr("texture.inspector.unpin"), onClick = { vm.releaseTexturePin(snapshot, single.layerId) }, enabled = !busy, height = 20.dp)
-		}
-	}
 	Text(tr("texture.inspector.pageHint"), style = typography.caption.copy(fontSize = 10.sp), color = colors.textMuted)
 }
 
@@ -236,7 +228,8 @@ private fun AtlasSummary(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, busy:
 	ValueRow(tr("texture.inspector.pages"), "${atlas.pages.size} / ${atlas.budget.maxPages}  ·  ${atlas.budget.pageSize} px")
 	ValueRow(tr("texture.inspector.tiles"), shown.size.toString())
 	ValueRow(tr("texture.inspector.fitLabel"), "%.0f%%".format(atlas.fit * 100f))
-	ValueRow(tr("texture.inspector.lockedPinned"), "${shown.count { it.locked }} / ${shown.count { it.pinned }}")
+	ValueRow(tr("texture.inspector.locked"), shown.count { it.locked }.toString())
+	ValueRow(tr("texture.inspector.arrangement"), tr(if (atlas.auto) "texture.inspector.arrangement.auto" else "texture.inspector.arrangement.kept"))
 	CompactSectionHeader(tr("texture.atlas.budget"))
 	AtlasBudgetControls(vm, snapshot, !busy)
 }

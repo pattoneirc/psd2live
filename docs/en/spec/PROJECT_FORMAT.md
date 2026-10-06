@@ -51,7 +51,7 @@ A node or revision index moves to a newer schema only when it uses a newer field
 | Schema | Applies to | New fields |
 | --- | --- | --- |
 | Node 1 | nodes without the fields below | — |
-| Node 2 | a `source` or extra source-art node with a layer `rect`; `layers` with `textureOverrides`; `settings` with `atlas` | see texture fields below |
+| Node 2 | a `source` or extra source-art node with a layer `rect`; `layers` with `textureOverrides`; `settings` with `atlas` or `atlasArrangement` | see texture fields below |
 | Revision 1 | the journal names no payload node | — |
 | Revision 2 | the journal names payload nodes, listed under `payloads` | `{"$payload": "<sha256>"}` journal entries |
 
@@ -59,11 +59,12 @@ Builds that read only schema 1 reject a schema-2 node or revision instead of dro
 
 ### Texture fields
 
-All three are optional; absent means the earlier behaviour and keeps earlier revisions. Generation and atlas packing read them (rules in the Chinese [document layer](../../zh/spec/DOCUMENT_LAYER.md#逐层尺寸) reference).
+All four are optional; absent means the earlier behaviour and keeps earlier revisions. Generation and atlas packing read them (rules in the Chinese [document layer](../../zh/spec/DOCUMENT_LAYER.md#逐层尺寸) reference).
 
 - Source layer `rect: [left, top, width, height]`: the float canvas rectangle in canvas units - where the layer sits on the canvas, never changed by pixel operations. It is omitted when absent or equal to the integer bounds, which stay the enclosing box and must contain it. The layer raster may have any resolution; raster pixels over the rectangle size are the layer's native density, possibly different per axis.
 - Document `textureOverrides: {layer ID: {density?, lock?, pin?: {page, x, y}}}`: per-layer texture density multiplier (default 1, the raster's own resolution), lock (keeps the density when the atlas has to shrink) and fixed atlas position (page and top-left page pixel); all-default entries are not written. Stored in the `layers` node.
 - Setting `atlas: {pageSize, maxPages, padding}`: the atlas budget. Without it the budget is the legacy `atlasSize` / `texturePadding` with the default of 8 pages; missing members fall back the same way.
+- Setting `atlasArrangement: {fitStep, tiles: {layer ID: {page, x, y, footprint?: {cell, columns, rows, bits}}}}`: a stored atlas layout. Without it the atlas is arranged automatically on every build (the earlier behaviour); with it every tile keeps its spot and every unlocked tile the common fit `fitStep / 4096`. `footprint` is the cells of the layer raster its meshes cover (`cell` raster pixels each, `bits` a row-major bitmap as a Base64 `BitSet`); a tile with one writes only those cells. A newly imported project stores its first layout.
 
 ## v1 compatibility and migration
 

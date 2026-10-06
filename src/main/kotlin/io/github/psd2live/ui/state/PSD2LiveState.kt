@@ -575,6 +575,8 @@ data class PSD2LiveState(
 	val textureOverrides: Map<String, io.github.psd2live.project.TextureOverride> = emptyMap(),
 	/** Projection of the optional `atlas` budget setting; null keeps the legacy atlasSize/texturePadding behaviour. */
 	val atlasBudget: io.github.psd2live.core.AtlasBudget? = null,
+	/** Projection of the optional stored atlas arrangement; kept so GUI commits do not drop it. */
+	val atlasArrangement: io.github.psd2live.project.AtlasArrangement? = null,
 	/** The simulation the preview runs live over the rig, or null; the canvas then draws in software. */
 	val simulationPreviewId: String? = null,
 	val errorMessage: String? = null,
@@ -715,6 +717,7 @@ data class PSD2LiveState(
 			meshSource = meshSource,
 			atlasBudget = atlasBudget,
 			textureOverrides = textureOverrides.filterValues { !it.isDefault },
+			atlasArrangement = atlasArrangement,
 		)
 	}
 

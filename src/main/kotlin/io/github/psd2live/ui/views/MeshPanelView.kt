@@ -177,6 +177,24 @@ private fun GlobalMeshSettingsEditor(
 				onEditStart = { viewModel.beginEditorField("setGlobalMeshSettings.$it") },
 				onEditEnd = { viewModel.endEditorField("setGlobalMeshSettings.$it") },
 			)
+			// Which pixels count as the layer's art for its outline and mesh; a generation setting, so it lives with the mesh.
+			MeshFormRow(label = tr("settings.alphaThreshold")) {
+				CompactNumberSpinner(
+					onEditStart = { viewModel.beginEditorField("setAlphaThreshold") },
+					onEditEnd = { viewModel.endEditorField("setAlphaThreshold") },
+					value = state.alphaThreshold.toDouble(),
+					onValueChange = { viewModel.setAlphaThreshold(it.toInt()) },
+					min = 0.0,
+					max = 255.0,
+					step = 1.0,
+					decimals = 0,
+					unit = tr("settings.unit.byte"),
+					enabled = !isBusy,
+					modifier = Modifier.weight(1f),
+					height = 22.dp,
+				)
+			}
+			if (showHints) Text(tr("mesh.settings.alphaThresholdHint"), style = typography.caption.copy(fontSize = 9.sp), color = colors.textMuted)
 			MeshUnitsToggle(state = state, viewModel = viewModel, enabled = !isBusy, showHints = showHints)
 		}
 	}

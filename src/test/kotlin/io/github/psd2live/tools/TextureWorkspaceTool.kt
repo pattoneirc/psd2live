@@ -16,7 +16,6 @@ import io.github.psd2live.core.CanvasViewport
 import io.github.psd2live.core.RigCanvasSupport
 import io.github.psd2live.i18n.AppLanguage
 import io.github.psd2live.i18n.I18n
-import io.github.psd2live.project.TexturePin
 import io.github.psd2live.ui.SkiaRigPainter
 import io.github.psd2live.ui.SourcePixelImages
 import io.github.psd2live.ui.state.DesktopWorkspace
@@ -62,7 +61,7 @@ class TextureWorkspaceTool {
 				DesktopWorkspace(vm, temporary.resolve("store")).use { workspace ->
 					vm.attachWorkspace(workspace)
 					workspace.importPsd(File("examples/tml/psd-input/tml.psd").absolutePath, true)
-					// A spread of densities, a lock and a pin, so the heatmap and badges show.
+					// A spread of densities and a lock, then one arrangement by the meshes' footprints.
 					val first = requireNotNull(vm.textureSnapshot())
 					val bySize = first.atlas.tiles.sortedBy { it.width * it.height }
 					val small = bySize.take(3).map { it.layerId }
@@ -70,8 +69,7 @@ class TextureWorkspaceTool {
 					var state = first.state
 					state = vm.commitTextureEditNow(state, WorkspaceTextureEdit.SetPixelDensity(small, 3f)).mutation.state!!
 					state = vm.commitTextureEditNow(state, WorkspaceTextureEdit.SetPixelDensity(large, 0.5f, lock = true)).mutation.state!!
-					val pinnedTile = requireNotNull(vm.textureSnapshot()).tilesByLayer.getValue(small.first())
-					vm.commitTextureEditNow(state, WorkspaceTextureEdit.SetTile(small.first(), TexturePin(pinnedTile.page, pinnedTile.x, pinnedTile.y)))
+					vm.commitTextureEditNow(state, WorkspaceTextureEdit.Pack(byMesh = true))
 					val selected = bySize[bySize.size / 2].layerId
 					vm.selectLayer(selected)
 
@@ -86,9 +84,9 @@ class TextureWorkspaceTool {
 						}
 					}
 					I18n.setLanguage(AppLanguage.ENGLISH, persist = false)
-					vm.setTextureHeatmap(false)
-					write("en-atlas-plain", 620, 760) { AtlasPageView(vm.state.value, vm) }
 					vm.setTextureHeatmap(true)
+					write("en-atlas-heatmap", 620, 760) { AtlasPageView(vm.state.value, vm) }
+					vm.setTextureHeatmap(false)
 					vm.selectLayer(large.first()); vm.selectLayer(small.last(), additive = true)
 					write("en-inspector-multi", 360, 640) { TextureInspectorPanel(vm.state.value, vm) }
 					vm.selectLayer(null)

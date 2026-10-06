@@ -38,6 +38,8 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -60,7 +62,10 @@ import io.github.psd2live.ui.components.CompactMenuDivider
 import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactMenuSection
 import io.github.psd2live.ui.components.CompactToggleChip
+import io.github.psd2live.ui.components.IconCheck
 import io.github.psd2live.ui.components.IconClose
+import io.github.psd2live.ui.components.IconMeshWireframe
+import io.github.psd2live.ui.components.IconTextureView
 import io.github.psd2live.ui.components.IconLock
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.state.PSD2LiveState
@@ -75,6 +80,9 @@ import io.github.psd2live.ui.theme.frostedGlass
 import io.github.psd2live.ui.utils.NativeFilePicker
 import io.github.psd2live.ui.utils.toImageBitmapFast
 import io.github.psd2live.ui.views.CanvasNavigation
+import io.github.psd2live.ui.views.CanvasOptionsRail
+import io.github.psd2live.ui.views.RailDivider
+import io.github.psd2live.ui.views.RailToggle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
@@ -152,6 +160,8 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	val image = rememberPageImage(state, snapshot, page)
 	val selection = remember(state.selectedLayerIds, state.selectedLayerId, snapshot) { textureSelection(state, snapshot) }
 	val selected = remember(selection) { selection.toSet() }
+	val shownIds = remember(tiles) { tiles.mapTo(HashSet()) { it.layerId } }
+	val meshes = rememberMeshPaths(state, snapshot, page)
 	val busy = texture.busy || state.isAnalyzing || state.isGenerating
 
 	var zoom by remember(page) { mutableStateOf(1f) }
@@ -386,7 +396,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 			val pageRect = transform.rect(0f, 0f, pageInfo.width.toFloat(), pageInfo.height.toFloat())
 			clipRect {
 				drawChecker(pageRect, colors.checkerLight, colors.checkerDark)
-				if (image != null) {
+				if (image != null && texture.showPage) {
 					drawImage(
 						image,
 						dstOffset = IntOffset(pageRect.left.toInt(), pageRect.top.toInt()),
@@ -397,7 +407,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 					)
 				}
 				// Packed space no shown tile owns (a deleted layer's leftover) reads as empty page.
-				val shown = tiles.mapTo(HashSet()) { it.layerId }
+				val shown = shownIds
 				for (tile in atlas.tiles) {
 					if (tile.page != page || tile.layerId in shown) continue
 					val rect = transform.rect(tile)
@@ -417,12 +427,11 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 							isHovered -> colors.textPrimary
 							else -> colors.textMuted.copy(alpha = 0.7f)
 						}
-						drawRect(color, rect.topLeft, rect.size, style = Stroke(if (isSelected) 2f else 1f))
+						// A tile arranged by its meshes may share its rectangle; the dotted frame says so.
+						drawRect(color, rect.topLeft, rect.size, style = Stroke(if (isSelected) 2f else 1f,
+							pathEffect = if (tile.shaped && !isSelected) PathEffect.dashPathEffect(floatArrayOf(2f, 3f)) else null))
 					}
 					val badge = (6.dp.toPx()).coerceAtMost(min(rect.width, rect.height) / 2.5f)
-					if (tile.pinned && badge >= 3f) {
-						drawCircle(colors.warning, badge / 2f, Offset(rect.left + badge * 0.75f, rect.top + badge * 0.75f))
-					}
 					if (tile.locked && badge >= 3f) {
 						drawRoundRect(colors.highlight, Offset(rect.right - badge * 1.25f, rect.top + badge * 0.25f), Size(badge, badge),
 							androidx.compose.ui.geometry.CornerRadius(badge / 4f))
@@ -436,6 +445,18 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 							val at = transform.toView(corner.x, corner.y)
 							drawRect(colors.panelBackground, at - Offset(handleRadius / 2f + 1f, handleRadius / 2f + 1f), Size(handleRadius + 2f, handleRadius + 2f))
 							drawRect(colors.accent, at - Offset(handleRadius / 2f, handleRadius / 2f), Size(handleRadius, handleRadius))
+						}
+					}
+				}
+				if (texture.showMeshes && meshes != null) {
+					// The wireframes are in page pixels; one transform draws them all at a hairline width.
+					withTransform({ translate(transform.left, transform.top); scale(transform.scale, transform.scale, Offset.Zero) }) {
+						val hairline = 1f / transform.scale
+						for ((layerId, path) in meshes) {
+							if (layerId !in shownIds) continue
+							val chosen = layerId in selected
+							drawPath(path, if (chosen) colors.accent.copy(alpha = 0.9f) else colors.textPrimary.copy(alpha = 0.35f),
+								style = Stroke(if (chosen) hairline * 1.5f else hairline))
 						}
 					}
 				}
@@ -490,14 +511,23 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 			horizontalArrangement = Arrangement.spacedBy(3.dp),
 			verticalAlignment = Alignment.CenterVertically,
 		) {
-			var packMenu by remember { mutableStateOf(false) }
+			var arrangeMenu by remember { mutableStateOf(false) }
 			var budgetMenu by remember { mutableStateOf(false) }
+			// The automatic arrangement is a mode; Arrange is one action that keeps its result.
+			CompactToggleChip(tr("texture.atlas.auto"), atlas.auto, { vm.setAtlasAuto(snapshot, !atlas.auto) }, enabled = !busy,
+				showCheckWhenSelected = true, tooltip = tr("texture.atlas.autoHint"))
+			CompactButton(tr("texture.atlas.arrange"), onClick = { vm.arrangeAtlas(snapshot, selection) }, enabled = !busy, isPrimary = !atlas.auto, height = 22.dp)
 			Box {
-				CompactButton(tr("texture.atlas.pack") + " ▾", onClick = { packMenu = true }, enabled = !busy, height = 22.dp)
-				TreeContextMenu(packMenu, { packMenu = false }, frosted = true) {
-					CompactMenuItem(tr("texture.atlas.packKeepPins"), onClick = { packMenu = false; vm.packAtlas(snapshot, keepPins = true) })
-					CompactMenuItem(tr("texture.atlas.packAll"), onClick = { packMenu = false; vm.packAtlas(snapshot, keepPins = false) },
-						enabled = atlas.tiles.any { it.pinned })
+				CompactButton("▾", onClick = { arrangeMenu = true }, height = 22.dp)
+				TreeContextMenu(arrangeMenu, { arrangeMenu = false }, frosted = true, minWidth = 230.dp) {
+					CompactMenuSection(tr("texture.atlas.arrangeOptions"))
+					CompactMenuItem(tr("texture.atlas.arrangeByMesh"), onClick = { vm.setTextureArrangeOptions(true, texture.arrangeSelectionOnly) },
+						active = texture.arrangeByMesh, icon = { if (texture.arrangeByMesh) IconCheck(tint = colors.accent) })
+					CompactMenuItem(tr("texture.atlas.arrangeByRect"), onClick = { vm.setTextureArrangeOptions(false, texture.arrangeSelectionOnly) },
+						active = !texture.arrangeByMesh, icon = { if (!texture.arrangeByMesh) IconCheck(tint = colors.accent) })
+					CompactMenuDivider()
+					CompactMenuItem(tr("texture.atlas.arrangeSelection"), onClick = { vm.setTextureArrangeOptions(texture.arrangeByMesh, !texture.arrangeSelectionOnly) },
+						active = texture.arrangeSelectionOnly, icon = { if (texture.arrangeSelectionOnly) IconCheck(tint = colors.accent) })
 				}
 			}
 			Box {
@@ -530,25 +560,18 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 			}
 		}
 
-		// Bottom right: display toggles and the heat scale, like the edit canvas's view rail.
-		Column(
-			Modifier.align(Alignment.BottomEnd).padding(8.dp),
-			horizontalAlignment = Alignment.End,
-			verticalArrangement = Arrangement.spacedBy(4.dp),
-		) {
-			if (texture.heatmap) {
-				Box(Modifier.width(170.dp).frostedGlass(RoundedCornerShape(6.dp), elevation = 2.dp, alpha = 0.82f)
-					.padding(horizontal = 8.dp, vertical = 5.dp)) { HeatLegend() }
-			}
-			Row(
-				Modifier.frostedGlass(RoundedCornerShape(6.dp), elevation = 2.dp, alpha = 0.82f).padding(3.dp),
-				horizontalArrangement = Arrangement.spacedBy(3.dp),
-			) {
-				CompactToggleChip(tr("texture.atlas.heatmap"), texture.heatmap, { vm.setTextureHeatmap(!texture.heatmap) },
-					leadingIcon = { IconHeatmap() }, showCheckWhenSelected = false)
-				CompactToggleChip(tr("texture.atlas.outlines"), texture.showOutlines, { vm.setTextureOutlines(!texture.showOutlines) },
-					leadingIcon = { IconTileOutlines(colors.textPrimary) }, showCheckWhenSelected = false)
-			}
+		// Bottom right: the display rail of the edit canvas, with the heat scale beside it while the heatmap shows.
+		if (texture.heatmap) {
+			Box(Modifier.align(Alignment.BottomEnd).padding(end = 50.dp, bottom = 8.dp).width(170.dp)
+				.frostedGlass(RoundedCornerShape(6.dp), elevation = 2.dp, alpha = 0.82f)
+				.padding(horizontal = 8.dp, vertical = 5.dp)) { HeatLegend() }
+		}
+		CanvasOptionsRail(Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = 8.dp)) {
+			RailToggle(tr("texture.atlas.showPage"), texture.showPage, { IconTextureView(tint = it) }) { vm.setTextureShowPage(!texture.showPage) }
+			RailToggle(tr("texture.atlas.meshes"), texture.showMeshes, { IconMeshWireframe(tint = it) }) { vm.setTextureShowMeshes(!texture.showMeshes) }
+			RailToggle(tr("texture.atlas.outlines"), texture.showOutlines, { IconTileOutlines(it) }) { vm.setTextureOutlines(!texture.showOutlines) }
+			RailDivider()
+			RailToggle(tr("texture.atlas.heatmap"), texture.heatmap, { IconHeatmap() }) { vm.setTextureHeatmap(!texture.heatmap) }
 		}
 
 		// Bottom left: what the pointer is over or the gesture is doing; otherwise the page at a glance.
@@ -559,7 +582,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 			color = if (status.second) colors.warning else colors.textPrimary,
 			maxLines = 1,
 			overflow = TextOverflow.Ellipsis,
-			modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 8.dp, end = 200.dp)
+			modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 8.dp, end = if (texture.heatmap) 230.dp else 50.dp)
 				.frostedGlass(RoundedCornerShape(6.dp), elevation = 2.dp, alpha = 0.78f).padding(horizontal = 8.dp, vertical = 4.dp),
 		)
 
@@ -622,13 +645,9 @@ private fun AtlasContextMenu(
 			CompactMenuItem(tr("texture.inspector.lock"), onClick = { run { vm.setTextureLock(snapshot, selection, !locked) } },
 				enabled = !busy, active = locked, icon = { IconLock(locked = locked, tint = if (locked) colors.accent else colors.textMuted) })
 			CompactMenuDivider()
+			CompactMenuItem(tr("texture.menu.arrangeSelection"), onClick = { run { vm.arrangeAtlas(snapshot, selection, onlySelection = true) } },
+				enabled = !busy)
 			if (single != null) {
-				val tile = single.tile
-				if (tile?.pinned == true) {
-					CompactMenuItem(tr("texture.inspector.unpin"), onClick = { run { vm.releaseTexturePin(snapshot, single.layerId) } }, enabled = !busy)
-				} else {
-					CompactMenuItem(tr("texture.menu.pin"), onClick = { run { vm.pinTextureTile(snapshot, single.layerId) } }, enabled = !busy && tile != null)
-				}
 				CompactMenuItem(tr("texture.inspector.replace"), onClick = { run {
 					NativeFilePicker.chooseTransparentImages().firstOrNull()?.let { vm.replaceLayerImage(snapshot, single.layerId, it) }
 				} }, enabled = !busy)
@@ -636,9 +655,9 @@ private fun AtlasContextMenu(
 			CompactMenuItem(tr("texture.menu.frame"), onClick = { run(onFrame) }, trailingText = frameKey)
 		} else {
 			CompactMenuSection(tr("texture.menu.page"))
-			CompactMenuItem(tr("texture.atlas.packKeepPins"), onClick = { run { vm.packAtlas(snapshot, keepPins = true) } }, enabled = !busy)
-			CompactMenuItem(tr("texture.atlas.packAll"), onClick = { run { vm.packAtlas(snapshot, keepPins = false) } },
-				enabled = !busy && snapshot.atlas.tiles.any { it.pinned })
+			CompactMenuItem(tr("texture.atlas.arrange"), onClick = { run { vm.arrangeAtlas(snapshot, onlySelection = false) } }, enabled = !busy)
+			CompactMenuItem(tr("texture.atlas.auto"), onClick = { run { vm.setAtlasAuto(snapshot, !snapshot.atlas.auto) } }, enabled = !busy,
+				active = snapshot.atlas.auto, icon = { if (snapshot.atlas.auto) IconCheck(tint = colors.accent) })
 			CompactMenuDivider()
 			CompactMenuItem(tr("texture.menu.selectAll"), onClick = { run { vm.selectLayers(snapshot.tiles(state.textureWorkspace.selectedPage
 				.coerceIn(0, snapshot.atlas.pages.lastIndex)).map { it.layerId }) } }, trailingText = state.keymap.labelFor(ShortcutAction.SELECT_ALL))
@@ -665,6 +684,34 @@ private fun DrawScope.drawChecker(rect: Rect, light: Color, dark: Color) {
 			column += 2
 		}
 		row++
+	}
+}
+
+/**
+ * Each tile's meshes on [page] as one wireframe path per layer, in page pixels: the preview model's triangles at
+ * their texture coordinates, when that model's atlas is this version's. Built once per model and page.
+ */
+@Composable
+private fun rememberMeshPaths(state: PSD2LiveState, snapshot: TextureSnapshot, page: Int): Map<String, Path>? {
+	val model = state.previewModel
+	return remember(model, snapshot, page) {
+		if (model == null || !snapshot.matches(model.atlas)) return@remember null
+		val image = model.atlas.pages.getOrNull(page)?.image ?: return@remember null
+		val paths = HashMap<String, Path>()
+		for (drawable in model.rig.puppet.drawables) {
+			val mesh = drawable.mesh ?: continue
+			if (drawable.texturePage != page) continue
+			val layerId = model.rig.layerIdByDrawableId[drawable.id.raw] ?: continue
+			val path = paths.getOrPut(layerId) { Path() }
+			val uv = mesh.uvs; val indices = mesh.indices
+			fun x(v: Int) = uv[v * 2] * image.width
+			fun y(v: Int) = uv[v * 2 + 1] * image.height
+			for (t in 0 until indices.size - 2 step 3) {
+				val a = indices[t]; val b = indices[t + 1]; val c = indices[t + 2]
+				path.moveTo(x(a), y(a)); path.lineTo(x(b), y(b)); path.lineTo(x(c), y(c)); path.close()
+			}
+		}
+		paths
 	}
 }
 

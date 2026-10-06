@@ -167,19 +167,28 @@ class WorkspaceTextureCommandsTest {
             }))
             val pinned = runtime.capture().model.atlas.placementByLayerId.getValue("body")
             assertEquals(300 to 400, pinned.x to pinned.y)
+            // Moving a tile keeps the layout from then on: the other tiles stay where they were.
             val atlas = operations.call("atlas_get", JsonObject(emptyMap())).data
-            assertTrue(atlas.getValue("tiles").jsonArray.single { it.jsonObject.getValue("layer_id").jsonPrimitive.content == "body" }
-                .jsonObject.getValue("pinned").jsonPrimitive.boolean)
+            assertFalse(atlas.getValue("auto").jsonPrimitive.boolean)
+            for ((id, at) in doubled.model.atlas.placementByLayerId) if (id != "body")
+                assertEquals(at.x to at.y, runtime.capture().model.atlas.placementByLayerId.getValue(id).let { it.x to it.y }, id)
+            assertNull(runtime.capture().document.textureOverrides["body"])
 
             val small = operations.completed("atlas_set_budget", input(runtime, "budget", buildJsonObject { put("page_size", 256); put("max_pages", 1) }))
             assertEquals(256, runtime.capture().model.atlas.pages.first().image.width)
             assertTrue(small.getValue("notices").jsonArray.isNotEmpty())
 
             val packed = operations.completed("atlas_pack", input(runtime, "pack", JsonObject(emptyMap())))
-            assertEquals(listOf("body"), packed.getValue("layers").jsonArray.map { it.jsonPrimitive.content })
-            assertNull(runtime.capture().document.textureOverrides["body"])
+            assertTrue(packed.getValue("applied").jsonPrimitive.boolean)
+            assertTrue("body" in packed.getValue("layers").jsonArray.map { it.jsonPrimitive.content })
             assertEquals(TextureOverride(2f, true), runtime.capture().document.textureOverrides["pupil"])
+            val shaped = operations.call("atlas_get", JsonObject(emptyMap())).data.getValue("tiles").jsonArray
+            assertTrue(shaped.all { it.jsonObject.getValue("shaped").jsonPrimitive.boolean })
             assertFalse(operations.completed("atlas_pack", input(runtime, "pack-again", JsonObject(emptyMap()))).getValue("applied").jsonPrimitive.boolean)
+            // Back to the automatic layout: no stored spots, no shapes.
+            operations.completed("atlas_set_budget", input(runtime, "auto", buildJsonObject { put("auto", true) }))
+            assertNull(AtlasArrangementCodec.decode(runtime.capture().document.settings))
+            assertTrue(operations.call("atlas_get", JsonObject(emptyMap())).data.getValue("auto").jsonPrimitive.boolean)
         }
     }
 

@@ -2,6 +2,9 @@ package io.github.psd2live.core
 
 import io.github.psd2live.format.compile.RasterResample
 import io.github.psd2live.i18n.tr
+import io.github.psd2live.project.ArrangedTile
+import io.github.psd2live.project.AtlasArrangement
+import io.github.psd2live.project.TextureFootprint
 import io.github.psd2live.project.TextureOverride
 import io.github.psd2live.project.TexturePin
 import org.umamo.format.art.SourceLayer
@@ -17,7 +20,11 @@ import javax.imageio.ImageIO
 /**
  * Where layer rasters go on the atlas pages, and the pages themselves.
  *
- * The layout is always the canonical one - a deterministic multi-page shelf pack of every textured layer,
+ * A document with a stored arrangement ([AtlasArrangement]) keeps it: every listed tile stays at its spot
+ * and fit, a tile arranged by its meshes writes only the cells its meshes use, and only tiles without a free
+ * stored spot are placed into free space ([AtlasArrange]). [arrange] finds such an arrangement once, on request.
+ *
+ * Without one the layout is the canonical one - a deterministic multi-page shelf pack of every textured layer,
  * tallest first - so a document's atlas is a function of the document alone: a fresh build, a reopen, an
  * undo, a paint commit and an export all put the same tiles in the same spots, and exports stay byte for
  * byte what they were. What is incremental is the pages. Given the atlas a commit starts from (`previous`),
@@ -78,7 +85,8 @@ internal object AtlasLayout {
         config: PipelineConfig,
         progress: ProgressListener = ProgressListener { _, _ -> },
         previous: PackedAtlas? = null,
-    ): PackedAtlas = pack(layers, config.effectiveAtlasBudget(), config.textureOverrides, config.textureUpscale, progress, previous)
+    ): PackedAtlas = pack(layers, config.effectiveAtlasBudget(), config.textureOverrides, config.textureUpscale, progress, previous,
+        config.atlasArrangement)
 
     /**
      * The canonical layout of [layers] on pages of [requestedSize] with no page-count limit and no overrides.
@@ -101,7 +109,8 @@ internal object AtlasLayout {
         upscale: TextureUpscaleConfig = TextureUpscaleConfig(),
         progress: ProgressListener = ProgressListener { _, _ -> },
         previous: PackedAtlas? = null,
-    ): PackedAtlas = packWithTextures(layers, budget, overrides, upscale, progress, previous) { l, c -> TextureUpscale.prepare(l, c, progress) }
+        arrangement: AtlasArrangement? = null,
+    ): PackedAtlas = packWithTextures(layers, budget, overrides, upscale, progress, previous, arrangement) { l, c -> TextureUpscale.prepare(l, c, progress) }
 
     internal fun packWithTextures(
         layers: List<ClassifiedLayer>, requestedSize: Int, padding: Int,
@@ -109,7 +118,7 @@ internal object AtlasLayout {
         progress: ProgressListener = ProgressListener { _, _ -> },
         previous: PackedAtlas? = null,
         prepareTextures: (List<ClassifiedLayer>, TextureUpscaleConfig) -> Map<String, Path>,
-    ): PackedAtlas = packWithTextures(layers, unlimited(requestedSize, padding), emptyMap(), upscale, progress, previous, prepareTextures)
+    ): PackedAtlas = packWithTextures(layers, unlimited(requestedSize, padding), emptyMap(), upscale, progress, previous, prepareTextures = prepareTextures)
 
     private fun unlimited(requestedSize: Int, padding: Int) = AtlasBudget(requestedSize.coerceAtLeast(1), UNLIMITED_PAGES, padding.coerceAtLeast(0))
 
@@ -120,13 +129,16 @@ internal object AtlasLayout {
         upscale: TextureUpscaleConfig,
         progress: ProgressListener = ProgressListener { _, _ -> },
         previous: PackedAtlas? = null,
+        arrangement: AtlasArrangement? = null,
         prepareTextures: (List<ClassifiedLayer>, TextureUpscaleConfig) -> Map<String, Path>,
     ): PackedAtlas {
         val safePadding = budget.padding.coerceIn(0, 32)
         val items = items(layers, upscale.scale, overrides)
         val pageSize = pageSize(items, budget.pageSize, safePadding)
-        val solved = solve(items, pageSize, safePadding, budget.maxPages)
+        val solved = if (arrangement != null) kept(items, arrangement, pageSize, safePadding, budget.maxPages)
+            else solve(items, pageSize, safePadding, budget.maxPages)
         val placements = solved.placements
+        val masks = solved.masks
         val pageCount = solved.pageCount
         // Fail before inference or large allocations; encoded PNGs and render copies cost extra memory.
         require(upscale.scale == 1 || pageCount.toLong() * pageSize * pageSize * 4 <= 512L * 1024 * 1024) {
@@ -134,16 +146,103 @@ internal object AtlasLayout {
         }
         progress.update(tr("progress.atlas"), 0.96)
         if (upscale.scale != 1) {
-            return PackedAtlas(upscaledPages(items, placements, pageSize, pageCount, budget.padding, prepareTextures(items.map { it.layer }, upscale)),
-                placements, solved.fit, solved.notices)
+            return PackedAtlas(upscaledPages(items, placements, masks, pageSize, pageCount, budget.padding, prepareTextures(items.map { it.layer }, upscale)),
+                placements, solved.fit, solved.notices, solved.footprints, arrangement != null)
         }
         val byPage = items.groupBy { placements.getValue(it.id).page }
         val pages = (0 until pageCount).map { index ->
             if (Thread.currentThread().isInterrupted) throw InterruptedException()
-            val tiles = byPage[index].orEmpty().map { it.texture to placements.getValue(it.id) }
+            val tiles = byPage[index].orEmpty().map { Tile(it.texture, placements.getValue(it.id), masks[it.id]) }
             page(pageSize, tiles, previous?.pages?.getOrNull(index))
         }
-        return PackedAtlas(pages, placements, solved.fit, solved.notices)
+        return PackedAtlas(pages, placements, solved.fit, solved.notices, solved.footprints, arrangement != null)
+    }
+
+    /** One tile to draw on a page: its texture, its rectangle and, with a footprint, the only cells it may write. */
+    private class Tile(val texture: SourceLayer, val at: AtlasPlacement, val mask: AtlasArrange.Shape?)
+
+    private fun request(item: Item, fit: Double, stored: ArrangedTile?, footprint: TextureFootprint?): AtlasArrange.Request =
+        AtlasArrange.Request(item.id, item.layer.source.name, item.width(fit, true), item.height(fit, true),
+            item.texture.raster.width, item.texture.raster.height, stored, footprint)
+
+    private fun placement(item: Item, request: AtlasArrange.Request, spot: AtlasArrange.Spot) = AtlasPlacement(spot.page, spot.x, spot.y,
+        request.width, request.height, request.width.toFloat() / item.texture.raster.width, request.height.toFloat() / item.texture.raster.height)
+
+    /**
+     * A stored arrangement's layout: its fit for every unlocked tile, its spots for the tiles that still hold
+     * there, free space for the rest ([AtlasArrange.keep]). A footprint holds only at the spot it was found for.
+     */
+    private fun kept(items: List<Item>, arrangement: AtlasArrangement, pageSize: Int, padding: Int, maxPages: Int): Solved {
+        val fit = arrangement.fit
+        val requests = items.map { item -> arrangement.tiles[item.id].let { request(item, fit, it, it?.footprint) } }
+        val kept = AtlasArrange.keep(requests, pageSize, padding, maxPages)
+        val placements = LinkedHashMap<String, AtlasPlacement>()
+        val masks = HashMap<String, AtlasArrange.Shape>()
+        val footprints = HashMap<String, TextureFootprint>()
+        for ((item, request) in items.zip(requests)) {
+            val spot = kept.spots.getValue(item.id)
+            placements[item.id] = placement(item, request, spot)
+            val stored = request.stored
+            if (request.footprint != null && stored != null && stored.page == spot.page && stored.x == spot.x && stored.y == spot.y) {
+                masks[item.id] = kept.shapes.getValue(item.id); footprints[item.id] = request.footprint
+            }
+        }
+        val notices = ArrayList<String>()
+        if (kept.moved.isNotEmpty()) notices += "Textures without a free stored spot were placed into free space (" + kept.moved.joinToString() +
+            "); arrange the atlas to lay them out again."
+        if (kept.pageCount > maxPages) notices += "Textures need ${kept.pageCount} atlas pages, more than the budget of $maxPages."
+        if (arrangement.fitStep < AtlasArrangement.FIT_STEPS)
+            notices += "Textures are scaled to ${String.format(Locale.ROOT, "%.1f", fit * 100)}% to fit the atlas budget of $maxPages page(s) of ${pageSize}px."
+        return Solved(placements, kept.pageCount, fit.toFloat(), notices, masks, footprints)
+    }
+
+    /**
+     * A compact arrangement of [layers] under [config]'s budget, to store once. Tiles with a mesh footprint in
+     * [footprints] are placed by their meshes, the others by their rectangles, largest first, at the largest fit
+     * (a multiple of 64/[FIT_STEPS]) at which all fit within the budget's pages. With [only], every other tile
+     * keeps its spot and footprint in [current] and the current fit holds. Null when nothing fits.
+     */
+    fun arrange(layers: List<ClassifiedLayer>, config: PipelineConfig, footprints: Map<String, TextureFootprint>,
+                current: PackedAtlas?, only: Set<String>? = null): AtlasArrangement? {
+        val budget = config.effectiveAtlasBudget()
+        val padding = budget.padding.coerceIn(0, 32)
+        val items = items(layers, config.textureUpscale.scale, config.textureOverrides)
+        val pageSize = pageSize(items, budget.pageSize, padding)
+        val fixedItems = if (only == null || current == null) emptyList() else items.filter { it.id !in only && it.id in current.placementByLayerId }
+        val moving = items.filter { it !in fixedItems }
+        fun attempt(step: Int): AtlasArrangement? {
+            val fit = step.toDouble() / AtlasArrangement.FIT_STEPS
+            val fixed = fixedItems.map { item ->
+                val at = current!!.placementByLayerId.getValue(item.id)
+                Triple(item, AtlasArrange.Spot(at.page, at.x, at.y),
+                    AtlasArrange.shape(at.x, at.y, at.width, at.height, item.texture.raster.width, item.texture.raster.height, current.footprints[item.id]))
+            }
+            val requests = moving.map { request(it, fit, null, footprints[it.id]) }
+            val spots = AtlasArrange.arrange(requests, fixed.map { it.second to it.third }, pageSize, padding, budget.maxPages) ?: return null
+            val tiles = HashMap<String, ArrangedTile>()
+            for ((item, spot, _) in fixed) tiles[item.id] = ArrangedTile(spot.page, spot.x, spot.y, current!!.footprints[item.id])
+            for (request in requests) spots.getValue(request.id).let { tiles[request.id] = ArrangedTile(it.page, it.x, it.y, request.footprint) }
+            return AtlasArrangement(step, tiles)
+        }
+        if (fixedItems.isNotEmpty()) {
+            val step = Math.round(current!!.fit * AtlasArrangement.FIT_STEPS).coerceIn(1, AtlasArrangement.FIT_STEPS)
+            return attempt(step)
+        }
+        attempt(AtlasArrangement.FIT_STEPS)?.let { return it }
+        var low = 1; var high = AtlasArrangement.FIT_STEPS / 64 - 1
+        var best: AtlasArrangement? = null
+        while (low <= high) {
+            val middle = (low + high) ushr 1
+            val tried = attempt(middle * 64)
+            if (tried != null) { best = tried; low = middle + 1 } else high = middle - 1
+        }
+        return best
+    }
+
+    /** [atlas]'s layout as a stored arrangement, to keep it exactly as it is. */
+    fun frozen(atlas: PackedAtlas): AtlasArrangement {
+        val step = Math.round(atlas.fit * AtlasArrangement.FIT_STEPS).coerceIn(1, AtlasArrangement.FIT_STEPS)
+        return AtlasArrangement(step, atlas.placementByLayerId.mapValues { (id, at) -> ArrangedTile(at.page, at.x, at.y, atlas.footprints[id]) })
     }
 
     private fun items(layers: List<ClassifiedLayer>, scale: Int, overrides: Map<String, TextureOverride>): List<Item> =
@@ -172,7 +271,8 @@ internal object AtlasLayout {
         return maxOf(safeSize, nextPowerOfTwo(largest)).coerceAtMost(16384)
     }
 
-    private class Solved(val placements: Map<String, AtlasPlacement>, val pageCount: Int, val fit: Float, val notices: List<String>)
+    private class Solved(val placements: Map<String, AtlasPlacement>, val pageCount: Int, val fit: Float, val notices: List<String>,
+                         val masks: Map<String, AtlasArrange.Shape> = emptyMap(), val footprints: Map<String, TextureFootprint> = emptyMap())
 
     private class Layout(val placements: Map<String, AtlasPlacement>, val pageCount: Int)
 
@@ -257,8 +357,8 @@ internal object AtlasLayout {
         return Layout(placements, maxOf(pageIndex, lastPinnedPage) + 1)
     }
 
-    /** One tile of a 1:1 page: its rectangle and the digest of the raster drawn there. */
-    internal data class TileKey(val x: Int, val y: Int, val width: Int, val height: Int, val digest: String)
+    /** One tile of a 1:1 page: its rectangle, the digest of the raster drawn there and the cells it may write ("" for all). */
+    internal data class TileKey(val x: Int, val y: Int, val width: Int, val height: Int, val digest: String, val mask: String = "")
 
     /** All a 1:1 page's pixels depend on: its side and its tiles, top to bottom. */
     internal data class Recipe(val size: Int, val tiles: List<TileKey>)
@@ -281,9 +381,10 @@ internal object AtlasLayout {
      * [base]'s other strips. A tile whose size is not its raster's is resampled ([RasterResample]); its digest
      * and size together still determine its pixels.
      */
-    private fun page(size: Int, tiles: List<Pair<SourceLayer, AtlasPlacement>>, base: AtlasPage?): AtlasPage {
-        val recipe = Recipe(size, tiles.map { (layer, at) -> TileKey(at.x, at.y, at.width, at.height, digest(layer.raster.rgba)) }.sortedWith(
-            compareBy<TileKey> { it.y }.thenBy { it.x }))
+    private fun page(size: Int, tiles: List<Tile>, base: AtlasPage?): AtlasPage {
+        val recipe = Recipe(size, tiles.map { tile ->
+            TileKey(tile.at.x, tile.at.y, tile.at.width, tile.at.height, digest(tile.texture.raster.rgba), tile.mask?.key ?: "")
+        }.sortedWith(compareBy<TileKey> { it.y }.thenBy { it.x }))
         if (base?.recipe == recipe) return base
         synchronized(pageCache) { pageCache[recipe]?.get()?.let { return it } }
         val dirtyRows = base?.recipe?.takeIf { it.size == size }?.let { old ->
@@ -291,16 +392,36 @@ internal object AtlasLayout {
             java.util.BitSet().apply { for (tile in old.tiles + recipe.tiles) if (tile !in kept) set(tile.y, tile.y + tile.height) }
         }
         val image = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
-        for ((layer, at) in tiles) {
+        for (tile in tiles) {
             if (Thread.currentThread().isInterrupted) throw InterruptedException()
-            val raster = layer.raster
+            val raster = tile.texture.raster; val at = tile.at
             val rgba = RasterResample.resize(raster.rgba, raster.width, raster.height, at.width, at.height)
             // Direct pixel copy retains RGB even when alpha is zero (Graphics may discard it).
-            image.setRGB(at.x, at.y, at.width, at.height, argb(rgba, at.width * at.height), 0, at.width)
+            val pixels = argb(rgba, at.width * at.height)
+            val mask = tile.mask
+            if (mask == null) image.setRGB(at.x, at.y, at.width, at.height, pixels, 0, at.width)
+            else writeMasked(image, at, mask) { x, y, length, offset -> image.setRGB(x, y, length, 1, pixels, offset, at.width) }
         }
         val page = AtlasPage.composed(image, recipe, base, dirtyRows)
         synchronized(pageCache) { pageCache[recipe] = SoftReference(page) }
         return page
+    }
+
+    /**
+     * The runs of [at] that [mask] owns, row by row, as (page x, page y, length, offset into the tile's pixels): a
+     * tile arranged by its meshes writes only its own cells, so a neighbour reaching into its rectangle keeps its pixels.
+     */
+    private inline fun writeMasked(image: BufferedImage, at: AtlasPlacement, mask: AtlasArrange.Shape, write: (Int, Int, Int, Int) -> Unit) {
+        for (y in at.y until minOf(at.y + at.height, image.height)) {
+            val r = y / AtlasArrange.CELL - mask.row
+            if (r !in 0 until mask.height) continue
+            val run = mask.runs[r]
+            for (k in run.indices step 2) {
+                val from = maxOf(at.x, (mask.column + run[k]) * AtlasArrange.CELL)
+                val to = minOf(at.x + at.width, (mask.column + run[k + 1]) * AtlasArrange.CELL, image.width)
+                if (to > from) write(from, y, to - from, (y - at.y) * at.width + (from - at.x))
+            }
+        }
     }
 
     private fun argb(rgba: ByteArray, count: Int): IntArray = IntArray(count) { index ->
@@ -313,7 +434,7 @@ internal object AtlasLayout {
      * Upscaled pages read each tile from the inference output - resampled when the density or fit make the tile
      * another size - and extrude its edge into the padding.
      */
-    private fun upscaledPages(items: List<Item>, placements: Map<String, AtlasPlacement>, pageSize: Int, pageCount: Int,
+    private fun upscaledPages(items: List<Item>, placements: Map<String, AtlasPlacement>, masks: Map<String, AtlasArrange.Shape>, pageSize: Int, pageCount: Int,
                               padding: Int, textures: Map<String, Path>): List<AtlasPage> = (0 until pageCount).map { index ->
         if (Thread.currentThread().isInterrupted) throw InterruptedException()
         val page = BufferedImage(pageSize, pageSize, BufferedImage.TYPE_INT_ARGB)
@@ -334,6 +455,12 @@ internal object AtlasLayout {
             }
             require(image.colorModel.hasAlpha()) { "Upscaled RGBA texture size mismatch" }
             val pixels = image.getRGB(0, 0, width, height, null, 0, width)
+            val mask = masks[item.id]
+            if (mask != null) {
+                // A mesh-arranged tile writes only its own cells; its edge is not extruded over a neighbour.
+                writeMasked(page, placement, mask) { x, y, length, offset -> page.setRGB(x, y, length, 1, pixels, offset, width) }
+                continue
+            }
             page.setRGB(placement.x, placement.y, width, height, pixels, 0, width)
             if (padding > 0) {
                 for (dy in -padding until height + padding) for (dx in -padding until width + padding) {

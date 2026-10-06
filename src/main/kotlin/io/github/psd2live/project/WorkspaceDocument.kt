@@ -149,6 +149,7 @@ internal fun WorkspaceDocument.rawConfig(base: PipelineConfig = PipelineConfig()
         meshSource = meshSource,
         atlasBudget = WorkspaceSettingsCodec.decodeAtlasBudget(settings),
         textureOverrides = storedTextureOverrides,
+        atlasArrangement = AtlasArrangementCodec.decode(settings),
     )
 
 /** The document, rather than a renderer or UI projection, supplies all durable generation inputs. */

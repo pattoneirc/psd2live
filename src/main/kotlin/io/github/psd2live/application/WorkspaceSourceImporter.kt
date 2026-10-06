@@ -60,10 +60,14 @@ internal class WorkspaceSourceImporter(
         val document = WorkspaceDocument(source, emptyMap(), emptySet(), overrides, emptyMap(), RigEditOverlay.Empty,
             WorkspaceSettingsCodec.encode(config))
         progress(0.6f, "Rebuilding new source project")
-        val preview = build(document)
+        val built = build(document)
+        // A new project keeps its first layout: the atlas is arranged on request, not on every edit. The stored
+        // arrangement is that layout exactly, so the model it builds is this one.
+        val arrangement = AtlasLayout.frozen(built.atlas)
+        val preview = built.copy(config = built.config.copy(atlasArrangement = arrangement), atlas = built.atlas.copy(arranged = true))
         // The preview was generated from effective settings; the document keeps the raw ones it was given.
         val prepared = document.copy(rigEdits = preview.config.rigEdits,
-            settings = WorkspaceSettingsCodec.encode(WorkspaceSettingsPolicy.restoreRaw(preview.config, config)))
+            settings = AtlasArrangementCodec.with(WorkspaceSettingsCodec.encode(WorkspaceSettingsPolicy.restoreRaw(preview.config, config)), arrangement))
         progress(0.9f, "Installing new source project")
         val id = newProjectId()
         val installed = runtime.install(state, id, prepared, preview,

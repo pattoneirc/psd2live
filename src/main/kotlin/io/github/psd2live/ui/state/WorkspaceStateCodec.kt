@@ -371,6 +371,7 @@ internal object WorkspaceStateCodec {
         put("exportPixelsPerUnit", state.exportPixelsPerUnit?.let(::JsonPrimitive) ?: JsonNull)
         // Written only when set, so documents without a budget keep their settings text and revision.
         state.atlasBudget?.let { put(io.github.psd2live.project.WorkspaceSettingsCodec.ATLAS, io.github.psd2live.project.WorkspaceSettingsCodec.encodeAtlasBudget(it)) }
+        state.atlasArrangement?.let { put(io.github.psd2live.project.AtlasArrangementCodec.KEY, io.github.psd2live.project.AtlasArrangementCodec.encode(it)) }
     }
     fun encode(state: PSD2LiveState): JsonObject = buildJsonObject {
         put("projectSourceName", state.projectSourceName)
@@ -481,6 +482,7 @@ internal object WorkspaceStateCodec {
         put("exportIncludeDisplayInfo", state.exportIncludeDisplayInfo)
         put("exportPixelsPerUnit", state.exportPixelsPerUnit?.let(::JsonPrimitive) ?: JsonNull)
         state.atlasBudget?.let { put(io.github.psd2live.project.WorkspaceSettingsCodec.ATLAS, io.github.psd2live.project.WorkspaceSettingsCodec.encodeAtlasBudget(it)) }
+        state.atlasArrangement?.let { put(io.github.psd2live.project.AtlasArrangementCodec.KEY, io.github.psd2live.project.AtlasArrangementCodec.encode(it)) }
         put("exportOptionsExpanded", state.exportOptionsExpanded)
         put("motionSubExpanded", state.motionSubExpanded)
         put("physicsSubExpanded", state.physicsSubExpanded)
@@ -610,6 +612,8 @@ internal object WorkspaceStateCodec {
         // A settings payload (it always has atlasSize) without a budget means none; other payloads keep base's.
         atlasBudget = if (io.github.psd2live.project.WorkspaceSettingsCodec.ATLAS in value) io.github.psd2live.project.WorkspaceSettingsCodec.decodeAtlasBudget(value)
             else if ("atlasSize" in value) null else base.atlasBudget,
+        atlasArrangement = if (io.github.psd2live.project.AtlasArrangementCodec.KEY in value) io.github.psd2live.project.AtlasArrangementCodec.decode(value)
+            else if ("atlasSize" in value) null else base.atlasArrangement,
         exportOptionsExpanded = value["exportOptionsExpanded"]?.jsonPrimitive?.boolean ?: base.exportOptionsExpanded,
         motionSubExpanded = value["motionSubExpanded"]?.jsonPrimitive?.boolean ?: base.motionSubExpanded,
         physicsSubExpanded = value["physicsSubExpanded"]?.jsonPrimitive?.boolean ?: base.physicsSubExpanded,

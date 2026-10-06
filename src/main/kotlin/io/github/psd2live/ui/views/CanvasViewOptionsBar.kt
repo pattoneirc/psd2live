@@ -56,26 +56,17 @@ import io.github.psd2live.ui.theme.frostedGlass
 import io.github.psd2live.ui.tutorial.TutorialTargetId
 import io.github.psd2live.ui.tutorial.tutorialTarget
 
+/** What a row of a [CanvasOptionsRail] needs to animate with it: whether the rail is open, and its labels' fade and slide. */
+internal class CanvasRailScope(val expanded: Boolean, val textAlpha: Float, val textOffset: androidx.compose.ui.unit.Dp)
+
 /**
- * Bottom-right mirror of the left tool palette: the most-used per-tab display toggles, so the
- * View menu does not have to be opened mid-edit. Icons stay on the trailing edge; hovering expands
- * the rail leftward and reveals labels the same way the left toolbar reveals them rightward.
- *
- * Path guides and selection-focus toggles are Edit-only overlays, so [showPathGuides] /
- * [showSelectionFocus] hide those rows on Preview tabs.
+ * The bottom-right display rail of a canvas: a column of icon toggles on the trailing edge that, while hovered,
+ * widens leftward and reveals each row's label - the mirror of the left tool palette. The edit canvas
+ * ([CanvasViewOptionsBar]) and the atlas page build their rows with [RailToggle] and [RailDivider].
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-internal fun CanvasViewOptionsBar(
-	options: TabViewOptions,
-	onOptionsChange: (TabViewOptions) -> Unit,
-	showPathGuides: Boolean = true,
-	showSelectionFocus: Boolean = true,
-	/** Edit canvases can sample layer rasters (source pixels) instead of the atlas. */
-	showSourcePixels: Boolean = false,
-	modifier: Modifier = Modifier,
-) {
-	val colors = LocalToolColors.current
+internal fun CanvasOptionsRail(modifier: Modifier = Modifier, content: @Composable CanvasRailScope.() -> Unit) {
 	val toolbarInteractionSource = remember { MutableInteractionSource() }
 	val isHoveredBySource by toolbarInteractionSource.collectIsHoveredAsState()
 	var isHoveredByEvent by remember { mutableStateOf(false) }
@@ -105,16 +96,9 @@ internal fun CanvasViewOptionsBar(
 		targetValue = if (isToolbarHovered) 8.dp else 2.dp,
 		animationSpec = tween(durationMillis = 200),
 	)
-
-	fun apply(updated: TabViewOptions) {
-		onOptionsChange(updated.normalized())
-	}
-
-	val isExpanded = animatedWidth > 42.dp
-
+	val scope = CanvasRailScope(animatedWidth > 42.dp, textAlpha, textOffset)
 	Column(
 		modifier = modifier
-			.tutorialTarget(TutorialTargetId.VIEW_OPTIONS_BAR)
 			.width(animatedWidth)
 			.frostedGlass(
 				shape = RoundedCornerShape(6.dp),
@@ -128,110 +112,114 @@ internal fun CanvasViewOptionsBar(
 			.padding(3.dp),
 		verticalArrangement = Arrangement.spacedBy(2.dp),
 		horizontalAlignment = Alignment.End,
-	) {
-		ViewOptionRow(
+	) { scope.content() }
+}
+
+/** A thin rule between groups of a [CanvasOptionsRail]. */
+@Composable
+internal fun CanvasRailScope.RailDivider() {
+	Box(
+		modifier = Modifier
+			.fillMaxWidth()
+			.padding(horizontal = 4.dp, vertical = 2.dp)
+			.height(1.dp)
+			.background(LocalToolColors.current.border.copy(alpha = 0.35f)),
+	)
+}
+
+/** One toggle of a [CanvasOptionsRail]: its icon on the trailing edge, its label while the rail is open. */
+@Composable
+internal fun CanvasRailScope.RailToggle(label: String, isChecked: Boolean, icon: @Composable (Color) -> Unit, onClick: () -> Unit) =
+	ViewOptionRow(label, isChecked, expanded, textAlpha, textOffset, icon, onClick)
+
+/**
+ * Bottom-right mirror of the left tool palette: the most-used per-tab display toggles, so the
+ * View menu does not have to be opened mid-edit.
+ *
+ * Path guides and selection-focus toggles are Edit-only overlays, so [showPathGuides] /
+ * [showSelectionFocus] hide those rows on Preview tabs.
+ */
+@Composable
+internal fun CanvasViewOptionsBar(
+	options: TabViewOptions,
+	onOptionsChange: (TabViewOptions) -> Unit,
+	showPathGuides: Boolean = true,
+	showSelectionFocus: Boolean = true,
+	/** Edit canvases can sample layer rasters (source pixels) instead of the atlas. */
+	showSourcePixels: Boolean = false,
+	modifier: Modifier = Modifier,
+) {
+	fun apply(updated: TabViewOptions) {
+		onOptionsChange(updated.normalized())
+	}
+	CanvasOptionsRail(modifier.tutorialTarget(TutorialTargetId.VIEW_OPTIONS_BAR)) {
+		RailToggle(
 			label = tr("canvas.visibility.texture"),
 			isChecked = options.showTexture,
-			isToolbarExpanded = isExpanded,
-			textAlpha = textAlpha,
-			textOffset = textOffset,
 			icon = { IconTextureView(tint = it, modifier = Modifier.size(14.dp)) },
 			onClick = { apply(options.copy(showTexture = !options.showTexture)) },
 		)
 		if (showSourcePixels) {
-			ViewOptionRow(
+			RailToggle(
 				label = tr("canvas.visibility.sourcePixels"),
 				isChecked = options.sourcePixels,
-				isToolbarExpanded = isExpanded,
-				textAlpha = textAlpha,
-				textOffset = textOffset,
 				icon = { IconPixelSource(source = options.sourcePixels, tint = it, modifier = Modifier.size(14.dp)) },
 				onClick = { apply(options.copy(sourcePixels = !options.sourcePixels)) },
 			)
 		}
-		ViewOptionRow(
+		RailToggle(
 			label = tr("canvas.visibility.mesh"),
 			isChecked = options.showMesh,
-			isToolbarExpanded = isExpanded,
-			textAlpha = textAlpha,
-			textOffset = textOffset,
 			icon = { IconMeshWireframe(tint = it, modifier = Modifier.size(14.dp)) },
 			onClick = { apply(options.copy(showMesh = !options.showMesh)) },
 		)
-		ViewOptionRow(
+		RailToggle(
 			label = tr("canvas.visibility.warp"),
 			isChecked = options.showWarp,
-			isToolbarExpanded = isExpanded,
-			textAlpha = textAlpha,
-			textOffset = textOffset,
 			icon = { IconWarpDeformer(tint = it, modifier = Modifier.size(14.dp)) },
 			onClick = { apply(options.copy(showWarp = !options.showWarp)) },
 		)
-		ViewOptionRow(
+		RailToggle(
 			label = tr("canvas.visibility.rotation"),
 			isChecked = options.showRotation,
-			isToolbarExpanded = isExpanded,
-			textAlpha = textAlpha,
-			textOffset = textOffset,
 			icon = { IconRotationDeformer(tint = it, modifier = Modifier.size(14.dp)) },
 			onClick = { apply(options.copy(showRotation = !options.showRotation)) },
 		)
 		if (showPathGuides) {
-			ViewOptionRow(
+			RailToggle(
 				label = tr("canvas.visibility.paths"),
 				isChecked = options.showDeformPaths,
-				isToolbarExpanded = isExpanded,
-				textAlpha = textAlpha,
-				textOffset = textOffset,
 				icon = { IconDeformPath(tint = it, modifier = Modifier.size(14.dp)) },
 				onClick = { apply(options.copy(showDeformPaths = !options.showDeformPaths)) },
 			)
 			if (options.showDeformPaths) {
-				ViewOptionRow(
+				RailToggle(
 					label = tr("canvas.information.pathWidth"),
 					isChecked = options.pathShowWidth,
-					isToolbarExpanded = isExpanded,
-					textAlpha = textAlpha,
-					textOffset = textOffset,
 					icon = { IconPathWidth(tint = it) },
 					onClick = { apply(options.copy(pathShowWidth = !options.pathShowWidth)) },
 				)
-				ViewOptionRow(
+				RailToggle(
 					label = tr("canvas.information.pathHardness"),
 					isChecked = options.pathShowHardness,
-					isToolbarExpanded = isExpanded,
-					textAlpha = textAlpha,
-					textOffset = textOffset,
 					icon = { IconPathHardness(tint = it) },
 					onClick = { apply(options.copy(pathShowHardness = !options.pathShowHardness)) },
 				)
 			}
-			ViewOptionRow(
+			RailToggle(
 				label = tr("canvas.visibility.skeleton"),
 				isChecked = options.showSkeleton,
-				isToolbarExpanded = isExpanded,
-				textAlpha = textAlpha,
-				textOffset = textOffset,
 				icon = { IconSkeleton(tint = it, modifier = Modifier.size(14.dp)) },
 				onClick = { apply(options.copy(showSkeleton = !options.showSkeleton)) },
 			)
 		}
 
 		if (showSelectionFocus) {
-			Box(
-				modifier = Modifier
-					.fillMaxWidth()
-					.padding(horizontal = 4.dp, vertical = 2.dp)
-					.height(1.dp)
-					.background(colors.border.copy(alpha = 0.35f)),
-			)
+			RailDivider()
 
-			ViewOptionRow(
+			RailToggle(
 				label = tr("canvas.information.selectedOnly"),
 				isChecked = options.filterSelectedOnly,
-				isToolbarExpanded = isExpanded,
-				textAlpha = textAlpha,
-				textOffset = textOffset,
 				icon = { IconSelectedOnly(tint = it, modifier = Modifier.size(14.dp)) },
 				onClick = { apply(options.copy(filterSelectedOnly = !options.filterSelectedOnly)) },
 			)

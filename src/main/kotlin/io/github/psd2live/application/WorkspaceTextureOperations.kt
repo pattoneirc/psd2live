@@ -45,9 +45,12 @@ internal object WorkspaceTextureSchemas {
             }
             "atlas_set_budget" -> {
                 fields["page_size"] = buildJsonObject { put("type", "integer"); put("enum", JsonArray((8..14).map { JsonPrimitive(1 shl it) })) }
-                fields["max_pages"] = s.integer(1, 64); fields["padding"] = s.integer(0, 32)
+                fields["max_pages"] = s.integer(1, 64); fields["padding"] = s.integer(0, 32); fields["auto"] = s.boolean()
             }
-            "atlas_pack" -> fields["keep_pins"] = s.boolean()
+            "atlas_pack" -> {
+                fields["shape"] = s.choices("mesh", "rect")
+                fields["layer_ids"] = JsonObject(s.array(s.handle(), 1, 4096) + ("uniqueItems" to JsonPrimitive(true)))
+            }
             else -> error("Unknown texture operation: $id")
         }
         return s.obj(fields, required)
@@ -60,7 +63,7 @@ internal object WorkspaceTextureSchemas {
 
     private val tileFields = linkedMapOf("page" to s.integer(0), "x" to s.integer(0), "y" to s.integer(0),
         "width" to s.integer(1), "height" to s.integer(1), "scale_x" to s.number(0), "scale_y" to s.number(0),
-        "density" to s.number(0), "locked" to s.boolean(), "pinned" to s.boolean())
+        "density" to s.number(0), "locked" to s.boolean(), "pinned" to s.boolean(), "shaped" to s.boolean())
     private val tile = s.obj(tileFields)
     private val listedTile = s.obj(linkedMapOf("layer_id" to s.handle()) + tileFields)
     private val read = linkedMapOf("project_id" to s.handle(), "state" to s.handle(), "revision" to s.handle())
@@ -74,7 +77,7 @@ internal object WorkspaceTextureSchemas {
 
     val atlas: JsonObject = s.obj(read + linkedMapOf(
         "budget" to s.obj(mapOf("page_size" to s.integer(1), "max_pages" to s.integer(1), "padding" to s.integer(0))),
-        "fit" to s.number(0, 1), "notices" to s.array(s.string()),
+        "fit" to s.number(0, 1), "notices" to s.array(s.string()), "auto" to s.boolean(),
         "pages" to s.array(s.obj(mapOf("index" to s.integer(0), "width" to s.integer(1), "height" to s.integer(1),
             "tile_count" to s.integer(0), "occupancy" to s.number(0, 1)))),
         "tiles" to s.array(listedTile)))
@@ -92,6 +95,7 @@ internal fun WorkspaceAtlasTile.toJson(listed: Boolean = false) = buildJsonObjec
     if (listed) put("layer_id", layerId)
     put("page", page); put("x", x); put("y", y); put("width", width); put("height", height)
     put("scale_x", scaleX); put("scale_y", scaleY); put("density", density); put("locked", locked); put("pinned", pinned)
+    put("shaped", shaped)
 }
 
 internal fun WorkspaceTextureView.layerJson(layerId: String): JsonObject {
@@ -121,7 +125,7 @@ internal fun WorkspaceTextureView.atlasJson(page: Int?): JsonObject {
     return buildJsonObject {
         put("project_id", projectId); put("state", state); put("revision", revision)
         putJsonObject("budget") { put("page_size", atlas.budget.pageSize); put("max_pages", atlas.budget.maxPages); put("padding", atlas.budget.padding) }
-        put("fit", atlas.fit); put("notices", JsonArray(atlas.notices.map(::JsonPrimitive)))
+        put("fit", atlas.fit); put("notices", JsonArray(atlas.notices.map(::JsonPrimitive))); put("auto", atlas.auto)
         put("pages", JsonArray(atlas.pages.map { buildJsonObject {
             put("index", it.index); put("width", it.width); put("height", it.height); put("tile_count", it.tileCount); put("occupancy", it.occupancy)
         } }))
@@ -199,9 +203,9 @@ internal fun registerTextureOperations(registry: WorkspaceOperationRegistry, por
         "layer_set_canvas_rect" to "Move or resize a source layer to a canvas rectangle in canvas units (fractional allowed); its raster stretches over it and its integer bounds become the enclosing box. The generator places the layer's mesh by the new rectangle. Rejects layers whose meshes carry authored edits, skeleton/swing/simulation bindings or materialized geometry (split, created or rebuilt meshes; use layer_set_bounds for file-imported layers) and imported CMO3 models. The same rectangle is a no-op.",
         "layer_replace_image" to "Replace a source layer's pixels with an image of any resolution, keeping its canvas rectangle: give an absolute path (PNG, WebP, TIFF or BMP; single operation only) or png_base64. fit=stretch (default) fills the rectangle; contain keeps the aspect ratio, centred on transparency. The rig keeps its generation input, so meshes, keyforms and bindings stay; rebuild_mesh=true instead regenerates the layer's mesh from the new pixels and is rejected for authored or materialized layers. At most 16 megapixels; identical pixels are a no-op.",
         "layer_set_pixel_density" to "Set the texture density of 1..128 layers: texture pixels per raster pixel (1/64..16; null resets to 1). lock=true keeps the density when the atlas budget forces unlocked tiles smaller; omitted lock keeps its value. Only the atlas and bound uvs change, never geometry.",
-        "atlas_set_tile" to "Pin a layer's atlas tile at texture pixel (x, y) on page, or pass pin=null to release it to the automatic layout. Pins that do not fit the budget or overlap are dropped from the layout with a notice in atlas_get.",
-        "atlas_set_budget" to "Set the atlas budget: page_size (power of two 256..16384), max_pages (1..64) and padding (0..32 texture pixels); omitted values keep the current effective budget's. When textures do not fit, every unlocked tile is scaled by one common fit.",
-        "atlas_pack" to "Repack the atlas canonically: clears every tile pin unless keep_pins=true and drops texture overrides of layers that no longer exist. The layout is otherwise always canonical, so a pack with nothing to clear is a no-op.",
+        "atlas_set_tile" to "Move a layer's atlas tile to texture pixel (x, y) on page, or pass pin=null to release it into free space. The spot is stored in the atlas arrangement; an automatically arranged atlas first keeps its current layout (auto becomes false), so no other tile moves. A tile whose spot no longer fits or overlaps is placed into free space with a notice in atlas_get.",
+        "atlas_set_budget" to "Set the atlas budget: page_size (power of two 256..16384), max_pages (1..64) and padding (0..32 texture pixels); omitted values keep the current effective budget's. auto=true arranges the atlas automatically on every build again (rectangle shelf pack; the stored arrangement is dropped); auto=false keeps the current layout. When automatic textures do not fit, every unlocked tile is scaled by one common fit.",
+        "atlas_pack" to "Arrange the atlas once and keep the result (auto becomes false): shape=mesh (default) places tiles by their meshes' footprint, so tiles nest wherever their meshes leave room and each writes only its own cells; shape=rect by tile rectangles. Largest first, at the largest fit that keeps the budget's pages. layer_ids moves only those tiles; the others keep their spots. Drops pins and texture overrides of layers that no longer exist. Later mesh edits that leave a footprint are reported in atlas_get notices.",
     )
     for (id in WorkspaceTextureSchemas.edits.sorted()) registry.register(WorkspaceOperationDefinition(id,
         descriptions.getValue(id) + " Returns a process-owned job handle; use job_wait/job_get for the committed state, changed layers, atlas fit and notices.",

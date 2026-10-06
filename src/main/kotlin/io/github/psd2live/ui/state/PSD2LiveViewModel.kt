@@ -3895,20 +3895,6 @@ class PSD2LiveViewModel : AutoCloseable {
 	    editorChanged()
 	}
 
-	/** The export dialog's texture atlas section back to its defaults. */
-	fun resetTextureAtlasToDefault() {
-		updateState {
-			it.copy(
-				atlasSize = 4096,
-                textureUpscale = io.github.psd2live.core.TextureUpscaleConfig(),
-				texturePadding = 2,
-				alphaThreshold = 8,
-			)
-		}
-		schedulePreviewRebuild()
-	    editorChanged()
-	}
-
 	fun setLanguage(language: AppLanguage) {
 		I18n.setLanguage(language)
 		updateState { it.copy(currentLanguage = language) }
@@ -4073,6 +4059,10 @@ class PSD2LiveViewModel : AutoCloseable {
 	fun setTexturePage(page: Int) = updateTextureWorkspace { it.copy(selectedPage = page.coerceAtLeast(0), dragDraft = null) }
 	fun setTextureHeatmap(on: Boolean) = updateTextureWorkspace { it.copy(heatmap = on) }
 	fun setTextureOutlines(on: Boolean) = updateTextureWorkspace { it.copy(showOutlines = on) }
+	fun setTextureShowPage(on: Boolean) = updateTextureWorkspace { it.copy(showPage = on) }
+	fun setTextureShowMeshes(on: Boolean) = updateTextureWorkspace { it.copy(showMeshes = on) }
+	fun setTextureArrangeOptions(byMesh: Boolean, selectionOnly: Boolean) =
+		updateTextureWorkspace { it.copy(arrangeByMesh = byMesh, arrangeSelectionOnly = selectionOnly) }
 	fun setTextureReplaceOptions(fit: io.github.psd2live.application.WorkspaceImageFit, rebuildMesh: Boolean) =
 		updateTextureWorkspace { it.copy(replaceFit = fit, replaceRebuildMesh = rebuildMesh) }
 	fun clearTextureError() = updateTextureWorkspace { it.copy(error = null) }
@@ -4081,13 +4071,17 @@ class PSD2LiveViewModel : AutoCloseable {
 	fun dragTextureTile(snapshot: TextureSnapshot, layerId: String, x: Float, y: Float, snap: Float) {
 		val tile = snapshot.tilesByLayer[layerId] ?: return
 		val page = snapshot.atlas.pages.getOrNull(tile.page) ?: return
-		val draft = placeDraggedTile(tile, x, y, page.width, page.height, snapshot.tiles(tile.page), snapshot.atlas.budget.padding, snap)
+		val draft = placeDraggedTile(tile, x, y, page.width, page.height, snapshot.tiles(tile.page), snapshot.atlas.budget.padding, snap,
+			snapshot::shape)
 		updateTextureWorkspace { it.copy(dragDraft = draft) }
 	}
 
 	fun cancelTextureTileDrag() = updateTextureWorkspace { it.copy(dragDraft = null) }
 
-	/** Ends a tile drag: pins the tile once where it was dropped, unless it collides or did not move. */
+	/**
+	 * Ends a tile drag: moves the tile once to where it was dropped, unless it collides or did not move. The spot is
+	 * stored; an automatically arranged atlas keeps its current layout from then on, so no other tile moves.
+	 */
 	fun endTextureTileDrag(snapshot: TextureSnapshot) {
 		val draft = _state.value.textureWorkspace.dragDraft ?: return
 		val tile = snapshot.tilesByLayer[draft.layerId]
@@ -4100,8 +4094,6 @@ class PSD2LiveViewModel : AutoCloseable {
 			io.github.psd2live.project.TexturePin(draft.page, draft.x, draft.y)))
 	}
 
-	fun releaseTexturePin(snapshot: TextureSnapshot, layerId: String) =
-		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetTile(layerId, null))
 
 	/** Sets the texture density of [layerIds] (null resets to 1), keeping each layer's lock. */
 	fun setTextureDensity(snapshot: TextureSnapshot, layerIds: List<String>, density: Float?) {
@@ -4137,9 +4129,22 @@ class PSD2LiveViewModel : AutoCloseable {
 		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetBudget(pageSize, maxPages, padding))
 	}
 
-	/** Packs the atlas again: pinned tiles stay where they are when [keepPins], otherwise every pin is released. */
-	fun packAtlas(snapshot: TextureSnapshot, keepPins: Boolean) = commitTextureEdit(snapshot.state,
-		io.github.psd2live.application.WorkspaceTextureEdit.Pack(keepPins))
+	/**
+	 * Arranges the atlas once with the workspace's options - by the meshes' footprints or the tile rectangles, all
+	 * tiles or only [selection] - and keeps the result.
+	 */
+	fun arrangeAtlas(snapshot: TextureSnapshot, selection: List<String> = emptyList(),
+	                 onlySelection: Boolean = _state.value.textureWorkspace.arrangeSelectionOnly) {
+		val options = _state.value.textureWorkspace
+		val only = selection.filter { it in snapshot.tilesByLayer }.takeIf { onlySelection && it.isNotEmpty() }
+		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.Pack(options.arrangeByMesh, only))
+	}
+
+	/** Turns the automatic arrangement on (the atlas packs itself on every build) or off (it keeps its layout). */
+	fun setAtlasAuto(snapshot: TextureSnapshot, auto: Boolean) {
+		if (snapshot.atlas.auto == auto) return
+		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetBudget(auto = auto))
+	}
 
 	/** The atlas budget back to its defaults; nothing is sent when it already is. */
 	fun resetAtlasBudget(snapshot: TextureSnapshot) {
@@ -4161,13 +4166,6 @@ class PSD2LiveViewModel : AutoCloseable {
 		commitTextureEdits(snapshot.state, edits)
 	}
 
-	/** Pins [layerId]'s tile where the current layout put it, so later packs keep it there. */
-	fun pinTextureTile(snapshot: TextureSnapshot, layerId: String) {
-		val tile = snapshot.tilesByLayer[layerId] ?: return
-		if (tile.pinned) return
-		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetTile(layerId,
-			io.github.psd2live.project.TexturePin(tile.page, tile.x, tile.y)))
-	}
 
 	private fun commitTextureEdit(state: String, edit: io.github.psd2live.application.WorkspaceTextureEdit) =
 		commitTextureEdits(state, listOf(edit))
@@ -4344,6 +4342,12 @@ class PSD2LiveViewModel : AutoCloseable {
 		setActiveWorkspace(workspace.id)
 		if (_state.value.activeWorkspaceId != workspace.id) markWorkspaceChanged()
 		return workspace.id
+	}
+
+	/** Shows a workspace of [preset]: the first one the user already has, else a new one. */
+	fun openWorkspacePreset(preset: WorkspacePreset) {
+		val existing = _state.value.workspaces.firstOrNull { it.preset == preset }
+		if (existing != null) setActiveWorkspace(existing.id) else addWorkspace(preset)
 	}
 
 	/** Copies layout, panel visibility and canvases into a new workspace. */

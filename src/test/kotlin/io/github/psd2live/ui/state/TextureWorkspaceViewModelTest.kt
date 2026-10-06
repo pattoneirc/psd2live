@@ -68,7 +68,7 @@ class TextureWorkspaceViewModelTest {
         assertEquals(tile.width, undone.tilesByLayer.getValue(id).width)
     }
 
-    @Test fun draggingATilePinsItOnceWhereItIsDropped() = fixture { vm, workspace, layers ->
+    @Test fun draggingATileMovesItOnceWhereItIsDroppedAndKeepsTheOthers() = fixture { vm, workspace, layers ->
         val snapshot = assertNotNull(vm.textureSnapshot())
         val id = layers.last()
         val tile = snapshot.tilesByLayer.getValue(id)
@@ -83,24 +83,19 @@ class TextureWorkspaceViewModelTest {
         settled(vm)
         assertNull(vm.state.value.textureWorkspace.dragDraft)
         assertEquals(nodes + 1, workspace.history().nodes.size)
-        val pinned = assertNotNull(vm.textureSnapshot()).tilesByLayer.getValue(id)
-        assertTrue(pinned.pinned)
-        assertEquals(draft.x to draft.y, pinned.x to pinned.y)
-
-        // A drop over that pinned tile collides and commits nothing.
-        val other = vm.textureSnapshot()!!
+        val other = assertNotNull(vm.textureSnapshot())
+        val moved = other.tilesByLayer.getValue(id)
+        assertEquals(draft.x to draft.y, moved.x to moved.y)
+        assertFalse(other.atlas.auto, "A new project keeps its layout")
         val second = layers.first()
-        vm.dragTextureTile(other, second, pinned.x.toFloat(), pinned.y.toFloat(), snap = 0f)
+        assertEquals(snapshot.tilesByLayer.getValue(second).let { it.x to it.y }, other.tilesByLayer.getValue(second).let { it.x to it.y })
+
+        // A drop over any other tile collides and commits nothing.
+        vm.dragTextureTile(other, second, moved.x.toFloat(), moved.y.toFloat(), snap = 0f)
         assertTrue(vm.state.value.textureWorkspace.dragDraft!!.collides)
         vm.endTextureTileDrag(other)
         assertNotNull(vm.state.value.textureWorkspace.error)
         assertEquals(nodes + 1, workspace.history().nodes.size)
-
-        // Releasing the pin is one more node.
-        vm.releaseTexturePin(other, id)
-        settled(vm)
-        assertFalse(vm.textureSnapshot()!!.tilesByLayer.getValue(id).pinned)
-        assertEquals(nodes + 2, workspace.history().nodes.size)
     }
 
     @Test fun budgetLockAndRejectedMovesReportThroughTheWorkspaceState() = fixture { vm, workspace, layers ->
@@ -135,7 +130,7 @@ class TextureWorkspaceViewModelTest {
         assertEquals(WorkspaceImageFit.CONTAIN, vm.state.value.textureWorkspace.replaceFit)
     }
 
-    @Test fun cornerScalingKeepsEachLayersRatioAndPinningKeepsTheTileWhereItIs() = fixture { vm, workspace, layers ->
+    @Test fun cornerScalingKeepsEachLayersRatioAndArrangingIsOneAction() = fixture { vm, workspace, layers ->
         val (first, second) = layers
         vm.setTextureDensity(vm.textureSnapshot()!!, listOf(second), 0.5f)
         settled(vm)
@@ -150,20 +145,31 @@ class TextureWorkspaceViewModelTest {
         assertNull(scaled.layer(second)!!.override.density)
         assertEquals(nodes + 2, workspace.history().nodes.size, "One command per resulting density")
 
-        val tile = scaled.tilesByLayer.getValue(first)
-        vm.pinTextureTile(scaled, first)
+        // Arranging is one command; arranging the same atlas again changes nothing.
+        val count = workspace.history().nodes.size
+        vm.arrangeAtlas(vm.textureSnapshot()!!)
         settled(vm)
-        val pinned = vm.textureSnapshot()!!.tilesByLayer.getValue(first)
-        assertTrue(pinned.pinned)
-        assertEquals(Triple(tile.page, tile.x, tile.y), Triple(pinned.page, pinned.x, pinned.y))
+        assertNull(vm.state.value.textureWorkspace.error)
+        assertEquals(count + 1, workspace.history().nodes.size)
+        val arranged = vm.textureSnapshot()!!
+        assertFalse(arranged.atlas.auto)
+        assertTrue(arranged.atlas.tiles.all { it.shaped }, "Tiles with meshes are arranged by their footprint")
+        vm.arrangeAtlas(arranged)
+        settled(vm)
+        assertEquals(count + 1, workspace.history().nodes.size)
 
-        // Repacking everything releases the pin; keeping pins would not.
-        vm.packAtlas(vm.textureSnapshot()!!, keepPins = true)
+        // The automatic arrangement is a mode: on, the stored layout goes; off again, the current one is kept.
+        vm.setAtlasAuto(vm.textureSnapshot()!!, true)
         settled(vm)
-        assertTrue(vm.textureSnapshot()!!.tilesByLayer.getValue(first).pinned)
-        vm.packAtlas(vm.textureSnapshot()!!, keepPins = false)
+        val auto = vm.textureSnapshot()!!
+        assertTrue(auto.atlas.auto)
+        assertTrue(auto.atlas.tiles.none { it.shaped })
+        vm.setAtlasAuto(auto, false)
         settled(vm)
-        assertFalse(vm.textureSnapshot()!!.tilesByLayer.getValue(first).pinned)
+        val kept = vm.textureSnapshot()!!
+        assertFalse(kept.atlas.auto)
+        assertEquals(auto.atlas.tiles.map { Triple(it.layerId, it.x, it.y) }, kept.atlas.tiles.map { Triple(it.layerId, it.x, it.y) })
+        assertEquals(count + 3, workspace.history().nodes.size)
 
         vm.selectLayers(listOf(second), additive = true)
         assertEquals(layers.toSet(), vm.state.value.selectedLayerIds)

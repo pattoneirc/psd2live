@@ -52,7 +52,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `parameter_create / parameter_update / parameter_delete` | `request` | `create/update/delete`；删除时按最后一次默认值选择最近的已写关键点切片并折叠轴 |
 | `layer_import_images` | `request` | 从 PNG、无损 WebP、TIFF 或 BMP 文件一次导入多层源图，后台完成后返回图层与网格句柄 |
 | `layer_get_texture / atlas_get / atlas_render_page` | `layer_id`；`atlas_get` 可选 `page`；渲染要求 `page`，可选 `max_size` | 从同一捕获读取图层画布矩形、栅格像素、原生密度、纹理覆盖与图块，或纹理集预算、fit、提示、页面占用与全部图块；渲染页面为只读后台任务，终态返回 PNG |
-| `layer_set_canvas_rect / layer_replace_image / layer_set_pixel_density / atlas_set_tile / atlas_set_budget / atlas_pack` | `request` 内 `state` 及各自字段 | 后台修改图层画布矩形、替换任意分辨率图像、设置纹理密度与锁定、固定图块、修改纹理集预算或重排；均可加入原子批量，见[纹理与纹理集](#纹理与纹理集) |
+| `layer_set_canvas_rect / layer_replace_image / layer_set_pixel_density / atlas_set_tile / atlas_set_budget / atlas_pack` | `request` 内 `state` 及各自字段 | 后台修改图层画布矩形、替换任意分辨率图像、设置纹理密度与锁定、移动图块、修改纹理集预算与自动排布，或一次性排布；均可加入原子批量，见[纹理与纹理集](#纹理与纹理集) |
 | `source_get_components / source_split_components / source_split_polygon / source_split_depth / asset_prepare_reference / asset_import_png / asset_register / asset_preview_composite / layer_add_from_asset / layer_set_placement / layer_finalize_placement / asset_inspect / asset_reprocess / layer_soft_delete / layer_restore` | `request` | 源图拆分与素材的参考、导入、配准、预览、添加、定位、确认、检查、重处理、软删除和恢复 |
 | `swing_put / swing_delete` | `request` | `put/delete`，在 Warp 或 Mesh（自动包一层 Warp）上生成左右 / 上下摇摆及摆锤；`motions` 组合左右与上下，`parallel` 让多束头发平行摆动，`tilt` / `offset_along` / `offset_across` 旋转和平移摇摆矩形；`delete` 可 `bake` 为普通关键，见[摇摆生成](../guide/SWING.md) |
 | `physics_put / physics_delete / physics_simulate / physics_fit / physics_config / physics_import` | `request` | `put/delete/simulate/fit/config/import`：按 ID 新建或局部修改任意物理组（含生成的预设、骨骼、摆动组）、删除自定义组或恢复生成值、后台只读阶跃采样，通过任务结果返回峰值与稳定时间、按标准晃动或 `observed_peaks` 实测峰值调整输出倍率、设置计算顺序与计算 FPS、导入 physics3.json，见[物理](../guide/PHYSICS.md) |
@@ -77,14 +77,14 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 图层的画布矩形（画布单位，可为小数）与栅格像素相互独立：原生密度是每画布单位的栅格像素，纹理集图块保存 `栅格像素 × 密度 × fit`。密度默认 1；超出预算时，未锁定图块共用一个 fit（≤1）统一缩小，锁定与固定位置放不下时被取消并在 `notices` 中说明。几何不感知纹理集：密度、预算、固定位置和重排只改变图块与绑定 UV，不改变网格。
 
 - `layer_get_texture`（查询）：`layer_id`；返回 `canvas_rect`、整数外包 `bounds`、`raster`、`native_density`、`override{density,lock,pin}`、`deleted`、`tile`（页、纹理像素矩形、每栅格像素的纹理像素 `scale_x/scale_y`、密度、锁定与固定；透明或已删除图层为 null）及 `atlas_fit`，全部来自同一捕获版本。
-- `atlas_get`（查询）：可选 `page` 过滤图块；返回有效 `budget{page_size,max_pages,padding}`、`fit`、`notices`、`pages[{index,width,height,tile_count,occupancy}]` 与 `tiles`。
+- `atlas_get`（查询）：可选 `page` 过滤图块；返回有效 `budget{page_size,max_pages,padding}`、`fit`、`notices`、`auto`（是否每次自动排布）、`pages[{index,width,height,tile_count,occupancy}]` 与 `tiles`。
 - `atlas_render_page`（只读后台任务，要求 `request_id/project_id/state`）：`page`，可选 `max_size`（64–16384，默认 2048，按长边缩小）；终态含 `revision`、原尺寸与渲染尺寸、`sha256`、该页图层，PNG 以图片内容返回，`job_get/job_wait` 可重复取图。
 - `layer_set_canvas_rect`：`layer_id`、`rect{left,top,width,height}`；栅格拉伸到新矩形，整数 bounds 取外包框，生成输入同步移动，由生成器按新矩形放置网格。网格带作者编辑（关键形、路径、Glue 等日志引用）、骨架/摆动/模拟绑定、物化几何（拆分、新建或重建网格；文件导入图层改用 `layer_set_bounds`）或导入 CMO3 时拒绝（`invalid_argument`）。相同矩形无变化。
 - `layer_replace_image`：`layer_id` 与 `path`（绝对路径，PNG/WebP/TIFF/BMP，仅单项）或 `png_base64` 二选一，可选 `fit`（`stretch` 默认铺满，`contain` 保持比例居中补透明）与 `rebuild_mesh`（默认 false）。画布矩形不变，生成输入冻结在首次替换前的像素，网格、关键形与绑定保留，仅图块和 UV 改变；`rebuild_mesh=true` 改由新像素重新生成该层网格，带作者编辑或物化几何时拒绝。单项先核对状态再读取文件；批量成员只接受 `png_base64`，给出 `path` 时整批以 `invalid_edit` 失败。最多 16MP，像素相同为无变化。
 - `layer_set_pixel_density`：1–128 个唯一 `layer_ids`、必需的 `density`（1/64–16，`null` 恢复为 1），可选 `lock`（省略保持原值）。
-- `atlas_set_tile`：`layer_id` 与 `pin{page,x,y}`（纹理像素）或 `null` 释放；页号须在预算内。
-- `atlas_set_budget`：`page_size`（256–16384 的 2 的幂）、`max_pages`（1–64）、`padding`（0–32），至少给一项，省略项沿用当前有效预算；写入 `atlas` 设置。
-- `atlas_pack`：可选 `keep_pins`；清除全部固定位置（`keep_pins=true` 时保留）并删除已不存在图层的覆盖。布局本身始终是规范布局，没有可清除内容时无变化。
+- `atlas_set_tile`：`layer_id` 与 `pin{page,x,y}`（纹理像素）或 `null` 放入空闲区域；页号须在预算内。位置保存在排布（`atlasArrangement` 设置）中；自动排布的纹理集先按当前布局保存（`auto` 变为 false），其他图块不动。放不下或与其他图块重叠的位置会被放入空闲区域并在 `atlas_get` 的 `notices` 中说明。
+- `atlas_set_budget`：`page_size`（256–16384 的 2 的幂）、`max_pages`（1–64）、`padding`（0–32）与 `auto`，至少给一项，省略项沿用当前值；预算写入 `atlas` 设置。`auto=true` 删除保存的排布，此后每次重建按矩形货架自动排布；`auto=false` 保存当前布局。
+- `atlas_pack`：一次性排布并保存结果（`auto` 变为 false）。可选 `shape`：`mesh`（默认）按各图层最终网格的纹理坐标覆盖区域（每格 4 栅格像素、外加间距）排布，矩形可以相互嵌套，各图块只写入自己的单元格；`rect` 按矩形。按占用面积从大到小放置，放不下预算页数时所有未锁定图块按 1/64 步长共同缩小。可选 `layer_ids` 只移动这些图块，其余保持原位与原 fit。同时清除自动排布的固定位置及已不存在图层的覆盖；相同输入再次排布无变化。之后若网格编辑超出排布时的覆盖区域，`atlas_get` 的 `notices` 会提示重新排布。图块 `shaped` 表示按网格覆盖区域排布。
 
 六项编辑均为进程任务和原子批量成员，经 `WorkspaceTextureEdits` 纯候选、完整重建与 CAS 提交，一次成功只追加一个历史节点，撤销恢复此前图块。终态为 `project_id/state/history_node_id/revision/applied/layers/atlas_fit/notices`（可含 `geometry_diagnostics`），`layers` 为纹理实际变化的图层。
 

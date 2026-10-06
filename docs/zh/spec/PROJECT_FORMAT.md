@@ -51,7 +51,7 @@
 | schema | 适用 | 新字段 |
 | --- | --- | --- |
 | 节点 1 | 不含下列字段的节点 | — |
-| 节点 2 | `source` 及三种附加源图节点中有图层带 `rect`；`layers` 含 `textureOverrides`；`settings` 含 `atlas` | 见下文纹理字段 |
+| 节点 2 | `source` 及三种附加源图节点中有图层带 `rect`；`layers` 含 `textureOverrides`；`settings` 含 `atlas` 或 `atlasArrangement` | 见下文纹理字段 |
 | 修订 1 | 日志不引用载荷节点 | — |
 | 修订 2 | 日志引用载荷节点，索引列出 `payloads` | `{"$payload": "<sha256>"}` 日志条目 |
 
@@ -59,11 +59,12 @@
 
 ### 纹理字段
 
-三项字段均为可选，缺省即旧语义，不参与旧文档的 revision。生成与图集打包读取它们（规则见[文档层](DOCUMENT_LAYER.md#逐层尺寸)）：
+四项字段均为可选，缺省即旧语义，不参与旧文档的 revision。生成与图集打包读取它们（规则见[文档层](DOCUMENT_LAYER.md#逐层尺寸)）：
 
 - 源图层 `rect: [left, top, width, height]`：浮点画布矩形（画布单位），即图层在画布上的位置，像素操作不改变它。缺省或等于整数边界时不写出，整数 `left/top/width/height` 仍是外包框，矩形必须位于其中。图层栅格（`raster` 的宽高）可以是任意分辨率，与矩形无关；栅格像素 / 矩形尺寸即该图层的原生密度，两轴可以不同。
 - 文档 `textureOverrides: {图层 ID: {density?, lock?, pin?: {page, x, y}}}`：逐层纹理密度倍率（缺省 1，即栅格原分辨率）、锁定（图集需要缩小时保持密度）与固定图集位置（页、左上角页面像素）；全为默认值的项不写出。位于 `layers` 节点。
 - 设置 `atlas: {pageSize, maxPages, padding}`：图集预算。缺省时预算为旧的 `atlasSize` / `texturePadding` 加默认页数 8；缺少的子字段同样回退到这两项。
+- 设置 `atlasArrangement: {fitStep, tiles: {图层 ID: {page, x, y, footprint?: {cell, columns, rows, bits}}}}`：保存的图集布局。缺省时每次重建自动排布（旧语义）；存在时各图块保持其位置，所有未锁定图块使用 `fitStep / 4096` 的共同 fit。`footprint` 为网格在图层栅格上覆盖的单元格（每格 `cell` 栅格像素，`bits` 为按行排列的位图，Base64 编码的 `BitSet`），带 footprint 的图块只写入这些单元格。新导入的工程保存其首个布局。
 
 ## v1 兼容与迁移
 

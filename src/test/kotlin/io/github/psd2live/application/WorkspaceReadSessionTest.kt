@@ -10,6 +10,9 @@ import java.nio.file.Path
 import kotlin.test.*
 
 class WorkspaceReadSessionTest {
+    /** The settings a read reports: the stored atlas arrangement is layout, read through atlas_get, not a setting. */
+    private fun settingsOf(document: WorkspaceDocument) = JsonObject(document.settings - AtlasArrangementCodec.KEY)
+
     @TempDir lateinit var temporary: Path
     private val builder = WorkspacePreviewBuilder()
     private val config = PipelineConfig(atlasSize = 256, meshOnly = true, generateDeformers = false, generatePhysics = false)
@@ -53,7 +56,7 @@ class WorkspaceReadSessionTest {
         assertEquals(oldHistory, read.history())
         assertEquals(oldObject, read.getObject(mesh))
         assertEquals(oldMesh, read.layerMeshSettings(layerId))
-        assertEquals(posed.document.settings, read.projectSettings())
+        assertEquals(settingsOf(posed.document), read.projectSettings())
         assertEquals(60, read.physicsFps())
         assertEquals(0.5f, read.previewSession().getValue("values").jsonObject.getValue(parameter.raw).jsonPrimitive.float)
         assertEquals(listOf(parameter.raw), read.previewSession().getValue("locked").jsonArray.map { it.jsonPrimitive.content })
@@ -126,7 +129,7 @@ class WorkspaceReadSessionTest {
         assertEquals(seed.state, loaded.snapshot().state)
         assertNotEquals(seed.state, runtime.capture().state)
         assertEquals(seed.historyHead, loaded.history().headNodeId)
-        assertEquals(seed.document.settings, loaded.projectSettings())
+        assertEquals(settingsOf(seed.document), loaded.projectSettings())
     }
 
     @Test fun publicCompositeQueriesCaptureOnceEvenWhenTheHostChangesDuringCapture() = runBlocking<Unit> {

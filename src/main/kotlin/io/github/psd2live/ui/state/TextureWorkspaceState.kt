@@ -20,8 +20,15 @@ import kotlin.math.pow
 data class TextureWorkspaceState(
 	val selectedPage: Int = 0,
 	/** Tiles are tinted by how many atlas pixels they spend per canvas unit. */
-	val heatmap: Boolean = true,
+	val heatmap: Boolean = false,
 	val showOutlines: Boolean = true,
+	/** The page's pixels are drawn; off, only the overlays show. */
+	val showPage: Boolean = true,
+	/** Each tile's meshes are drawn as a wireframe over their texels. */
+	val showMeshes: Boolean = true,
+	/** How "Arrange" lays tiles out: by the meshes' footprints (nesting) or by rectangles, all tiles or the selection. */
+	val arrangeByMesh: Boolean = true,
+	val arrangeSelectionOnly: Boolean = false,
 	/** How "Replace image" lays an image of another aspect ratio on the layer, and whether it rebuilds the mesh. */
 	val replaceFit: WorkspaceImageFit = WorkspaceImageFit.STRETCH,
 	val replaceRebuildMesh: Boolean = false,
@@ -65,6 +72,13 @@ class TextureSnapshot(private val view: WorkspaceTextureView) {
 	 * split part supersedes, is no art of the model even while a tile is packed for it.
 	 */
 	fun tiles(page: Int): List<WorkspaceAtlasTile> = atlas.tiles.filter { it.page == page && layer(it.layerId)?.deleted == false }
+
+	/** The cells [tile] occupies if it stood at ([x], [y]): its meshes' footprint when it was arranged by one, else its rectangle. */
+	internal fun shape(tile: WorkspaceAtlasTile, x: Int, y: Int): io.github.psd2live.core.AtlasArrange.Shape {
+		val layer = layer(tile.layerId)
+		val rasterWidth = layer?.rasterWidth ?: tile.width; val rasterHeight = layer?.rasterHeight ?: tile.height
+		return io.github.psd2live.core.AtlasArrange.shape(x, y, tile.width, tile.height, rasterWidth, rasterHeight, view.footprint(tile.layerId))
+	}
 
 	/** The page's canonical PNG; encoding a large page takes a while, so read it off the UI thread. */
 	fun pagePng(page: Int): ByteArray = view.pagePng(page)
@@ -130,12 +144,13 @@ internal fun tilesOverlap(ax: Int, ay: Int, aw: Int, ah: Int, b: WorkspaceAtlasT
 
 /**
  * Where a tile dragged to ([x], [y]) lands: inside the page, snapped to a neighbour's edge (plus padding) within
- * [snap] texture pixels, and whether it then overlaps a pinned tile (which keeps its place, unlike unpinned ones
- * the packer moves around a pin).
+ * [snap] texture pixels, and whether it then overlaps another tile. Every other tile keeps its place once a tile
+ * is moved, so any overlap collides: of rectangles, or of [shape]s for tiles arranged by their meshes.
  */
 internal fun placeDraggedTile(
 	tile: WorkspaceAtlasTile, x: Float, y: Float, pageWidth: Int, pageHeight: Int,
 	others: List<WorkspaceAtlasTile>, padding: Int, snap: Float,
+	shape: ((WorkspaceAtlasTile, Int, Int) -> io.github.psd2live.core.AtlasArrange.Shape)? = null,
 ): TileDragDraft {
 	var px = x.coerceIn(0f, (pageWidth - tile.width).coerceAtLeast(0).toFloat())
 	var py = y.coerceIn(0f, (pageHeight - tile.height).coerceAtLeast(0).toFloat())
@@ -155,6 +170,10 @@ internal fun placeDraggedTile(
 		listOf((it.y + it.height + padding).toFloat(), (it.y - padding).toFloat(), it.y.toFloat())
 	}).coerceIn(0f, (pageHeight - tile.height).coerceAtLeast(0).toFloat())
 	val ix = Math.round(px); val iy = Math.round(py)
-	val collides = neighbours.any { it.pinned && tilesOverlap(ix, iy, tile.width, tile.height, it, padding) }
+	val collides = neighbours.any { other ->
+		if ((!tile.shaped && !other.shaped) || shape == null) tilesOverlap(ix, iy, tile.width, tile.height, other, padding)
+		else io.github.psd2live.core.AtlasArrange.overlaps(io.github.psd2live.core.AtlasArrange.dilate(shape(tile, ix, iy),
+			io.github.psd2live.core.AtlasArrange.paddingCells(padding)), shape(other, other.x, other.y))
+	}
 	return TileDragDraft(tile.layerId, tile.page, ix, iy, collides)
 }
