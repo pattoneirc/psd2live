@@ -83,6 +83,8 @@ internal class CommitBaseline(private val sample: Sample, private val out: File)
 	private fun r1(value: Double) = Math.round(value * 10) / 10.0
 
 	fun run() {
+		// Measure the preview path as the app runs it: test JVMs read preview bundles back, the app does not.
+		System.setProperty("psd2live.validatePreviewBundles", "false")
 		val commands: WorkspaceDocumentCommands
 		runtime = WorkspaceRuntime({ document ->
 			val start = System.nanoTime()

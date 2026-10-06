@@ -153,14 +153,43 @@ internal object SkeletonRig {
 	}
 
 	/**
-	 * Baked skeletons by the content hash of their inputs. Skinning takes seconds on a full figure while
-	 * hashing the rig before it takes milliseconds, so a rebuild with an unchanged skeleton and base rig -
-	 * an undo, a history checkout, an export after the preview, a classification change elsewhere and back -
-	 * reuses the bake. Rigs are large; only the last few are kept.
+	 * Baked skeletons by the content hash of what the bake reads. Skinning takes seconds on a full figure while
+	 * hashing its inputs takes milliseconds, so a rebuild with an unchanged skeleton and base rig - an undo, a
+	 * history checkout, an export after the preview, a classification change elsewhere and back - reuses the bake.
+	 *
+	 * What the bake reads ([BakeInputs]): the meshes the bones bind; the deformers it hangs bones, warps and
+	 * meshes from (the body, breath, lean and legs warps, the head rotation, the bones' own ids and the parents
+	 * of the bound meshes) with all their ancestors; the parameters, parts, glues and parameter tree; and of
+	 * every other deformer and drawable only its id, kind, order and parent - the torso warp adopts what hangs
+	 * on its host. The atlas, the source files and the deform paths it neither reads nor writes, and of the
+	 * hand-edited topology only the bound meshes matter. The key holds exactly that.
+	 *
+	 * A hit with a different base takes everything the key leaves out from the new base: the unread deformers
+	 * and drawables (re-parented as the bake re-parented them), the atlas, the sources and the paths, and the
+	 * draw order is derived again - what [apply] makes of the new base. A bake that changed an unread object any
+	 * other way is kept only for a base whose whole IR matches. Rigs are large; only the last few are kept.
 	 */
-	private val generated = io.github.psd2live.format.compile.document.GenerationCache<PuppetModel>(capacity = 4)
+	private class BakeInputs(val drawables: Set<DrawableId>, val deformers: Set<DeformerId>)
 
-	/** [apply] through the generation cache. The key covers every input, including the names' language. */
+	private class Bake(
+		val base: PuppetModel,
+		val output: PuppetModel,
+		val inputs: BakeInputs,
+		/** Unread drawables and deformers the bake moved under another deformer, and that deformer. */
+		val reparentedDrawables: Map<DrawableId, DeformerId?>,
+		val reparentedDeformers: Map<DeformerId, DeformerId?>,
+		/** The full IR hash of [base] when the bake changed something the narrowed key leaves out; null otherwise. */
+		val exact: String?,
+	)
+
+	private const val CACHE_CAPACITY = 4
+	private val bakes = object : LinkedHashMap<String, Bake>(16, 0.75f, true) {
+		override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bake>?): Boolean = size > CACHE_CAPACITY
+	}
+	private var hits = 0
+	private var misses = 0
+
+	/** [apply] through the bake cache. The key covers every input the bake reads, including the names' language. */
 	fun generate(
 		base: PuppetModel,
 		spec: SkeletonSpec,
@@ -169,15 +198,118 @@ internal object SkeletonRig {
 		stance: BodyStance? = null,
 	): PuppetModel {
 		if (!spec.enabled || base.deformers.none { it.id == bodyId } || limbBones(spec).isEmpty()) return base
-		val key = io.github.psd2live.format.compile.document.ContentHash.of("skeleton", io.github.psd2live.targets.cubism.PuppetIr.toIr(base),
-			spec.toJson(), frame, lockedTopology.sorted(), stance?.contentKey, io.github.psd2live.i18n.I18n.currentLanguage.tag)
-		return generated.getOrPut(key) { apply(base, spec, frame, lockedTopology, stance) }
+		val inputs = bakeInputs(base, spec)
+		val key = cacheKey(base, spec, frame, lockedTopology, stance, inputs)
+		synchronized(bakes) {
+			val cached = bakes[key]
+			if (cached != null && (cached.exact == null || cached.exact == fullHash(base))) {
+				hits++
+				return if (cached.base === base) cached.output else rebased(cached, base)
+			}
+			misses++
+		}
+		val output = apply(base, spec, frame, lockedTopology, stance)
+		val bake = recordBake(base, output, inputs)
+		synchronized(bakes) { bakes[key] = bake }
+		return output
+	}
+
+	private fun bakeInputs(base: PuppetModel, spec: SkeletonSpec): BakeInputs {
+		val bones = limbBones(spec)
+		val drawables = bones.flatMapTo(HashSet()) { bone -> bone.drawableIds.map(::DrawableId) }
+		val roots = hashSetOf(bodyId, breathId, headRotationId, torsoWarpId, BodyStance.legsWarpId, BodyStance.leanWarpId)
+		for (bone in bones) { roots += DeformerId(bone.deformerId); roots += DeformerId(bone.deformerId + "Stance") }
+		for (drawable in base.drawables) if (drawable.id in drawables) drawable.parentDeformerId?.let(roots::add)
+		val byId = base.deformers.associateBy { it.id }
+		val deformers = HashSet<DeformerId>()
+		for (root in roots) {
+			var next: DeformerId? = root
+			while (next != null && deformers.add(next)) next = byId[next]?.parent
+		}
+		return BakeInputs(drawables, deformers)
+	}
+
+	private fun cacheKey(base: PuppetModel, spec: SkeletonSpec, frame: Bounds, lockedTopology: Set<String>, stance: BodyStance?,
+						 inputs: BakeInputs): String {
+		val read = base.copy(
+			drawables = base.drawables.filter { it.id in inputs.drawables },
+			deformers = base.deformers.filter { it.id in inputs.deformers },
+			atlas = org.umamo.runtime.model.PuppetAtlas.Empty, sources = emptyList(), deformPaths = emptyList(),
+			renderRoot = org.umamo.runtime.model.RenderGroup(null, org.umamo.runtime.model.DEFAULT_DRAW_ORDER, emptyList()),
+		)
+		return io.github.psd2live.format.compile.document.ContentHash.of("skeleton-2", io.github.psd2live.targets.cubism.PuppetIr.toIr(read),
+			base.deformers.map { Triple(it.id.raw, it.parent?.raw, it.javaClass.simpleName) },
+			base.drawables.map { it.id.raw to it.parentDeformerId?.raw }, spec.toJson(), frame,
+			lockedTopology.filter { DrawableId(it) in inputs.drawables }.sorted(), stance?.contentKey, io.github.psd2live.i18n.I18n.currentLanguage.tag)
+	}
+
+	private fun fullHash(model: PuppetModel) =
+		io.github.psd2live.format.compile.document.ContentHash.of(io.github.psd2live.targets.cubism.PuppetIr.toIr(model))
+
+	/** [deformer] hung from [parent]; null for a kind that has no parent to change. */
+	private fun withParent(deformer: Deformer, parent: DeformerId?): Deformer? = when (deformer) {
+		is Deformer.Warp -> deformer.copy(parent = parent)
+		is Deformer.Rotation -> deformer.copy(parent = parent)
+		else -> null
+	}
+
+	/** What the bake did to the objects the narrowed key leaves out, so a later base can take their place. */
+	private fun recordBake(base: PuppetModel, output: PuppetModel, inputs: BakeInputs): Bake {
+		val drawablesBefore = base.drawables.associateBy { it.id }
+		val deformersBefore = base.deformers.associateBy { it.id }
+		val reparentedDrawables = HashMap<DrawableId, DeformerId?>()
+		val reparentedDeformers = HashMap<DeformerId, DeformerId?>()
+		var narrow = output.atlas === base.atlas && output.sources === base.sources && output.deformPaths === base.deformPaths &&
+			output.drawables.filter { it.id !in inputs.drawables }.map { it.id } == base.drawables.filter { it.id !in inputs.drawables }.map { it.id }
+		if (narrow) for (drawable in output.drawables) {
+			if (drawable.id in inputs.drawables) continue
+			val old = drawablesBefore.getValue(drawable.id)
+			if (drawable === old) continue
+			if (drawable != old.copy(parentDeformerId = drawable.parentDeformerId)) { narrow = false; break }
+			reparentedDrawables[drawable.id] = drawable.parentDeformerId
+		}
+		if (narrow) for (deformer in output.deformers) {
+			// A deformer the base lacked is the bake's own, made from what the key holds.
+			if (deformer.id in inputs.deformers) continue
+			val old = deformersBefore[deformer.id] ?: continue
+			if (deformer === old) continue
+			if (deformer.javaClass != old.javaClass || deformer != withParent(old, deformer.parent)) { narrow = false; break }
+			reparentedDeformers[deformer.id] = deformer.parent
+		}
+		// Every unread base deformer must survive the bake, or a rebase could not take it from the new base.
+		if (narrow) {
+			val kept = output.deformers.mapTo(HashSet()) { it.id }
+			narrow = base.deformers.all { it.id in inputs.deformers || it.id in kept }
+		}
+		return Bake(base, output, inputs, reparentedDrawables, reparentedDeformers, if (narrow) null else fullHash(base))
+	}
+
+	/** [bake]'s output with what the narrowed key left out taken from [base] instead of the base it was baked on. */
+	private fun rebased(bake: Bake, base: PuppetModel): PuppetModel {
+		val drawables = base.drawables.associateBy { it.id }
+		val deformers = base.deformers.associateBy { it.id }
+		val unread = bake.base.deformers.mapNotNullTo(HashSet()) { it.id.takeIf { id -> id !in bake.inputs.deformers } }
+		return bake.output.copy(
+			drawables = bake.output.drawables.map { drawable ->
+				if (drawable.id in bake.inputs.drawables) drawable else {
+					val next = drawables.getValue(drawable.id)
+					if (drawable.id in bake.reparentedDrawables) next.copy(parentDeformerId = bake.reparentedDrawables[drawable.id]) else next
+				}
+			},
+			deformers = bake.output.deformers.map { deformer ->
+				if (deformer.id !in unread) deformer else {
+					val next = deformers.getValue(deformer.id)
+					if (deformer.id in bake.reparentedDeformers) withParent(next, bake.reparentedDeformers[deformer.id])!! else next
+				}
+			},
+			atlas = base.atlas, sources = base.sources, deformPaths = base.deformPaths,
+		).withDerivedRenderRoot()
 	}
 
 	/** Hits and misses of the skeleton cache, for tests and measurements. */
-	internal val cacheHits: Int get() = generated.hits
-	internal val cacheMisses: Int get() = generated.misses
-	internal fun clearCache() = generated.clear()
+	internal val cacheHits: Int get() = synchronized(bakes) { hits }
+	internal val cacheMisses: Int get() = synchronized(bakes) { misses }
+	internal fun clearCache() = synchronized(bakes) { bakes.clear() }
 
 	/**
 	 * Bakes [spec] into [base]. [frame] is the character bounds the body warp spans, and [stance] how the

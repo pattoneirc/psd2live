@@ -463,7 +463,7 @@ class PSD2LivePipeline {
 		Files.createDirectories(outputRoot)
 		val files = mutableListOf<ExportedFile>()
 		val warnings = (analysis.warnings + rig.warnings + neutralRig.warnings + generatedAngleWarnings + generatedWarpWarnings).toMutableList()
-		val (runtimeBundle, runtimeReport) = buildRuntimeBundle(baseName, analysis, atlas, rig, config)
+		val (runtimeBundle, runtimeReport) = buildRuntimeBundle(baseName, analysis, atlas, rig, config, validate = true)
 
 		if (config.exportMoc3) {
 			for (file in runtimeBundle.assets) files += writeContained(outputRoot, file.path, file.bytes)
@@ -506,16 +506,22 @@ class PSD2LivePipeline {
 		return PipelineResult(analysis, files, warnings, RigPreviewModel(analysis, atlas, rig, config, runtimeBundle, baseRig = baseRig))
 	}
 
+	/**
+	 * The moc3 runtime bundle of [rig]. [validate] reads the manifest and every sidecar back: files written for
+	 * the user always are, while the editor's preview bundles - the same compile, rebuilt on every edit and only
+	 * loaded by the preview - skip it unless [validatesPreviewBundles].
+	 */
 	internal fun buildRuntimeBundle(
 		baseName: String,
 		analysis: PipelineAnalysis,
 		atlas: PackedAtlas,
 		rig: BuiltRig,
 		config: PipelineConfig,
+		validate: Boolean = validatesPreviewBundles(),
 	): Pair<CubismRuntimeBundle, org.umamo.interop.ExportReport> {
 		val ir = RigIrCompiler.compile(analysis, atlas, rig, config)
 		val bundle = io.github.psd2live.targets.cubism.Moc3Target.bundle(ir, moc3ExportOptions(baseName, config))
-		validateBundle(bundle)
+		if (validate) validateBundle(bundle)
 		val manifest = bundle.files.single { it.name.endsWith(".model3.json") }.name
 		return CubismRuntimeBundle(manifest, bundle.files.map { CubismRuntimeAsset(it.name, it.bytes) }) to bundle.report
 	}
@@ -530,6 +536,13 @@ class PSD2LivePipeline {
 			options.pixelsPerUnitOverride?.let { put("pixels_per_unit", it.toString()) }
 		})
 	}
+
+	/**
+	 * Whether preview bundles are read back too: as the `psd2live.validatePreviewBundles` system property says,
+	 * otherwise whenever assertions are on (the test JVMs), so a malformed sidecar still fails in tests.
+	 */
+	internal fun validatesPreviewBundles(): Boolean =
+		System.getProperty("psd2live.validatePreviewBundles")?.toBooleanStrictOrNull() ?: PSD2LivePipeline::class.java.desiredAssertionStatus()
 
 	private fun validateBundle(bundle: Moc3Sidecars.Bundle) {
 		val byName = bundle.files.associateBy { it.name }
