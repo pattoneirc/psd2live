@@ -48,6 +48,7 @@ import org.umamo.format.art.SourceLayer
 import org.umamo.format.art.SourceLayerKind
 import org.umamo.runtime.model.ParameterKind
 import java.io.ByteArrayOutputStream
+import java.nio.file.AccessDeniedException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -998,11 +999,21 @@ internal class WorkspaceStore(
 			} else {
 				arrayOf(StandardCopyOption.ATOMIC_MOVE)
 			}
-			try {
-				Files.move(temporary, path, *options)
-			} catch (_: AtomicMoveNotSupportedException) {
-				if (replace) Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING)
-				else Files.move(temporary, path)
+			// Windows refuses to replace a file another process (a scanner or indexer) holds open for a moment.
+			var attempt = 0
+			while (true) {
+				try {
+					try {
+						Files.move(temporary, path, *options)
+					} catch (_: AtomicMoveNotSupportedException) {
+						if (replace) Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING)
+						else Files.move(temporary, path)
+					}
+					break
+				} catch (error: AccessDeniedException) {
+					if (!replace || ++attempt >= REPLACE_ATTEMPTS) throw error
+					Thread.sleep(10L * attempt)
+				}
 			}
 		} finally {
 			Files.deleteIfExists(temporary)
@@ -1044,6 +1055,8 @@ internal class WorkspaceStore(
 		private const val CHUNK_MAX_ENTRIES = 16
 		/** Bounds what one commit rewrites: the open tail chunk is at most about this long plus one entry. */
 		private const val CHUNK_MAX_CHARS = 64 * 1024
+		/** Replacing a file retries for about half a second in all before the refusal is reported. */
+		private const val REPLACE_ATTEMPTS = 10
 		private val payloadDigests = IdentityWeakCache<String, String>()
 
 		/**
