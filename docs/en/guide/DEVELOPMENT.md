@@ -110,11 +110,13 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `SimBakeBenchmark` | Bakes the `tml` back hair at a few settings and compares the simulation with the export on motion the fit never saw | standard output |
 | `CommitPerfTool.profile` / `.desktop` | Wall time of one authored commit: `profile` goes through the application command boundary and splits it by phase (revision, settings decode, rebuild, geometry check); `desktop` goes through the desktop view model and adapter, committing mesh vertex edits and brush strokes in a row, and reports commit time and the longest UI-thread stall. Pair with `JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` to sample | `commit-perf/report.txt`, `desktop.txt` |
 | `CommitPerfTool.baseline` | Per-stage baseline of the commit paths on a project with an auto skeleton, two swings and a baked simulation: every stage of a full rebuild (analysis, atlas packing and PNG encoding, base rig, skeleton cache hit/miss, journal replay, swing/simulation write-back, overrides, IR, moc3 bundle, `validateBundle`, revision hash, writing the runtime files), plus geometry commits, painting a small layer, replacing an image (same shape / mesh rebuild), the skeleton cache after an unrelated topology edit, and commit time and growth with 50/200 appended journal entries; history is persisted after every commit. The native preview reload (needs a GL context) is not measured | `commit-perf/baseline.json`, `baseline.md` |
+| `Cmo3HiresTool` | Spike for writing a denser-than-canvas layer to `.cmo3`: upscales one tml eye layer 4x (a one-texel checker across its middle third) and writes a baseline, a canvas-resolution layer with a hi-res atlas only, a hi-res layer with a scaled model-image affine (layer rect at raster or canvas size) and a 4x layered image, reading each back through the readers; the files are for checking by hand in Cubism Editor | `cmo3-hires/*.cmo3`, `report.txt`, `README.txt` |
 
 | Variable | Effect |
 | --- | --- |
 | `PSD2LIVE_SAMPLE` | Example name (`tml`, `ds`) or a PSD path; `tml` by default. `CommitPerfTool.desktop` also accepts a `.psd2live` project |
 | `PSD2LIVE_CMO3` | Input of `ModelProfileTool.cmo3`: a `.cmo3` file or a directory of them |
+| `PSD2LIVE_HIRES_TILE` | The layer `Cmo3HiresTool` upscales; the smallest eye layer by default |
 | `PSD2LIVE_PROBES` | Parameters the band profile probes, `id=value,...`; the ends of body X, Y and Z by default |
 | `PSD2LIVE_SHEET_PARAM` | Lay the silhouettes out along this parameter instead of body X × body Y |
 | `PSD2LIVE_BONES` | Bone positions correcting the auto skeleton in `MotionSheetTool.body`, `id=headX,headY,tailX,tailY;...` in canvas pixels |
