@@ -26,8 +26,23 @@ Saves write v2. Each history revision is split into content-addressed document n
 | `auxiliary/tasks.json` | Agent task records and events |
 | `workspace.json` | Durable UI layout, camera, selection, parameter preview, annotations and logs |
 | `images/<hash>.png` | Log images |
+| `cache/head/` | Optional, disposable cache for rebuilding the head revision (see "Head cache" below) |
 
-Document node, override and clip files are named by the SHA-256 of their bytes, checked on open. Splitting is lossless: opening joins every revision's complete document from its index, so revision IDs, node IDs and branches are unchanged. The rig model (`PuppetModel`) is never stored; opening still rebuilds it from source, settings and edits. Auxiliary entries depend on features used; `cache/` is reserved for disposable compile caches and is not written yet.
+Document node, override and clip files are named by the SHA-256 of their bytes, checked on open. Splitting is lossless: opening joins every revision's complete document from its index, so revision IDs, node IDs and branches are unchanged. The rig model (`PuppetModel`) is never stored; opening still rebuilds it from source, settings and edits. Auxiliary entries depend on features used; `cache/` holds only disposable rebuild caches and takes part in no identity.
+
+### Head cache
+
+A save may write `cache/head/`: expensive intermediate results of rebuilding the head revision that are safe to reuse, so opening can skip recomputing them. It is not authoritative: opening still rebuilds fully from source, settings and the journal; the cache only seeds generator caches in memory, whose own content keys decide whether an entry is used, so a rebuild with and without the cache gives a bit-identical model.
+
+| Path | Content |
+| --- | --- |
+| `cache/head/manifest.json` | `{format:"psd2live-head-cache", version:1, build, generator, revision, language, entries:[{kind, file, sha256, bytes}]}` |
+| `cache/head/skeleton-bake.bin` | The head's skeleton bake: a JSON header (bake version, cache key, skeleton definition, read set, re-parenting of unread objects, optional full hash) followed by the output model as binary IR (`RigIrBinary`, floats kept bit for bit; without atlas, source inventory and deform paths, which a hit takes from the new base rig) |
+
+- Keys: head revision ID, application version (`Compiler.version`), the generator constant `ProjectHeadCache.GENERATOR` (raised when generation changes in a way the entries' own keys would miss) and interface language; any difference discards the whole cache. The skeleton cache key inside the entry (with `SkeletonRig.BAKE_VERSION`, everything the bake reads and the language) then decides a hit.
+- Only the skeleton bake is cached (about 5–7 s cold, 1–7 ms on a hit); an entry above 64 MB is not written. A save takes the most recently used bake in the process whose skeleton definition equals the head's; without one no cache is written. `-Dpsd2live.headCache=false` turns writing and reading off.
+- On open, a mismatched manifest format, key or entry checksum, or a missing, truncated or undecodable entry is logged and discarded, never failing the open; `cache/` is removed from the extracted directory after reading.
+- The cache lives outside `history/` and `document/` and enters no revision ID, document node or history. Archives without it open as before. The archive manifest lists and verifies its files like any other. Earlier v2 builds unpack it with the rest and never read it, so they still open such archives; their next save drops the folder.
 
 ### Node schemas
 
