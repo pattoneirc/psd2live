@@ -1,10 +1,11 @@
 package io.github.psd2live.core
 
-import java.security.MessageDigest
-
 /** Per-pipeline, bounded cache of raster-local geometry; never caches parent coordinates. */
 class PreviewMeshCache(private val capacity: Int = 128) {
     init { require(capacity > 0) }
+
+    /** The rig builder's stage outputs for this pipeline ([RigStageCache]). */
+    internal val stages = RigStageCache()
 
     private data class Key(
         val width: Int, val height: Int, val digest: String,
@@ -18,12 +19,15 @@ class PreviewMeshCache(private val capacity: Int = 128) {
         width: Int, height: Int, rgba: ByteArray, alphaThreshold: Int, settings: MeshSettings,
         unitScale: Float = 1f,
     ): AdaptiveMeshGenerator.Result? {
-        // Content addressing also invalidates in-place pixel edits, not just replaced rasters.
-        val digest = java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(rgba))
+        // Content addressed; rasters are never edited in place (every producer fills a new array), so each
+        // array is hashed once ([RasterDigest]).
+        val digest = RigBuildProfile.stage("mesh cache: raster digest") {
+            if (RigStageCache.enabled) RasterDigest.of(rgba) else RasterDigest.compute(rgba)
+        }
         val key = Key(width, height, digest, alphaThreshold, settings, unitScale)
         if (entries.containsKey(key)) return entries[key]?.detached()
         if (Thread.currentThread().isInterrupted) throw InterruptedException()
-        val result = AdaptiveMeshGenerator.generate(width, height, rgba, alphaThreshold, settings, unitScale)
+        val result = RigBuildProfile.stage("mesh cache: adaptive mesh (miss)") { AdaptiveMeshGenerator.generate(width, height, rgba, alphaThreshold, settings, unitScale) }
         entries[key] = result
         while (entries.size > capacity) entries.remove(entries.keys.first())
         return result?.detached()

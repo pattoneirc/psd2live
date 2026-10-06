@@ -1,0 +1,33 @@
+package io.github.psd2live.core
+
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * Wall time spent in each stage of a rig build, summed over every build while [recording] is on. Off - the
+ * default - a stage costs one volatile read. Only the measurement tools turn it on.
+ */
+internal object RigBuildProfile {
+	@Volatile var recording: Boolean = false
+	private val nanos = ConcurrentHashMap<String, AtomicLong>()
+	private val calls = ConcurrentHashMap<String, AtomicLong>()
+
+	inline fun <T> stage(name: String, block: () -> T): T {
+		if (!recording) return block()
+		val start = System.nanoTime()
+		try { return block() } finally { add(name, System.nanoTime() - start) }
+	}
+
+	fun add(name: String, elapsed: Long) {
+		nanos.computeIfAbsent(name) { AtomicLong() }.addAndGet(elapsed)
+		calls.computeIfAbsent(name) { AtomicLong() }.incrementAndGet()
+	}
+
+	fun count(name: String) = calls.computeIfAbsent(name) { AtomicLong() }.incrementAndGet()
+
+	fun reset() { nanos.clear(); calls.clear() }
+
+	/** Milliseconds per stage and call counts, in first-recorded order of their names. */
+	fun snapshot(): Map<String, Pair<Double, Long>> =
+		nanos.keys.union(calls.keys).sorted().associateWith { (nanos[it]?.get() ?: 0L) / 1e6 to (calls[it]?.get() ?: 0L) }
+}

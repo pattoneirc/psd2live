@@ -58,7 +58,7 @@ private fun List<Double>.median(): Double = sorted().let { if (it.isEmpty()) 0.0
  * desktop does. The native Cubism reload needs a GL context and is not measured; writing the runtime files it
  * loads ("materialize") is.
  */
-internal class CommitBaseline(private val sample: Sample, private val out: File) {
+internal class CommitBaseline(private val sample: Sample, private val out: File, private val rigOnly: Boolean = false) {
 	private val builder = WorkspacePreviewBuilder()
 	private var lastRebuild = 0.0
 	private lateinit var runtime: WorkspaceRuntime<RigPreviewModel>
@@ -147,6 +147,10 @@ internal class CommitBaseline(private val sample: Sample, private val out: File)
 			table.appendLine("drawables ${modelA.rig.puppet.drawables.size}, source layers ${documentA.source.layers.size}, " +
 				"atlas ${modelA.atlas.pages.size}×${modelA.atlas.pages.first().image.width}px; import %.0f ms, cold skeleton build %.0f ms, simulation bake %.0f ms"
 					.format(importMs, skeletalMs, bakeMs))
+
+				// (g) A classification change and (h) a single-layer mesh override, with the rig builder's stages.
+			rigScenarios(meshes(SemanticTag.FACE).map { it.id.raw }.toSet())
+			if (rigOnly) return@runBlocking
 
 			// (a) Every stage of a full rebuild of the scenario document.
 			val full = fullStages(documentA, modelA)
@@ -294,8 +298,9 @@ internal class CommitBaseline(private val sample: Sample, private val out: File)
 			put("java", System.getProperty("java.version")); put("max_heap_mb", Runtime.getRuntime().maxMemory() / (1 shl 20))
 		}
 		val pretty = Json { prettyPrint = true }
-		File(out, "baseline.json").writeText(pretty.encodeToString(JsonObject.serializer(), JsonObject(report)))
-		File(out, "baseline.md").writeText(table.toString())
+		val name = if (rigOnly) "rig-stages" else "baseline"
+		File(out, "$name.json").writeText(pretty.encodeToString(JsonObject.serializer(), JsonObject(report)))
+		File(out, "$name.md").writeText(table.toString())
 		println(table)
 	}
 
@@ -349,6 +354,135 @@ internal class CommitBaseline(private val sample: Sample, private val out: File)
 			put("split", stagesJson(split))
 			put("rebuild_stages", stagesJson(stages))
 			put("revision_hash_ms", r1(revision))
+		}
+	}
+
+	/**
+	 * Generation commits through [WorkspaceGenerationCommands] - the path a classification or a layer mesh change
+	 * takes from the GUI and MCP - with the rig builder's stages recorded over each commit, then a full rebuild
+	 * (reopen) of the result. The classified and the meshed layers are body layers away from the face, the
+	 * swings, the simulation and the skeleton's bones.
+	 */
+	private suspend fun rigScenarios(faceMeshes: Set<String>) {
+		val start = runtime.capture()
+		val was = RigStageCache.enabled
+		try {
+			// PSD2LIVE_RIG_MODES=staged (or unstaged) runs only that mode.
+			val modes = setting("PSD2LIVE_RIG_MODES", "both")
+			for (staged in listOf(false, true).filter { modes == "both" || modes == (if (it) "staged" else "unstaged") }) {
+				RigStageCache.enabled = staged
+				val now = runtime.capture()
+				runtime.install(now.state, now.projectId, start.document, start.model, discardUnsaved = true)
+				rigScenariosOnce(faceMeshes, if (staged) "staged" else "unstaged")
+			}
+		} finally { RigStageCache.enabled = was }
+		val now = runtime.capture()
+		runtime.install(now.state, now.projectId, start.document, start.model, discardUnsaved = true)
+	}
+
+	private suspend fun rigScenariosOnce(faceMeshes: Set<String>, mode: String) {
+		val generation = io.github.psd2live.application.WorkspaceGenerationCommands(runtime)
+		val start = runtime.capture()
+		val layers = start.model.analysis.layers.associateBy { it.source.id.raw }
+		val generated = start.document.rigEdits.swingEdits.flatMap { it.targets } + start.document.rigEdits.simEdits.flatMap { it.targets }
+		val skinned = start.model.rig.puppet.vertexGroups.mapTo(HashSet()) { it.drawableId.raw } +
+			start.model.baseRig.puppet.drawables.filter { d -> d.parentDeformerId?.raw?.startsWith("DeformSkel") == true }.map { it.id.raw }
+		val bodyLayers = start.model.rig.puppet.drawables.filter { d -> d.mesh != null && d.id.raw !in faceMeshes && d.id.raw !in generated && d.id.raw !in skinned }
+			.mapNotNull { d -> start.model.rig.layerIdByDrawableId[d.id.raw]?.let { layers[it] } }
+			.filter { it.semantic.tag.group == LayerGroup.BODY && it.semantic.tag != SemanticTag.TOPWEAR }
+			.sortedBy { it.source.raster.width * it.source.raster.height }
+		require(bodyLayers.isNotEmpty()) { "No unbound clothing layer to classify" }
+		val meshed = bodyLayers.last()
+		fun classify(before: WorkspaceCapture<RigPreviewModel>, layer: String, fields: JsonObject, round: Int) = suspend {
+			generation.execute(before.projectId, before.state, io.github.psd2live.application.WorkspaceDocumentOperation("layer_classify",
+				JsonObject(fields + ("layer_id" to JsonPrimitive(layer)))), "Classify $round", MutationAuthor.USER)
+		}
+		fun role(tag: SemanticTag) = buildJsonObject { put("role", tag.name) }
+		// The first layer and change the generation migration accepts (it rejects some re-parentings): another role
+		// in the layer's group, else a toggle.
+		val unbound = start.model.rig.puppet.drawables.filter { d -> d.mesh != null && d.id.raw !in generated && d.id.raw !in skinned }
+			.mapNotNull { d -> start.model.rig.layerIdByDrawableId[d.id.raw]?.let { layers[it] } }
+			.filter { it.semantic.tag !in setOf(SemanticTag.FACE, SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN) }
+		suspend fun profiled(title: String, runs: Int, commit: suspend (WorkspaceCapture<RigPreviewModel>, Int) -> Unit): JsonObject {
+			val totals = ArrayList<Double>(); val rebuilds = ArrayList<Double>()
+			var stages: Map<String, Pair<Double, Long>> = emptyMap()
+			for (round in 0 until runs) {
+				val before = runtime.capture()
+				RigBuildProfile.reset(); RigBuildProfile.recording = true
+				try { totals += timed { commit(before, round) }.second } finally { RigBuildProfile.recording = false }
+				rebuilds += lastRebuild
+				stages = RigBuildProfile.snapshot()
+				check(runtime.capture().document != before.document) { "$title did not change the document" }
+			}
+			section("[$mode] $title — $runs commits")
+			row("commit wall time, median", totals.median(), "all: " + totals.joinToString { "%.0f".format(it) })
+			row("rebuild inside commit (last build), median", rebuilds.median())
+			stages.forEach { (k, v) -> row("  last commit, $k", v.first, "calls ${v.second}") }
+			return buildJsonObject {
+				put("title", title)
+				put("commit_ms", JsonArray(totals.map { JsonPrimitive(r1(it)) })); put("commit_ms_median", r1(totals.median()))
+				put("rebuild_ms", JsonArray(rebuilds.map { JsonPrimitive(r1(it)) }))
+				put("last_commit_stages", buildJsonObject { stages.forEach { (k, v) -> put(k, buildJsonObject { put("ms", r1(v.first)); put("calls", v.second) }) } })
+			}
+		}
+		report["mesh_override_commit_$mode"] = profiled("(h) layer_mesh_update ${meshed.source.id.raw} (${meshed.source.raster.width}×${meshed.source.raster.height})", 4) { before, round ->
+			generation.execute(before.projectId, before.state, io.github.psd2live.application.WorkspaceDocumentOperation("layer_mesh_update",
+				buildJsonObject { put("layer_id", meshed.source.id.raw); put("changes", buildJsonObject { put("maxEdgeDistance", 20 + 4 * round) }) }),
+				"Mesh $round", MutationAuthor.USER)
+		}
+		// Classification changes, each from the same document: the first four distinct (layer, change) pairs the
+		// generation migration accepts (it rejects some re-parentings, and every one on a skinned rig whose neutral
+		// frames it cannot invert - then the scenario drops the skeleton, then the swings and simulation).
+		val base = start // before the mesh commits: their migration records hold only with the skeleton they were made on
+		val changes = (bodyLayers + unbound).distinctBy { it.source.id.raw }.flatMap { layer ->
+			SemanticTag.entries.filter { it.group == layer.semantic.tag.group && it != layer.semantic.tag }.take(2).map { layer to role(it) } +
+				(layer to buildJsonObject { put("type", "TOGGLE"); put("parameter", "ParamBaselineToggle") })
+		}
+		var classifyDocument = "scenario a (skeleton, swings, simulation)"
+		val variants = listOf(classifyDocument to base.document,
+			"scenario a without the skeleton" to base.document.copy(rigEdits = base.document.rigEdits.copy(skeleton = null)),
+			"plain import" to base.document.copy(rigEdits = io.github.psd2live.core.RigEditOverlay.Empty))
+		val totals = ArrayList<Double>(); val rebuilds = ArrayList<Double>(); val titles = ArrayList<String>()
+		var stages: Map<String, Pair<Double, Long>> = emptyMap()
+		for ((label, document) in variants) {
+			if (totals.isNotEmpty()) break
+			val model = if (document === base.document) base.model else builder.build(document)
+			classifyDocument = label
+			for ((layer, fields) in changes) {
+				if (totals.size >= 4) break
+				val now = runtime.capture()
+				runtime.install(now.state, now.projectId, document, model, discardUnsaved = true)
+				val before = runtime.capture()
+				RigBuildProfile.reset(); RigBuildProfile.recording = true
+				val (ok, ms) = try { timed { runCatching { classify(before, layer.source.id.raw, fields, totals.size)() }.isSuccess } }
+					finally { RigBuildProfile.recording = false }
+				if (!ok) { println("baseline: classify ${layer.source.id.raw} ${layer.semantic.tag} $fields rejected"); continue }
+				totals += ms; rebuilds += lastRebuild; stages = RigBuildProfile.snapshot()
+				titles += "${layer.source.id.raw} ${layer.semantic.tag} $fields"
+			}
+		}
+		require(totals.isNotEmpty()) { "No classification change was accepted" }
+		section("[$mode] (g) layer_classify on $classifyDocument — ${totals.size} commits: ${titles.joinToString("; ")}")
+		row("commit wall time, median", totals.median(), "all: " + totals.joinToString { "%.0f".format(it) })
+		row("rebuild inside commit (last build), median", rebuilds.median())
+		stages.forEach { (k, v) -> row("  last commit, $k", v.first, "calls ${v.second}") }
+		report["classify_commit_$mode"] = buildJsonObject {
+			put("document", classifyDocument); put("changes", JsonArray(titles.map(::JsonPrimitive)))
+			put("commit_ms", JsonArray(totals.map { JsonPrimitive(r1(it)) })); put("commit_ms_median", r1(totals.median()))
+			put("rebuild_ms", JsonArray(rebuilds.map { JsonPrimitive(r1(it)) }))
+			put("last_commit_stages", buildJsonObject { stages.forEach { (k, v) -> put(k, buildJsonObject { put("ms", r1(v.first)); put("calls", v.second) }) } })
+		}
+		// A reopen of the result: a fresh builder, so only the process-wide caches (skeleton, motions) carry over.
+		val document = runtime.capture().document
+		RigBuildProfile.reset(); RigBuildProfile.recording = true
+		val cold = try { timed { WorkspacePreviewBuilder().build(document) }.second } finally { RigBuildProfile.recording = false }
+		val coldStages = RigBuildProfile.snapshot()
+		section("[$mode] (i) full rebuild of the result (reopen, fresh builder)")
+		row("whole build", cold)
+		coldStages.forEach { (k, v) -> row("  $k", v.first, "calls ${v.second}") }
+		report["full_rebuild_after_generation_edits_$mode"] = buildJsonObject {
+			put("ms", r1(cold))
+			put("stages", buildJsonObject { coldStages.forEach { (k, v) -> put(k, buildJsonObject { put("ms", r1(v.first)); put("calls", v.second) }) } })
 		}
 	}
 

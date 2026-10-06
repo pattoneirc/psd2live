@@ -127,7 +127,8 @@ class SimulationOverridesTest {
 		val swing = RigSwingEdit.single("front", "Front", SwingKind.LATERAL, listOf("WarpFront"), listOf("ParamSwingFront"))
 		val overlay = simulated(1f).copy(swingEdits = listOf(swing))
 		val graph = DocumentGenerators.graph(overlay)
-		assertEquals(listOf("rig", "skeleton", "journal", "swing:front", "simulation:back", "overrides", "physics", "motions"), graph.order.map { it.id })
+		assertEquals(listOf("rig.footprints", "rig.scaffold", "rig.meshes", "rig", "skeleton", "journal", "swing:front", "simulation:back", "overrides", "physics", "motions"),
+			graph.order.map { it.id })
 		assertEquals("swing:front", DocumentGenerators.owner(graph, DocumentGenerators.keyform("warp", "WarpFront", "ParamSwingFront"))?.id)
 		val mode = parameterOf(overlay)
 		assertEquals("simulation:back", DocumentGenerators.owner(graph, DocumentGenerators.keyform("mesh", back.id.raw, mode))?.id)
@@ -137,8 +138,8 @@ class SimulationOverridesTest {
 		// Retuning the swing reruns it and what reads it, nothing upstream and not the simulation.
 		val retuned = overlay.copy(swingEdits = listOf(swing.copy(tilt = 10f)))
 		assertEquals(listOf("swing:front", "overrides", "physics", "motions"), DocumentGenerators.stale(overlay, retuned))
-		// A new skeleton reruns everything after the rig builder.
 		val skeletal = overlay.copy(skeleton = SkeletonSpec())
+		// The skeleton places the body's warps (the scaffold), so everything from the scaffold on reruns.
 		assertEquals(graph.order.map { it.id }.drop(1), DocumentGenerators.stale(overlay, skeletal))
 		// Removing the simulation drops its keyforms: the overrides and physics read again.
 		val removed = overlay.copy(simEdits = emptyList())

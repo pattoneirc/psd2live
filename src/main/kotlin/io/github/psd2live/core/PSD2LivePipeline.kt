@@ -55,7 +55,7 @@ class PSD2LivePipeline {
 		progress: ProgressListener = ProgressListener { _, _ -> },
 		previousAtlas: PackedAtlas? = null,
 	): RigPreviewModel = buildPreview(if (config.rigEdits.importedCmo3 != null) Cmo3ModelImport.analysis(source, config)
-		else RigGenerationSource.analyze(source, config), config, progress, previousAtlas)
+		else RigBuildProfile.stage("pipeline: analyze") { RigGenerationSource.analyze(source, config) }, config, progress, previousAtlas)
 
 	fun buildPreview(
 		analysis: PipelineAnalysis,
@@ -85,39 +85,43 @@ class PSD2LivePipeline {
 	private fun generatedBase(input: PipelineAnalysis, config: PipelineConfig, progress: ProgressListener,
 	                          previousAtlas: PackedAtlas? = null): GeneratedBase {
 		val baselineConfig = RigGenerationBaseline.restore(MeshGenerationBaseline.restore(config))
-		val analyses = RigGenerationSource.prepare(input, baselineConfig, config)
+		val analyses = RigBuildProfile.stage("pipeline: analysis prepare") { RigGenerationSource.prepare(input, baselineConfig, config) }
 		val createdLayers = config.rigEdits.authoringJournal.filter { it["op"]?.jsonPrimitive?.contentOrNull == RasterMeshCreation.OP }
 			.mapTo(HashSet()) { it.getValue("layer_id").jsonPrimitive.content }
 		createdLayers += SourcePartitionJournal.commands(config.rigEdits).flatMap(SourcePartitionJournal::pieces)
 			.map { it.getValue("layer_id").jsonPrimitive.content }
 		val generationConfig = baselineConfig.copy(parentOverrides = config.parentOverrides - createdLayers)
-		val atlas = AtlasLayout.pack(analyses.textures.layers, config, progress, previousAtlas)
+		val atlas = RigBuildProfile.stage("pipeline: atlas layout") { AtlasLayout.pack(analyses.textures.layers, config, progress, previousAtlas) }
 		val visible = ArtPrimitiveJournal.visibleAnalysis(analyses.textures, config.rigEdits)
 		if (config.generationSource == null) return GeneratedBase(visible, atlas,
 			withoutCreatedMeshes(RigBuilder.build(analyses.geometry, atlas, generationConfig, meshCache), config))
 		val geometry = generatedGeometry.getOrPut(analyses.geometry.source, generationConfig, baselineConfig) {
-			val geometryAtlas = AtlasLayout.pack(analyses.geometry.layers, config, progress)
+			val geometryAtlas = RigBuildProfile.stage("pipeline: geometry atlas layout") { AtlasLayout.pack(analyses.geometry.layers, config, progress) }
 			GeneratedGeometryCache.Entry(geometryAtlas, RigBuilder.build(analyses.geometry, geometryAtlas, generationConfig, meshCache))
 		}
-		// The repacked base depends on the cached geometry, the layout and the texture layers' metadata - never
-		// on their pixels - so a repaint that keeps every tile's size and spot gets the very same base instance,
-		// and replay checkpoints keyed by it keep hitting.
-		val key = BoundBaseKey(geometry, atlas.placementByLayerId, atlas.pages.map { it.image.width to it.image.height },
+		// The repacked base depends on the geometry rig, its layout, the layout and the texture layers' metadata -
+		// never on their pixels - so a repaint that keeps every tile's size and spot gets the very same base instance,
+		// and replay checkpoints keyed by it keep hitting. The geometry rig counts by identity: the rig builder's
+		// stage cache hands out the same instance whenever every stage input is unchanged, even when the generation
+		// config differs in what no stage reads (a journal entry), which misses the geometry cache.
+		val key = BoundBaseKey(geometry.rig, geometry.atlas.placementByLayerId, geometry.atlas.pages.map { it.image.width to it.image.height },
+			atlas.placementByLayerId, atlas.pages.map { it.image.width to it.image.height },
 			analyses.textures.layers.map { layer -> val s = layer.source
 				listOf(s.id.raw, s.name, s.groupPath, s.visible, s.idIsStable, s.bounds, s.raster.width, s.raster.height) },
 			createdIds(config))
-		val rig = synchronized(boundBases) { boundBases[key] } ?: withoutCreatedMeshes(
-			RigGenerationSource.repack(geometry.rig, analyses.geometry, geometry.atlas, analyses.textures, atlas), config)
+		val rig = synchronized(boundBases) { boundBases[key] } ?: RigBuildProfile.stage("pipeline: repack") { withoutCreatedMeshes(
+			RigGenerationSource.repack(geometry.rig, analyses.geometry, geometry.atlas, analyses.textures, atlas), config) }
 			.also { synchronized(boundBases) { boundBases[key] = it } }
 		return GeneratedBase(visible, atlas, rig)
 	}
 
-	private data class BoundBaseKey(val geometry: GeneratedGeometryCache.Entry, val placements: Map<String, AtlasPlacement>,
+	private data class BoundBaseKey(val geometry: BuiltRig, val geometryPlacements: Map<String, AtlasPlacement>, val geometryPages: List<Pair<Int, Int>>,
+	                                val placements: Map<String, AtlasPlacement>,
 	                                val pages: List<Pair<Int, Int>>, val layers: List<List<Any>>, val created: Set<String>) {
-		// The cached geometry entry counts by identity: the cache hands out the same entry for the same input.
-		override fun equals(other: Any?) = other is BoundBaseKey && geometry === other.geometry && placements == other.placements &&
+		override fun equals(other: Any?) = other is BoundBaseKey && geometry === other.geometry && geometryPlacements == other.geometryPlacements &&
+			geometryPages == other.geometryPages && placements == other.placements &&
 			pages == other.pages && layers == other.layers && created == other.created
-		override fun hashCode() = java.util.Objects.hash(System.identityHashCode(geometry), placements, pages, layers, created)
+		override fun hashCode() = java.util.Objects.hash(System.identityHashCode(geometry), geometryPlacements, geometryPages, placements, pages, layers, created)
 	}
 
 	private val boundBases = object : LinkedHashMap<BoundBaseKey, BuiltRig>(8, 0.75f, true) {

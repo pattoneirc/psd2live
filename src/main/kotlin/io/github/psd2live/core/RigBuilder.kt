@@ -285,7 +285,7 @@ object RigBuilder {
 					deletedLayerIds = config.deletedLayerIds - splitBaselineIds,
 					rigEdits = config.rigEdits.copy(splitBaselineLayerIds = emptySet()),
 				)
-				val baselineAnalysis = CharacterAnalyzer.analyze(baselineSource, baselineConfig)
+				val baselineAnalysis = RigBuildProfile.stage("context: split baseline analyze") { CharacterAnalyzer.analyze(baselineSource, baselineConfig) }
 				return rigContext(baselineAnalysis, baselineConfig, meshCache).withArtwork(
 					meshFramedAnalysis(inputAnalysis.copy(
 						layers = inputAnalysis.layers.filter { it.source !is MouthLipLayer },
@@ -293,9 +293,56 @@ object RigBuilder {
 				)
 			}
 		}
-		val analysis = meshFramedAnalysis(inputAnalysis.copy(
+		val analysis = RigBuildProfile.stage("context: mesh footprints + anchors") { meshFramedAnalysis(inputAnalysis.copy(
 			layers = inputAnalysis.layers.filter { it.source !is MouthLipLayer },
-		), config, meshCache)
+		), config, meshCache) }
+		val layout = analysis.calibration ?: analysis
+		val scaffold = scaffold(analysis, config, stagesOf(meshCache))
+		// The eye whites carry their layers, which a reused scaffold must not hand out from an older analysis.
+		val eyeWhiteLayers = layout.layers.map { it.riggedIn(layout.anchors, scaffold.faceRig.coordinateSpace) }
+			.filter { it.semantic.tag == SemanticTag.EYEWHITE && it.opaquePixels > 0 }
+		return RigContext(
+			analysis,
+			scaffold.character,
+			scaffold.head,
+			scaffold.face,
+			scaffold.frontHair,
+			scaffold.backHair,
+			scaffold.faceRig.coordinateSpace,
+			scaffold.faceRig,
+			eyeWhiteLayers,
+			scaffold.frameByDeformer,
+			scaffold.deformers.pairedParentByLayerId,
+			config.rigEdits.skeleton?.enabled == true,
+			scaffold.deformersEnabled,
+			scaffold.deformers.deformers,
+			scaffold.stance,
+			scaffold.bodyFrame,
+		)
+	}
+
+	/**
+	 * What a rig derives from its mesh-framed analysis before any mesh: the frames, the face rig, the body's
+	 * stance and frame and the deformers. It reads only the layers' metadata (roles, names, order, footprints),
+	 * the anchors and the settings, never their pixels. The frames are cheap and derived every build; the
+	 * deformers are a stage of their own ([DeformerKey]).
+	 */
+	private class Scaffold(
+		val character: Bounds,
+		val head: Bounds,
+		val face: Bounds,
+		val frontHair: Bounds?,
+		val backHair: Bounds?,
+		val faceRig: NinePoseFaceRig,
+		val deformersEnabled: Boolean,
+		val stance: BodyStance,
+		val bodyFrame: Bounds,
+		val deformers: DeformerBuildResult,
+		val frameByDeformer: Map<String, Bounds>,
+	)
+
+	private fun scaffold(analysis: PipelineAnalysis, config: PipelineConfig, stages: RigStageCache?): Scaffold {
+		val faceStart = System.nanoTime()
 		val character = analysis.anchors.character
 		val layout = analysis.calibration ?: analysis
 		val faceRig = NinePoseFaceRig.from(layout, config.rigTuning)
@@ -308,9 +355,6 @@ object RigBuilder {
 			.filter { inferredGroup(it, analysis.anchors) == LayerGroup.HEAD && it.opaquePixels > 0 }
 			.map { it.inHeadSpace(headSpace) }
 		val head = if (headCandidates.isEmpty()) faceRig.face else headCandidates.map { it.bounds }.reduce(Bounds::union).expanded(0.025f)
-		val eyeWhiteLayers = layoutRigLayers.filter {
-			it.semantic.tag == SemanticTag.EYEWHITE && it.opaquePixels > 0
-		}
 		val faceCandidates = layoutRigLayers.filter { it.semantic.tag in faceTags && it.opaquePixels > 0 }
 		val face = (faceCandidates.map { it.bounds } + faceRig.face)
 			.reduce(Bounds::union)
@@ -320,31 +364,16 @@ object RigBuilder {
 		val frontHair = frontHairCandidates.map { it.bounds }.takeIf { it.isNotEmpty() }?.reduce(Bounds::union)?.expanded(0.04f)
 		val backHair = backHairCandidates.map { it.bounds }.takeIf { it.isNotEmpty() }?.reduce(Bounds::union)?.expanded(0.04f)
 
+		if (RigBuildProfile.recording) RigBuildProfile.add("scaffold: face rig + frames", System.nanoTime() - faceStart)
+		val bodyStart = System.nanoTime()
 		val deformersEnabled = !config.meshOnly && config.generateDeformers
 		val stance = BodyStance.of(analysis, character, config.rigEdits.skeleton, config.bodyStrength, config.rigTuning)
 		val bodyFrame = bodyFrame(analysis, stance, faceRig, character, head, face, frontHair, backHair, config.rigEdits.skeleton?.enabled == true)
-		val deformerResult = if (deformersEnabled) {
-			buildDeformers(
-				analysis,
-				stance,
-				bodyFrame,
-				rigLayerById,
-				faceRig,
-				character,
-				head,
-				face,
-				frontHair,
-				backHair,
-				PartId("PartHead"),
-				PartId("PartFace"),
-				PartId("PartHairFront"),
-				PartId("PartHairBack"),
-				PartId("PartHeadAccessories"),
-				PartId("PartBody"),
-				PartId("PartExtra"),
-				config,
-			)
-		} else {
+		if (RigBuildProfile.recording) RigBuildProfile.add("scaffold: stance + body frame", System.nanoTime() - bodyStart)
+		val deformerResult = if (deformersEnabled) stages?.get(RigStageCache.DEFORMERS, 8,
+			deformerKey(analysis, rigLayerById, stance, bodyFrame, faceRig, character, head, face, frontHair, backHair, config)) {
+			deformerStage(analysis, stance, bodyFrame, rigLayerById, faceRig, character, head, face, frontHair, backHair, config)
+		} ?: deformerStage(analysis, stance, bodyFrame, rigLayerById, faceRig, character, head, face, frontHair, backHair, config) else {
 			DeformerBuildResult(emptyList(), emptyMap(), emptyMap())
 		}
 
@@ -373,26 +402,68 @@ object RigBuilder {
 			frameByDeformer[backHairPhysicsWarpId.raw] = it
 		}
 		frameByDeformer.putAll(deformerResult.pairFrames)
-
-		return RigContext(
-			analysis,
-			character,
-			head,
-			face,
-			frontHair,
-			backHair,
-			headSpace,
-			faceRig,
-			eyeWhiteLayers,
-			frameByDeformer,
-			deformerResult.pairedParentByLayerId,
-			config.rigEdits.skeleton?.enabled == true,
-			deformersEnabled,
-			deformerResult.deformers,
-			stance,
-			bodyFrame,
-		)
+		return Scaffold(character, head, face, frontHair, backHair, faceRig, deformersEnabled, stance, bodyFrame, deformerResult, frameByDeformer)
 	}
+
+	/** A layer's metadata: everything about it the scaffold and the mesh stages read except its pixels. */
+	private data class LayerMeta(
+		val id: String, val name: String, val groupPath: String, val order: Int, val sourceBounds: org.umamo.format.art.LayerBounds,
+		val semantic: LayerSemantic, val bounds: Bounds, val centroidX: Float, val centroidY: Float, val opaquePixels: Int,
+	)
+
+	private fun ClassifiedLayer.meta() = LayerMeta(source.id.raw, source.name, source.groupPath, source.order, source.bounds,
+		semantic, bounds, centroidX, centroidY, opaquePixels)
+
+	/**
+	 * The settings a generation stage may read, and only those: the mesh, mouth, rig strength and tuning settings,
+	 * the generation mode, the runtime target and (for the scaffold and the deformers) the skeleton. Everything
+	 * else - the journal and static edits, per-layer maps (a stage that reads one layer's entry keys it itself),
+	 * the generation inputs, visibility, draw orders, texture, physics, motion and export settings - is left at
+	 * its default, so changing it keeps the stages' outputs.
+	 */
+	private fun stageConfig(config: PipelineConfig, skeleton: Boolean): PipelineConfig = PipelineConfig(
+		meshOuterMargin = config.meshOuterMargin, meshEdgeMode = config.meshEdgeMode, meshEdgeWidth = config.meshEdgeWidth,
+		meshMaxEdgeDistance = config.meshMaxEdgeDistance, meshInteriorDensity = config.meshInteriorDensity,
+		meshFillAlgorithm = config.meshFillAlgorithm, meshSuppressBoundaryDiagonals = config.meshSuppressBoundaryDiagonals,
+		meshFillParameters = config.meshFillParameters, meshUnits = config.meshUnits, alphaThreshold = config.alphaThreshold,
+		headTurnStrength = config.headTurnStrength, bodyStrength = config.bodyStrength, rigTuning = config.rigTuning,
+		meshOnly = config.meshOnly, generateDeformers = config.generateDeformers, featureDisplacementEnabled = config.featureDisplacementEnabled,
+		mouthOutlineEnabled = config.mouthOutlineEnabled, mouthShape = config.mouthShape, mouthCurve = config.mouthCurve,
+		mouthColor = config.mouthColor, mouthThickness = config.mouthThickness,
+		hairSimulationFront = config.hairSimulationFront, hairSimulationBack = config.hairSimulationBack, runtimeTarget = config.runtimeTarget,
+		rigEdits = if (skeleton) RigEditOverlay.Empty.copy(skeleton = config.rigEdits.skeleton) else RigEditOverlay.Empty,
+	)
+
+	private fun deformerStage(
+		analysis: PipelineAnalysis, stance: BodyStance, bodyFrame: Bounds, rigLayerById: Map<String, ClassifiedLayer>,
+		faceRig: NinePoseFaceRig, character: Bounds, head: Bounds, face: Bounds, frontHair: Bounds?, backHair: Bounds?, config: PipelineConfig,
+	): DeformerBuildResult = RigBuildProfile.stage("scaffold: deformers (built)") {
+		buildDeformers(analysis, stance, bodyFrame, rigLayerById, faceRig, character, head, face, frontHair, backHair,
+			PartId("PartHead"), PartId("PartFace"), PartId("PartHairFront"), PartId("PartHairBack"), PartId("PartHeadAccessories"),
+			PartId("PartBody"), PartId("PartExtra"), config)
+	}
+
+	/**
+	 * What [buildDeformers] reads: the stance, the frames and the face rig by value, the anchors (a layer's
+	 * group and default parent), every sided layer (the paired and arm warps: its metadata and rig-space
+	 * bounds, in analysis order), the topwear (the torso) and the settings. A layer without a side and not
+	 * topwear reaches the deformers only through the frames, so its role or mesh can change and the deformers
+	 * stay the same instances.
+	 */
+	private data class DeformerKey(
+		val stance: String, val bodyFrame: Bounds, val character: Bounds, val head: Bounds, val face: Bounds,
+		val frontHair: Bounds?, val backHair: Bounds?, val faceRig: List<Any?>, val anchors: RigAnchors,
+		val sided: List<Pair<LayerMeta, Bounds>>, val topwear: List<Bounds>, val config: PipelineConfig, val language: String,
+	)
+
+	private fun deformerKey(
+		analysis: PipelineAnalysis, rigLayerById: Map<String, ClassifiedLayer>, stance: BodyStance, bodyFrame: Bounds,
+		faceRig: NinePoseFaceRig, character: Bounds, head: Bounds, face: Bounds, frontHair: Bounds?, backHair: Bounds?, config: PipelineConfig,
+	) = DeformerKey(stance.contentKey, bodyFrame, character, head, face, frontHair, backHair, faceSignature(faceRig), analysis.anchors,
+		analysis.layers.filter { it.semantic.side == Side.LEFT || it.semantic.side == Side.RIGHT }
+			.map { it.meta() to rigLayerById.getValue(it.source.id.raw).bounds },
+		analysis.layers.filter { it.semantic.tag == SemanticTag.TOPWEAR && it.opaquePixels > 0 }.map { it.bounds },
+		stageConfig(config, skeleton = true), io.github.psd2live.i18n.I18n.currentLanguage.tag)
 
 	/** Use the same generated triangles that will render the texture to place automatic deformers. */
 	private fun meshFramedAnalysis(
@@ -437,8 +508,26 @@ object RigBuilder {
 			return rectangle()
 		}
 		val (settings, _) = meshSettings(layer, config)
-		val adaptive = if (meshCache != null) meshCache.generate(width, height, source.raster.rgba, config.alphaThreshold, settings, unitScale)
-			else AdaptiveMeshGenerator.generate(width, height, source.raster.rgba, config.alphaThreshold, settings, unitScale)
+		fun generate() = adaptiveFootprint(if (meshCache != null) meshCache.generate(width, height, source.raster.rgba, config.alphaThreshold, settings, unitScale)
+			else AdaptiveMeshGenerator.generate(width, height, source.raster.rgba, config.alphaThreshold, settings, unitScale), source, ::rectangle)
+		val stages = stagesOf(meshCache) ?: return generate()
+		val key = FootprintKey(width, height, RasterDigest.of(source.raster.rgba), source.bounds.left, source.bounds.top,
+			config.alphaThreshold, settings, unitScale)
+		return stages.get(RigStageCache.FOOTPRINT, 512, key) { Footprint(generate()) }.value
+	}
+
+	/** The pipeline's stage cache, unless stage caching is off ([RigStageCache.enabled]). */
+	private fun stagesOf(meshCache: PreviewMeshCache?): RigStageCache? = meshCache?.stages?.takeIf { RigStageCache.enabled }
+
+	/** A layer's mesh footprint inputs: its pixels, where they sit, and the mesh settings and scale they mesh at. */
+	private data class FootprintKey(val width: Int, val height: Int, val digest: String, val left: Int, val top: Int,
+	                                val alphaThreshold: Int, val settings: MeshSettings, val unitScale: Float)
+
+	/** A kept footprint, null for a layer whose mesh has no triangles. */
+	private class Footprint(val value: MeshFootprint?)
+
+	private fun adaptiveFootprint(adaptive: AdaptiveMeshGenerator.Result?, source: org.umamo.format.art.SourceLayer,
+	                              rectangle: () -> MeshFootprint): MeshFootprint? {
 		// The renderer falls back to a rectangular mesh when adaptive triangulation fails.
 		if (adaptive == null) return rectangle()
 		if (adaptive.indices.isEmpty()) return null
@@ -610,7 +699,11 @@ object RigBuilder {
 	)
 
 	fun build(inputAnalysis: PipelineAnalysis, atlas: PackedAtlas, config: PipelineConfig, meshCache: PreviewMeshCache? = null): BuiltRig =
-		buildWithContext(inputAnalysis, atlas, config, meshCache, rigContext(inputAnalysis, config, meshCache), splitStableDrawableIds(inputAnalysis, config))
+		RigBuildProfile.stage("build: total") {
+			val context = RigBuildProfile.stage("build: context") { rigContext(inputAnalysis, config, meshCache) }
+			val ids = RigBuildProfile.stage("build: split ids") { splitStableDrawableIds(inputAnalysis, config) }
+			buildWithContext(inputAnalysis, atlas, config, meshCache, context, ids)
+		}
 
 	/**
 	 * The drawable ids a document split with the layer splitter has to keep.
@@ -710,10 +803,14 @@ object RigBuilder {
 		val bodyPartId = PartId("PartBody")
 		val extraPartId = PartId("PartExtra")
 		val rawDeformers = context.deformers
+		val stages = stagesOf(meshCache)
+		// The face lean rewrites each warp's own grid and nothing else, so it commutes with the re-parenting below.
+		val leaned = stages?.get(RigStageCache.LEAN, 8, Identity(rawDeformers, config.rigTuning)) { withFaceLean(rawDeformers, config.rigTuning) }
+			?: withFaceLean(rawDeformers, config.rigTuning)
 
-		val deformers = if (config.parentOverrides.isEmpty()) rawDeformers else {
+		val deformers = if (config.parentOverrides.isEmpty()) leaned else {
 			val deformerById = rawDeformers.associateBy { it.id.raw }
-			rawDeformers.map { deformer ->
+			leaned.map { deformer ->
 				if (config.parentOverrides.containsKey(deformer.id.raw)) {
 					val targetParentRaw = config.parentOverrides[deformer.id.raw]
 					val targetParentId = targetParentRaw?.takeIf { it.isNotBlank() && !it.equals("root", true) }?.let(::DeformerId)
@@ -791,6 +888,7 @@ object RigBuilder {
 		}
 
 		val builtDeformPaths = mutableListOf<DeformPath>()
+		val meshConfig = stageConfig(config, skeleton = false)
 		val reservedDrawableIds = stableDrawableIds.values.toMutableSet()
 		val orderedLayers = orderMouthLayers(analysis.layers.sortedBy { it.source.order })
 		for ((drawIndex, layer) in orderedLayers.withIndex()) {
@@ -810,7 +908,7 @@ object RigBuilder {
 				}
 				else stableSplitDrawableId(layer.source.id.raw, stableDrawableIds.values)
 			reservedDrawableIds += id
-			val parts = buildDrawableMesh(
+			val parts = meshStage(
 				layer,
 				rigLayer,
 				context,
@@ -820,13 +918,14 @@ object RigBuilder {
 				parentFrame = parentFrame,
 				headSpace = context.headSpaceFor(layer),
 				config = config,
+				meshConfig = meshConfig,
 				meshCache = meshCache,
 			)
 			builtDeformPaths.addAll(parts.mouthPaths)
 			val override = config.layerOverrides[layer.source.id.raw]
 			val classification = override?.type ?: layer.semantic.type
 			val channelGrids = if (config.meshOnly && classification == LayerType.PRESET) ChannelGrids.Empty
-				else buildChannels(layer, override, switchParamKeys, config.rigTuning)
+				else channelStage(layer, override, switchParamKeys, config.rigTuning, stages)
 			val drawable = Drawable(
 				id = id,
 				name = layer.source.name,
@@ -851,7 +950,7 @@ object RigBuilder {
 			classifiedByDrawable[id] = layer
 			pageByDrawable[id.raw] = placement.page
 			sourceBoundsByDrawable[id.raw] = parts.neutralBounds
-			for (lip in mouthLips(drawable, layer, parts.data, parentFrame, parts.mouthAperture, parts.headSpace, atlas, generatedLips, config)) {
+			for (lip in lipsStage(drawable, layer, parts, parentFrame, atlas, generatedLips, config, meshConfig, stages)) {
 				drawables += lip.drawable
 				lip.path?.let { builtDeformPaths += it }
 				classifiedByDrawable[lip.drawable.id] = lip.layer
@@ -863,6 +962,7 @@ object RigBuilder {
 			layerIdByDrawable[id.raw] = layer.source.id.raw
 		}
 
+		val assemblyStart = System.nanoTime()
 		val drawableByTagSide = drawables.groupBy { drawable ->
 			val semantic = classifiedByDrawable.getValue(drawable.id).semantic
 			semantic.tag to semantic.side
@@ -954,10 +1054,10 @@ object RigBuilder {
 		// Geometry is generated against the art alone: tiles without placements, offsets for uvs.
 		val (unboundAtlas, artSources) = UvBinding.unboundAtlas(inputAnalysis,
 			inputAnalysis.layers.map { it.source.id.raw }.filter { it in atlas.placementByLayerId })
-		val unbound = PuppetModel(
+		val assembled = PuppetModel(
 			parameters = StandardParameters.all + uniqueCustomParams,
 			parts = parts,
-			deformers = withFaceLean(deformers, config.rigTuning),
+			deformers = deformers,
 			drawables = maskedDrawables,
 			rootChildren = listOf(OrgChild.Part(headPartId), OrgChild.Part(extraPartId), OrgChild.Part(bodyPartId)),
 			rootPartId = null,
@@ -976,27 +1076,106 @@ object RigBuilder {
 			atlas = unboundAtlas,
 			sources = artSources,
 			deformPaths = builtDeformPaths,
-		).withDerivedRenderRoot().let { withoutLegacyHairSway(it, config) }
-		// The skeleton still bakes the bound rig: it refines meshes by interpolating their uvs, and doing
-		// that on offsets and binding afterwards would round the new vertices' uvs differently.
-		val puppet = UvBinding.bind(unbound, inputAnalysis, atlas) { classifiedByDrawable[it.id] }.puppet
-		val faceCenterCanvas = faceRig.coordinateSpace.toCanvas(faceRig.centerX, faceRig.centerY)
-		val skeletonPuppet = config.rigEdits.skeleton?.takeIf { it.enabled && shouldBuildDeformers }
-			?.let { SkeletonRig.generate(puppet, it, context.bodyFrame, handEditedTopology(config), context.stance) } ?: puppet
-		return BuiltRig(
-			skeletonPuppet,
-			pageByDrawable,
-			sourceBoundsByDrawable,
-			layerIdByDrawable,
-			faceCenterCanvas.first,
-			faceCenterCanvas.second,
-			faceRig.radiusX,
-			faceRig.radiusY,
-			warnings,
-			faceRig.initialAngleZ,
-			unbound,
 		)
+		if (RigBuildProfile.recording) RigBuildProfile.add("assembly: masks, parts, parameters, model", System.nanoTime() - assemblyStart)
+		val skeleton = config.rigEdits.skeleton?.takeIf { it.enabled && shouldBuildDeformers }
+		val faceCenterCanvas = faceRig.coordinateSpace.toCanvas(faceRig.centerX, faceRig.centerY)
+		var skeletonKey: String? = null
+		fun finish(): BuiltRig {
+			val unbound = assembled.withDerivedRenderRoot().let { withoutLegacyHairSway(it, config) }
+			// The skeleton still bakes the bound rig: it refines meshes by interpolating their uvs, and doing
+			// that on offsets and binding afterwards would round the new vertices' uvs differently.
+			val puppet = RigBuildProfile.stage("binding: UvBinding.bind") { UvBinding.bind(unbound, inputAnalysis, atlas) { classifiedByDrawable[it.id] }.puppet }
+			val skeletonPuppet = skeleton
+				?.let { RigBuildProfile.stage("skeleton") {
+					SkeletonRig.takeLastKey()
+					SkeletonRig.generate(puppet, it, context.bodyFrame, handEditedTopology(config), context.stance).also { skeletonKey = SkeletonRig.takeLastKey() }
+				} } ?: puppet
+			return BuiltRig(
+				skeletonPuppet,
+				pageByDrawable,
+				sourceBoundsByDrawable,
+				layerIdByDrawable,
+				faceCenterCanvas.first,
+				faceCenterCanvas.second,
+				faceRig.radiusX,
+				faceRig.radiusY,
+				warnings,
+				faceRig.initialAngleZ,
+				unbound,
+			)
+		}
+		if (stages == null) return finish()
+		// The assembled rig, the binding's and the skeleton's inputs and the rest of the result: equal to an earlier
+		// build's, that build's very instance comes back, so replay checkpoints keyed by it keep hitting.
+		val key = BoundKey(assembled, config.hairSimulationFront, config.hairSimulationBack, atlas.placementByLayerId,
+			atlas.pages.map { it.image.width to it.image.height }, inputAnalysis.layers.map(::bindingMeta),
+			classifiedByDrawable.entries.associate { it.key.raw to it.value.source.id.raw },
+			skeleton?.let { listOf(it, handEditedTopology(config), context.bodyFrame, context.stance.contentKey, SkeletonRig.clears) },
+			listOf(pageByDrawable, sourceBoundsByDrawable, layerIdByDrawable, warnings.toList(), faceCenterCanvas,
+				faceRig.radiusX, faceRig.radiusY, faceRig.initialAngleZ),
+			io.github.psd2live.i18n.I18n.currentLanguage.tag)
+		val bound = stages.get(RigStageCache.BOUND, 4, key) { finish() to skeletonKey }
+		// Reusing the rig reuses its skeleton bake: keep that bake the most recent, as asking the skeleton cache would.
+		bound.second?.let(SkeletonRig::touch)
+		return bound.first
 	}
+
+	/** Everything [UvBinding.bind] reads of a layer: its source inventory entry and the space its offsets bind in. */
+	private fun bindingMeta(layer: ClassifiedLayer): List<Any?> {
+		val source = layer.source
+		return listOf(source.id.raw, source.name, source.groupPath, source.bounds, source.visible, source.idIsStable,
+			LayerTexture.generatorSpace(layer), source.textureLayer.raster.width, source.textureLayer.raster.height)
+	}
+
+	/** The inputs of the binding and the skeleton, and the assembled rig they run on; see [buildWithContext]. */
+	private data class BoundKey(
+		val assembled: PuppetModel, val hairFront: Boolean, val hairBack: Boolean, val placements: Map<String, AtlasPlacement>,
+		val pages: List<Pair<Int, Int>>, val layers: List<List<Any?>>, val layerOfDrawable: Map<String, String>,
+		val skeleton: List<Any?>?, val result: List<Any?>, val language: String,
+	)
+
+	/** A key part compared by identity: a stage output that later stages reuse while it is the same instance. */
+	private class Identity(val value: Any, val extra: Any? = null) {
+		override fun equals(other: Any?) = other is Identity && value === other.value && extra == other.extra
+		override fun hashCode() = System.identityHashCode(value) * 31 + (extra?.hashCode() ?: 0)
+	}
+
+	/** [buildChannels] under a key of what it reads. */
+	private fun channelStage(layer: ClassifiedLayer, override: LayerClassificationOverride?, switchParamKeys: Map<String, FloatArray>,
+	                         tuning: RigTuning, stages: RigStageCache?): ChannelGrids {
+		if (stages == null) return buildChannels(layer, override, switchParamKeys, tuning)
+		val parameter = (override?.parameter ?: layer.semantic.parameter).trim()
+		val key = listOf(override?.type ?: layer.semantic.type, parameter, override?.switchId ?: layer.semantic.switchId,
+			switchParamKeys[parameter]?.toList(), layer.semantic.tag, layer.semantic.side, tuning.teethFade)
+		return stages.get(RigStageCache.CHANNELS, 256, key) { buildChannels(layer, override, switchParamKeys, tuning) }
+	}
+
+	/**
+	 * [mouthLips] under a key of what it reads: the owner drawable and the mesh stage output it outlines (by
+	 * instance), the frame, the lip layers' metadata, pixels and whether they are packed, and the settings.
+	 */
+	private fun lipsStage(
+		owner: Drawable, layer: ClassifiedLayer, parts: LayerMeshParts, parentFrame: Bounds, atlas: PackedAtlas,
+		generatedLips: Map<String, ClassifiedLayer>, config: PipelineConfig, meshConfig: PipelineConfig, stages: RigStageCache?,
+	): List<MouthLip> {
+		val build = { RigBuildProfile.stage("mesh: mouth lips (built)") {
+			mouthLips(owner, layer, parts.data, parentFrame, parts.mouthAperture, parts.headSpace, atlas, generatedLips, config)
+		} }
+		if (stages == null) return build()
+		val lips = (0..1).map { side -> generatedLips[MouthLipLayer.idFor(layer.source.id.raw, side)]?.let { lip ->
+			listOf(lip.meta(), RasterDigest.of(lip.source.raster.rgba), lip.source.raster.width, lip.source.raster.height,
+				lip.source.id.raw in atlas.placementByLayerId, config.drawOrderOverrides[lip.source.id.raw],
+				layerVisibility(config, lip.source.id.raw, lip.source.visible))
+		} }
+		val key = listOf(owner, layer.source.id.raw, Identity(parts), parentFrame, lips, meshConfig, io.github.psd2live.i18n.I18n.currentLanguage.tag)
+		// A kept lip carries the layer of the build that made it; hand out this build's layer of the same content.
+		return stages.get(RigStageCache.LIPS, 64, key, build).map { lip ->
+			val current = generatedLips[lip.layer.source.id.raw] ?: lip.layer
+			if (current === lip.layer) lip else MouthLip(lip.drawable, lip.ownerId, current, lip.path, lip.neutralBounds)
+		}
+	}
+
 
 	/**
 	 * A hair kind the model preset simulates drops its legacy sway: the physics warp unwraps into the follow
@@ -1175,6 +1354,50 @@ object RigBuilder {
 		val offset = (localSum - scale * canvasSum) / count
 		return if (scale.isFinite() && offset.isFinite()) scale to offset else null
 	}
+
+	/**
+	 * Stage `mesh:<layer>`: [buildDrawableMesh] through the pipeline's [RigStageCache], under a key of exactly what
+	 * it reads - the layer's metadata and pixels, its rig-space footprint, its parent and that parent's frame, the
+	 * head space, the eye whites it closes against, the face rig for an eye layer, the mesh scale, the layer's own
+	 * mesh override and the settings [meshConfig] keeps.
+	 */
+	private fun meshStage(
+		layer: ClassifiedLayer,
+		rigLayer: ClassifiedLayer,
+		context: RigContext,
+		parentId: DeformerId?,
+		parentFrame: Bounds,
+		headSpace: HeadCoordinateSpace?,
+		config: PipelineConfig,
+		meshConfig: PipelineConfig,
+		meshCache: PreviewMeshCache?,
+	): LayerMeshParts {
+		val build = {
+			RigBuildProfile.stage("mesh: layer mesh + keyforms (built)") {
+				buildDrawableMesh(layer, rigLayer, context, parentId, parentFrame, headSpace, config, meshCache)
+			}
+		}
+		val stages = stagesOf(meshCache) ?: return build()
+		val eyes = rigLayer.semantic.tag == SemanticTag.EYEWHITE || rigLayer.semantic.tag == SemanticTag.EYELASH
+		val key = MeshKey(layer.meta(), layer.source.raster.width, layer.source.raster.height, RasterDigest.of(layer.source.raster.rgba),
+			rigLayer.bounds, rigLayer.centroidX, rigLayer.centroidY, parentId, parentFrame, headSpace,
+			if (eyes) faceSignature(context.faceRig) else null, matchingEyeWhiteBounds(rigLayer, context.eyeWhiteLayers),
+			MeshResolution.unitScale(config, context.analysis.source), meshConfig, config.meshOverrides[layer.source.id.raw],
+			io.github.psd2live.i18n.I18n.currentLanguage.tag)
+		return stages.get(RigStageCache.MESH, 1024, key, build)
+	}
+
+	private data class MeshKey(
+		val layer: LayerMeta, val width: Int, val height: Int, val digest: String,
+		val rigBounds: Bounds, val rigCentroidX: Float, val rigCentroidY: Float,
+		val parent: DeformerId?, val parentFrame: Bounds, val headSpace: HeadCoordinateSpace?,
+		val face: List<Any?>?, val eyeWhites: List<Bounds>, val unitScale: Float,
+		val config: PipelineConfig, val override: MeshSettings?, val language: String,
+	)
+
+	/** Every value of [rig], which has no equality of its own. */
+	private fun faceSignature(rig: NinePoseFaceRig): List<Any?> = listOf(rig.face, rig.centerX, rig.centerY, rig.radiusX, rig.radiusY,
+		rig.eyeLineY, rig.noseLineY, rig.mouthLineY, rig.chinX, rig.chinY, rig.regions, rig.coordinateSpace, rig.tuning)
 
 	/**
 	 * Builds every piece of one layer's rig geometry: the stored mesh, its mouth outline and the

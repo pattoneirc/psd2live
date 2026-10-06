@@ -19,8 +19,9 @@ internal object RigGenerationSource {
     }
 
     fun prepare(input: PipelineAnalysis, config: PipelineConfig, textureConfig: PipelineConfig = config): Analyses {
-        val reference = config.generationSource ?: return MouthLipLayers.prepare(input, config).let { Analyses(it, it) }
-        val geometry = MouthLipLayers.prepare(CharacterAnalyzer.analyze(geometrySource(input.source, reference, config.rigEdits), config), config)
+        val reference = config.generationSource ?: return RigBuildProfile.stage("prepare: mouth lips") { MouthLipLayers.prepare(input, config) }.let { Analyses(it, it) }
+        val geometryAnalysis = RigBuildProfile.stage("prepare: geometry analyze") { CharacterAnalyzer.analyze(geometrySource(input.source, reference, config.rigEdits), config) }
+        val geometry = RigBuildProfile.stage("prepare: geometry mouth lips") { MouthLipLayers.prepare(geometryAnalysis, config) }
         val current = input.source.layers.associateBy { it.id.raw }
         val creationCoverage = config.rigEdits.authoringJournal.filter { it["op"]?.jsonPrimitive?.contentOrNull == RasterMeshCreation.OP }
             .associate { command ->
@@ -34,12 +35,13 @@ internal object RigGenerationSource {
         val superseded = ArtPrimitiveJournal.supersededLayers(config.rigEdits)
         val primitiveCoverage = ArtPrimitiveJournal.coverage(config.rigEdits)
         fun gone(id: String) = id !in current && superseded.any { id == it || id.startsWith("$it:") }
-        val generated = (if (RigGenerationBaseline.present(config.rigEdits))
+        val generated = RigBuildProfile.stage("prepare: texture lips") { (if (RigGenerationBaseline.present(config.rigEdits))
             RigGenerationTextures.layers(config.meshSource ?: input.source, textureConfig) else
-            MouthLipLayers.prepare(lipInputs, textureConfig).layers.filter { it.source is MouthLipLayer })
+            MouthLipLayers.prepare(lipInputs, textureConfig).layers.filter { it.source is MouthLipLayer }) }
             // Primitive layers are never generated, so they own no ribbons; a superseded mouth keeps its ribbons.
             .filterNot { layer -> (layer.source as? MouthLipLayer)?.ownerId?.let { it in owned } == true }
             .associateBy { it.source.id.raw }
+        val texturesStart = System.nanoTime()
         val textures = geometry.copy(source = input.source, preview = input.preview, layers = geometry.layers.map { layer ->
             // Keeping a generated ribbon's mesh also keeps its generated raster and contour.
             val lip = layer.source as? MouthLipLayer
@@ -81,6 +83,7 @@ internal object RigGenerationSource {
             val artwork = current[id]?.let { padded(it, coverage) } ?: if (id in superseded) ArtPrimitiveJournal.placeholder(id, id, coverage) else null
             artwork?.let { CharacterAnalyzer.classify(it, textureConfig).let { classified -> classified.copy(opaquePixels = classified.opaquePixels.coerceAtLeast(1)) } }
         })
+        if (RigBuildProfile.recording) RigBuildProfile.add("prepare: texture layers", System.nanoTime() - texturesStart)
         return Analyses(geometry, textures)
     }
 

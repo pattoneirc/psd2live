@@ -79,6 +79,12 @@ class CommitPerfTool {
 		CommitBaseline(Sample.fromEnvironment(), output("commit-perf")).run()
 	}
 
+	/** Only the setup and the generation commits (classification, layer mesh) with the rig builder's stages: rig-stages.json/md. */
+	@Test fun rigStages() {
+		requireTools()
+		CommitBaseline(Sample.fromEnvironment(), output("commit-perf"), rigOnly = true).run()
+	}
+
 	/** The editor's own path: view model, desktop adapter, projection and persistence, with EDT stalls. */
 	@Test fun desktop() {
 		requireTools()

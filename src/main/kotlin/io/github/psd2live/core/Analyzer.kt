@@ -26,6 +26,7 @@ object CharacterAnalyzer {
 		val depthLayerIds = config.rigEdits.authoringJournal.filter {
 			it["op"]?.jsonPrimitive?.contentOrNull == DepthSplit.OP
 		}.mapNotNullTo(HashSet()) { it["layer_id"]?.jsonPrimitive?.contentOrNull }
+		val classifyStart = System.nanoTime()
 		val initiallyClassified = source.layers
 			.filter { it.raster.width > 0 && it.raster.height > 0 && it.id.raw !in config.deletedLayerIds }
 			.map { layer ->
@@ -36,6 +37,7 @@ object CharacterAnalyzer {
 		val unitScale = MeshResolution.unitScale(config, source)
 		val layers = initiallyClassified.flatMap { expandLayer(it, config, unitScale) }
 			.filter { it.source.id.raw !in config.deletedLayerIds }
+		if (RigBuildProfile.recording) RigBuildProfile.add("analyze: classify layers", System.nanoTime() - classifyStart)
 		val warnings = source.warnings.toMutableList()
 		val nonEmpty = layers.filter { it.opaquePixels > 0 }
 		require(nonEmpty.isNotEmpty()) { tr("error.psdNoVisibleLayers") }
@@ -62,7 +64,8 @@ object CharacterAnalyzer {
             require(baseline.layers.size == calibrationIds.size) { "Registration calibration source layers are missing" }
             analyze(baseline, config.copy(deletedLayerIds = emptySet(), rigEdits = config.rigEdits.copy(calibrationLayerIds = emptySet())))
         }
-        return PipelineAnalysis(source, layers, calibration?.anchors ?: anchors, warnings, PreviewRenderer.composite(source), calibration)
+        return PipelineAnalysis(source, layers, calibration?.anchors ?: anchors, warnings,
+            RigBuildProfile.stage("analyze: composite preview") { PreviewRenderer.composite(source) }, calibration)
 	}
 
 	/** Refit rig anchors after the actual renderable mesh footprints replace pixel alpha boxes. */

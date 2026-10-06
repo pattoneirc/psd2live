@@ -8,7 +8,9 @@ import org.umamo.runtime.model.PuppetModel
 /**
  * The generators of a document as a dependency graph: what each reads and owns, by stable id.
  *
- * The rig builder makes the base rig from the source art and settings; the skeleton stage bakes the authored
+ * The rig builder makes the base rig from the source art and settings in stages - each layer's mesh footprint,
+ * the scaffold (anchors, face rig, frames and deformers), each layer's mesh and keyforms, then assembly and the
+ * atlas binding - whose outputs [RigStageCache] keeps under keys of only what each reads; the skeleton stage bakes the authored
  * skeleton into it; the journal replays the user's edits; each swing and each baked simulation then adds the
  * keyforms of its own parameters; generated overrides merge the user's edits of those keyforms; physics and
  * the generated motions read the finished rig. Replay runs the swings and simulations in the graph's order,
@@ -20,6 +22,13 @@ import org.umamo.runtime.model.PuppetModel
  */
 internal object DocumentGenerators {
 	const val RIG = "rig"
+	const val RIG_FOOTPRINTS = "rig.footprints"
+	const val RIG_SCAFFOLD = "rig.scaffold"
+	const val RIG_MESHES = "rig.meshes"
+	private const val MESH = "mesh:"
+
+	/** The mesh stage of layer [layerId]. */
+	fun meshId(layerId: String) = MESH + layerId
 	const val SKELETON = "skeleton"
 	const val JOURNAL = "journal"
 	const val OVERRIDES = "overrides"
@@ -36,12 +45,29 @@ internal object DocumentGenerators {
 	 * The graph of [overlay]'s generators. A generated object only one generator may own; should a document
 	 * give two the same parameter, the earlier keeps it and the later one's claim is dropped, so replay still
 	 * runs (the generators report the clash themselves).
+	 *
+	 * The rig generator's stages come first: footprints (every layer's pixels and mesh settings), the scaffold
+	 * (layer roles and footprints, settings, the skeleton), the meshes - one node per layer of [layers] (its
+	 * pixels, role and mesh override, and the scaffold), or one `rig.meshes` node for all when none are named -
+	 * and `rig`, the assembly and atlas binding that owns the base rig.
 	 */
-	fun graph(overlay: RigEditOverlay): GeneratorGraph {
+	fun graph(overlay: RigEditOverlay, layers: List<String> = emptyList()): GeneratorGraph {
 		val owned = HashSet<String>()
 		fun claim(ids: Collection<String>) = ids.filterTo(LinkedHashSet()) { owned.add(it) }
 		val nodes = ArrayList<GeneratorNode>()
-		nodes += GeneratorNode(RIG, setOf("document:source", "document:settings", "document:layers"), claim(listOf("rig:base")))
+		nodes += GeneratorNode(RIG_FOOTPRINTS, setOf("document:source", "document:settings", "document:meshes"), claim(listOf("rig:footprints")))
+		nodes += GeneratorNode(RIG_SCAFFOLD, setOf("rig:footprints", "document:layers", "document:settings", "document:skeleton"),
+			claim(listOf("rig:scaffold")))
+		val meshes = if (layers.isEmpty()) {
+			nodes += GeneratorNode(RIG_MESHES, setOf("rig:scaffold", "document:source", "document:layers", "document:meshes", "document:settings"),
+				claim(listOf("rig:meshes")))
+			listOf("rig:meshes")
+		} else layers.map { layer ->
+			nodes += GeneratorNode(meshId(layer), setOf("rig:scaffold", "document:source:$layer", "document:layers:$layer",
+				"document:meshes:$layer", "document:settings"), claim(listOf("rig:mesh:$layer")))
+			"rig:mesh:$layer"
+		}
+		nodes += GeneratorNode(RIG, (meshes + listOf("rig:scaffold", "document:source", "document:settings", "document:layers")).toSet(), claim(listOf("rig:base")))
 		nodes += GeneratorNode(SKELETON, setOf("rig:base", "document:skeleton"), claim(listOf("rig:skeleton")))
 		nodes += GeneratorNode(JOURNAL, setOf("rig:skeleton", "document:journal"), claim(listOf("rig:authored")))
 		val keyforms = LinkedHashSet<String>()

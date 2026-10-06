@@ -214,6 +214,16 @@ internal object SkeletonRig {
 	}
 	private var hits = 0
 	private var misses = 0
+	private val lastKey = ThreadLocal<String?>()
+
+	/** The cache key of the last [generate] on this thread that baked or looked up a bake, then forgets it. */
+	internal fun takeLastKey(): String? = lastKey.get().also { lastKey.remove() }
+
+	/**
+	 * Marks the bake under [key] most recently used, as a hit would: a caller that reuses a rig with that bake
+	 * without asking again (the rig builder's stage cache) keeps it the one [storedBake] hands a saved project.
+	 */
+	internal fun touch(key: String) { synchronized(bakes) { bakes[key] } }
 
 	/** [apply] through the bake cache. The key covers every input the bake reads, including the names' language. */
 	fun generate(
@@ -226,6 +236,7 @@ internal object SkeletonRig {
 		if (!spec.enabled || base.deformers.none { it.id == bodyId } || limbBones(spec).isEmpty()) return base
 		val inputs = bakeInputs(base, spec)
 		val key = cacheKey(base, spec, frame, lockedTopology, stance, inputs)
+		lastKey.set(key)
 		synchronized(bakes) {
 			val cached = bakes[key]
 			if (cached != null && (cached.exact == null || cached.exact == fullHash(base))) {
@@ -336,7 +347,11 @@ internal object SkeletonRig {
 	/** Hits and misses of the skeleton cache, for tests and measurements. */
 	internal val cacheHits: Int get() = synchronized(bakes) { hits }
 	internal val cacheMisses: Int get() = synchronized(bakes) { misses }
-	internal fun clearCache() = synchronized(bakes) { bakes.clear() }
+	internal fun clearCache() = synchronized(bakes) { bakes.clear(); clears++ }
+
+	/** How often the cache was cleared: a cache of rigs holding bakes keys by it, so clearing reaches them too. */
+	@Volatile internal var clears = 0
+		private set
 
 	/** The most recently used bake of [spec], to store with a project whose head has that skeleton; null when none. */
 	fun storedBake(spec: SkeletonSpec): StoredBake? {
