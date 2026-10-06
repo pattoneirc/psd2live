@@ -19,6 +19,7 @@ internal object ExportService {
 	fun registry(config: PipelineConfig): ExportRegistry = ExportRegistry(listOf(
 		Moc3Target,
 		Cmo3Target { BezierWarp.configureEditor(it, config.rigEdits) },
+		io.github.psd2live.targets.cubism.VTubeStudioTarget,
 		io.github.psd2live.targets.psd.PosedPsdTarget(IrFrameRenderer),
 		io.github.psd2live.targets.spine.SpineTarget(IrGeometryEvaluator),
 		io.github.psd2live.targets.runtime.P2lrtTarget,
@@ -28,7 +29,7 @@ internal object ExportService {
 	/** Built-in options for [target] from the document's export settings; explicit [settings] win. */
 	fun options(target: ExportTarget, baseName: String, config: PipelineConfig, settings: Map<String, String> = emptyMap()): ExportOptions {
 		val defaults = when (target.id) {
-			Moc3Target.id -> PSD2LivePipeline().moc3ExportOptions(baseName, config).settings
+			Moc3Target.id, io.github.psd2live.targets.cubism.VTubeStudioTarget.id -> PSD2LivePipeline().moc3ExportOptions(baseName, config).settings
 			else -> emptyMap()
 		}
 		return ExportOptions(baseName, settings = defaults + settings)
