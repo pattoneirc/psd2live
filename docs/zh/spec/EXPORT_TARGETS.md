@@ -12,6 +12,7 @@
 | `:targets:spine` | `spine`：Spine 4.2 骨骼 JSON + 图集，由宿主提供的几何求值器烘焙变形 | MIT |
 | `:targets:runtime` | `p2lrt`：PSD2Live 运行时模型，见[运行时](RUNTIME.md) | MIT |
 | `:format-eval` | Rust 运行时的 JVM 绑定（JNA），可作为几何求值器 | MIT |
+| `:targets:gltf` | `gltf`：glTF 2.0 二进制（`.glb`），变形按参数关键点烘焙为变形目标，由宿主提供的几何求值器采样 | MIT |
 | `:targets:web` | `web`：网页播放器（运行时的 WebAssembly 构建、WebGL 播放脚本、页面与模型） | MIT |
 | `:targets:cubism` | `PuppetModel` 与 IR 的双向转换器（`PuppetIr`）、`moc3`、`cmo3`、`vtube-studio`、motion3 / physics3 写出 | GPL-3 |
 | `:targets:psd` | `psd-pose`：指定姿势的分层 PSD | GPL-3 |
@@ -37,6 +38,7 @@ MIT 模块不依赖任何 GPL 模块，由 Gradle 依赖关系在编译期保证
 | `spine` | 结构化绑定 | 骨骼 JSON、`.atlas`、贴图页 | 每个参数成为一段 1 秒动画（时间即参数归一化值），交叉项近似并报告误差；动作片段按帧采样后精简关键帧；无 Warp、混合形、Glue（已烘焙）；物理、遮罩、屏幕色未写入 |
 | `p2lrt` | 结构化绑定 | `.p2lrt`（PSD2Live 运行时） | 编辑器附带数据（来源图层、图块、编辑路径）不写入；渲染（遮罩、混合模式）由宿主完成 |
 | `web` | 结构化绑定 | `index.html`、`p2l.js`、`p2l_runtime.wasm`、`.p2lrt` | 叠加、乘算以外的混合模式按普通绘制；需通过 http 访问 |
+| `gltf` | 结构化绑定 | `.glb`（无光照材质、变形目标、权重动画） | 每个参数关键点一个变形目标，参数组合为叠加近似并报告误差；绘制顺序按静止值以深度分层；遮罩、混合模式、按参数变化的透明度与物理不写入 |
 | `psd-pose` | 合成/时间轴 | 每个可见网格一层，按静止绘制顺序 | 变形器和参数不保留；按参数变化的绘制顺序取静止值 |
 | `png-sequence` | 光栅 | 编号 PNG 帧 | 结构全部烘焙为像素 |
 | `sprite-sheet` | 光栅 | 网格排列的精灵表 PNG + TexturePacker（hash）JSON | 同上 |
@@ -68,6 +70,10 @@ Spine 有骨骼没有参数。导出用一根根骨骼承载全部网格（无�
 - 每个动作片段一段动画 `clip/<名称>`，按 `clip_fps` 采样，再用 `KeyReduction` 去掉线性插值可重建（容差 `key_tolerance` 像素）的关键帧，偏移保留到千分之一像素。示例工程 13 段动作的 JSON 由 49 MB 降到 13 MB。
 - 图集为每页一个覆盖整页的区域 `page<i>`，网格 UV 直接引用该页。
 - 验证：单元测试按 Spine 运行时的规则（无权重 deform 键为相对设置姿势的增量、按 offset 写入、线性插值；绘制顺序按偏移算法重排）重建姿势并与求值器比较。未使用官方 Spine 运行时（其许可证要求持有 Spine 许可），也未在 Spine Editor 中打开验证。
+
+## glTF
+
+每个可见网格成为一个无光照（`KHR_materials_unlit`）、双面、半透明混合的平面网格，处于静止姿势，按绘制顺序每层朝观察者前移 0.5 毫米；单位为米（`pixels_per_meter`，默认 1000），y 向上，原点在画布底边中点。每个参数的每个非默认关键点对它移动的网格成为一个变形目标（`extras.targetNames` 为 `参数=关键点`），参数值到权重的映射是关键点之间的线性帽函数，参数及其关键点列在 `extras.psd2live.parameters`。动作片段按 `clip_fps` 采样为权重动画并用 `KeyReduction` 精简。验证：单元测试由权重重建采样姿势；tml 导出经 Khronos glTF Validator 校验零错误零警告，并在 Godot 4.4 中按静止姿势和摇头动作渲染正确。
 
 ## 损失报告
 

@@ -24,6 +24,7 @@ internal object ExportService {
 		io.github.psd2live.targets.spine.SpineTarget(IrGeometryEvaluator),
 		io.github.psd2live.targets.runtime.P2lrtTarget,
 		io.github.psd2live.targets.web.WebTarget,
+		io.github.psd2live.targets.gltf.GltfTarget(IrGeometryEvaluator),
 	) + RasterTargets(IrFrameRenderer).all)
 
 	/** Built-in options for [target] from the document's export settings; explicit [settings] win. */
