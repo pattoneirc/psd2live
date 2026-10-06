@@ -1,31 +1,51 @@
-# 工程格式 v1
+# 工程格式 v2
 
 [文档目录](../../README.md) · [English](../../en/spec/PROJECT_FORMAT.md) · [运行时与导出边界](RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)
 
 `.psd2live` 是未加密 ZIP，JSON 使用 UTF-8，栅格资源为 PNG。保存后的工程包含继续编辑所需的源素材与历史，不依赖原 PSD 路径。导出报告 `.psd2live.json` 不是此格式。
 
-## 归档布局
+## 归档布局（v2）
+
+保存写出 v2。每个历史修订拆为按内容寻址的文档节点，未改变的部分在修订之间共享；节点各自带 schema 版本。
 
 | 路径 | 内容 |
 | --- | --- |
-| `manifest.json` | 格式名、版本、工程 UUID、载荷 SHA-256 清单 |
+| `manifest.json` | 格式名、版本 `2`、工程 UUID、载荷 SHA-256 清单 |
 | `source/original.psd` 或 `source/original.cmo3` | 原始导入源文件；图片创建工程生成 PSD 源文件 |
+| `history/HEAD.json` | 当前节点与节点顺序 |
+| `history/nodes/` | 不可变父链节点和元数据（与 v1 相同） |
+| `history/revisions/<key>.json` | 每个修订的索引：`{schema, nodes:{类型:哈希}, overrides?, clips?}` |
+| `document/nodes/<类型>/<sha256>.json` | 文档节点 `{schema, kind, value}`；类型为 `source`（源图层与组）、`generation-source` / `mesh-source` / `placement-source`、`layers`（可见性、软删除、分类、父级与网格覆盖）、`settings`、`rig`（参数、骨架、摆动、模拟、物理等 Rig 定义）、`journal`（作者编辑日志，不含覆盖）、`document`（其余字段） |
+| `document/overrides/<sha256>.json` | 生成结果覆盖 `generated_override`，连同其在编辑日志中的位置 |
+| `document/clips/<sha256>.json` | 动作片段与生成动作设置 |
+| `assets/` | 去重 RGBA 栅格，以 PNG 保存 |
+| `auxiliary/assets/` | 暂存素材元数据 |
+| `auxiliary/views/`、`auxiliary/view-images/` | 观察图的空间映射与图像 |
+| `auxiliary/workflow/` | 素材参考包、注册 / 放置等辅助记录 |
+| `auxiliary/tasks.json` | Agent 任务和事件记录 |
 | `workspace.json` | 布局、镜头、选择、参数预览、历史注释和日志等持久 UI 状态 |
 | `images/<hash>.png` | 日志图片 |
-| `workspace/<projectId>/HEAD.json` | 当前节点与节点顺序 |
-| `workspace/<projectId>/history/nodes/` | 不可变父链节点和元数据 |
-| `workspace/<projectId>/history/snapshots/` | 源图层、配置、结构与编辑覆盖 |
-| `workspace/<projectId>/blobs/` | 去重 RGBA 栅格，以 PNG 保存 |
-| `workspace/<projectId>/assets/` | 暂存素材元数据 |
-| `workspace/<projectId>/views/`、`view-images/` | 观察图的空间映射与图像 |
-| `workspace/<projectId>/workflow/` | 素材参考包、注册 / 放置等辅助记录 |
-| `workspace/<projectId>/tasks.json` | Agent 任务和事件记录 |
 
-内部文件名可使用逻辑 ID 的哈希，不能由显示名推断。PNG 保留透明像素下的 RGB；不同快照共享栅格资源。辅助目录按是否使用相关功能出现。
+文档节点和覆盖、片段文件的文件名是其字节的 SHA-256，打开时逐个核对。拆分是无损的：打开时按索引拼回每个修订的完整文档，revision ID、节点 ID 与分支不变。Rig 模型（`PuppetModel`）从不保存，打开后仍由源图、设置和编辑重建。辅助目录按是否使用相关功能出现；`cache/` 预留给可删除的编译缓存，目前不写出。
+
+## v1 兼容与迁移
+
+v1 归档仍可打开。v1 把每个修订保存为一个完整快照：
+
+| 路径 | 内容 |
+| --- | --- |
+| `workspace/<projectId>/HEAD.json`、`history/nodes/` | 当前节点、节点顺序与节点元数据 |
+| `workspace/<projectId>/history/snapshots/` | 每个修订的完整文档：源图层、配置、结构与编辑覆盖 |
+| `workspace/<projectId>/blobs/` | 去重 RGBA 栅格（PNG） |
+| `workspace/<projectId>/assets/`、`views/`、`view-images/`、`workflow/`、`tasks.json` | 辅助数据 |
+
+其余条目（`manifest.json`、`source/`、`workspace.json`、`images/`）与 v2 相同。打开 v1 时直接读入这些快照，内存中的文档与 v2 一致；下一次保存写出 v2，并在替换目标文件前把原 v1 文件另存为同目录的 `<名称>.v1.psd2live`（已有同名备份时不覆盖）。迁移只改变存储布局，所有修订、分支、注释、素材、观察图与任务记录原样保留。工作目录内部仍使用快照布局，归档的打包与解包在保存、打开时完成。
+
+内部文件名可使用逻辑 ID 的哈希，不能由显示名推断。PNG 保留透明像素下的 RGB；不同修订共享栅格资源。
 
 ## 保存和恢复
 
-骨骼数据位于配置的 `rigEdits.skeleton`，当前骨骼子结构版本为 9（工程归档版本仍为 1）。骨骼保存显式 `connected`（缺省兼容旧坐标推断）、副本 `parameterOverride`、`mirror` 配对和 `ik` 求解设置；骨架保存 `symmetryAxisX`、命名 `savedPoses`、以骨骼 ID 为键的 `ikTargets`，以及以画元 ID 为键的 `manualWeights`。手工权重包含静止画布 `positions`、`triangles` 和每顶点骨骼 ID → 权重的 `weights`，使加密顶点通过三角形插值读取。旧工程缺省读取为空手工权重、无固定目标和默认 IK 设置，仍可继续编辑。
+骨骼数据位于配置的 `rigEdits.skeleton`，当前骨骼子结构版本为 9（不改变工程格式版本）。骨骼保存显式 `connected`（缺省兼容旧坐标推断）、副本 `parameterOverride`、`mirror` 配对和 `ik` 求解设置；骨架保存 `symmetryAxisX`、命名 `savedPoses`、以骨骼 ID 为键的 `ikTargets`，以及以画元 ID 为键的 `manualWeights`。手工权重包含静止画布 `positions`、`triangles` 和每顶点骨骼 ID → 权重的 `weights`，使加密顶点通过三角形插值读取。旧工程缺省读取为空手工权重、无固定目标和默认 IK 设置，仍可继续编辑。
 
 保存捕获不可变状态，按顺序写入同目录临时文件、校验清单，再原子替换目标。不支持原子替换时报告失败并保留旧工程。捕获后发生的新编辑仍属于未保存内容。
 
@@ -33,17 +53,17 @@
 
 所有分支保留。撤销沿父节点，重做有多个后继时选择分支；从旧节点编辑会创建新分支。改标题、备注或隐藏分支不改写原始节点，不删除素材。
 
-新参数定义的创建、更新、删除写入 `rigEdits.authoringJournal`，按照实际编辑顺序重放；因此参数删除在此前关键形和最后一次默认值更新之后执行。旧 v1 的静态参数覆盖字段保持原读取顺序，已有快照、revision 和节点 ID 不被重写。通道关键形与几何编辑同样持久化。
+新参数定义的创建、更新、删除写入 `rigEdits.authoringJournal`，按照实际编辑顺序重放；因此参数删除在此前关键形和最后一次默认值更新之后执行。旧版静态参数覆盖字段保持原读取顺序，已有快照、revision 和节点 ID 不被重写。通道关键形与几何编辑同样持久化。
 
-内部网格替换记录 `canvas_mesh_rebuild` 同样位于有序 journal，保存父级局部顶点、三角形、源画布纹理坐标、旧顶点插值来源和 Glue 顶点映射；可选 `neutral_bounds` 保存替换网格的中立画布边界。导入 CMO3 的画布基形首次替换可保存 `previous_parent_points`：重放先将普通及混合关键形重基到这些父级中性顶点，再迁移到新拓扑，已有路径沿原三角形转换。重放核对旧网格几何 SHA-256、父级和源图身份，从当前贴图位置重建 UV，并迁移关键形、混合形、路径、顶点组和 Glue。独立网格设置变更保留此前日志并追加有序替换，不改写旧创建记录或历史；工程版本仍为 1。此为内部重放格式，完整分类及生成模式迁移的接入进度见 [验收记录](../agent/REFACTOR_PROGRESS.md)。
+内部网格替换记录 `canvas_mesh_rebuild` 同样位于有序 journal，保存父级局部顶点、三角形、源画布纹理坐标、旧顶点插值来源和 Glue 顶点映射；可选 `neutral_bounds` 保存替换网格的中立画布边界。导入 CMO3 的画布基形首次替换可保存 `previous_parent_points`：重放先将普通及混合关键形重基到这些父级中性顶点，再迁移到新拓扑，已有路径沿原三角形转换。重放核对旧网格几何 SHA-256、父级和源图身份，从当前贴图位置重建 UV，并迁移关键形、混合形、路径、顶点组和 Glue。独立网格设置变更保留此前日志并追加有序替换，不改写旧创建记录或历史，也不改变工程格式版本。此为内部重放格式，完整分类及生成模式迁移的接入进度见 [验收记录](../agent/REFACTOR_PROGRESS.md)。
 
-内部创建记录 `canvas_mesh_create` 保存原生成输入中不存在的网格：固定 ID、源图与图层身份、透明覆盖边界、父级及部件、静态材质、局部顶点/三角形、画布纹理坐标、生成参数/关键形/通道和路径。重放重新解析当前图集，要求网格 ID 未存在、父级与源图可解析，验证几何、关键形及栅格尺寸。普通透明图层及嘴部首次绘制可见像素时自动创建网格；之后清空保持创建几何与绑定。网格设置变更更新当前候选中的创建几何并持久化重绑路径和权重，之前的历史快照保持原样。此为内部格式，工程版本仍为 1；完整分类切换及导入无网格对象仍待迁移。
+内部创建记录 `canvas_mesh_create` 保存原生成输入中不存在的网格：固定 ID、源图与图层身份、透明覆盖边界、父级及部件、静态材质、局部顶点/三角形、画布纹理坐标、生成参数/关键形/通道和路径。重放重新解析当前图集，要求网格 ID 未存在、父级与源图可解析，验证几何、关键形及栅格尺寸。普通透明图层及嘴部首次绘制可见像素时自动创建网格；之后清空保持创建几何与绑定。网格设置变更更新当前候选中的创建几何并持久化重绑路径和权重，之前的历史快照保持原样。此为内部格式，不改变工程格式版本；完整分类切换及导入无网格对象仍待迁移。
 
-内部分区记录 `canvas_source_partition` 保存原网格 ID、局部几何指纹、父级、每个原顶点所属分区，以及新网格/源图 ID、名称、可见性、局部顶点、三角形、源画布纹理坐标和顶点插值来源。重放在原日志位置复制绑定并重映射当前图集；原层软删除在全部编辑重放之后过滤。连通块按原顺序迁移 Glue；模拟目标、已有烘焙偏移和 Glue 角色写入同一文档候选。原始生成输入新增透明占位以保留贴图覆盖，已有历史不改写，归档版本仍为 1。多边形实时 Glue 和导入模型拆分仍待完成。
+内部分区记录 `canvas_source_partition` 保存原网格 ID、局部几何指纹、父级、每个原顶点所属分区，以及新网格/源图 ID、名称、可见性、局部顶点、三角形、源画布纹理坐标和顶点插值来源。重放在原日志位置复制绑定并重映射当前图集；原层软删除在全部编辑重放之后过滤。连通块按原顺序迁移 Glue；模拟目标、已有烘焙偏移和 Glue 角色写入同一文档候选。原始生成输入新增透明占位以保留贴图覆盖，已有历史不改写，也不改变归档格式版本。多边形实时 Glue 和导入模型拆分仍待完成。
 
 内部 `mesh_generation_baseline` 标记保存此前全局网格、逐层覆盖及 alpha 阈值，只影响基础生成。文档当前设置仍表示实际请求；后续网格更新、重置及全局调整从保存的网格输入或当前像素生成替换，在实际父级中性坐标追加 `canvas_mesh_rebuild`。普通、分区、新建及导入 CMO3 网格使用同一替换流程，普通/混合关键形、路径、顶点组、Glue 及模拟烘焙偏移迁移到新拓扑；烘焙保留旧指纹和质量指标，更新顶点数，继续报告输入陈旧。已删除网格也先重生再过滤，恢复使用新拓扑。旧文档只在实际网格修改的新候选中增加标记，旧 revision、历史节点及归档版本不变。导入模型只规范化已替换网格的贴图地址；完全透明的源图保留已有拓扑。每次替换插值前一拓扑的编辑偏移，拓扑变粗后重置设置不能恢复已经丢失的高频细节。完整源图、分类及生成模式迁移仍需完成。
 
-软删除仍使用文档已有的 `deletedLayerIds`，不抹除源像素或有序编辑，也不修改旧历史节点。含创建记录、源图分区、深度拆分或内部 `layer_membership` 标记的工程，在重建/导出时先恢复完整生成输入和编辑，再过滤已删除图层及派生嘴唇，清理活动模型中的遮罩引用、Glue、路径和顶点组；恢复重新重放保存的 ID 和绑定。普通工程首次实际删除或恢复，在新候选中保存当前生成范围及全部源图/Drawable 身份，并追加只有 `op` 字段的 `layer_membership` 标记；恢复后保留该身份基线。导入 CMO3 沿用原模型的 ID 和坐标系，只追加标记。没有上述记录的旧文档仍按原生成规则读取，不自动升级或改写已有 revision、节点。删除期间网格设置变更也重生隐藏网格并保存重绑路径/权重，贴图下限使用完整输入。GUI 与 MCP 的删除、指定/全部恢复共用候选提交，重复操作不追加历史。沿用已有 journal 和基线字段，归档版本仍为 1。
+软删除仍使用文档已有的 `deletedLayerIds`，不抹除源像素或有序编辑，也不修改旧历史节点。含创建记录、源图分区、深度拆分或内部 `layer_membership` 标记的工程，在重建/导出时先恢复完整生成输入和编辑，再过滤已删除图层及派生嘴唇，清理活动模型中的遮罩引用、Glue、路径和顶点组；恢复重新重放保存的 ID 和绑定。普通工程首次实际删除或恢复，在新候选中保存当前生成范围及全部源图/Drawable 身份，并追加只有 `op` 字段的 `layer_membership` 标记；恢复后保留该身份基线。导入 CMO3 沿用原模型的 ID 和坐标系，只追加标记。没有上述记录的旧文档仍按原生成规则读取，不自动升级或改写已有 revision、节点。删除期间网格设置变更也重生隐藏网格并保存重绑路径/权重，贴图下限使用完整输入。GUI 与 MCP 的删除、指定/全部恢复共用候选提交，重复操作不追加历史。沿用已有 journal 和基线字段，不改变归档格式版本。
 
 历史文档可选的 `generationSource` 与当前源图使用相同的画布、图层和栅格 blob 格式，保存生成基础 Rig 所需的原始栅格形状。当前 `source` 提供绘画后的实际像素；生成坐标系和基础拓扑使用保存的输入，再按源画布坐标将 UV 重映射到当前贴图。收紧裁剪时补足透明覆盖，避免旧网格采到相邻图片。可选 `meshSource` 使用相同编码，更新显式重建或首次创建的目标图层输入，保存生成嘴唇的轮廓和颜色；保留网格绘画保持该输入。即使顶点未改变，派生贴图输入的更新也属于持久变化。可选 `placementSource` 同样保存源图格式，保留图片文件导入时裁剪/缩放后的原像素，重复放置从该像素重新缩放，不累积失真。四种源图及历史节点共用去重 PNG blob。新增字段缺省时不改变旧 revision 或历史节点。
 
@@ -51,13 +71,13 @@ GUI 捕获的画布像素与 MCP 栅格手势进入同一文档候选；完全�
 
 重开工程由源图、设置和编辑日志重建模型。原生句柄、网络连接、正在执行的任务和动画时钟不保存；保存的 Agent 任务是记录，不会自动恢复执行。
 
-已提交姿态及参数锁在运行时辅助状态中按工作区保存；归档仍投影为 v1 `workspace.json` 的原工作区/画布字段，不引入新版本。保存逐工作区使用捕获的持久值和锁，排除 GUI 临时显示值及求值缓存。旧姿态在查询、预览修改和快照应用时按当前参数定义规范化，读取和逻辑无变化不改写旧记录或历史节点。复制工作区会登记复制的持久姿态。
+已提交姿态及参数锁在运行时辅助状态中按工作区保存；归档仍投影为 `workspace.json` 的原工作区/画布字段。保存逐工作区使用捕获的持久值和锁，排除 GUI 临时显示值及求值缓存。旧姿态在查询、预览修改和快照应用时按当前参数定义规范化，读取和逻辑无变化不改写旧记录或历史节点。复制工作区会登记复制的持久姿态。
 
-`workspace.json` 可选的 `assetCatalog` 保存 `{version:1, assets:[ID...], workflow:[ID...]}`，记录已提交素材及参考/配准的成员集合；资源仍使用现有辅助目录，不进入 Rig journal。素材写入推进运行时持久 state，不改变 Rig revision 或历史节点。保存按捕获清单复制资源，排除后来提交的素材。旧 v1 文件缺少清单时，在打开阶段从已有不可变记录固定成员，不改写历史；新工程从空清单开始。打开同时检查清单成员存在、工程身份和参考关系。素材检查/试拼只使用捕获的成员，失败或提交前取消不会发布候选文件。
+`workspace.json` 可选的 `assetCatalog` 保存 `{version:1, assets:[ID...], workflow:[ID...]}`，记录已提交素材及参考/配准的成员集合；资源仍使用现有辅助目录，不进入 Rig journal。素材写入推进运行时持久 state，不改变 Rig revision 或历史节点。保存按捕获清单复制资源，排除后来提交的素材。旧文件缺少清单时，在打开阶段从已有不可变记录固定成员，不改写历史；新工程从空清单开始。打开同时检查清单成员存在、工程身份和参考关系。素材检查/试拼只使用捕获的成员，失败或提交前取消不会发布候选文件。
 
 ## 校验边界
 
-打开时校验版本、清单、哈希、栅格、历史引用与 HEAD。拒绝重复条目、路径越界和不支持版本；解包限制为最多 1,000,000 条目、实际解压数据 64 GiB。不要依赖 ZIP 声明尺寸绕过限制。
+打开时校验版本（1 或 2）、清单、哈希、文档节点哈希与 schema、栅格、历史引用与 HEAD。不认识的文档节点类型或更高 schema 拒绝打开，不会丢弃内容。拒绝重复条目、路径越界和不支持版本；解包限制为最多 1,000,000 条目、实际解压数据 64 GiB。不要依赖 ZIP 声明尺寸绕过限制。
 
 可解压查看，但手工修改需同步全部引用与清单哈希。常规操作使用界面和历史工具。旧 `.rgba.gz` 恢复存储属于兼容读取，不是新工程的主写入格式。
 
@@ -67,6 +87,6 @@ GUI 捕获的画布像素与 MCP 栅格手势进入同一文档候选；完全�
 - 保存 / 另存为：`Ctrl+S` / `Ctrl+Shift+S`。
 - MCP：`project_save`、`project_save_as`、`project_open`，以及 `history_checkpoint`、`history_list`、`history_checkout`。另存为和打开使用绝对路径，不需要先在 UI 选择目的地。修改请求使用当前 `project_id`、不透明 `state` 和唯一 `request_id`；同一节点重开也会使旧状态失效。公开摘要不等于所有内部工程字段均可查询，见 [MCP 契约](../agent/MCP_AUTHORING.md)。
 
-实现：[ProjectArchive](../../../src/main/kotlin/io/github/psd2live/project/ProjectArchive.kt) · [ProjectRepository](../../../src/main/kotlin/io/github/psd2live/project/ProjectRepository.kt) · [WorkspaceStore](../../../src/main/kotlin/io/github/psd2live/project/WorkspaceStore.kt)。
+实现：[ProjectArchive](../../../src/main/kotlin/io/github/psd2live/project/ProjectArchive.kt) · [ProjectFormatV2](../../../src/main/kotlin/io/github/psd2live/project/ProjectFormatV2.kt) · [ProjectRepository](../../../src/main/kotlin/io/github/psd2live/project/ProjectRepository.kt) · [WorkspaceStore](../../../src/main/kotlin/io/github/psd2live/project/WorkspaceStore.kt)。
 
-独立 Warp 新建保存在有序 `authoringJournal` 的 `warp` 命令中，记录固定 ID、父级、网格列表及拟合选项；新命令不追加旧静态 Warp/structure 字段。旧 v1 Warp 记录仍按原重放顺序读取，已存历史节点不改写。
+独立 Warp 新建保存在有序 `authoringJournal` 的 `warp` 命令中，记录固定 ID、父级、网格列表及拟合选项；新命令不追加旧静态 Warp/structure 字段。旧版 Warp 记录仍按原重放顺序读取，已存历史节点不改写。

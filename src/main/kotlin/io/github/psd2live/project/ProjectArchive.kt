@@ -25,10 +25,13 @@ internal object ProjectArchive {
         }
         return hash.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
     }
-    fun write(directory: Path, target: Path, projectId: String, beforeReplace: () -> Unit = {}) {
+    /** Versions [extract] opens: v1 archives migrate on open, saves write [ProjectFormatV2.VERSION]. */
+    val readableVersions = setOf(1, ProjectFormatV2.VERSION)
+
+    fun write(directory: Path, target: Path, projectId: String, version: Int = ProjectFormatV2.VERSION, beforeReplace: () -> Unit = {}) {
         val files = Files.walk(directory).use { paths -> paths.filter(Files::isRegularFile).sorted().toList() }
         writeJson(directory.resolve("manifest.json"), buildJsonObject {
-            put("format", "PSD2Live"); put("version", 1); put("projectId", projectId)
+            put("format", "PSD2Live"); put("version", version); put("projectId", projectId)
             putJsonObject("files") { files.forEach { file ->
                 val name = directory.relativize(file).toString().replace('\\', '/')
                 if (name != "manifest.json") put(name, digest(file))
@@ -79,7 +82,9 @@ internal object ProjectArchive {
                     }
                 }
                 val manifest = readJson(root.resolve("manifest.json"))
-                require(manifest["format"]?.jsonPrimitive?.content == "PSD2Live" && manifest["version"]?.jsonPrimitive?.int == 1) { "Unsupported project format/version" }
+                require(manifest["format"]?.jsonPrimitive?.content == "PSD2Live" && manifest["version"]?.jsonPrimitive?.intOrNull in readableVersions) {
+                    "Unsupported project format/version"
+                }
                 val inventory = manifest.getValue("files").jsonObject
                 require(names.filterNot { it.endsWith('/') || it == "manifest.json" }.toSet() == inventory.keys) { "Project inventory mismatch" }
                 inventory.forEach { (name, hash) -> require(digest(root.resolve(name)) == hash.jsonPrimitive.content) { "Project resource checksum mismatch: $name" } }

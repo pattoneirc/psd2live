@@ -38,7 +38,7 @@ For hands-on learning, open **Help → Tutorials…** (`F1`). Chinese is the pri
 | PSD 素材与命名 | 分层要求、图层名称表、左右与差分 | [打开](zh/spec/PSD_LAYER_SPEC.md) | [Open](en/spec/PSD_LAYER_SPEC.md) | [開く](ja/spec/PSD_LAYER_SPEC.md) |
 | 变形器与参数 | 自动生成的结构、坐标约定、默认参数 | [打开](zh/spec/DEFORMER_AND_PARAMETER_SPEC.md) | [Open](en/spec/DEFORMER_AND_PARAMETER_SPEC.md) | [開く](ja/spec/DEFORMER_AND_PARAMETER_SPEC.md) |
 | 实现概览 | 流水线各阶段的实现与核心不变量 | [打开](zh/spec/IMPLEMENTATION_COMPARISON.md) | [Open](en/spec/IMPLEMENTATION_COMPARISON.md) | [開く](ja/spec/IMPLEMENTATION_COMPARISON.md) |
-| 工程格式 v1 | `.psd2live` 归档布局、保存与校验 | [打开](zh/spec/PROJECT_FORMAT.md) | [Open](en/spec/PROJECT_FORMAT.md) | English |
+| 工程格式 v2 | `.psd2live` 归档布局、v1 迁移、保存与校验 | [打开](zh/spec/PROJECT_FORMAT.md) | [Open](en/spec/PROJECT_FORMAT.md) | English |
 | 运行时与导出边界 | 数据流、格式支持范围、交付检查 | [打开](zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md) | 中文 | 中文 |
 | 网格拓扑与图层拆分 | 自适应网格生成、填充算法、两种拆分 | [打开](zh/spec/MESH_TOPOLOGY_AND_SPLIT.md) | 中文 | 中文 |
 | 绘画系统 | 绘画会话、组件分工、提交与网格迁移 | [打开](zh/spec/PAINT_SYSTEM_ARCHITECTURE_AND_PRD.md) | 中文 | 中文 |

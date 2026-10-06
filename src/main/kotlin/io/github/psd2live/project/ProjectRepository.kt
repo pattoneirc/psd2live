@@ -53,10 +53,15 @@ internal class ProjectRepository(private val writeArchive: ((Path, Path, String)
                         JsonObject(log)
                     })
                     ProjectArchive.writeJson(root.resolve("workspace.json"), JsonObject(ui))
-                    Files.writeString(root.resolve("README.txt"), "PSD2Live project v1. Unencrypted ZIP. manifest.json inventories SHA-256 checksums. source/original.psd is the original source; workspace/ contains immutable history snapshots, PNG resources, tasks and spatial references; workspace.json restores the UI. See docs/en/spec/PROJECT_FORMAT.md.\n")
+                    ProjectFormatV2.pack(root, capture.projectId)
+                    Files.writeString(root.resolve("README.txt"), "PSD2Live project v2. Unencrypted ZIP. manifest.json inventories SHA-256 checksums. source/ holds the original source; history/ the history nodes and the document nodes each revision is made of; document/ the content-addressed document nodes, generator overrides and motion clips; assets/ the PNG rasters; auxiliary/ staged assets, views, workflow records and tasks; workspace.json restores the UI. See docs/en/spec/PROJECT_FORMAT.md.\n")
                     caller.ensureActive()
                     if (writeArchive != null) writeArchive.invoke(root, path, capture.projectId)
-                    else ProjectArchive.write(root, path, capture.projectId) { caller.ensureActive() }
+                    else ProjectArchive.write(root, path, capture.projectId) {
+                        caller.ensureActive()
+                        // A v1 project being migrated keeps its original beside the verified v2 file.
+                        ProjectFormatV2.backupV1(path)
+                    }
                     // Runs before a dispatcher handoff can surface late cancellation.
                     onCommitted()
                 }
@@ -74,6 +79,9 @@ internal class ProjectRepository(private val writeArchive: ((Path, Path, String)
                 val root = ProjectArchive.extract(path).also { extracted = it }
                 val manifest = ProjectArchive.readJson(root.resolve("manifest.json"))
                 val id = manifest.getValue("projectId").jsonPrimitive.content
+                val version = manifest.getValue("version").jsonPrimitive.int
+                // v2 splits each revision into document nodes; the working store takes whole snapshots.
+                if (version == ProjectFormatV2.VERSION) ProjectFormatV2.unpack(root, id)
                 val store = WorkspaceStore(root.resolve("workspace"))
                 val tree = withContext(Dispatchers.IO) { store.loadHistory(id) ?: error("Project has no history") }
                 val ui = ProjectArchive.readJson(root.resolve("workspace.json")).toMutableMap()
@@ -89,7 +97,7 @@ internal class ProjectRepository(private val writeArchive: ((Path, Path, String)
                 val source = root.resolve("source/original.cmo3").takeIf(Files::isRegularFile) ?: root.resolve("source/original.psd")
                 require(Files.isRegularFile(source)) { "Project has no original source" }
                 store.validateAssetCatalog(id, WorkspaceAssetCatalog.read(JsonObject(ui)) ?: store.existingAssetCatalog(id))
-                OpenedProject(id, path.toAbsolutePath().normalize(), root, source, JsonObject(ui), tree, store)
+                OpenedProject(id, path.toAbsolutePath().normalize(), root, source, JsonObject(ui), tree, store, version)
             }
         } catch (failure: Throwable) {
             extracted?.let { withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { ProjectArchive.deleteTemporaryDirectory(it) } }
@@ -121,6 +129,8 @@ internal class OpenedProject(
     val presentation: JsonObject,
     val history: io.github.psd2live.history.WorkspaceHistoryTree<WorkspaceDocument>,
     val store: WorkspaceStore,
+    /** The archive's format version; a v1 project migrates to v2 on its next save. */
+    val formatVersion: Int = ProjectFormatV2.VERSION,
 ) : AutoCloseable {
     private var owned = true
     fun transferDirectory(): Path {
