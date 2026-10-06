@@ -26,6 +26,14 @@ internal class JointBand(val x: Double, val y: Double, val nx: Double, val ny: D
  */
 internal object SkeletonMeshRefine {
 
+	/**
+	 * How far an inserted vertex's uv may lie off the affine map of its quad before a flip is refused. The bake
+	 * runs on the unbound rig, whose uvs are layer offsets in canvas units, so this is the page tolerance the
+	 * flip uses by default (2e-4) on a 4096 px page at one texel per canvas unit: the bake keeps the
+	 * triangulation it had on such a page, and no longer depends on the page size or the layout.
+	 */
+	private const val OFFSET_UV_TOLERANCE = 2e-4f * 4096f
+
 	/** Largest number of points one row may add, however wide the mesh is. */
 	private const val MAX_ROW_POINTS = 24
 
@@ -43,7 +51,7 @@ internal object SkeletonMeshRefine {
 		val edit = inserted.result.edit
 		val created = (mesh.vertexCount until edit.newMesh.vertexCount).toSet()
 		if (created.isEmpty()) return model to canvas
-		val flipped = MeshRefinementOps.flipTowardDelaunay(edit.newMesh, inserted.frame, created)
+		val flipped = MeshRefinementOps.flipTowardDelaunay(edit.newMesh, inserted.frame, created, uvTolerance = OFFSET_UV_TOLERANCE)
 		val tidy = MeshTopologyEdit(DrawableMesh(edit.newMesh.positions, edit.newMesh.uvs, flipped), edit.vertexSources)
 		return model.withMeshTopologyEdit(drawableId, tidy) to inserted.frame
 	}

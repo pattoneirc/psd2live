@@ -22,8 +22,10 @@ class LegacySplitReplayTest {
     private val hashes = mapOf(
         "history-a8855e4e-2343-4c25-ac37-5bbd5975f837" to "4b6091ae739d9cfc97bca6185e2dcfe4fb97cc194fab810f62389db93ddf848f",
         "history-35307cf9-8818-4ab3-9203-604da84ce587" to "7629519a31e7dc497f053ed392776c2c754fde9291a794723c6760f2e97d9884",
-        "history-9720a4c9-5233-4a5b-848c-220ad1c5d75c" to "4e50bb3cdd9f110b2260cb9d0d7567ba9ebb823e3874bb6fe383d739e1764ae8",
-        "history-0493aaf9-0a1c-4310-baf5-5896117ab92e" to "5a3814618e3da6913b6667d6fe5eaaaa2cdda74328615dce2a8c36d2c8da9933",
+        // In the two split nodes the soft-deleted original no longer packs a tile, so the remaining tiles and their uvs move left;
+        // geometry, keyforms and every other object are as that build replayed them.
+        "history-9720a4c9-5233-4a5b-848c-220ad1c5d75c" to "71b26714226c216764d4bbaa98ee2219c636cfabdb8e7553acd10db71da2048e",
+        "history-0493aaf9-0a1c-4310-baf5-5896117ab92e" to "13755df4d9290a2d05a109d8363d6e0f874c83decc0bccac9c2947179bc670d2",
     )
 
     private suspend fun open(): OpenedProject {

@@ -64,7 +64,7 @@ class PSD2LivePipeline {
 		previousAtlas: PackedAtlas? = null,
 	): RigPreviewModel {
         if (RigLayerDeletion.deferred(config)) {
-            return RigLayerDeletion.preview(buildPreview(analysis.source, RigLayerDeletion.generationConfig(config), progress, previousAtlas), config)
+            return RigLayerDeletion.preview(buildPreview(analysis.source, RigLayerDeletion.generationConfig(config), progress, previousAtlas), config, previousAtlas)
         }
         if (config.rigEdits.importedCmo3 != null) {
             val importedAnalysis = Cmo3ModelImport.analysis(analysis.source, config)
@@ -409,8 +409,11 @@ class PSD2LivePipeline {
 		// A deferred deletion model keeps the complete generated base and atlas; only its replayed rig and
 		// analysis are filtered. Replay onto that base and filter the same way instead of regenerating it.
 		if (RigLayerDeletion.deferred(config) != RigLayerDeletion.deferred(current.config)) return buildPreview(current.analysis.source, config)
-		val rig = RigLayerDeletion.rig(current.baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides),
+		val replayed = RigLayerDeletion.rig(current.baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides),
 			current.analysis, config)
+		val rig = current.generationAtlas?.let { full ->
+			RigLayerDeletion.rebind(replayed, current.analysis, full, current.analysis, current.atlas) ?: return buildPreview(current.analysis.source, config)
+		} ?: replayed
 		val (runtimeBundle, _) = buildRuntimeBundle(baseName, current.analysis, current.atlas, rig, config)
 		return current.copy(
 			rig = rig,
@@ -484,9 +487,10 @@ class PSD2LivePipeline {
 			val (atlas, rig) = Cmo3ModelImport.baseRig(inputAnalysis.source, replayConfig)
 			GeneratedBase(replayAnalysis, atlas, rig)
 		} else generatedBase(replayAnalysis, replayConfig, progress)
-		val (_, atlas, baseRig) = prepared
+		val (_, fullAtlas, baseRig) = prepared
 		val analysis = RigLayerDeletion.analysis(prepared.analysis, config)
-		val rig = RigLayerDeletion.rig(baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides), prepared.analysis, config)
+		val (atlas, rig) = RigLayerDeletion.compact(fullAtlas, prepared.analysis, analysis,
+			RigLayerDeletion.rig(baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides), prepared.analysis, config), config)
 		val generatedLabel = tr("validation.generated")
 		val neutralRig = RigIntegrityValidator.validateNeutralPose(generatedLabel, rig.puppet, rig.sourceBoundsByDrawableId)
 		val generatedAngleWarnings = RigIntegrityValidator.validateHeadAnglePoses(generatedLabel, rig.puppet, neutralRig.boundsByDrawableId)
@@ -543,7 +547,8 @@ class PSD2LivePipeline {
 			files += writeContained(outputRoot, "$baseName.psd2live.json", report.encodeToByteArray())
 		}
 		progress.update(tr("progress.validated"), 1.0)
-		return PipelineResult(analysis, files, warnings, RigPreviewModel(analysis, atlas, rig, config, runtimeBundle, baseRig = baseRig))
+		return PipelineResult(analysis, files, warnings, RigPreviewModel(analysis, atlas, rig, config, runtimeBundle, baseRig = baseRig,
+			generationAtlas = fullAtlas.takeIf { it !== atlas }))
 	}
 
 	/**

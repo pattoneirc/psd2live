@@ -111,6 +111,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `SafetyGoldenTool` | 自动骨架 Rig 上 24 组带种子的随机几何编辑的完整几何安全报告（不含 `coverage`），用于逐字节对比检查器改动前后的分类；`PSD2LIVE_GOLDEN_LABEL` 指定输出名 | `safety-golden/<名称>.txt` |
 | `BundleProfileTool` | moc3 预览包的分项耗时（IR 编译、IR 转回、静止网格换到画布空间、physics3/motion3、moc 降级与写出、cdi3）及几何安全检查耗时；`PSD2LIVE_SAMPLER=1` 另打印栈采样的热点 | 仅标准输出 |
 | `TextureWorkspaceTool` | 用 `tml` 设置几种密度、锁定与固定后，渲染纹理集页面与纹理面板（中英文、单选/多选/未选、热力图开关），以及编辑画布的纹理集像素与原始像素对比 | `texture-workspace/*.png` |
+| `TexturePerfTool` | 纹理命令（固定图块、改密度、自动排布、改预算）的提交耗时：`runtime` 经应用命令并单独计时重建，`TEXTURE_PERF_SCENARIO` 取 `plain`、`skeleton`（自动骨架）或 `deleted`（自动骨架并软删除一层）；`desktop` 走视图模型与桌面适配器，记录 Swing 线程停顿、界面抓取与页面 PNG。环境变量不是 Gradle 任务输入，换场景时加 `--rerun` | `texture-perf/runtime-<场景>.txt`、`desktop.txt` |
 | `ExportDialogTool` | “文件”菜单展开“导入”与“导出为”子菜单，以及每个目标的“导出为”对话框（中英文、深色主题），用于检查菜单分组、标签与控件布局 | `export-dialog/<语言>-<目标或菜单>.png` |
 | `CommitPerfTool.profile` / `.desktop` | 单次作者提交的耗时：`profile` 走应用层命令边界并按阶段拆分（修订号、配置解码、重建、几何检查）；`desktop` 走桌面视图模型与适配器，连续提交网格顶点编辑和画笔笔触，报告提交耗时与界面线程最长停顿。可配合 `JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` 采样 | `commit-perf/report.txt`、`desktop.txt` |
 | `CommitPerfTool.baseline` | 提交路径的逐阶段基线：在带自动骨架、两个摆动和一个已烘焙模拟的工程上，分别测量完整重建的各阶段（分析、纹理集打包与 PNG 编码、基础 Rig、骨架缓存命中/未命中、日志重放、摆动/模拟写回、覆盖、IR、moc3 打包、`validateBundle`、修订号哈希、运行时文件写出），以及几何提交、小图层绘画、换图（同形/重建网格）、无关拓扑编辑后的骨架缓存命中和日志追加到 50/200 条时的提交耗时与增长；每次提交后写入历史存储。不测原生预览重载（需要 GL 上下文） | `commit-perf/baseline.json`、`baseline.md` |

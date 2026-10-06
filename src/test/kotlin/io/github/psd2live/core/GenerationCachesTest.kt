@@ -39,6 +39,30 @@ class GenerationCachesTest {
 	}
 
 	@Tag("slow")
+	@Test fun aDifferentAtlasLayoutKeepsTheBakeAndEqualsAColdBuild() {
+		val plain = PSD2LivePipeline().buildPreview(Path.of("examples/tml/psd-input/tml.psd"))
+		val config = plain.config.copy(rigEdits = plain.config.rigEdits.copy(skeleton = SkeletonAutoBuilder.build(plain.analysis, plain.rig)))
+		SkeletonRig.clearCache()
+		val skeletal = PSD2LivePipeline().buildPreview(plain.analysis, config)
+		val bound = config.rigEdits.skeleton!!.bones.flatMapTo(HashSet()) { it.drawableIds }
+		val layer = skeletal.rig.layerIdByDrawableId.getValue(bound.first())
+		val placement = skeletal.atlas.placementByLayerId.getValue(layer)
+		// A pinned tile, a denser layer and a larger padding: every bound mesh's uvs change, the bake does not.
+		val moved = config.copy(textureOverrides = mapOf(layer to io.github.psd2live.project.TextureOverride(density = 2f,
+			pin = io.github.psd2live.project.TexturePin(0, placement.x + 640, placement.y + 512))),
+			atlasBudget = config.effectiveAtlasBudget().copy(padding = 6))
+		val misses = SkeletonRig.cacheMisses
+		val hits = SkeletonRig.cacheHits
+		val warm = PSD2LivePipeline().buildPreview(plain.analysis, moved)
+		assertEquals(misses, SkeletonRig.cacheMisses, "moving or scaling tiles does not bake the skeleton again")
+		assertEquals(hits + 1, SkeletonRig.cacheHits)
+		assertNotEquals(skeletal.atlas.placementByLayerId.getValue(layer), warm.atlas.placementByLayerId.getValue(layer))
+		SkeletonRig.clearCache()
+		val cold = PSD2LivePipeline().buildPreview(plain.analysis, moved)
+		assertEquals(PuppetIr.toIr(cold.rig.puppet), PuppetIr.toIr(warm.rig.puppet), "the reused bake binds exactly as a cold one")
+	}
+
+	@Tag("slow")
 	@Test fun editsToMeshesNoBoneBindsKeepTheBake() {
 		val plain = PSD2LivePipeline().buildPreview(Path.of("examples/tml/psd-input/tml.psd"))
 		val spec = SkeletonAutoBuilder.build(plain.analysis, plain.rig)

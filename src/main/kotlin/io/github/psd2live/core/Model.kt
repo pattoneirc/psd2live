@@ -394,6 +394,11 @@ data class RigPreviewModel(
 	val config: PipelineConfig,
 	val runtimeBundle: CubismRuntimeBundle,
 	val baseRig: BuiltRig = rig,
+	/**
+	 * The atlas [baseRig] is bound to when it is not [atlas]: after a deferred layer deletion the replay binds
+	 * every layer, while [atlas] packs only the kept ones ([RigLayerDeletion.compact]).
+	 */
+	val generationAtlas: PackedAtlas? = null,
 ) {
 	/** True only when this exact preview bundle contains an active Cubism physics sidecar. */
 	val hasRuntimePhysics: Boolean

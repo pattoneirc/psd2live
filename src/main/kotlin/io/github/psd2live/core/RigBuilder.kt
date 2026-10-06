@@ -1083,14 +1083,17 @@ object RigBuilder {
 		var skeletonKey: String? = null
 		fun finish(): BuiltRig {
 			val unbound = assembled.withDerivedRenderRoot().let { withoutLegacyHairSway(it, config) }
-			// The skeleton still bakes the bound rig: it refines meshes by interpolating their uvs, and doing
-			// that on offsets and binding afterwards would round the new vertices' uvs differently.
-			val puppet = RigBuildProfile.stage("binding: UvBinding.bind") { UvBinding.bind(unbound, inputAnalysis, atlas) { classifiedByDrawable[it.id] }.puppet }
-			val skeletonPuppet = skeleton
+			// The skeleton bakes the unbound rig: the joint rows it inserts interpolate layer offsets, which the
+			// binding then turns into page uvs like every other vertex. So the bake never reads the atlas, and
+			// moving, scaling or repacking tiles reuses it.
+			val skeletal = skeleton
 				?.let { RigBuildProfile.stage("skeleton") {
 					SkeletonRig.takeLastKey()
-					SkeletonRig.generate(puppet, it, context.bodyFrame, handEditedTopology(config), context.stance).also { skeletonKey = SkeletonRig.takeLastKey() }
-				} } ?: puppet
+					SkeletonRig.generate(unbound, it, context.bodyFrame, handEditedTopology(config), context.stance).also { skeletonKey = SkeletonRig.takeLastKey() }
+				} } ?: unbound
+			val skeletonPuppet = RigBuildProfile.stage("binding: UvBinding.bind") {
+				UvBinding.bind(skeletal, inputAnalysis, atlas) { classifiedByDrawable[it.id] }.puppet
+			}
 			return BuiltRig(
 				skeletonPuppet,
 				pageByDrawable,

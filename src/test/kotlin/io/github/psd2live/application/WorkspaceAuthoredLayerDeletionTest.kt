@@ -70,6 +70,36 @@ class WorkspaceAuthoredLayerDeletionTest {
         }
     }
 
+    /** Each mesh's uvs relative to its layer's tile: equal before and after a repack that moves or scales the tile. */
+    private fun tileUvs(model: RigPreviewModel): Map<String, List<Float>> = model.rig.puppet.drawables.filter { it.mesh != null }.associate { drawable ->
+        val placement = model.atlas.placementByLayerId.getValue(model.rig.layerIdByDrawableId.getValue(drawable.id.raw))
+        val page = model.atlas.pages[placement.page].image
+        assertEquals(placement.page, drawable.texturePage)
+        drawable.id.raw to drawable.mesh!!.uvs.asList().chunked(2).flatMap { (u, v) ->
+            listOf((u * page.width - placement.x) / placement.width, (v * page.height - placement.y) / placement.height)
+        }
+    }
+
+    @Test fun deletedLayersTakeNoAtlasSpaceAndTheRemainingMeshesSampleTheSameTexels() = runBlocking<Unit> {
+        val runtime = fixture(); val authored = author(runtime)
+        val before = tileUvs(authored.model)
+        val deleted = WorkspaceLayerCommands(runtime).execute(authored.projectId, authored.state, deletion("first"), "Delete", MutationAuthor.USER).commit.capture
+        val fast = PSD2LivePipeline().updateRigEdits(deleted.model, deleted.model.config)
+        for (model in listOf(deleted.model, builder.build(deleted.document), fast)) {
+            assertFalse("first" in model.atlas.placementByLayerId, "A deleted layer packs no tile")
+            assertTrue("first" in assertNotNull(model.generationAtlas).placementByLayerId, "The replay still binds it")
+            assertEquals(setOf("second", "third"), model.atlas.placementByLayerId.keys)
+            val after = tileUvs(model)
+            assertEquals(before.keys - mesh(authored.model, "first").id.raw, after.keys)
+            for ((id, uvs) in after) uvs.indices.forEach { assertEquals(before.getValue(id)[it], uvs[it], 1e-4f, "uv $it of $id") }
+        }
+        assertEvaluation(deleted.model.rig.puppet, fast.rig.puppet)
+        // Restoring brings the full atlas back, with no generation atlas left over.
+        val restored = WorkspaceLayerCommands(runtime).execute(deleted.projectId, deleted.state, restoration(), "Restore", MutationAuthor.USER).commit.capture
+        assertTrue("first" in restored.model.atlas.placementByLayerId)
+        assertNull(restored.model.generationAtlas)
+    }
+
     @Test fun ordinaryAuthoredLayerDeletionReplaysBeforeFilteringAndRestoresAllBindings() = runBlocking<Unit> {
         val runtime = fixture(); val authored = author(runtime)
         assertTrue(authored.document.rigEdits.authoringJournal.none { it["op"]?.jsonPrimitive?.content == RasterMeshCreation.OP })

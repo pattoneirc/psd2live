@@ -73,10 +73,38 @@ internal object RigLayerDeletion {
             sourceBoundsByDrawableId = input.sourceBoundsByDrawableId - ids, pageByDrawableId = input.pageByDrawableId - ids)
     }
 
-    fun preview(input: RigPreviewModel, config: PipelineConfig): RigPreviewModel {
+    fun preview(input: RigPreviewModel, config: PipelineConfig, previousAtlas: PackedAtlas? = null): RigPreviewModel {
         val active = analysis(input.analysis, config)
-        val rig = rig(input.rig, input.analysis, config)
-        val bundle = PSD2LivePipeline().buildRuntimeBundle("psd2live-preview", active, input.atlas, rig, config).first
-        return input.copy(analysis = active, rig = rig, config = config, runtimeBundle = bundle)
+        val filtered = rig(input.rig, input.analysis, config)
+        val (atlas, rig) = compact(input.atlas, input.analysis, active, filtered, config, previousAtlas)
+        val bundle = PSD2LivePipeline().buildRuntimeBundle("psd2live-preview", active, atlas, rig, config).first
+        return input.copy(analysis = active, atlas = atlas, rig = rig, config = config, runtimeBundle = bundle,
+            generationAtlas = input.atlas.takeIf { atlas !== it })
+    }
+
+    /**
+     * The replay binds deleted layers too, so the full atlas still packs their tiles. The active model packs
+     * only the layers it keeps and moves every remaining mesh onto that atlas, so deleted art takes no page
+     * space in the preview, the texture workspace or exports. Imported CMO3 keeps its own layout, and so does a
+     * rig with a mesh that no kept layer owns.
+     */
+    fun compact(full: PackedAtlas, fullAnalysis: PipelineAnalysis, active: PipelineAnalysis, rig: BuiltRig,
+                config: PipelineConfig, previousAtlas: PackedAtlas? = null): Pair<PackedAtlas, BuiltRig> {
+        if (config.rigEdits.importedCmo3 != null) return full to rig
+        val kept = active.layers.mapTo(HashSet()) { it.source.id.raw }
+        if (full.placementByLayerId.keys.all { it in kept } || !binds(rig, kept, full)) return full to rig
+        val atlas = AtlasLayout.pack(active.layers, config, previous = previousAtlas)
+        return rebind(rig, fullAnalysis, full, active, atlas)?.let { atlas to it } ?: (full to rig)
+    }
+
+    /** [rig], bound to [from], moved onto [to]; null when one of its meshes has no tile on either. */
+    fun rebind(rig: BuiltRig, fromAnalysis: PipelineAnalysis, from: PackedAtlas, toAnalysis: PipelineAnalysis, to: PackedAtlas): BuiltRig? {
+        val layers = toAnalysis.layers.mapTo(HashSet()) { it.source.id.raw }
+        if (!binds(rig, layers, from) || !binds(rig, layers, to)) return null
+        return RigGenerationSource.repack(rig, fromAnalysis, from, toAnalysis, to)
+    }
+
+    private fun binds(rig: BuiltRig, layers: Set<String>, atlas: PackedAtlas) = rig.puppet.drawables.all { drawable ->
+        drawable.mesh == null || rig.layerIdByDrawableId[drawable.id.raw]?.let { it in layers && it in atlas.placementByLayerId } == true
     }
 }

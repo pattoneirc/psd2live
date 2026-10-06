@@ -206,7 +206,7 @@ internal object SkeletonRig {
 	)
 
 	/** Version of the bake and its key; raise it whenever the bake or what the key covers changes. */
-	const val BAKE_VERSION = "skeleton-2"
+	const val BAKE_VERSION = "skeleton-3"
 
 	private const val CACHE_CAPACITY = 4
 	private val bakes = object : LinkedHashMap<String, Bake>(16, 0.75f, true) {

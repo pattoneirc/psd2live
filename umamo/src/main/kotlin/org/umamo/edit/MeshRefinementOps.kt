@@ -523,9 +523,12 @@ object MeshRefinementOps {
 	 * @param FloatArray frame The mesh's vertices in the space quality is judged in.
 	 * @param Set<Int> around Only edges with a vertex of this set among their four are considered.
 	 * @param Int maxFlips A bound on the work, far above what one gesture needs.
+	 * @param Float uvTolerance How far, in the mesh's own UV units, the fourth UV may lie off the affine map.
+	 *        The default suits UVs that address a page; UVs in other units pass a tolerance scaled to match.
 	 * @return IntArray The new index buffer.
 	 */
-	fun flipTowardDelaunay(mesh: DrawableMesh, frame: FloatArray, around: Set<Int>, maxFlips: Int = 512): IntArray {
+	fun flipTowardDelaunay(mesh: DrawableMesh, frame: FloatArray, around: Set<Int>, maxFlips: Int = 512,
+	                       uvTolerance: Float = 2e-4f): IntArray {
 		val triangles = mesh.indices.toList().chunked(3).map { it.toIntArray() }.toMutableList()
 		if (around.isEmpty() || frame.size != mesh.positions.size) return mesh.indices.copyOf()
 		fun area(values: FloatArray, a: Int, b: Int, c: Int): Float =
@@ -547,7 +550,7 @@ object MeshRefinementOps {
 			for (component in 0..1) {
 				val predicted = mesh.uvs[a * 2 + component] * weights[0] + mesh.uvs[b * 2 + component] * weights[1] +
 					mesh.uvs[c * 2 + component] * weights[2]
-				if (abs(predicted - mesh.uvs[d * 2 + component]) > 2e-4f) return false
+				if (abs(predicted - mesh.uvs[d * 2 + component]) > uvTolerance) return false
 			}
 			return true
 		}
