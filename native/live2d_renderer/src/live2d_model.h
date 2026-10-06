@@ -55,6 +55,11 @@ public:
     float GetParameterValue(const char* paramId);
     int GetParameterCount() const;
     int CopyParameterValues(float* outValues, int capacity) const;
+    /** Replaces texture page [index] in place with RGBA8888 pixels; the page may change size. */
+    bool ReplaceTexture(int index, const unsigned char* rgba, int width, int height);
+    /** Same, decoding PNG bytes first. */
+    bool ReplaceTextureEncoded(int index, const unsigned char* data, size_t size);
+    int GetTextureCount() const;
 
     const std::string& GetModelInfoJson();
 
@@ -65,6 +70,8 @@ private:
     void ReleaseMotions();
     void ReleaseExpressions();
     void ReleaseTextures();
+    void DropTextureFilesFromMemory();
+    static void UploadTexture(GLuint texId, const unsigned char* rgba, int width, int height);
 
     Csm::csmByte* CreateBuffer(const Csm::csmChar* path, Csm::csmSizeInt* size);
     void DeleteBuffer(Csm::csmByte* buffer);

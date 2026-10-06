@@ -3,6 +3,7 @@ package io.github.psd2live.core
 import com.sun.jna.Library
 import com.sun.jna.Memory
 import com.sun.jna.Native
+import com.sun.jna.NativeLibrary
 import com.sun.jna.Pointer
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
@@ -21,9 +22,47 @@ import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import javax.swing.SwingUtilities
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+/** The native preview bridge (`native/live2d_renderer`); a test can stand in for it. */
+internal interface CubismNativeApi : Library {
+	fun Live2D_InitOffscreen(): Int
+	fun Live2D_Shutdown()
+	fun Live2D_CreateModel(modelFilePath: String): Pointer?
+	/** Only on libraries with [CubismNativeBinding.memoryModels]; [bundle] is [encodeCubismPreviewBundle]'s. */
+	fun Live2D_CreateModelFromMemory(bundle: ByteArray, size: Long): Pointer?
+	/** Only on libraries with [CubismNativeBinding.textureReplace]; width and height 0 pass PNG bytes. */
+	fun Live2D_ReplaceTexture(handle: Pointer, index: Int, data: ByteArray, size: Long, width: Int, height: Int): Int
+	fun Live2D_DestroyModel(handle: Pointer)
+	fun Live2D_Update(handle: Pointer, deltaTime: Float)
+	fun Live2D_SetDragging(handle: Pointer, x: Float, y: Float)
+	fun Live2D_StartMotion(handle: Pointer, group: String, index: Int, priority: Int): Int
+	fun Live2D_SetParameterValue(handle: Pointer, parameterId: String, value: Float)
+	fun Live2D_GetParameterValue(handle: Pointer, parameterId: String): Float
+	fun Live2D_RefreshModel(handle: Pointer)
+	fun Live2D_GetParameterCount(handle: Pointer): Int
+	fun Live2D_CopyParameterValues(handle: Pointer, output: Pointer, capacity: Int): Int
+	fun Live2D_RenderToRgba(
+		handle: Pointer,
+		width: Int,
+		height: Int,
+		scale: Float,
+		offsetX: Float,
+		offsetY: Float,
+		output: Pointer,
+	): Int
+	fun Live2D_GetLastError(): Pointer?
+}
+
+/** A loaded bridge and the optional entry points it exports (`size_t` is 64-bit on the supported x86-64 targets). */
+internal class CubismNativeBinding(
+	val api: CubismNativeApi,
+	val memoryModels: Boolean,
+	val textureReplace: Boolean,
+)
 
 /** A frame evaluated and rendered by the official Cubism 5-r.5 runtime. */
 data class CubismSdkFrame(
@@ -57,36 +96,18 @@ internal const val CUBISM_NATIVE_POINTER_Y = 0f
  * Serializes access to Cubism's hidden OpenGL context on one daemon thread.  The Java SDK release is
  * Android-only, so Windows uses the matching 5-r.5 desktop Core/Framework ABI behind this JVM adapter.
  */
-class CubismSdkPreviewSession(
+class CubismSdkPreviewSession internal constructor(
 	private val onFrame: (CubismSdkFrame) -> Unit,
 	private val onStatus: (String?) -> Unit,
 	/** Where observation sampling stages its temporary model files; the system temp directory by default. */
-	private val stagingRoot: java.nio.file.Path? = null,
+	private val stagingRoot: java.nio.file.Path?,
+	private val nativeLoader: () -> CubismNativeBinding,
 ) : AutoCloseable {
-	private interface Api : Library {
-		fun Live2D_InitOffscreen(): Int
-		fun Live2D_Shutdown()
-		fun Live2D_CreateModel(modelFilePath: String): Pointer?
-		fun Live2D_DestroyModel(handle: Pointer)
-		fun Live2D_Update(handle: Pointer, deltaTime: Float)
-		fun Live2D_SetDragging(handle: Pointer, x: Float, y: Float)
-		fun Live2D_StartMotion(handle: Pointer, group: String, index: Int, priority: Int): Int
-		fun Live2D_SetParameterValue(handle: Pointer, parameterId: String, value: Float)
-		fun Live2D_GetParameterValue(handle: Pointer, parameterId: String): Float
-		fun Live2D_RefreshModel(handle: Pointer)
-		fun Live2D_GetParameterCount(handle: Pointer): Int
-		fun Live2D_CopyParameterValues(handle: Pointer, output: Pointer, capacity: Int): Int
-		fun Live2D_RenderToRgba(
-			handle: Pointer,
-			width: Int,
-			height: Int,
-			scale: Float,
-			offsetX: Float,
-			offsetY: Float,
-			output: Pointer,
-		): Int
-		fun Live2D_GetLastError(): Pointer?
-	}
+	constructor(
+		onFrame: (CubismSdkFrame) -> Unit,
+		onStatus: (String?) -> Unit,
+		stagingRoot: java.nio.file.Path? = null,
+	) : this(onFrame, onStatus, stagingRoot, CubismNativeRuntime::load)
 
 	data class RenderRequest(
 		val width: Int,
@@ -118,6 +139,18 @@ class CubismSdkPreviewSession(
 		val frame: CubismSdkFrame,
 	)
 
+	private data class PendingLoad(
+		val generation: Long,
+		val bundle: CubismRuntimeBundle,
+		val parameters: List<ParameterId>,
+	)
+
+	/** Where live models come from: the encoded bundle in memory, or a materialized manifest on old libraries. */
+	private sealed interface ModelSource {
+		class InMemory(val bytes: ByteArray) : ModelSource
+		class OnDisk(val manifest: Path) : ModelSource
+	}
+
 	private val executor = Executors.newSingleThreadExecutor { runnable ->
 		Thread(runnable, "cubism-sdk-preview").apply { isDaemon = true }
 	}
@@ -125,28 +158,37 @@ class CubismSdkPreviewSession(
 	private val latestRender = CanvasLatestQueue<QueuedRender>()
 	private val deliveryScheduled = AtomicBoolean(false)
 	private val latestDelivery = CanvasLatestQueue<QueuedDelivery>()
+	/** Reload requests coalesce: the native thread only ever applies the newest bundle. */
+	private val pendingLoad = AtomicReference<PendingLoad?>(null)
+	private val loadScheduled = AtomicBoolean(false)
 	@Volatile private var generation = 0L
 	@Volatile private var loadedGeneration = -1L
 	@Volatile private var closed = false
-	private var api: Api? = null
+	private var binding: CubismNativeBinding? = null
 	private var model: Pointer? = null
 	private var parameterIds: List<ParameterId> = emptyList()
 	private var pixelMemory: Memory? = null
 	private var pixelMemoryCapacity = 0L
 	private var parameterMemory: Memory? = null
 	private var parameterMemoryCapacity = 0
-	private class NativeCanvas(val handle: Pointer) {
+	private class NativeCanvas(var handle: Pointer) {
         var lastRenderedFrameTimeNanos = 0L
         var previousFrameWasAnimated = false
         var lastPoseRequest: RenderRequest? = null
+        /** The last request this view rendered, rendered again after a live update so the view shows it at once. */
+        var lastRequest: RenderRequest? = null
     }
     // All handles stay on the same native GL thread, but own their animation/physics state.
     private val nativeCanvases = mutableMapOf<String, NativeCanvas>()
-    private var loadedManifest: Path? = null
+    private var modelSource: ModelSource? = null
+    private var loadedFingerprint: CubismBundleFingerprint? = null
+    /** How the newest load reached the native models, for tests and diagnostics. */
+    @Volatile internal var lastAppliedReload: CubismPreviewReload? = null
+        private set
     private var hasIdleMotion = false
     private var motionSlots: Map<String, Pair<String, Int>> = emptyMap()
 
-    private fun canvasHandle(native: Api, viewId: String): NativeCanvas = nativeCanvases.getOrPut(viewId) {
+    private fun canvasHandle(native: CubismNativeApi, viewId: String): NativeCanvas = nativeCanvases.getOrPut(viewId) {
         // The model created while loading can serve the first view. Keeping it idle alongside
         // per-view copies used an extra full Cubism model for every preview session.
         val loaded = model
@@ -154,57 +196,188 @@ class CubismSdkPreviewSession(
             model = null
             loaded
         } else {
-            val manifest = requireNotNull(loadedManifest)
-            native.Live2D_CreateModel(manifest.toString())
-                ?: error(nativeError(native, "Could not create canvas preview"))
+            createModel(native, requireNotNull(modelSource), "Could not create canvas preview")
         }
         if (loaded == null && hasIdleMotion) native.Live2D_StartMotion(handle, "Idle", 0, 1)
         NativeCanvas(handle)
     }
 
+    private fun createModel(native: CubismNativeApi, source: ModelSource, failure: String): Pointer = when (source) {
+        is ModelSource.InMemory -> native.Live2D_CreateModelFromMemory(source.bytes, source.bytes.size.toLong())
+        is ModelSource.OnDisk -> native.Live2D_CreateModel(source.manifest.toString())
+    } ?: error(nativeError(native, failure))
+
+	/**
+	 * Follows [bundle] on the native thread. Requests coalesce to the newest one. With the in-memory entry
+	 * points the live models stay: texture-only changes upload just the changed pages, other changes rebuild
+	 * each model from memory and restore its pose. Older libraries reload through a materialized directory.
+	 */
 	fun load(bundle: CubismRuntimeBundle, parameters: List<ParameterId>) {
 		if (closed) return
 		val targetGeneration = ++generation
 		loadedGeneration = -1L
-		latestRender.clear()
-		postStatus(null)
-		onNativeThread {
-			if (closed || targetGeneration != generation) return@onNativeThread
-			var stage = "load native library"
-			try {
-				val native = api ?: CubismNativeRuntime.load().also {
-					stage = "initialize offscreen Cubism runtime"
-					require(it.Live2D_InitOffscreen() != 0) { nativeError(it, "Cubism runtime initialization failed") }
-					api = it
-				}
-				stage = "dispose previous Cubism model"
-				nativeCanvases.values.forEach { native.Live2D_DestroyModel(it.handle) }
-                nativeCanvases.clear()
-                loadedManifest = null
-                model?.let(native::Live2D_DestroyModel)
-				model = null
-				stage = "materialize exported runtime family"
-				val manifest = materialize(bundle)
-                loadedManifest = manifest
-				stage = "create Cubism model"
-				val loaded = native.Live2D_CreateModel(manifest.toString())
-					?: error(nativeError(native, "Cubism Core rejected the exported MOC3 model"))
-				model = loaded
-				parameterIds = parameters
-				loadedGeneration = targetGeneration
-				val manifestText = bundle.assets.firstOrNull { it.path.endsWith(".model3.json") }?.bytes?.decodeToString()
-				val hasIdle = manifestText?.contains("\"Idle\"") == true
-                hasIdleMotion = hasIdle
-				motionSlots = manifestText?.let(::cubismMotionSlots).orEmpty()
-				if (hasIdle) {
-					stage = "start generated idle motion"
-					native.Live2D_StartMotion(loaded, "Idle", 0, 1)
-				}
-				postStatus(if (targetGeneration == generation) "ready" else null)
-				scheduleRenderWorker()
-			} catch (failure: Throwable) {
-				postStatus("$stage: ${failure.message ?: failure.javaClass.simpleName}")
+		pendingLoad.set(PendingLoad(targetGeneration, bundle, parameters))
+		scheduleLoad()
+	}
+
+	private fun scheduleLoad() {
+		if (closed || !loadScheduled.compareAndSet(false, true)) return
+		if (!onNativeThread(::drainLoads)) loadScheduled.set(false)
+	}
+
+	private fun drainLoads() {
+		try {
+			while (!closed) {
+				val next = pendingLoad.getAndSet(null) ?: break
+				if (next.generation == generation) applyLoad(next)
 			}
+		} finally {
+			loadScheduled.set(false)
+			if (!closed && pendingLoad.get() != null) scheduleLoad()
+		}
+	}
+
+	private fun applyLoad(next: PendingLoad) {
+		var stage = "load native library"
+		try {
+			val current = binding ?: nativeLoader().also {
+				stage = "initialize offscreen Cubism runtime"
+				require(it.api.Live2D_InitOffscreen() != 0) { nativeError(it.api, "Cubism runtime initialization failed") }
+				binding = it
+			}
+			val native = current.api
+			stage = "compare runtime bundle"
+			val fingerprint = CubismBundleFingerprint.of(next.bundle, loadedFingerprint)
+			val live = model != null || nativeCanvases.isNotEmpty()
+			val plan = planCubismPreviewReload(
+				loadedFingerprint.takeIf { live && modelSource is ModelSource.InMemory },
+				fingerprint, current.memoryModels, current.textureReplace,
+			)
+			val manifestText = next.bundle.assets.firstOrNull { it.path == next.bundle.manifestPath }?.bytes?.decodeToString()
+			var applied = plan
+			when (plan) {
+				CubismPreviewReload.Unchanged -> Unit
+				is CubismPreviewReload.Textures -> {
+					stage = "replace texture pages"
+					if (!replaceTextures(native, next.bundle, fingerprint, plan.pages)) {
+						stage = "rebuild Cubism model in place"
+						recreateInPlace(native, next, manifestText)
+						applied = CubismPreviewReload.Recreate
+					}
+				}
+				CubismPreviewReload.Recreate -> {
+					stage = "rebuild Cubism model in place"
+					recreateInPlace(native, next, manifestText)
+				}
+				CubismPreviewReload.Full -> {
+					postStatus(null)
+					stage = "dispose previous Cubism model"
+					disposeModels(native)
+					stage = if (current.memoryModels) "encode runtime bundle" else "materialize exported runtime family"
+					val source = if (current.memoryModels) ModelSource.InMemory(encodeCubismPreviewBundle(next.bundle))
+						else ModelSource.OnDisk(materialize(next.bundle))
+					modelSource = source
+					stage = "create Cubism model"
+					val loaded = createModel(native, source, "Cubism Core rejected the exported MOC3 model")
+					model = loaded
+					adoptManifest(manifestText)
+					if (hasIdleMotion) {
+						stage = "start generated idle motion"
+						native.Live2D_StartMotion(loaded, "Idle", 0, 1)
+					}
+				}
+			}
+			loadedFingerprint = fingerprint
+			lastAppliedReload = applied
+			parameterIds = next.parameters
+			loadedGeneration = next.generation
+			if (plan != CubismPreviewReload.Full) requeueLastRequests()
+			postStatus(if (next.generation == generation) "ready" else null)
+			scheduleRenderWorker()
+		} catch (failure: Throwable) {
+			binding?.api?.let { native -> runCatching { disposeModels(native) } }
+			postStatus("$stage: ${failure.message ?: failure.javaClass.simpleName}")
+		}
+	}
+
+	private fun adoptManifest(manifestText: String?) {
+		hasIdleMotion = manifestText?.contains("\"Idle\"") == true
+		motionSlots = manifestText?.let(::cubismMotionSlots).orEmpty()
+	}
+
+	/** Uploads the changed pages into every live model; false when the library refused one of them. */
+	private fun replaceTextures(native: CubismNativeApi, bundle: CubismRuntimeBundle, fingerprint: CubismBundleFingerprint, pages: List<Int>): Boolean {
+		val handles = listOfNotNull(model) + nativeCanvases.values.map { it.handle }
+		val bytes = bundle.assets.associate { it.path to it.bytes }
+		for (page in pages) {
+			val png = bytes[fingerprint.texturePaths[page]] ?: return false
+			for (handle in handles) {
+				if (native.Live2D_ReplaceTexture(handle, page, png, png.size.toLong(), 0, 0) == 0) return false
+			}
+		}
+		// Views opened later are created from this bundle, so they see the new pages too.
+		modelSource = ModelSource.InMemory(encodeCubismPreviewBundle(bundle))
+		return true
+	}
+
+	/**
+	 * Rebuilds every live model from the new bundle without dropping its view: each keeps its clock and is
+	 * set to the pose its old model showed, so the preview does not jump before the next request arrives.
+	 */
+	private fun recreateInPlace(native: CubismNativeApi, next: PendingLoad, manifestText: String?) {
+		val source = ModelSource.InMemory(encodeCubismPreviewBundle(next.bundle))
+		val known = next.parameters.toSet()
+		val poses = nativeCanvases.mapValues { (_, canvas) -> copyParameterValues(native, canvas.handle) }
+		val created = ArrayList<Pointer>()
+		try {
+			val failure = "Cubism Core rejected the exported MOC3 model"
+			val replacements = nativeCanvases.mapValues { createModel(native, source, failure).also(created::add) }
+			val idle = if (model != null || nativeCanvases.isEmpty()) createModel(native, source, failure).also(created::add) else null
+			created.clear()
+			model?.let(native::Live2D_DestroyModel)
+			model = idle
+			modelSource = source
+			adoptManifest(manifestText)
+			idle?.let { if (hasIdleMotion) native.Live2D_StartMotion(it, "Idle", 0, 1) }
+			for ((viewId, canvas) in nativeCanvases) {
+				native.Live2D_DestroyModel(canvas.handle)
+				val handle = replacements.getValue(viewId)
+				canvas.handle = handle
+				canvas.lastPoseRequest = null
+				if (hasIdleMotion) native.Live2D_StartMotion(handle, "Idle", 0, 1)
+				val pose = poses.getValue(viewId)
+				for ((id, value) in pose) if (id in known) native.Live2D_SetParameterValue(handle, id.raw, value)
+				if (pose.isNotEmpty()) native.Live2D_RefreshModel(handle)
+			}
+		} finally {
+			created.forEach(native::Live2D_DestroyModel)
+		}
+	}
+
+	/** After a live update the views render their last request again with the new model. */
+	private fun requeueLastRequests() {
+		for ((viewId, canvas) in nativeCanvases) {
+			val last = canvas.lastRequest ?: continue
+			// A native clock advances on its own frames; rendering one again would step it twice.
+			if (!last.nativeClock) latestRender.putIfAbsent(viewId, QueuedRender(generation, last))
+		}
+	}
+
+	private fun disposeModels(native: CubismNativeApi) {
+		nativeCanvases.values.forEach { native.Live2D_DestroyModel(it.handle) }
+		nativeCanvases.clear()
+		model?.let(native::Live2D_DestroyModel)
+		model = null
+		modelSource = null
+		loadedFingerprint = null
+	}
+
+	/** Waits until queued native work, including work it queues in turn, has run; for tests. */
+	internal fun awaitIdle() {
+		repeat(4) {
+			val done = java.util.concurrent.CompletableFuture<Unit>()
+			if (!onNativeThread { done.complete(Unit) }) return
+			done.get(10, TimeUnit.SECONDS)
 		}
 	}
 
@@ -216,7 +389,7 @@ class CubismSdkPreviewSession(
 		if (closed) return
 		onNativeThread {
 			if (closed || loadedGeneration != generation) return@onNativeThread
-			val native = api ?: return@onNativeThread
+			val native = binding?.api ?: return@onNativeThread
 			val canvas = canvasHandle(native, viewId)
 			canvas.lastPoseRequest = null
 			val handle = canvas.handle
@@ -237,10 +410,10 @@ class CubismSdkPreviewSession(
                     if (closed || result.isCancelled || cancelled()) throw java.util.concurrent.CancellationException("Motion sampling cancelled")
                 }
                 checkpoint(); progress(0f)
-                val native = api ?: CubismNativeRuntime.load().also {
-                    require(it.Live2D_InitOffscreen() != 0) { nativeError(it, "Cubism runtime initialization failed") }
-                    api = it
-                }
+                val native = (binding ?: nativeLoader().also {
+                    require(it.api.Live2D_InitOffscreen() != 0) { nativeError(it.api, "Cubism runtime initialization failed") }
+                    binding = it
+                }).api
                 checkpoint()
                 val directory = stagingRoot?.let { Files.createTempDirectory(it, "psd2live-motion-sample-") }
                     ?: Files.createTempDirectory("psd2live-motion-sample-")
@@ -300,7 +473,7 @@ class CubismSdkPreviewSession(
         latestRender.remove(viewId)
         latestDelivery.remove(viewId)
         if (!closed) onNativeThread {
-            nativeCanvases.remove(viewId)?.let { api?.Live2D_DestroyModel(it.handle) }
+            nativeCanvases.remove(viewId)?.let { binding?.api?.Live2D_DestroyModel(it.handle) }
         }
     }
 
@@ -319,7 +492,11 @@ class CubismSdkPreviewSession(
 		try {
 			while (!closed) {
 				val queued = latestRender.poll() ?: break
-				if (queued.generation != generation || queued.generation != loadedGeneration) break
+				// A request queued before a reload still describes its view; it renders with the new model.
+				if (loadedGeneration != generation) {
+					latestRender.putIfAbsent(queued.request.viewId, queued)
+					break
+				}
 				renderFrame(queued)
 		}
 		} finally {
@@ -331,9 +508,11 @@ class CubismSdkPreviewSession(
 	private fun renderFrame(queued: QueuedRender) {
 		val request = queued.request
 		try {
-			if (closed || queued.generation != generation) return
-			val native = api ?: return
+			val frameGeneration = generation
+			if (closed || loadedGeneration != frameGeneration) return
+			val native = binding?.api ?: return
 			val canvas = canvasHandle(native, request.viewId)
+			canvas.lastRequest = request
             val handle = canvas.handle
             val reusePose = canvas.lastPoseRequest?.let { previous ->
                 previous.animationEnabled == request.animationEnabled &&
@@ -374,8 +553,8 @@ class CubismSdkPreviewSession(
 				// look offsets directly so mouse tracking remains useful while inspecting a pose.
 				val tracked = pointerPreviewPose(request.parameterOverrides, request.pointerX, request.pointerY,
 					request.parameterDefinitions, request.pointerTrackingEnabled, request.lockedParameters)
-				for (binding in CUBISM_POINTER_TRACKING_BINDINGS) {
-					val id = ParameterId(binding.parameterId)
+				for (tracking in CUBISM_POINTER_TRACKING_BINDINGS) {
+					val id = ParameterId(tracking.parameterId)
 					tracked[id]?.let { native.Live2D_SetParameterValue(handle, id.raw, it) }
 				}
 				needsRefresh = true
@@ -414,7 +593,7 @@ class CubismSdkPreviewSession(
                 cameraOffsetX = request.offsetX,
                 cameraOffsetY = request.offsetY,
 			)
-			if (!closed && queued.generation == generation) postFrame(queued.generation, frame)
+			if (!closed && frameGeneration == generation) postFrame(frameGeneration, frame)
 		} catch (failure: Throwable) {
 			postStatus(failure.message ?: failure.javaClass.simpleName)
 		}
@@ -436,11 +615,11 @@ class CubismSdkPreviewSession(
 		return elapsed
 	}
 
-	private fun applyParameterValues(native: Api, handle: Pointer, values: Map<ParameterId, Float>) {
+	private fun applyParameterValues(native: CubismNativeApi, handle: Pointer, values: Map<ParameterId, Float>) {
 		for ((id, value) in values) native.Live2D_SetParameterValue(handle, id.raw, value)
 	}
 
-	private fun applyAnimatedVerticalTracking(native: Api, handle: Pointer, y: Float) {
+	private fun applyAnimatedVerticalTracking(native: CubismNativeApi, handle: Pointer, y: Float) {
 		if (y == 0f) return
 		for (binding in CUBISM_POINTER_TRACKING_BINDINGS) {
 			val amount = y * binding.yScale
@@ -460,7 +639,7 @@ class CubismSdkPreviewSession(
 		}
 	}
 
-	private fun copyParameterValues(native: Api, handle: Pointer): Map<ParameterId, Float> {
+	private fun copyParameterValues(native: CubismNativeApi, handle: Pointer): Map<ParameterId, Float> {
 		val count = native.Live2D_GetParameterCount(handle).coerceAtLeast(0)
 		if (count == 0) return emptyMap()
 		val outputMemory = ensureParameterMemory(count)
@@ -514,7 +693,7 @@ class CubismSdkPreviewSession(
 		}
 	}
 
-	private fun nativeError(native: Api, fallback: String): String =
+	private fun nativeError(native: CubismNativeApi, fallback: String): String =
 		native.Live2D_GetLastError()?.getString(0, Charsets.UTF_8.name()).orEmpty().ifBlank { fallback }
 
 	private fun postStatus(status: String?) {
@@ -527,14 +706,11 @@ class CubismSdkPreviewSession(
 		generation++
 		latestRender.clear()
 		latestDelivery.clear()
+		pendingLoad.set(null)
 		onNativeThread {
-			val native = api
+			val native = binding?.api
 			if (native != null) {
-				nativeCanvases.values.forEach { native.Live2D_DestroyModel(it.handle) }
-                nativeCanvases.clear()
-                loadedManifest = null
-                model?.let(native::Live2D_DestroyModel)
-				model = null
+				disposeModels(native)
 				native.Live2D_Shutdown()
 			}
 			pixelMemory?.close()
@@ -618,7 +794,7 @@ class CubismSdkPreviewSession(
 			"FrameworkShaders/VertShaderSrcSetupMask.vert",
 		)
 
-		fun load(): Api {
+		fun load(): CubismNativeBinding {
 			val platformDir = getPlatformDir()
 			val libraryName = getLibraryName()
 
@@ -631,7 +807,16 @@ class CubismSdkPreviewSession(
 			val directory = Files.createTempDirectory("psd2live-cubism-5-r5-")
 			for (relative in runtimeFiles()) extract(directory, relative, customDir, platformDir)
 			System.setProperty("jna.library.path", directory.toString())
-			return Native.load(directory.resolve(libraryName).toString(), Api::class.java)
+			val path = directory.resolve(libraryName).toString()
+			val api = Native.load(path, CubismNativeApi::class.java)
+			// Libraries built before the in-memory entry points keep the file-based reload.
+			val library = NativeLibrary.getInstance(path)
+			fun exports(symbol: String) = runCatching { library.getFunction(symbol) }.isSuccess
+			return CubismNativeBinding(
+				api = api,
+				memoryModels = exports("Live2D_CreateModelFromMemory"),
+				textureReplace = exports("Live2D_ReplaceTexture"),
+			)
 		}
 
 		private fun extract(directory: Path, relative: String, customDir: Path? = null, platformDir: String) {

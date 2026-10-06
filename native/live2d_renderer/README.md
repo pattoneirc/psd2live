@@ -52,6 +52,9 @@ The build uses static MSVC CRT (`/MT`) and static Core. Check dependencies with 
 ### Linux
 Check dependencies with `ldd liblive2d_renderer.so`; the expected direct dependencies are system libraries: `libGL.so`, `libX11.so`, `libpthread.so`, `libdl.so`, and standard C/C++ runtime libraries.
 
+### Live preview updates
+The preview loads models from memory (`Live2D_CreateModelFromMemory`) and swaps changed texture pages in place (`Live2D_ReplaceTexture`), so an edit that only changes pixels keeps the live model, and other edits rebuild it from memory without writing a temporary directory. The application looks these symbols up when it loads the library: without `Live2D_ReplaceTexture` every change rebuilds from memory, and without `Live2D_CreateModelFromMemory` it keeps the file-based reload. Rebuild the bridge to get texture swaps.
+
 Check application renderer status and logs. Without usable native resources, the app uses its software renderer; basic model export does not require this native library.
 
 [English setup](../../docs/en/guide/CUBISM_SDK_SETUP.md) · [中文](../../docs/zh/guide/CUBISM_SDK_SETUP.md) · [日本語](../../docs/ja/guide/CUBISM_SDK_SETUP.md) · [CMake configuration](CMakeLists.txt)

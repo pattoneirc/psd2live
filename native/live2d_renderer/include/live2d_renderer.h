@@ -45,12 +45,34 @@ LIVE2D_API void Live2D_Shutdown();
 LIVE2D_API Live2DModelHandle Live2D_CreateModel(const char* modelFilePath);
 
 /**
- * @brief Create a model from an in-memory QDPREVIEW bundle produced by quadrism.
+ * @brief Create a model from an in-memory QDPREVIEW bundle, without touching the file system.
  * The native renderer copies every asset it needs before this function returns.
+ *
+ * Layout (little endian): "QDPREVIEW" (9 bytes), u32 version = 1, u32 manifestPathLength,
+ * u32 assetCount, manifest path (UTF-8, the .model3.json asset's path), then per asset:
+ * u32 pathLength, u64 dataLength, path (UTF-8, relative to the bundle root), data.
  */
 LIVE2D_API Live2DModelHandle Live2D_CreateModelFromMemory(
     const uint8_t* bundleData,
     size_t bundleSize);
+
+/**
+ * @brief Replace one texture page of a loaded model in place, keeping its moc, pose and motions.
+ * @param handle Model handle.
+ * @param index Page index in the manifest's Textures list.
+ * @param data RGBA8888 pixels when width and height are positive, otherwise encoded PNG bytes.
+ * @param size Byte count of data.
+ * @param width Page width in pixels, or 0 for PNG data.
+ * @param height Page height in pixels, or 0 for PNG data.
+ * @return 1 on success, 0 on failure. Use Live2D_GetLastError for details.
+ */
+LIVE2D_API int Live2D_ReplaceTexture(
+    Live2DModelHandle handle,
+    int index,
+    const uint8_t* data,
+    size_t size,
+    int width,
+    int height);
 
 /**
  * @brief Destroy a Live2D model instance and free its OpenGL textures and buffers.

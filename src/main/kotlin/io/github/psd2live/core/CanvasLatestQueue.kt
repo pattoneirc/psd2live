@@ -5,6 +5,8 @@ internal class CanvasLatestQueue<T> {
     private val pending = linkedMapOf<String, T>()
 
     @Synchronized fun put(viewId: String, value: T) { pending[viewId] = value }
+    /** Queues [value] unless newer work for [viewId] is already waiting. */
+    @Synchronized fun putIfAbsent(viewId: String, value: T) { pending.putIfAbsent(viewId, value) }
     @Synchronized fun poll(): T? {
         val key = pending.keys.firstOrNull() ?: return null
         return pending.remove(key)

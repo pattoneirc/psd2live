@@ -176,6 +176,17 @@ static void DestroyOffscreenLocked()
 #endif
 }
 
+static std::string FrameworkPathString(const char* path) { return path ? std::string(path) : std::string(); }
+static std::string FrameworkPathString(const std::string& path) { return path; }
+
+// Framework releases disagree on whether the loader takes `const csmChar*` or `const std::string`;
+// the target pointer type picks the instantiation.
+template <typename PathType>
+static Csm::csmByte* LoadFrameworkFile(PathType filePath, Csm::csmSizeInt* outSize)
+{
+    return Live2DPal::LoadFileAsBytes(FrameworkPathString(filePath), outSize);
+}
+
 static bool InitializeFramework()
 {
     if (s_isInitialized) return true;
@@ -183,7 +194,7 @@ static bool InitializeFramework()
     static Csm::CubismFramework::Option s_frameworkOption;
     s_frameworkOption.LogFunction = CoreLogHandler;
     s_frameworkOption.LoggingLevel = Csm::CubismFramework::Option::LogLevel_Warning;
-    s_frameworkOption.LoadFileFunction = Live2DPal::LoadFileAsBytes;
+    s_frameworkOption.LoadFileFunction = LoadFrameworkFile;
     s_frameworkOption.ReleaseBytesFunction = Live2DPal::ReleaseBytes;
 
     if (!Csm::CubismFramework::StartUp(&s_allocator, &s_frameworkOption))
@@ -519,16 +530,20 @@ Live2DModelHandle Live2D_CreateModelFromMemory(const uint8_t* bundleData, size_t
     ClearLastError();
     if (!bundleData || bundleSize < 21)
     {
-        Fail("Rust preview bundle is empty or truncated");
+        Fail("Preview bundle is empty or truncated");
         return nullptr;
     }
-    if (!InitializeOffscreenLocked()) return nullptr;
+    // Reloads happen on every edit: reuse a live context instead of re-running GLEW and the log line.
+    if (!(s_isInitialized && HasOffscreenContext() && MakeOffscreenCurrent()) && !InitializeOffscreenLocked())
+    {
+        return nullptr;
+    }
 
     const uint8_t* cursor = bundleData;
     const uint8_t* end = bundleData + bundleSize;
     if (std::memcmp(cursor, kPreviewMagic, sizeof(kPreviewMagic) - 1) != 0)
     {
-        Fail("Rust preview bundle has an invalid signature");
+        Fail("Preview bundle has an invalid signature");
         return nullptr;
     }
     cursor += sizeof(kPreviewMagic) - 1;
@@ -542,7 +557,7 @@ Live2DModelHandle Live2D_CreateModelFromMemory(const uint8_t* bundleData, size_t
         manifestLength == 0 || manifestLength > static_cast<uint32_t>(end - cursor) ||
         assetCount == 0 || assetCount > 10000)
     {
-        Fail("Rust preview bundle header is invalid");
+        Fail("Preview bundle header is invalid");
         return nullptr;
     }
 
@@ -559,7 +574,7 @@ Live2DModelHandle Live2D_CreateModelFromMemory(const uint8_t* bundleData, size_t
             dataLength > static_cast<uint64_t>(end - cursor - pathLength) ||
             dataLength > static_cast<uint64_t>((std::numeric_limits<size_t>::max)()))
         {
-            Fail("Rust preview bundle contains a truncated asset");
+            Fail("Preview bundle contains a truncated asset");
             return nullptr;
         }
         Live2DModel::MemoryAsset asset;
@@ -571,7 +586,7 @@ Live2DModelHandle Live2D_CreateModelFromMemory(const uint8_t* bundleData, size_t
     }
     if (cursor != end)
     {
-        Fail("Rust preview bundle has trailing bytes");
+        Fail("Preview bundle has trailing bytes");
         return nullptr;
     }
 
@@ -579,10 +594,47 @@ Live2DModelHandle Live2D_CreateModelFromMemory(const uint8_t* bundleData, size_t
     if (!model->LoadAssetsFromMemory(manifestPath, std::move(assets)))
     {
         delete model;
-        Fail("NativeSDK could not create the in-memory Live2D model");
+        Fail("Cubism could not create the in-memory Live2D model");
         return nullptr;
     }
     return reinterpret_cast<Live2DModelHandle>(model);
+}
+
+int Live2D_ReplaceTexture(Live2DModelHandle handle, int index, const uint8_t* data, size_t size, int width, int height)
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    ClearLastError();
+    if (!handle || !data || size == 0)
+    {
+        return Fail("Invalid model or texture data");
+    }
+    if (HasOffscreenContext() && !MakeOffscreenCurrent())
+    {
+        return Fail("Cannot activate OpenGL while replacing a texture");
+    }
+    Live2DModel* model = reinterpret_cast<Live2DModel*>(handle);
+    if (index < 0 || index >= model->GetTextureCount())
+    {
+        return Fail("Texture page index " + std::to_string(index) + " is out of range");
+    }
+    if (width > 0 && height > 0)
+    {
+        const uint64_t expected = static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 4u;
+        if (static_cast<uint64_t>(size) != expected)
+        {
+            return Fail("RGBA texture data does not match its width and height");
+        }
+        if (!model->ReplaceTexture(index, data, width, height))
+        {
+            return Fail("OpenGL rejected the replacement texture");
+        }
+        return 1;
+    }
+    if (!model->ReplaceTextureEncoded(index, data, size))
+    {
+        return Fail("Cannot decode or upload the replacement PNG texture");
+    }
+    return 1;
 }
 
 void Live2D_DestroyModel(Live2DModelHandle handle)

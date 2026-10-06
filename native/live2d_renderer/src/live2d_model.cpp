@@ -156,7 +156,9 @@ bool Live2DModel::LoadAssetsFromMemory(
         }
         _memoryFiles.emplace(std::move(asset.path), std::move(asset.data));
     }
-    return LoadAssets(modelFilePath);
+    if (!LoadAssets(modelFilePath)) return false;
+    DropTextureFilesFromMemory();
+    return true;
 }
 
 void Live2DModel::SetupModel(ICubismModelSetting* setting)
@@ -365,6 +367,8 @@ void Live2DModel::SetupTextures()
     if (!_modelSetting) return;
 
     csmInt32 textureCount = _modelSetting->GetTextureCount();
+    // One slot per manifest page, so a page index addresses its texture even when an earlier page failed.
+    _textures.assign(static_cast<size_t>(textureCount > 0 ? textureCount : 0), 0);
     for (csmInt32 i = 0; i < textureCount; i++)
     {
         const char* texFileName = _modelSetting->GetTextureFileName(i);
@@ -391,22 +395,81 @@ void Live2DModel::SetupTextures()
 
         GLuint texId = 0;
         glGenTextures(1, &texId);
-        glBindTexture(GL_TEXTURE_2D, texId);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, imgData);
-        glGenerateMipmap(GL_TEXTURE_2D);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glBindTexture(GL_TEXTURE_2D, 0);
+        UploadTexture(texId, imgData, width, height);
 
         stbi_image_free(imgData);
 
         GetRenderer<Rendering::CubismRenderer_OpenGLES2>()->BindTexture(i, texId);
-        _textures.push_back(texId);
+        _textures[static_cast<size_t>(i)] = texId;
     }
 
     GetRenderer<Rendering::CubismRenderer_OpenGLES2>()->IsPremultipliedAlpha(false);
+}
+
+void Live2DModel::UploadTexture(GLuint texId, const unsigned char* rgba, int width, int height)
+{
+    glBindTexture(GL_TEXTURE_2D, texId);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+bool Live2DModel::ReplaceTexture(int index, const unsigned char* rgba, int width, int height)
+{
+    if (!_model || !rgba || width <= 0 || height <= 0) return false;
+    if (index < 0 || static_cast<size_t>(index) >= _textures.size()) return false;
+    auto* renderer = GetRenderer<Rendering::CubismRenderer_OpenGLES2>();
+    if (!renderer) return false;
+
+    GLuint texId = _textures[static_cast<size_t>(index)];
+    if (texId == 0)
+    {
+        glGenTextures(1, &texId);
+        _textures[static_cast<size_t>(index)] = texId;
+    }
+    while (glGetError() != GL_NO_ERROR) {}
+    // glTexImage2D respecifies the storage, so a page that grew or shrank keeps the same texture name and
+    // the renderer's binding stays valid.
+    UploadTexture(texId, rgba, width, height);
+    renderer->BindTexture(index, texId);
+    return glGetError() == GL_NO_ERROR;
+}
+
+bool Live2DModel::ReplaceTextureEncoded(int index, const unsigned char* data, size_t size)
+{
+    if (!data || size == 0 || size > static_cast<size_t>(0x7fffffff)) return false;
+    int width = 0, height = 0, channels = 0;
+    unsigned char* pixels = stbi_load_from_memory(data, static_cast<int>(size), &width, &height, &channels, STBI_rgb_alpha);
+    if (!pixels) return false;
+    const bool replaced = ReplaceTexture(index, pixels, width, height);
+    stbi_image_free(pixels);
+    return replaced;
+}
+
+int Live2DModel::GetTextureCount() const
+{
+    return static_cast<int>(_textures.size());
+}
+
+void Live2DModel::DropTextureFilesFromMemory()
+{
+    // Pages live on the GPU once uploaded; motions and expressions stay because they load lazily.
+    if (!_modelSetting || _memoryFiles.empty()) return;
+    const csmInt32 textureCount = _modelSetting->GetTextureCount();
+    for (csmInt32 i = 0; i < textureCount; i++)
+    {
+        const char* texFileName = _modelSetting->GetTextureFileName(i);
+        if (!texFileName) continue;
+        std::string key = _modelHomeDir + texFileName;
+        std::replace(key.begin(), key.end(), '\\', '/');
+        while (key.rfind("./", 0) == 0) key.erase(0, 2);
+        _memoryFiles.erase(key);
+    }
 }
 
 void Live2DModel::ReleaseTextures()
