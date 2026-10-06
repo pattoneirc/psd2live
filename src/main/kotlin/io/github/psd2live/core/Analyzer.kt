@@ -7,8 +7,9 @@ import org.umamo.format.art.SourceArt
 import kotlin.math.max
 
 object CharacterAnalyzer {
+	/** [layer] classified at canvas resolution ([CanvasDensity]): a dense layer is analysed through its canvas view. */
 	internal fun classify(layer: org.umamo.format.art.SourceLayer, config: PipelineConfig): ClassifiedLayer =
-		LayerClassifier.classify(layer, config.alphaThreshold).withOverride(config.layerOverrides[layer.id.raw])
+		LayerClassifier.classify(CanvasDensity.canvasLayer(layer), config.alphaThreshold).withOverride(config.layerOverrides[layer.id.raw])
 
 	/** Recreate retained legacy component identities without building a model or discarding deleted pixels. */
 	internal fun expandLayer(original: ClassifiedLayer, config: PipelineConfig, unitScale: Float = 1f): List<ClassifiedLayer> {

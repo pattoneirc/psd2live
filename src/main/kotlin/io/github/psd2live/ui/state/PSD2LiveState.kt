@@ -693,6 +693,8 @@ data class PSD2LiveState(
 			rigEdits = rigEdits,
 			generationSource = generationSource,
 			meshSource = meshSource,
+			atlasBudget = atlasBudget,
+			textureOverrides = textureOverrides.filterValues { !it.isDefault },
 		)
 	}
 

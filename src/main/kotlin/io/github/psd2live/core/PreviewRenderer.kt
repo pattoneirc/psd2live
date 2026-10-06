@@ -1,5 +1,6 @@
 ﻿package io.github.psd2live.core
 
+import io.github.psd2live.project.storedCanvasRect
 import org.umamo.format.art.SourceArt
 import org.umamo.format.art.isEffectivelyVisible
 import java.awt.AlphaComposite
@@ -8,7 +9,8 @@ import java.awt.image.BufferedImage
 
 object PreviewRenderer {
 	/** What a composite reads of one layer; the raster array counts by identity (arrays compare by reference). */
-	private data class LayerKey(val rgba: ByteArray, val width: Int, val left: Int, val top: Int, val opacity: Float)
+	private data class LayerKey(val rgba: ByteArray, val width: Int, val left: Int, val top: Int, val opacity: Float,
+	                            val rect: io.github.psd2live.project.LayerCanvasRect? = null, val height: Int = 0)
 	private data class CompositeKey(val width: Int, val height: Int, val layers: List<LayerKey>)
 
 	private val composites = object : LinkedHashMap<CompositeKey, java.lang.ref.SoftReference<BufferedImage>>(4, 0.75f, true) {
@@ -21,7 +23,8 @@ object PreviewRenderer {
 	 */
 	fun composite(source: SourceArt): BufferedImage {
 		val key = CompositeKey(source.widthPx, source.heightPx, source.layers.filter { source.isEffectivelyVisible(it) && it.opacity > 0f }
-			.map { LayerKey(it.raster.rgba, it.raster.width, it.bounds.left, it.bounds.top, it.opacity.coerceIn(0f, 1f)) })
+			.map { LayerKey(it.raster.rgba, it.raster.width, it.bounds.left, it.bounds.top, it.opacity.coerceIn(0f, 1f),
+				it.storedCanvasRect, it.raster.height) })
 		synchronized(composites) { composites[key]?.get()?.let { return it } }
 		return compositeOf(source).also { image -> synchronized(composites) { composites[key] = java.lang.ref.SoftReference(image) } }
 	}
@@ -34,12 +37,32 @@ object PreviewRenderer {
 			for (layer in source.layers) {
 				if (!source.isEffectivelyVisible(layer) || layer.opacity <= 0f) continue
 				graphics.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, layer.opacity.coerceIn(0f, 1f))
-				graphics.drawImage(rasterImage(layer.raster.width, layer.raster.height, layer.raster.rgba), layer.bounds.left, layer.bounds.top, null)
+				drawLayer(graphics, layer)
 			}
 		} finally {
 			graphics.dispose()
 		}
 		return canvas
+	}
+
+	/**
+	 * Draws [layer]'s raster onto canvas-space [graphics]: at its integer bounds when it covers them one to one,
+	 * as always, else stretched over its canvas rectangle ([LayerSpace]). A canvas-resolution view
+	 * ([CanvasDensityLayer]) draws the texture raster behind it.
+	 */
+	fun drawLayer(graphics: java.awt.Graphics2D, layer: org.umamo.format.art.SourceLayer) {
+		val texture = layer.textureLayer
+		val raster = texture.raster
+		if (raster.width <= 0 || raster.height <= 0) return
+		val image = rasterImage(raster.width, raster.height, raster.rgba)
+		if (texture === layer && !CanvasDensity.dense(layer)) {
+			graphics.drawImage(image, layer.bounds.left, layer.bounds.top, null)
+			return
+		}
+		val space = LayerSpace.of(texture)
+		graphics.drawImage(image, java.awt.geom.AffineTransform(
+			(space.width / raster.width).toDouble(), 0.0, 0.0, (space.height / raster.height).toDouble(),
+			space.left.toDouble(), space.top.toDouble()), null)
 	}
 
 	fun rasterImage(width: Int, height: Int, rgba: ByteArray): BufferedImage {

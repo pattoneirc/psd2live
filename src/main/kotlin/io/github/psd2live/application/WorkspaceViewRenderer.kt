@@ -10,6 +10,8 @@ import io.github.psd2live.project.WorkspaceViewOutputSpec
 import io.github.psd2live.project.WorkspaceViewSpatialMetadata
 
 import io.github.psd2live.core.Bounds
+import io.github.psd2live.core.CanvasDensity
+import io.github.psd2live.core.LayerSpace
 import io.github.psd2live.core.PreviewRenderer
 import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.core.CanvasViewport
@@ -145,13 +147,13 @@ object WorkspaceViewRenderer {
 	): WorkspaceRenderedView {
 		validateOutput(output)
 		val foreground = PreviewRenderer.rasterImage(layer.raster.width, layer.raster.height, layer.raster.rgba)
-		val canvasRect = Bounds(
+		val canvasRect = if (!CanvasDensity.dense(layer)) Bounds(
 			layer.bounds.left.toFloat(),
 			layer.bounds.top.toFloat(),
 			(layer.bounds.left + layer.bounds.width).toFloat(),
 			(layer.bounds.top + layer.bounds.height).toFloat(),
-		)
-		requireMatchingAspect(foreground.width, foreground.height, canvasRect)
+		) else LayerSpace.of(layer).canvasBounds()
+		if (!CanvasDensity.dense(layer)) requireMatchingAspect(foreground.width, foreground.height, canvasRect)
 		val size = targetPixelSize(canvasRect, output.targetLongEdge)
 		val image = when (background) {
 			WorkspaceViewBackground.TRANSPARENT -> BufferedImage(size.first, size.second, BufferedImage.TYPE_INT_ARGB)
@@ -211,7 +213,12 @@ object WorkspaceViewRenderer {
 			graphics.drawImage(composite, transform, null)
 			graphics.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.58f)
 			val layerTransform = AffineTransform(transform).apply {
-				translate(layer.bounds.left.toDouble(), layer.bounds.top.toDouble())
+				if (!CanvasDensity.dense(layer)) translate(layer.bounds.left.toDouble(), layer.bounds.top.toDouble()) else {
+					// A raster denser or sparser than its canvas rectangle is stretched over it.
+					val space = LayerSpace.of(layer)
+					translate(space.left.toDouble(), space.top.toDouble())
+					scale((space.width / layer.raster.width).toDouble(), (space.height / layer.raster.height).toDouble())
+				}
 			}
 			graphics.drawImage(tintedLayer(layer, Color(0x00, 0xD8, 0xFF)), layerTransform, null)
 			graphics.composite = AlphaComposite.SrcOver

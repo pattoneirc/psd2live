@@ -208,9 +208,7 @@ internal object RasterPaintCommit {
         )
         val newAtlas = AtlasLayout.pack(
             effectiveAnalysis.layers,
-            currentPreview.config.atlasSize,
-            currentPreview.config.texturePadding,
-            currentPreview.config.textureUpscale,
+            currentPreview.config,
             ProgressListener { stage, fraction -> checkpoint(); progress.update(stage, 0.15 + 0.35 * fraction) },
             currentPreview.atlas,
         )

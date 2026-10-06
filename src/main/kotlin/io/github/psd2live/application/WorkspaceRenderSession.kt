@@ -77,8 +77,7 @@ internal class WorkspaceRenderSession(
                 val layer = classified.source
                 if (!captured.document.renderLayerVisible(layer, captured.model) || layer.opacity <= 0f) continue
                 graphics.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, layer.opacity.coerceIn(0f, 1f))
-                graphics.drawImage(PreviewRenderer.rasterImage(layer.raster.width, layer.raster.height, layer.raster.rgba),
-                    layer.bounds.left, layer.bounds.top, null)
+                PreviewRenderer.drawLayer(graphics, layer)
             }
         } finally { graphics.dispose() }
         return canvas

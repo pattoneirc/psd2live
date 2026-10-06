@@ -32,8 +32,27 @@ public class Cmo3Target(
 		masks = MaskSupport.TEXTURE_ALPHA, keyedDrawOrder = true, glue = true,
 	)
 
-	/** The converted graph and its lowering notices, before serialization. */
+	/**
+	 * The converted graph and its lowering notices, before serialization. A layer whose source raster is not its
+	 * canvas rectangle at one pixel per canvas unit is written as [Cmo3LayerArt] (the internal `layer_art`
+	 * setting) says, at canvas resolution by default.
+	 */
 	public fun convert(ir: RigIR, options: ExportOptions): Cmo3Conversion.Result {
+		val layerArt = Cmo3LayerArt.of(options.setting(Cmo3LayerArt.SETTING))
+		val lowered = if (layerArt == Cmo3LayerArt.CANVAS) Cmo3LayerArtLowering.canvasResolution(ir) else ir
+		val native = if (layerArt == Cmo3LayerArt.NATIVE) Cmo3LayerArtLowering.nativeResolution(ir) else null
+		return convertLowered(lowered, options) { root -> native?.invoke(root); decorate(root) }
+	}
+
+	/**
+	 * The texture-size losses of writing [ir]: one per tile whose atlas texels per canvas unit exceed its cmo3
+	 * layer's, which Cubism Editor's atlas regeneration would drop. None for `layer_art=native`.
+	 */
+	public fun textureLosses(ir: RigIR, options: ExportOptions): List<LossEntry> =
+		if (Cmo3LayerArt.of(options.setting(Cmo3LayerArt.SETTING)) == Cmo3LayerArt.NATIVE) emptyList()
+		else Cmo3LayerArtLowering.losses(Cmo3LayerArtLowering.canvasResolution(ir))
+
+	private fun convertLowered(ir: RigIR, options: ExportOptions, decorate: (CModelSource) -> Unit): Cmo3Conversion.Result {
 		val puppet = PuppetIr.toPuppet(ir)
 		val exportPuppet = restMeshesToCanvasSpace(puppet, ir.restPose.mapKeys { ParameterId(it.key) })
 		val pages = ir.textures.pages.mapIndexed { index, page ->
@@ -58,7 +77,7 @@ public class Cmo3Target(
 
 	override fun plan(ir: RigIR, options: ExportOptions): LoweredExport {
 		val converted = convert(ir, options)
-		val losses = CapabilityScan.scan(ir, capabilities, options) + converted.report.notices.map(Moc3Target::loss)
+		val losses = CapabilityScan.scan(ir, capabilities, options) + converted.report.notices.map(Moc3Target::loss) + textureLosses(ir, options)
 		return object : LoweredExport {
 			override val losses: List<LossEntry> = losses
 			override fun write(sink: OutputSink) = sink.write("${options.baseName}.cmo3", Cmo3.write(converted.model))

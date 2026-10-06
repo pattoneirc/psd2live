@@ -148,12 +148,16 @@ internal object RigGenerationSource {
             val next = requireNotNull(to.placementByLayerId[layerId]) { "Current atlas layer is missing" }
             val oldBounds = oldLayers.getValue(layerId).source.bounds
             val newBounds = newLayers.getValue(layerId).source.bounds
-            fun slice(atlas: PackedAtlas, placement: AtlasPlacement, bounds: LayerBounds): LayerTexture {
+            // A layer whose raster is not its bounds at one pixel per canvas unit maps through its own space;
+            // every other one keeps the bounds-sized slice it always had.
+            fun slice(atlas: PackedAtlas, placement: AtlasPlacement, layer: ClassifiedLayer): LayerTexture {
                 val page = atlas.pages[placement.page]
-                return LayerTexture.packed(bounds, placement, page.image.width, page.image.height)
+                return if (layer.source is CanvasDensityLayer || CanvasDensity.dense(layer.source))
+                    LayerTexture.packed(layer, placement, page.image.width, page.image.height)
+                else LayerTexture.packed(layer.source.bounds, placement, page.image.width, page.image.height)
             }
-            val before = slice(from, old, oldBounds)
-            val after = slice(to, next, newBounds)
+            val before = slice(from, old, oldLayers.getValue(layerId))
+            val after = slice(to, next, newLayers.getValue(layerId))
             val sameAddress = old == next && oldBounds == newBounds &&
                 from.pages[old.page].image.width == to.pages[next.page].image.width &&
                 from.pages[old.page].image.height == to.pages[next.page].image.height

@@ -127,7 +127,7 @@ internal object TextureUpscale {
             val pending = mutableSetOf<String>()
             for (layer in layers) {
                 if (Thread.currentThread().isInterrupted) throw InterruptedException()
-                val raster = layer.source.raster
+                val raster = layer.source.textureLayer.raster
                 val hash = MessageDigest.getInstance("SHA-256").apply {
                     update(identity)
                     update("${raster.width}x${raster.height}".toByteArray())
@@ -195,7 +195,7 @@ internal object TextureUpscale {
                 }
             }
             for (layer in layers) {
-                val raster = layer.source.raster
+                val raster = layer.source.textureLayer.raster
                 check(validImage(outputs.getValue(layer.source.id.raw), raster.width * config.scale, raster.height * config.scale)) {
                     "Invalid upscaled RGBA output for ${layer.source.name}"
                 }

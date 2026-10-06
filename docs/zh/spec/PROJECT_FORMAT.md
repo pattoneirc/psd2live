@@ -44,10 +44,10 @@
 
 ### 纹理字段
 
-三项字段均为可选，缺省即旧语义，不参与旧文档的 revision；当前只做保存、恢复和身份，图集打包尚未读取：
+三项字段均为可选，缺省即旧语义，不参与旧文档的 revision。生成与图集打包读取它们（规则见[文档层](DOCUMENT_LAYER.md#逐层尺寸)）：
 
-- 源图层 `rect: [left, top, width, height]`：浮点画布矩形（画布单位）。缺省或等于整数边界时不写出，整数 `left/top/width/height` 仍是外包框，矩形必须位于其中。
-- 文档 `textureOverrides: {图层 ID: {density?, lock?, pin?: {page, x, y}}}`：逐层纹理密度、锁定与固定图集位置；全为默认值的项不写出。位于 `layers` 节点。
+- 源图层 `rect: [left, top, width, height]`：浮点画布矩形（画布单位），即图层在画布上的位置，像素操作不改变它。缺省或等于整数边界时不写出，整数 `left/top/width/height` 仍是外包框，矩形必须位于其中。图层栅格（`raster` 的宽高）可以是任意分辨率，与矩形无关；栅格像素 / 矩形尺寸即该图层的原生密度，两轴可以不同。
+- 文档 `textureOverrides: {图层 ID: {density?, lock?, pin?: {page, x, y}}}`：逐层纹理密度倍率（缺省 1，即栅格原分辨率）、锁定（图集需要缩小时保持密度）与固定图集位置（页、左上角页面像素）；全为默认值的项不写出。位于 `layers` 节点。
 - 设置 `atlas: {pageSize, maxPages, padding}`：图集预算。缺省时预算为旧的 `atlasSize` / `texturePadding` 加默认页数 8；缺少的子字段同样回退到这两项。
 
 ## v1 兼容与迁移

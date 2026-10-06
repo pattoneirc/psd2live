@@ -60,7 +60,7 @@ MIT 模块不依赖任何 GPL 模块，由 Gradle 依赖关系在编译期保证
 | 目标 | 设置键 |
 | --- | --- |
 | `moc3` | `physics`、`user_data`、`display_info`、`hidden_parts`、`hidden_meshes`、`guide_parts`（布尔）、`pixels_per_unit`（正数）；缺省取工程导出设置 |
-| `cmo3` | `timestamp`（毫秒，默认 0） |
+| `cmo3` | `timestamp`（毫秒，默认 0）；内部未公开的 `layer_art`：`canvas`（默认，密度不为 1 的图层以画布分辨率写入，高分辨率只留在纹理集页，并给出 `texture_size` / `approximated` 损失项“Cubism Editor rebuilds the atlas from canvas-resolution layers”）或 `native`（按原分辨率写入图层，未经编辑器实测），见[文档层](DOCUMENT_LAYER.md#逐层尺寸) |
 | `spine` | `binary`（写出二进制 `.skel` 而非 JSON，默认 false）、`clip_fps`（动作采样帧率，默认 15）、`clips`（是否写出动作，默认 true）、`key_tolerance`（关键帧精简容差，像素，默认 0.25）、`sample_pairs` |
 | `psd-pose` | `clip` 与 `time`（秒）按动作片段摆姿势，或 `pose`（`ParamAngleX=20,ParamEyeLOpen=0`，覆盖片段）；`scale`（0.25–2，默认 1） |
 | 视频类 | 同光栅类，另有 `ffmpeg`（ffmpeg 路径；缺省依次取环境变量 `PSD2LIVE_FFMPEG` 与 PATH） |

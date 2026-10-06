@@ -33,6 +33,12 @@ internal class LayerTexture(
 	val placement: TilePlacement?,
 	val pageWidth: Int,
 	val pageHeight: Int,
+	/**
+	 * Canvas units from the corner layer offsets are measured from (the layer's integer bounds) to the
+	 * rectangle's corner; 0 unless the layer has a fractional canvas rectangle.
+	 */
+	val offsetOriginX: Float = 0f,
+	val offsetOriginY: Float = 0f,
 ) {
 	private val axisAligned = placement == null || placement.rotationDegrees == 0f
 
@@ -64,7 +70,7 @@ internal class LayerTexture(
 	}
 
 	/** The stored uv of a layer offset - the binding of one unbound texture coordinate. */
-	fun uvOfOffset(x: Float, y: Float): FloatArray = uvOfRaster(x * space.scaleX, y * space.scaleY)
+	fun uvOfOffset(x: Float, y: Float): FloatArray = uvOfRaster((x - offsetOriginX) * space.scaleX, (y - offsetOriginY) * space.scaleY)
 
 	/** Stored uvs to canvas units, pairwise. */
 	fun toCanvas(uvs: FloatArray): FloatArray = FloatArray(uvs.size).also { out ->
@@ -103,8 +109,19 @@ internal class LayerTexture(
 			left.toFloat(), top.toFloat(), rasterWidth.toFloat(), rasterHeight.toFloat(), rasterWidth, rasterHeight,
 		)
 
-		fun generatorSpace(layer: ClassifiedLayer): LayerSpace =
-			generatorSpace(layer.source.bounds.left, layer.source.bounds.top, layer.source.raster.width, layer.source.raster.height)
+		/**
+		 * The space a generated layer's offsets are bound in: its texture raster ([textureLayer]) over its canvas
+		 * rectangle. For a layer whose raster covers its integer bounds one to one this is the generator's own
+		 * space, computed exactly as before; a denser (or sparser) or fractionally placed layer maps the same
+		 * canvas offsets onto its own raster.
+		 */
+		fun generatorSpace(layer: ClassifiedLayer): LayerSpace {
+			val source = layer.source
+			val texture = source.textureLayer
+			if (texture === source && !CanvasDensity.dense(source))
+				return generatorSpace(source.bounds.left, source.bounds.top, source.raster.width, source.raster.height)
+			return LayerSpace.of(texture)
+		}
 
 		/** Umamo's form of a packed placement: axis aligned, positioned at whole page pixels. */
 		fun tilePlacement(placement: AtlasPlacement): TilePlacement = TilePlacement(
@@ -118,7 +135,15 @@ internal class LayerTexture(
 
 		/** [layer]'s texture on [atlas] under the generator's layer space. */
 		fun packed(layer: ClassifiedLayer, placement: AtlasPlacement, atlas: PackedAtlas): LayerTexture =
-			packed(generatorSpace(layer), placement, atlas.pages[placement.page].image.width, atlas.pages[placement.page].image.height)
+			packed(layer, placement, atlas.pages[placement.page].image.width, atlas.pages[placement.page].image.height)
+
+		/** [layer]'s texture on a page of [pageWidth] x [pageHeight], its offsets measured from its integer bounds. */
+		fun packed(layer: ClassifiedLayer, placement: AtlasPlacement, pageWidth: Int, pageHeight: Int): LayerTexture {
+			val space = generatorSpace(layer)
+			val bounds = layer.source.bounds
+			return LayerTexture(space, tilePlacement(placement), pageWidth, pageHeight,
+				space.left - bounds.left, space.top - bounds.top)
+		}
 
 		fun packed(space: LayerSpace, placement: AtlasPlacement, pageWidth: Int, pageHeight: Int): LayerTexture =
 			LayerTexture(space, tilePlacement(placement), pageWidth, pageHeight)
@@ -219,7 +244,7 @@ internal object UvBinding {
 
 	/** Binds one unbound mesh of [layer] to its [placement]. */
 	fun bindMesh(mesh: DrawableMesh, layer: ClassifiedLayer, placement: AtlasPlacement, pageWidth: Int, pageHeight: Int): DrawableMesh =
-		DrawableMesh(mesh.positions, LayerTexture.packed(LayerTexture.generatorSpace(layer), placement, pageWidth, pageHeight).bind(mesh.uvs), mesh.indices)
+		DrawableMesh(mesh.positions, LayerTexture.packed(layer, placement, pageWidth, pageHeight).bind(mesh.uvs), mesh.indices)
 
 	/**
 	 * The part of a bound model the binding decides for [drawables] (all when null): each one's page and

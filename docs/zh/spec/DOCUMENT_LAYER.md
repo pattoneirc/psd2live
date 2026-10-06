@@ -112,6 +112,40 @@
 - 绘画候选不再做第二遍打包：保留网格的绘画（及换图）在 `WorkspaceRasterEdits` 中只裁剪像素（`RasterPaintCommit.paintedSource`）并冻结生成输入，Rig、纹理集与运行包全部来自随后的一次重建；需要重建网格的绘画仍调用 `RasterPaintCommit.prepare` 取得迁移记录，但不再编译预览运行包。重建时 `WorkspacePreviewBuilder` 把当前模型的纹理集交给 `buildPreview`，只借用其页面与条带，结果与从零构建完全相同。
 - 重排后的基础 Rig 按“生成几何缓存条目 + 布局 + 纹理图层元数据（不含像素）+ 新建网格 ID”缓存最近 4 个：图块尺寸与位置不变的绘画得到同一基础 Rig 实例，重放检查点继续命中。图层透明度统计（`LayerClassifier`）按栅格数组身份缓存，合成预览图（`PreviewRenderer.composite`）按各图层栅格身份与位置缓存最近 3 个，重建只重新扫描被绘画的图层。
 
+## 逐层尺寸
+
+图层的画布位置与像素数量相互独立（`core/LayerSpace.kt`）：
+
+- 画布矩形：浮点画布单位，即源图层的 `rect`，缺省为整数边界。它决定图层在画布上的位置，绘画、换图等像素操作不改变它。
+- 栅格：图层实际的源像素 W×H，可以是任意分辨率。
+- 原生密度：栅格像素 / 画布单位，两轴可以不同。栅格恰好覆盖整数边界（一像素一画布单位）且没有分数矩形的图层与此前完全相同。
+
+几何（`core/CanvasDensity.kt`）：
+
+- 分析、分类、锚点、轮廓、网格生成、嘴唇与连通块拆分都按画布单位读取栅格。密度不为 1 或矩形为分数的图层在分析时换成画布分辨率视图 `CanvasDensityLayer`：同一图层，栅格按面积平均（放大时双线性）重采样到整数边界、一像素一画布单位，矩形外为透明。因此 32 单位矩形上的 1024² 栅格与 32² 栅格生成相同的网格；完全透明的占位栅格不换视图。
+- 生成器的纹理坐标仍是相对整数边界左上角的画布单位偏移。`UvBinding` / `LayerTexture` 按纹理图层（`textureLayer`，视图背后的原栅格）的空间把偏移换算到原栅格再到图块：`raster = (offset − (rect − bounds)) × 密度`，矩形为整数时减项为 0，结果与此前逐位相同。
+- 预览合成（`PreviewRenderer.drawLayer`）、素材工作流和观察渲染把栅格拉伸到画布矩形绘制。
+
+纹理集（`AtlasLayout`）：
+
+- 每个图块的纹理像素 = 栅格像素 × `textureUpscale` × 密度倍率（`textureOverrides.density`，缺省 1，即栅格原分辨率）× fit。`textureUpscale` 仍是按摘要缓存的源图预处理，效果与此前相同。
+- 页尺寸取预算的 `pageSize`，并与此前一样增长到能容纳最大图层的画布分辨率尺寸（下一个 2 的幂，至多 16384）；密度带来的超出部分由 fit 处理。
+- fit ≤ 1 是所有未锁定图层共用的一个系数：先按 fit 1 排布，不超出 `maxPages` 页即用 1；否则在 1/4096 的整数步长上二分查找能放下的最大步长。结果只由文档决定，相同输入得到相同布局。锁定图层（`lock`）保持 fit 1；固定图层（`pin`）先放在指定页面位置，货架排布绕开它们。
+- 锁定或固定的图层单独就超出预算时，不会悄悄缩小：解除锁定与固定后一起求 fit，并在 `PackedAtlas.notices` 中说明；连 1/4096 都放不下时按 fit 1 超出页数并说明。fit < 1 同样给出说明。说明进入导出警告。
+- 图块尺寸不等于栅格时按 `RasterResample`（`format-compile`，确定性，预乘 alpha）重采样；页面配方以“图块矩形 + 像素摘要”为键，不受影响。放置的 `scaleX/scaleY` = 图块像素 / 栅格像素。
+- 默认值（所有栅格等于边界、默认密度、已有设置、fit 1）下布局、UV、页面与导出与此前逐字节相同（`ExportGoldenTool`）。
+
+导出：
+
+- moc3 只读取页面与页 UV，无需额外处理。
+- cmo3（`Cmo3LayerArt`，`targets/cubism`）：Cubism Editor 图层一像素一画布单位，且编辑器会从图层重建纹理集。默认 `canvas`：密度不为 1 的图层以画布矩形尺寸（降采样）写入分层图像，存储的纹理集页仍保留高分辨率，图块打包缩放随之增大；只要某个图块的纹理集密度（纹理像素 / 画布单位）大于 1，导出给出 `TEXTURE_SIZE` / `APPROXIMATED` 损失项（“Cubism Editor rebuilds the atlas from canvas-resolution layers”），原有 `textureUpscale` 工程同样适用。内部设置 `layer_art=native` 按原分辨率写入图层并以模型图像变换缩放到画布，尚未经编辑器实测，默认关闭。
+
+换图（`core/LayerImageReplace.kt`）：
+
+- `LayerImageReplace.replace(document, layerId, raster, fit)` 返回候选文档：画布矩形与整数边界不变，只替换栅格（`STRETCH` 直接拉伸，`CONTAIN` 保持比例居中并补透明），首次替换时把此前的源图冻结为生成输入（与保留网格的绘画相同）。网格、关键形与绑定不变，重建后只有绑定的 UV 与页面不同。调用方照常重建并提交。
+
+尚未完成：在栅格空间绘画（绘画仍按画布分辨率工作）、导入保留分辨率、纹理应用命令与 MCP、纹理工作区。分数矩形写入 umamo 的源图层清单（整数）时取整数边界；按清单解析纹理的网格迁移（`LayerTexture.of`）对分数矩形只是近似。改变覆盖边界的生成输入补边（`RigGenerationSource.padded`）把高密度栅格降到画布分辨率。
+
 ## 性能基线
 
 `CommitPerfTool.baseline`（`PSD2LIVE_TOOLS=1`）在 tml 上搭建带自动骨架、两个摆动（前发、头饰）和一个已烘焙后发模拟的工程，逐阶段测量提交路径，输出 `build/tools/commit-perf/baseline.json` 与 `baseline.md`。数字取自一台 Windows 开发机的单次运行，只用于同机前后对比：不同机器、JIT 预热和并发负载下绝对值可差一倍以上，阶段之间的比例更可靠。阶段值为多次热调用的均值；提交值为经应用层命令边界的墙钟时间（含每次提交后写入历史存储）。原生 Cubism 预览重载需要原生运行时与 GL 上下文，未测；只测了重载前写出运行时文件（“写出”）。

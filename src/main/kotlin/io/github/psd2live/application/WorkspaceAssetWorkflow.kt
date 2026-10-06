@@ -72,7 +72,7 @@ internal class WorkspaceAssetWorkflow(
                 g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,RenderingHints.VALUE_INTERPOLATION_BICUBIC)
                 g.scale(width/rect.width.toDouble(),height/rect.height.toDouble()); g.translate(-rect.left.toDouble(),-rect.top.toDouble())
                 if (context) g.drawImage(PreviewRenderer.composite(document.source),0,0,null)
-                else g.drawImage(PreviewRenderer.rasterImage(layer.raster.width,layer.raster.height,layer.raster.rgba),layer.bounds.left,layer.bounds.top,null)
+                else PreviewRenderer.drawLayer(g,layer)
             } finally { g.dispose() }
             return image
         }
@@ -196,7 +196,7 @@ internal class WorkspaceAssetWorkflow(
                 if(layer!=null) {
                     if(!(document.layerVisibility[layer.id.raw] ?: layer.visible) || layer.opacity<=0) continue
                     g.composite=AlphaComposite.getInstance(AlphaComposite.SRC_OVER,layer.opacity)
-                    g.drawImage(PreviewRenderer.rasterImage(layer.raster.width,layer.raster.height,layer.raster.rgba),layer.bounds.left,layer.bounds.top,null)
+                    PreviewRenderer.drawLayer(g,layer)
                 } else {
                     val item=placed.getValue(key);g.composite=AlphaComposite.SrcOver
                     g.drawImage(PreviewRenderer.rasterImage(item.public.pixelWidth,item.public.pixelHeight,item.rgba),item.public.placement.canvasRect.left.toInt(),item.public.placement.canvasRect.top.toInt(),null)

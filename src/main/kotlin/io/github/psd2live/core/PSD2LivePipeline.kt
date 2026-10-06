@@ -91,12 +91,12 @@ class PSD2LivePipeline {
 		createdLayers += SourcePartitionJournal.commands(config.rigEdits).flatMap(SourcePartitionJournal::pieces)
 			.map { it.getValue("layer_id").jsonPrimitive.content }
 		val generationConfig = baselineConfig.copy(parentOverrides = config.parentOverrides - createdLayers)
-		val atlas = AtlasLayout.pack(analyses.textures.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress, previousAtlas)
+		val atlas = AtlasLayout.pack(analyses.textures.layers, config, progress, previousAtlas)
 		val visible = ArtPrimitiveJournal.visibleAnalysis(analyses.textures, config.rigEdits)
 		if (config.generationSource == null) return GeneratedBase(visible, atlas,
 			withoutCreatedMeshes(RigBuilder.build(analyses.geometry, atlas, generationConfig, meshCache), config))
 		val geometry = generatedGeometry.getOrPut(analyses.geometry.source, generationConfig, baselineConfig) {
-			val geometryAtlas = AtlasLayout.pack(analyses.geometry.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
+			val geometryAtlas = AtlasLayout.pack(analyses.geometry.layers, config, progress)
 			GeneratedGeometryCache.Entry(geometryAtlas, RigBuilder.build(analyses.geometry, geometryAtlas, generationConfig, meshCache))
 		}
 		// The repacked base depends on the cached geometry, the layout and the texture layers' metadata - never
@@ -149,7 +149,7 @@ class PSD2LivePipeline {
 		config: PipelineConfig,
 	): RigPreviewModel {
 		val analysis = MouthLipLayers.prepare(CharacterAnalyzer.analyze(source, config), config)
-		val atlas = AtlasLayout.pack(analysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale)
+		val atlas = AtlasLayout.pack(analysis.layers, config)
 		val existingIds = current.rig.layerIdByDrawableId.map { (drawableId, layerId) -> layerId to DrawableId(drawableId) }.toMap() +
 			config.rigEdits.splitDrawableIds.mapValues { DrawableId(it.value) }
 		val ids = RigBuilder.assignSplitDrawableIds(analysis, existingIds)
@@ -262,7 +262,7 @@ class PSD2LivePipeline {
 			val customLayers = custom.mapTo(HashSet()) { it.getValue("layer_id").jsonPrimitive.content }
 			val meshConfig = config.copy(parentOverrides = config.parentOverrides - customCreations.map { it.getValue("layer_id").jsonPrimitive.content })
 			val meshAnalysis = MouthLipLayers.prepare(CharacterAnalyzer.analyze(meshInput, meshConfig), meshConfig)
-			val meshAtlas = AtlasLayout.pack(meshAnalysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
+			val meshAtlas = AtlasLayout.pack(meshAnalysis.layers, config, progress)
 			val stableIds = RigBuilder.assignSplitDrawableIds(meshAnalysis, current.rig.layerIdByDrawableId
 				.map { (id, layer) -> layer to DrawableId(id) }.toMap())
 			val originalFrames = RigGenerationSource.prepare(current.analysis, current.config).geometry
@@ -496,7 +496,7 @@ class PSD2LivePipeline {
 		val outputRoot = outputDirectory.toAbsolutePath().normalize()
 		Files.createDirectories(outputRoot)
 		val files = mutableListOf<ExportedFile>()
-		val warnings = (analysis.warnings + rig.warnings + neutralRig.warnings + generatedAngleWarnings + generatedWarpWarnings).toMutableList()
+		val warnings = (analysis.warnings + atlas.notices + rig.warnings + neutralRig.warnings + generatedAngleWarnings + generatedWarpWarnings).toMutableList()
 		val (runtimeBundle, runtimeReport) = buildRuntimeBundle(baseName, analysis, atlas, rig, config, validate = true, preview = false)
 
 		if (config.exportMoc3) {
@@ -515,11 +515,13 @@ class PSD2LivePipeline {
 
 		if (config.exportCmo3) {
 			val ir = RigIrCompiler.compile(analysis, atlas, rig, config, tileArt = true)
-			val converted = io.github.psd2live.targets.cubism.Cmo3Target { BezierWarp.configureEditor(it, config.rigEdits) }.convert(ir,
-				io.github.psd2live.format.compile.ExportOptions(baseName, settings = mapOf("timestamp" to Instant.now().toEpochMilli().toString())))
+			val cmo3 = io.github.psd2live.targets.cubism.Cmo3Target { BezierWarp.configureEditor(it, config.rigEdits) }
+			val cmo3Options = io.github.psd2live.format.compile.ExportOptions(baseName, settings = mapOf("timestamp" to Instant.now().toEpochMilli().toString()))
+			val converted = cmo3.convert(ir, cmo3Options)
 			val bytes = Cmo3.write(converted.model)
 			files += writeContained(outputRoot, "$baseName.cmo3", bytes)
 			warnings += converted.report.notices.map { noticeText("CMO3", it) }
+			warnings += cmo3.textureLosses(ir, cmo3Options).map { "CMO3: ${it.objectId}: ${it.note}" }
 			val source = Cmo3.read(bytes).root as? CModelSource ?: error(tr("error.cmo3Root"))
 			val reimported = Cmo3Import.fromModelSource(source)
 			warnings += validateRigShape("CMO3", converted.puppet, reimported)

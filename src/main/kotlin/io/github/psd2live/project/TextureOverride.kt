@@ -21,7 +21,8 @@ data class TexturePin(
  * The atlas holds `raster pixels x density x fit` for each layer, where fit (at most 1) is solved
  * once for all unlocked layers so the atlas stays within its budget.
  *
- * Stored in [WorkspaceDocument.textureOverrides]; the packer does not read it yet.
+ * Stored in [WorkspaceDocument.textureOverrides] and read by the atlas packer (`AtlasLayout`) through
+ * `PipelineConfig.textureOverrides`.
  *
  * @property density Texture pixels per raster pixel; null keeps the default of 1.
  * @property lock Whether the layer keeps its density when the atlas has to shrink to fit.

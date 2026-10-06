@@ -62,8 +62,8 @@ internal object PuppetSourceAtlas {
 			tiles += AtlasTile(
 				id = tileIdFor(layerId, sourceIdRaw),
 				name = source.name,
-				width = source.raster.width,
-				height = source.raster.height,
+				width = source.textureLayer.raster.width,
+				height = source.textureLayer.raster.height,
 				placement = placement?.let(LayerTexture::tilePlacement),
 				source = SourceLayerRef(
 					sourceId = sourceId,
@@ -85,7 +85,7 @@ internal object PuppetSourceAtlas {
 
 	fun rastersByTile(analysis: PipelineAnalysis, sourceIdRaw: String = SOURCE_ID_RAW): Map<AtlasTileId, RasterImage> =
 		analysis.layers.associate { layer ->
-			val raster = layer.source.raster
+			val raster = layer.source.textureLayer.raster
 			tileIdFor(layer.source.id.raw, sourceIdRaw) to RasterImage(raster.width, raster.height, raster.rgba)
 		}
 }

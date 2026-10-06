@@ -22,7 +22,7 @@ data class WorkspaceDocument(
     val placementSource: SourceArt? = null,
 	/**
 	 * Per-layer texture settings by source layer ID (density, lock, atlas pin). Absent or default entries mean
-	 * the automatic atlas budget; nothing consumes them yet beyond storage and revision identity.
+	 * the automatic atlas budget; the atlas packer reads them through [PipelineConfig.textureOverrides].
 	 */
 	val textureOverrides: Map<String, TextureOverride> = emptyMap(),
 ) {
@@ -147,6 +147,8 @@ internal fun WorkspaceDocument.rawConfig(base: PipelineConfig = PipelineConfig()
         meshOverrides = meshOverrides,
         generationSource = generationSource,
         meshSource = meshSource,
+        atlasBudget = WorkspaceSettingsCodec.decodeAtlasBudget(settings),
+        textureOverrides = storedTextureOverrides,
     )
 
 /** The document, rather than a renderer or UI projection, supplies all durable generation inputs. */

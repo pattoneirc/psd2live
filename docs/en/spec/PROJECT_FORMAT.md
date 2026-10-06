@@ -44,10 +44,10 @@ Builds that read only schema 1 reject a schema-2 node or revision instead of dro
 
 ### Texture fields
 
-All three are optional; absent means the earlier behaviour and keeps earlier revisions. They are stored, restored and part of revision identity; the atlas packer does not read them yet.
+All three are optional; absent means the earlier behaviour and keeps earlier revisions. Generation and atlas packing read them (rules in the Chinese [document layer](../../zh/spec/DOCUMENT_LAYER.md#逐层尺寸) reference).
 
-- Source layer `rect: [left, top, width, height]`: the float canvas rectangle in canvas units. It is omitted when absent or equal to the integer bounds, which stay the enclosing box and must contain it.
-- Document `textureOverrides: {layer ID: {density?, lock?, pin?: {page, x, y}}}`: per-layer texture density, lock and fixed atlas position; all-default entries are not written. Stored in the `layers` node.
+- Source layer `rect: [left, top, width, height]`: the float canvas rectangle in canvas units - where the layer sits on the canvas, never changed by pixel operations. It is omitted when absent or equal to the integer bounds, which stay the enclosing box and must contain it. The layer raster may have any resolution; raster pixels over the rectangle size are the layer's native density, possibly different per axis.
+- Document `textureOverrides: {layer ID: {density?, lock?, pin?: {page, x, y}}}`: per-layer texture density multiplier (default 1, the raster's own resolution), lock (keeps the density when the atlas has to shrink) and fixed atlas position (page and top-left page pixel); all-default entries are not written. Stored in the `layers` node.
 - Setting `atlas: {pageSize, maxPages, padding}`: the atlas budget. Without it the budget is the legacy `atlasSize` / `texturePadding` with the default of 8 pages; missing members fall back the same way.
 
 ## v1 compatibility and migration

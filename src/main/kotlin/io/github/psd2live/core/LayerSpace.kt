@@ -3,6 +3,7 @@ package io.github.psd2live.core
 import org.umamo.format.art.LayerBounds
 import org.umamo.format.art.LayerRaster
 import org.umamo.format.art.SourceLayer
+import io.github.psd2live.project.storedCanvasRect
 
 /**
  * One layer's space: where the layer sits on the canvas and how many raster pixels cover it.
@@ -76,7 +77,10 @@ data class LayerSpace(
 		fun fromBounds(bounds: LayerBounds, raster: LayerRaster): LayerSpace =
 			fromBounds(bounds, raster.width, raster.height)
 
-		/** The space of a source layer, today always its integer bounds over its raster. */
-		fun of(layer: SourceLayer): LayerSpace = fromBounds(layer.bounds, layer.raster)
+		/** The space of a source layer: its stored canvas rectangle, else its integer bounds, over its raster. */
+		fun of(layer: SourceLayer): LayerSpace {
+			val rect = layer.storedCanvasRect ?: return fromBounds(layer.bounds, layer.raster)
+			return LayerSpace(rect.left, rect.top, rect.width, rect.height, layer.raster.width, layer.raster.height)
+		}
 	}
 }
