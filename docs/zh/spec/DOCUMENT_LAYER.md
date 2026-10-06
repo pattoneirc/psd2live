@@ -144,7 +144,7 @@
 
 - `LayerImageReplace.replace(document, layerId, raster, fit)` 返回候选文档：画布矩形与整数边界不变，只替换栅格（`STRETCH` 直接拉伸，`CONTAIN` 保持比例居中并补透明），首次替换时把此前的源图冻结为生成输入（与保留网格的绘画相同）。网格、关键形与绑定不变，重建后只有绑定的 UV 与页面不同。调用方照常重建并提交。
 
-尚未完成：在栅格空间绘画（绘画仍按画布分辨率工作）、导入保留分辨率、纹理应用命令与 MCP、纹理工作区。分数矩形写入 umamo 的源图层清单（整数）时取整数边界；按清单解析纹理的网格迁移（`LayerTexture.of`）对分数矩形只是近似。改变覆盖边界的生成输入补边（`RigGenerationSource.padded`）把高密度栅格降到画布分辨率。
+尚未完成：在栅格空间绘画（绘画仍按画布分辨率工作）、导入保留分辨率、纹理应用命令与 MCP、纹理工作区。分数矩形写入 umamo 的源图层清单（整数）时取整数边界；按清单解析纹理的网格迁移（`LayerTexture.of`）对分数矩形只是近似（整数矩形精确：图块宽高为栅格尺寸、清单为画布尺寸，比值即密度）。生成输入的补边（`RigGenerationSource.padded`，保留网格、新建网格与 `art_primitive` 部件的纹理覆盖）对高密度图层按原密度补透明，不降采样；`art_primitive`、`canvas_mesh_create` / `canvas_mesh_rebuild` 的 `canvas_uvs` 为画布单位，经 `LayerTexture.of` 映射到高分辨率图块。
 
 ## 性能基线
 

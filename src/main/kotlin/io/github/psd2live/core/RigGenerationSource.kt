@@ -169,6 +169,28 @@ internal object RigGenerationSource {
         return rig.copy(puppet = rig.puppet.copy(drawables = drawables, atlas = atlas, sources = sources), pageByDrawableId = pages)
     }
 
+    /**
+     * [current] - a layer whose raster is denser or sparser than its canvas rectangle - grown to [bounds] at the
+     * same density: the raster is laid over its rectangle inside a transparent raster covering [bounds], so the
+     * padded layer keeps its texels and its pixels stay where they were on the canvas.
+     */
+    private fun paddedAtDensity(current: SourceLayer, bounds: LayerBounds): SourceLayer {
+        val space = LayerSpace.of(current)
+        val width = Math.round(bounds.width * space.scaleX.toDouble()).toInt().coerceAtLeast(1)
+        val height = Math.round(bounds.height * space.scaleY.toDouble()).toInt().coerceAtLeast(1)
+        require(width.toLong() * height <= 64L * 1024 * 1024) { "Padded layer exceeds 64 megapixels" }
+        // Output pixel i covers canvas bounds.left + i / (width / bounds.width); in raster pixels of [current]
+        // that starts at (bounds.left - space.left) * scaleX and is scaleX * bounds.width / width wide.
+        val stepX = space.scaleX.toDouble() * bounds.width / width
+        val stepY = space.scaleY.toDouble() * bounds.height / height
+        val rgba = io.github.psd2live.format.compile.RasterResample.resample(current.raster.rgba, current.raster.width, current.raster.height,
+            width, height, (bounds.left - space.left) * space.scaleX.toDouble(), stepX, (bounds.top - space.top) * space.scaleY.toDouble(), stepY)
+        return object : SourceLayer by current {
+            override val bounds = bounds
+            override val raster = LayerRaster(width, height, rgba)
+        }
+    }
+
     /** Transparent coverage prevents a kept mesh from sampling another layer after a tighter crop. */
     internal fun padded(current: SourceLayer, previous: LayerBounds): SourceLayer {
         val left = minOf(current.bounds.left, previous.left)
@@ -177,6 +199,7 @@ internal object RigGenerationSource {
         val bottom = maxOf(current.bounds.top + current.bounds.height, previous.top + previous.height)
         val bounds = LayerBounds(left, top, right - left, bottom - top)
         if (bounds == current.bounds) return current
+        if (CanvasDensity.dense(current)) return paddedAtDensity(current, bounds)
         val raster = BufferedImage(current.raster.width, current.raster.height, BufferedImage.TYPE_INT_ARGB)
         for (y in 0 until raster.height) for (x in 0 until raster.width) {
             val offset = (y * raster.width + x) * 4

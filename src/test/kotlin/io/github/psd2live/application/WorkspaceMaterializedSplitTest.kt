@@ -168,6 +168,39 @@ class WorkspaceMaterializedSplitTest {
         }
     }
 
+    @Test fun aPartTakesAHighResolutionReplacementInPlace() = runBlocking<Unit> {
+        val runtime = fixture(); val before = author(runtime)
+        val split = WorkspacePartitionCommands(runtime).execute(before.projectId, before.state, listOf(split("source_split_components")),
+            "Split", MutationAuthor.USER).commit.capture
+        val layer = split.document.source.layers.single { it.id.raw == "first" }
+        val factor = 8
+        val raster = layer.raster
+        val dense = LayerRaster(raster.width * factor, raster.height * factor, ByteArray(raster.width * factor * raster.height * factor * 4).also { out ->
+            for (y in 0 until raster.height * factor) for (x in 0 until raster.width * factor)
+                System.arraycopy(raster.rgba, ((y / factor) * raster.width + x / factor) * 4, out, (y * raster.width * factor + x) * 4, 4)
+        })
+        val replaced = LayerImageReplace.replace(split.document, "first", dense, LayerImageReplace.Fit.STRETCH)
+        assertEquals(layer.bounds, replaced.source.layers.single { it.id.raw == "first" }.bounds)
+        val model = builder.build(replaced)
+        val old = mesh(split.model, "first"); val new = mesh(model, "first")
+        // The art_primitive part keeps its geometry and keyforms; its canvas texture coordinates land on the dense tile.
+        assertContentEquals(old.mesh!!.positions, new.mesh!!.positions)
+        assertContentEquals(old.mesh!!.indices, new.mesh!!.indices)
+        assertSamePoses(split.model.rig.puppet, model.rig.puppet, model.rig.puppet.drawables.map { it.id })
+        // The tile holds the part's texture coverage (padded to its primitive's canvas extent) at 8x.
+        val tile = model.rig.puppet.atlas.tiles.single { it.id == new.atlasTileId }
+        val oldTile = split.model.rig.puppet.atlas.tiles.single { it.id == old.atlasTileId }
+        assertEquals(oldTile.width * factor, tile.width); assertEquals(oldTile.height * factor, tile.height)
+        val oldCanvas = RasterMeshJournal.TextureCoordinates(split.model.rig.puppet, old).toCanvas(old.mesh!!.uvs)
+        val newCanvas = RasterMeshJournal.TextureCoordinates(model.rig.puppet, new).toCanvas(new.mesh!!.uvs)
+        oldCanvas.indices.forEach { assertEquals(oldCanvas[it], newCanvas[it], 0.01f, "texture coordinate $it") }
+        // Exports read back.
+        val files = PSD2LivePipeline().run(replaced.source, "parts", temporary, replaced.config().copy(exportMoc3 = true, exportJson = false)).exportedFiles
+        val moc = Moc3Import.fromMocDocument(Moc3.read(Files.readAllBytes(files.single { it.path.toString().endsWith(".moc3") }.path)), null)
+        assertTrue(moc.drawables.any { it.id == new.id })
+        assertTrue(Cmo3ModelImport.read(Files.readAllBytes(files.single { it.path.toString().endsWith(".cmo3") }.path)).puppet.drawables.any { it.id == new.id })
+    }
+
     @Test fun aPartSplitsAgainAndMeshSettingsRebuildAPart() = runBlocking<Unit> {
         val runtime = fixture(); val before = author(runtime)
         val first = WorkspacePartitionCommands(runtime).execute(before.projectId, before.state,
