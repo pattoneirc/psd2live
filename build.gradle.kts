@@ -51,6 +51,8 @@ dependencies {
 	implementation(project(":targets:raster"))
 	implementation(project(":targets:psd"))
 	implementation(project(":targets:spine"))
+	implementation(project(":targets:runtime"))
+	implementation(project(":format-eval"))
 
 	// LWJGL (OpenGL rendering pipeline)
 	val lwjglNatives = "natives-$hostOs" + if (hostArm) "-arm64" else ""
@@ -150,6 +152,8 @@ tasks.withType<Test>().configureEach {
 	// App settings use Java Preferences, which the platform shares between processes (and with the
 	// user's real settings); every test JVM gets its own in-memory store instead.
 	systemProperty("java.util.prefs.PreferencesFactory", "io.github.psd2live.testing.MemoryPreferencesFactory")
+	// The Rust runtime, when built with `cargo build --release` in runtime/; tests that need it skip without it.
+	systemProperty("psd2live.runtime.dir", file("runtime/target/release").absolutePath)
 	// CI keeps no test reports, so a failure's message and stack must reach the log.
 	testLogging {
 		events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)

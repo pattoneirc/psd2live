@@ -1,0 +1,507 @@
+//! Evaluates a rig at parameter values: keyform grids, blend shapes, the deformer chain and glue,
+//! producing every mesh's vertices in canvas pixels (y down) with its opacity, colors and draw order.
+
+use crate::rig::*;
+use crate::warp::Lattice;
+
+/// One axis' bracketing keys and the weight of the upper one.
+#[derive(Clone, Copy)]
+struct Span {
+    lo: usize,
+    hi: usize,
+    t: f32,
+}
+
+/// Keyform grids take a key exactly when the value is this close to it; blend shapes do not snap.
+const KEY_SNAP: f32 = 0.001;
+
+fn span(keys: &[f32], value: f32) -> Span {
+    match keys.iter().find(|k| (value - **k).abs() < KEY_SNAP) {
+        Some(k) => span_exact(keys, *k),
+        None => span_exact(keys, value),
+    }
+}
+
+fn span_exact(keys: &[f32], value: f32) -> Span {
+    let last = keys.len() - 1;
+    if last == 0 || value <= keys[0] {
+        return Span { lo: 0, hi: 0, t: 0.0 };
+    }
+    if value >= keys[last] {
+        return Span { lo: last, hi: last, t: 0.0 };
+    }
+    let mut j = 0;
+    while j + 1 < last && keys[j + 1] <= value {
+        j += 1;
+    }
+    let width = keys[j + 1] - keys[j];
+    let t = if width > 0.0 { (value - keys[j]) / width } else { 0.0 };
+    Span { lo: j, hi: j + 1, t }
+}
+
+/// The cells of [grid] that contribute at [values] and their weights. A missing cell of a sparse grid
+/// contributes a zero form: no offset for a mesh, the origin for a deformer's absolute forms.
+fn weights<F>(grid: &Grid<F>, values: &[f32], out: &mut Vec<(usize, f32)>) {
+    out.clear();
+    if grid.axes.is_empty() {
+        out.push((0, 1.0));
+        return;
+    }
+    let mut spans = [Span { lo: 0, hi: 0, t: 0.0 }; 16];
+    let n = grid.axes.len().min(16);
+    for (i, axis) in grid.axes.iter().take(n).enumerate() {
+        spans[i] = span(&axis.keys, values[axis.parameter]);
+    }
+    for corner in 0..(1usize << n) {
+        let mut weight = 1.0f32;
+        let mut index = 0;
+        for (i, s) in spans.iter().take(n).enumerate() {
+            let upper = corner >> i & 1 == 1;
+            if upper && s.hi == s.lo {
+                weight = 0.0;
+                break;
+            }
+            weight *= if upper { s.t } else { 1.0 - s.t };
+            index += if upper { s.hi } else { s.lo } * grid.strides[i];
+        }
+        if weight <= 0.0 {
+            continue;
+        }
+        let cell = grid.dense[index];
+        if cell != u32::MAX {
+            out.push((cell as usize, weight));
+        }
+    }
+}
+
+/// The cell of a flag grid at or below [values] on every axis: flags hold until the next key.
+fn floor_cell<F>(grid: &Grid<F>, values: &[f32]) -> Option<usize> {
+    let mut index = 0;
+    for (i, axis) in grid.axes.iter().enumerate() {
+        let s = span(&axis.keys, values[axis.parameter]);
+        index += s.lo * grid.strides[i];
+    }
+    let cell = grid.dense[index];
+    if cell == u32::MAX {
+        None
+    } else {
+        Some(cell as usize)
+    }
+}
+
+
+/// Channel values of one object at a pose, starting from its static values.
+#[derive(Clone, Copy)]
+struct ChannelState {
+    draw_order: f32,
+    opacity: f32,
+    multiply: Rgb,
+    screen: Rgb,
+    flip_x: bool,
+    flip_y: bool,
+    glue_intensity: f32,
+}
+
+fn apply_channels(channels: &Channels, values: &[f32], state: &mut ChannelState, scratch: &mut Vec<(usize, f32)>) {
+    for (channel, grid) in channels {
+        if let Channel::FlipX | Channel::FlipY = channel {
+            if let Some(cell) = floor_cell(grid, values) {
+                if let ChannelValue::Flag(v) = grid.cells[cell].1 {
+                    if *channel == Channel::FlipX {
+                        state.flip_x = v
+                    } else {
+                        state.flip_y = v
+                    }
+                }
+            }
+            continue;
+        }
+        weights(grid, values, scratch);
+        let mut scalar = 0.0;
+        let mut color = [0.0f32; 3];
+        for &(cell, w) in scratch.iter() {
+            match grid.cells[cell].1 {
+                ChannelValue::Scalar(v) => scalar += v * w,
+                ChannelValue::Color(c) => {
+                    for k in 0..3 {
+                        color[k] += c[k] * w
+                    }
+                }
+                ChannelValue::Flag(_) => {}
+            }
+        }
+        match channel {
+            Channel::DrawOrder => state.draw_order = scalar,
+            Channel::Opacity => state.opacity = scalar,
+            Channel::GlueIntensity => state.glue_intensity = scalar,
+            Channel::MultiplyColor => state.multiply = color,
+            Channel::ScreenColor => state.screen = color,
+            Channel::FlipX | Channel::FlipY => {}
+        }
+    }
+}
+
+/// Moves channel values toward a blend shape's targets by [w], from the values before any shape.
+fn toward(state: &mut ChannelState, base: &ChannelState, opacity: f32, draw_order: Option<f32>, multiply: Rgb, screen: Rgb, w: f32) {
+    state.opacity += (opacity - base.opacity) * w;
+    if let Some(d) = draw_order {
+        state.draw_order += (d - base.draw_order) * w;
+    }
+    for k in 0..3 {
+        state.multiply[k] += (multiply[k] - base.multiply[k]) * w;
+        state.screen[k] += (screen[k] - base.screen[k]) * w;
+    }
+}
+
+fn piecewise(points: &[(f32, f32)], x: f32) -> f32 {
+    match points {
+        [] => 1.0,
+        [only] => only.1,
+        _ => {
+            if x <= points[0].0 {
+                return points[0].1;
+            }
+            for w in points.windows(2) {
+                if x <= w[1].0 {
+                    let width = w[1].0 - w[0].0;
+                    let t = if width > 0.0 { (x - w[0].0) / width } else { 1.0 };
+                    return w[0].1 + (w[1].1 - w[0].1) * t;
+                }
+            }
+            points[points.len() - 1].1
+        }
+    }
+}
+
+/// The shapes a binding mixes at [values] with their weights, its limits applied.
+/// Keys without a shape, and the neutral key, add nothing.
+fn blend<'a, S>(binding: &'a Binding<S>, values: &[f32], out: &mut Vec<(&'a S, f32)>) {
+    out.clear();
+    let s = span_exact(&binding.keys, values[binding.parameter]);
+    let limit: f32 = binding.limits.iter().map(|l| piecewise(&l.points, values[l.parameter])).product();
+    if limit == 0.0 {
+        return;
+    }
+    for (i, (key, weight)) in [(s.lo, 1.0 - s.t), (s.hi, s.t)].into_iter().enumerate() {
+        if weight <= 0.0 || key == binding.neutral || (i == 1 && s.hi == s.lo) {
+            continue;
+        }
+        if let Some(shape) = &binding.shapes[key] {
+            out.push((shape, weight * limit));
+        }
+    }
+}
+
+/// Meshes back to front: each render group sorts its children by draw order, keeping tree order on
+/// ties, and draws them in place. Hidden meshes are left out.
+pub fn render_order(rig: &Rig, pose: &Pose) -> Vec<u32> {
+    fn group(rig: &Rig, pose: &Pose, g: &RenderGroup, out: &mut Vec<u32>) {
+        let mut children: Vec<(f32, &RenderNode)> = g
+            .children
+            .iter()
+            .map(|c| match c {
+                RenderNode::Mesh(m) => (pose.draw_order[*m], c),
+                RenderNode::Group(child) => (child.draw_order as f32, c),
+            })
+            .collect();
+        children.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        for (_, c) in children {
+            match c {
+                RenderNode::Mesh(m) => {
+                    if rig.meshes[*m].visible {
+                        out.push(*m as u32)
+                    }
+                }
+                RenderNode::Group(child) => group(rig, pose, child, out),
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(rig.meshes.len());
+    group(rig, pose, &rig.render, &mut out);
+    out
+}
+
+/// Where a deformer places its children: a lattice of canvas points or a rotation frame.
+#[derive(Clone, Debug)]
+pub enum Transform {
+    /// [scale] is the scale of the nearest rotation above, which rotations inside the lattice inherit.
+    Warp { points: Vec<f32>, columns: usize, rows: usize, bilinear: bool, scale: f32 },
+    Rotation { origin: [f32; 2], angle: f32, scale: f32, flip_x: bool, flip_y: bool },
+}
+
+impl Transform {
+    pub fn apply(&self, x: f32, y: f32) -> [f32; 2] {
+        match self {
+            Transform::Warp { points, columns, rows, bilinear, .. } => Lattice { points, columns: *columns, rows: *rows, bilinear: *bilinear }.map(x, y),
+            Transform::Rotation { origin, angle, scale, flip_x, flip_y } => {
+                let x = if *flip_x { -x } else { x } * scale;
+                let y = if *flip_y { -y } else { y } * scale;
+                let (sin, cos) = angle.to_radians().sin_cos();
+                [origin[0] + x * cos - y * sin, origin[1] + x * sin + y * cos]
+            }
+        }
+    }
+}
+
+/// The evaluated pose: per mesh in rig order.
+#[derive(Default, Clone, Debug)]
+pub struct Pose {
+    /// Canvas pixels, y down, two floats per vertex.
+    pub vertices: Vec<Vec<f32>>,
+    pub opacity: Vec<f32>,
+    pub draw_order: Vec<f32>,
+    pub multiply: Vec<Rgb>,
+    pub screen: Vec<Rgb>,
+    /// Deformer frames, for hosts that attach objects to them.
+    pub deformers: Vec<Transform>,
+    /// Accumulated opacity of each deformer.
+    pub deformer_opacity: Vec<f32>,
+}
+
+#[derive(Default)]
+pub struct Evaluator {
+    values: Vec<f32>,
+    defaults: Vec<f32>,
+    cells: Vec<(usize, f32)>,
+    pub pose: Pose,
+}
+
+impl Evaluator {
+    pub fn new() -> Evaluator {
+        Evaluator::default()
+    }
+
+    /// Evaluates [rig] at [parameters], one value per rig parameter; missing values take defaults.
+    ///
+    /// Blend shapes add their difference from the object's form at the default pose, weighted by the
+    /// blend parameter and its limits; mesh shapes hold target offsets.
+    pub fn evaluate(&mut self, rig: &Rig, parameters: &[f32]) -> &Pose {
+        self.values.clear();
+        self.defaults.clear();
+        for (i, p) in rig.parameters.iter().enumerate() {
+            self.values.push(p.normalize(parameters.get(i).copied().unwrap_or(p.default)));
+            self.defaults.push(p.normalize(p.default));
+        }
+        let (values, defaults, cells) = (&self.values, &self.defaults, &mut self.cells);
+        let pose = &mut self.pose;
+        pose.deformers.clear();
+        pose.deformer_opacity.clear();
+        let mut shapes_lattice: Vec<(&LatticeShape, f32)> = Vec::new();
+        let mut shapes_pivot: Vec<(&PivotShape, f32)> = Vec::new();
+        let mut shapes_mesh: Vec<(&MeshShape, f32)> = Vec::new();
+        for d in &rig.deformers {
+            let mut state = deformer_state(d, values, cells);
+            let parent = d.parent.map(|p| &pose.deformers[p]);
+            let transform = match &d.kind {
+                DeformerKind::Warp { columns, rows, bilinear, lattice, shapes } => {
+                    let len = (columns + 1) * (rows + 1) * 2;
+                    let mut points = lattice_points(lattice.as_ref(), len, values, cells);
+                    if !shapes.is_empty() {
+                        let base = deformer_state(d, defaults, cells);
+                        let base_points = lattice_points(lattice.as_ref(), len, defaults, cells);
+                        for binding in shapes {
+                            blend(binding, values, &mut shapes_lattice);
+                            for (s, w) in shapes_lattice.drain(..) {
+                                for ((o, v), b) in points.iter_mut().zip(&s.points).zip(&base_points) {
+                                    *o += (v - b) * w;
+                                }
+                                toward(&mut state, &base, s.opacity, None, s.multiply, s.screen, w);
+                            }
+                        }
+                    }
+                    if let Some(parent) = parent {
+                        for p in points.chunks_exact_mut(2) {
+                            let q = parent.apply(p[0], p[1]);
+                            p[0] = q[0];
+                            p[1] = q[1];
+                        }
+                    }
+                    let scale = match parent {
+                        Some(Transform::Warp { scale, .. }) | Some(Transform::Rotation { scale, .. }) => *scale,
+                        None => 1.0,
+                    };
+                    Transform::Warp { points, columns: *columns, rows: *rows, bilinear: *bilinear, scale }
+                }
+                DeformerKind::Rotation { base_angle, pivot, shapes, .. } => {
+                    let mut p = pivot_at(pivot.as_ref(), values, cells);
+                    if !shapes.is_empty() {
+                        let base = deformer_state(d, defaults, cells);
+                        let b = pivot_at(pivot.as_ref(), defaults, cells);
+                        for binding in shapes {
+                            blend(binding, values, &mut shapes_pivot);
+                            for (s, w) in shapes_pivot.drain(..) {
+                                p.x += (s.pivot.x - b.x) * w;
+                                p.y += (s.pivot.y - b.y) * w;
+                                p.angle += (s.pivot.angle - b.angle) * w;
+                                p.scale += (s.pivot.scale - b.scale) * w;
+                                toward(&mut state, &base, s.opacity, None, s.multiply, s.screen, w);
+                            }
+                        }
+                    }
+                    rotation_frame(parent, p, *base_angle, state.flip_x, state.flip_y)
+                }
+            };
+            let inherited = d.parent.map_or(1.0, |p| pose.deformer_opacity[p]);
+            // Each stage clamps, so blend shapes cannot carry an object below transparent.
+            pose.deformer_opacity.push(state.opacity.clamp(0.0, 1.0) * inherited);
+            pose.deformers.push(transform);
+        }
+
+        pose.vertices.resize(rig.meshes.len(), Vec::new());
+        pose.opacity.clear();
+        pose.draw_order.clear();
+        pose.multiply.clear();
+        pose.screen.clear();
+        for (m, mesh) in rig.meshes.iter().enumerate() {
+            let mut state = mesh_state(mesh, values, cells);
+            let out = &mut pose.vertices[m];
+            out.clear();
+            if let Some(geometry) = &mesh.geometry {
+                out.extend_from_slice(&geometry.positions);
+                if let Some(grid) = &mesh.offsets {
+                    weights(grid, values, cells);
+                    for &(cell, w) in cells.iter() {
+                        for (o, d) in out.iter_mut().zip(&grid.cells[cell].1) {
+                            *o += d * w;
+                        }
+                    }
+                }
+            }
+            if !mesh.shapes.is_empty() {
+                let base = mesh_state(mesh, defaults, cells);
+                // Shape deltas are target offsets: they replace the offsets the default pose has.
+                let mut base_offsets = vec![0.0f32; out.len()];
+                if let Some(grid) = &mesh.offsets {
+                    weights(grid, defaults, cells);
+                    for &(cell, w) in cells.iter() {
+                        for (o, d) in base_offsets.iter_mut().zip(&grid.cells[cell].1) {
+                            *o += d * w;
+                        }
+                    }
+                }
+                for binding in &mesh.shapes {
+                    blend(binding, values, &mut shapes_mesh);
+                    for (s, w) in shapes_mesh.drain(..) {
+                        for ((o, d), b) in out.iter_mut().zip(&s.deltas).zip(&base_offsets) {
+                            *o += (d - b) * w;
+                        }
+                        toward(&mut state, &base, s.opacity, Some(s.draw_order), s.multiply, s.screen, w);
+                    }
+                }
+            }
+            if let Some(parent) = mesh.parent {
+                let transform = &pose.deformers[parent];
+                for p in out.chunks_exact_mut(2) {
+                    let q = transform.apply(p[0], p[1]);
+                    p[0] = q[0];
+                    p[1] = q[1];
+                }
+            }
+            let inherited = mesh.parent.map_or(1.0, |p| pose.deformer_opacity[p]);
+            pose.opacity.push(state.opacity.clamp(0.0, 1.0) * inherited);
+            pose.draw_order.push(state.draw_order);
+            pose.multiply.push(state.multiply);
+            pose.screen.push(state.screen);
+        }
+
+        for glue in &rig.glues {
+            let mut state = ChannelState {
+                draw_order: 0.0, opacity: 1.0, multiply: WHITE, screen: BLACK, flip_x: false, flip_y: false, glue_intensity: glue.intensity,
+            };
+            apply_channels(&glue.channels, values, &mut state, cells);
+            let intensity = state.glue_intensity;
+            if glue.mesh_a == glue.mesh_b {
+                continue;
+            }
+            let (a, b) = if glue.mesh_a < glue.mesh_b {
+                let (left, right) = pose.vertices.split_at_mut(glue.mesh_b);
+                (&mut left[glue.mesh_a], &mut right[0])
+            } else {
+                let (left, right) = pose.vertices.split_at_mut(glue.mesh_a);
+                (&mut right[0], &mut left[glue.mesh_b])
+            };
+            for pair in &glue.pairs {
+                let (pa, pb) = ([a[pair.a * 2], a[pair.a * 2 + 1]], [b[pair.b * 2], b[pair.b * 2 + 1]]);
+                for k in 0..2 {
+                    a[pair.a * 2 + k] = pa[k] + (pb[k] - pa[k]) * pair.weight_a * intensity;
+                    b[pair.b * 2 + k] = pb[k] + (pa[k] - pb[k]) * pair.weight_b * intensity;
+                }
+            }
+        }
+        pose
+    }
+}
+
+fn deformer_state(d: &Deformer, values: &[f32], cells: &mut Vec<(usize, f32)>) -> ChannelState {
+    let mut state = ChannelState { draw_order: 0.0, opacity: d.opacity, multiply: d.multiply, screen: d.screen, flip_x: false, flip_y: false, glue_intensity: 1.0 };
+    if let DeformerKind::Rotation { flip_x, flip_y, .. } = d.kind {
+        state.flip_x = flip_x;
+        state.flip_y = flip_y;
+    }
+    apply_channels(&d.channels, values, &mut state, cells);
+    state
+}
+
+fn mesh_state(mesh: &Mesh, values: &[f32], cells: &mut Vec<(usize, f32)>) -> ChannelState {
+    let mut state = ChannelState {
+        draw_order: mesh.draw_order, opacity: mesh.opacity, multiply: mesh.multiply, screen: mesh.screen, flip_x: false, flip_y: false, glue_intensity: 1.0,
+    };
+    apply_channels(&mesh.channels, values, &mut state, cells);
+    state
+}
+
+/// A lattice's control points at [values]; without keyforms, all at the origin.
+fn lattice_points(grid: Option<&Grid<Vec<f32>>>, len: usize, values: &[f32], cells: &mut Vec<(usize, f32)>) -> Vec<f32> {
+    let mut points = vec![0.0; len];
+    if let Some(grid) = grid {
+        weights(grid, values, cells);
+        for &(cell, w) in cells.iter() {
+            for (o, v) in points.iter_mut().zip(&grid.cells[cell].1) {
+                *o += v * w;
+            }
+        }
+    }
+    points
+}
+
+/// A rotation's pivot at [values]; without keyforms, the identity at the origin.
+fn pivot_at(grid: Option<&Grid<Pivot>>, values: &[f32], cells: &mut Vec<(usize, f32)>) -> Pivot {
+    let Some(grid) = grid else { return Pivot { x: 0.0, y: 0.0, angle: 0.0, scale: 1.0 } };
+    weights(grid, values, cells);
+    let mut p = Pivot { x: 0.0, y: 0.0, angle: 0.0, scale: 0.0 };
+    for &(cell, w) in cells.iter() {
+        let c = grid.cells[cell].1;
+        p.x += c.x * w;
+        p.y += c.y * w;
+        p.angle += c.angle * w;
+        p.scale += c.scale * w;
+    }
+    p
+}
+
+/// The frame a rotation deformer gives its children, from its pivot in its parent's space.
+fn rotation_frame(parent: Option<&Transform>, mut p: Pivot, base_angle: f32, flip_x: bool, flip_y: bool) -> Transform {
+    // The base angle turns the frame on top of the keyed angle.
+    p.angle += base_angle;
+    match parent {
+        None => Transform::Rotation { origin: [p.x, p.y], angle: p.angle, scale: p.scale, flip_x, flip_y },
+        Some(Transform::Rotation { angle, scale, flip_y: parent_flip_y, .. }) => {
+            // The parent's flips place the pivot but do not mirror this frame: a vertical flip turns it
+            // half way round, a horizontal one leaves it.
+            let origin = parent.unwrap().apply(p.x, p.y);
+            // A negative parent scale turns the measured direction half way round as well, which keeps
+            // the child upright overall.
+            let half = if *parent_flip_y { 180.0 } else { 0.0 } + if *scale < 0.0 { 180.0 } else { 0.0 };
+            Transform::Rotation { origin, angle: angle + p.angle + half, scale: scale * p.scale, flip_x, flip_y }
+        }
+        Some(warp @ Transform::Warp { scale, .. }) => {
+            // The frame stays rigid: it turns with the lattice's direction along v, measured from a point
+            // a tenth of the lattice above the pivot, and keeps the scale of the rotation above the lattice.
+            let origin = warp.apply(p.x, p.y);
+            let above = warp.apply(p.x, p.y - 0.1);
+            // Measured toward the point above, so a collapsed lattice turns by a quarter.
+            let turn = (above[1] - origin[1]).atan2(above[0] - origin[0]).to_degrees() + 90.0;
+            Transform::Rotation { origin, angle: p.angle + turn, scale: p.scale * scale, flip_x, flip_y }
+        }
+    }
+}

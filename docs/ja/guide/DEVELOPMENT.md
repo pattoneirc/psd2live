@@ -82,6 +82,7 @@ Windows ではリポジトリ直下の `run-gui.bat` でも GUI を起動でき�
 - 公式 SDK のリソース（`src/main/resources/cubism/`）は、`-Ppsd2live.includeCubism=true` または `PSD2LIVE_INCLUDE_CUBISM=true` を指定したときだけ含まれます。SDK を含むパッケージは公開配布できません。[CI とリリース](../../en/guide/CUBISM_CI_RELEASE.md)（英語）を参照してください。
 - Linux では `./native/package_linux.sh` で、システムの JDK 21 を使うローカル起動パッケージを作成できます（`dist/linux-<タイムスタンプ>/` に出力）。詳しくは [native/README.md](../../../native/README.md) を参照してください。
 - 独立した lint タスクはありません。コードスタイルは `kotlin.code.style=official` です。
+- Rust ランタイムは `runtime/` で `cargo test`、`cargo build --release` によりビルドします。ビルド後は `NativeRuntimeConformanceTest` などそれを読み込むテストが実行され、未ビルドならスキップされます。[ランタイム（中国語）](../../zh/spec/RUNTIME.md) を参照してください。
 
 ## 開発ツール
 
@@ -99,6 +100,8 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `MotionSheetTool.idle` | 待機 12 秒のフレーム画像 | `motion-frames/<サンプル>-idle/` |
 | `ModelProfileTool.cmo3` | `.cmo3` のパラメータ、デフォーマツリー（グリッド軸と範囲）、メッシュ、帯ごとの動きのプロファイル、体パラメータでの各メッシュの移動、体 X × 体 Y のシルエット、物理グループ | `model-profile/<名前>.txt`、`.png`、`-physics.txt` |
 | `ModelProfileTool.sample` | 生成モデル（スケルトンなしと自動スケルトン）の帯ごとの動きのプロファイル、体レイヤーと自動ボーン | `model-profile/<サンプル>.txt` |
+| `RuntimeConformanceTool` | Rust ランタイムの参照データ：ランダムなモデル（ワープ、回転、入れ子、疎なキーフォーム、ブレンドシェイプ、グルー、チャンネル、パーツ）、サンプル、ローカルのプロジェクトをランダムなポーズでエディタが評価した結果と、ランダムな振り子グループとサンプルの物理のフレームごとの軌跡。`runtime/` の `p2lrt-conformance` で比較する | `runtime-conformance/<ケース>/`、`runtime-physics/<ケース>/` |
+| `WarpProbeTool` | エディタの評価器のブラックボックス探査：格子内外のワープ写像、ワープ下の回転フレーム、反転、ブレンドシェイプ、疎なキーフォーム。ランタイムの独立実装の照合用 | `warp-probe/*.tsv` |
 | `SwingCostTool` | tml での 2 つのスイングの生成時間、その入力の単純なハッシュ時間、編集全体の再生時間。生成器に生成キャッシュを付ける価値があるかの判断に使う | `swing-cost/report.txt` |
 | `ExportGoldenTool` | `tml` と `ds` の、スケルトンなし・自動スケルトン・作成したモーションの 3 種での全書き出しファイルのダイジェスト（cmo3 は読み戻して moc3 に下げたもの）。リファクタリング前後の書き出しをバイト単位で比較する。`PSD2LIVE_GOLDEN_LABEL` で出力名を指定 | `export-golden/<名前>.txt` |
 | `SimBakeBenchmark` | `tml` の後ろ髪をいくつかの設定で焼き込み、フィットに使わなかった動きでシミュレーションと書き出し結果を比較 | 標準出力 |

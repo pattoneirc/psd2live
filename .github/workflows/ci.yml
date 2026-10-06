@@ -37,6 +37,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
+      # The Rust runtime: its own tests, and the library the runtime conformance tests load.
+      - name: Build and test the runtime
+        working-directory: runtime
+        run: |
+          cargo test --release
+          cargo build --release
+
       - name: Run tests (Unix)
         if: runner.os != 'Windows'
         run: ./gradlew test --no-daemon

@@ -1,0 +1,15 @@
+[package]
+name = "p2l-runtime"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Plays .p2lrt rigs compiled by PSD2Live: deformation, physics and clips, with a C ABI."
+publish = false
+
+[lib]
+name = "p2l_runtime"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[profile.release]
+lto = true
+codegen-units = 1

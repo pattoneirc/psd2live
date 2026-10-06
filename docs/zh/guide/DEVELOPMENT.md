@@ -82,6 +82,7 @@ Windows 也可以直接运行根目录的 `run-gui.bat`。不带参数启动 GUI
 - 官方 SDK 资源（`src/main/resources/cubism/`）默认不打包，只有传入 `-Ppsd2live.includeCubism=true` 或设置 `PSD2LIVE_INCLUDE_CUBISM=true` 时才包含。含 SDK 的包不得公开分发，发行流程见 [CI 与发行](CUBISM_CI_RELEASE.md)。
 - Linux 也可用 `./native/package_linux.sh` 生成需要系统 JDK 21 的本地启动包（输出到 `dist/linux-<时间戳>/`），详见 [native/README.md](../../../native/README.md)。
 - 项目没有独立的 lint 任务，代码风格为 `kotlin.code.style=official`。
+- Rust 运行时在 `runtime/` 中用 `cargo test`、`cargo build --release` 构建；构建后 `NativeRuntimeConformanceTest` 等依赖它的测试才会运行，未构建时跳过。见[运行时](../spec/RUNTIME.md)。
 
 ## 开发工具
 
@@ -101,6 +102,8 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `ModelProfileTool.sample` | 生成模型（无骨架和自动骨架）的分段运动剖面、身体图层与自动骨骼 | `model-profile/<示例>.txt` |
 | `SimBakeBenchmark` | 在 `tml` 后发上按几组设置烘焙模拟，在未参与拟合的动作上对比模拟与导出结果，见[模拟与烘焙](SIMULATION.md) | 标准输出 |
 | `CanvasPerfTool` | 在 Xvfb 下打开真实窗口，对编辑画布依次做静止、悬停、滚轮缩放、中键平移、变形模式拖动脸部全部点，GPU 渲染与软件渲染各一轮，报告帧间隔、界面线程延迟与界面线程热点；需 `xvfb-run -a -s "-screen 0 1920x1080x24"` | `canvas-perf/report.txt`、各阶段截图与 `.jfr` |
+| `RuntimeConformanceTool` | Rust 运行时的参考数据：随机模型（Warp、旋转、嵌套、稀疏网格、混合形、Glue、通道、部件）、样例与本地工程在随机姿势下的编辑器求值结果，以及随机摆锤组和样例物理的逐帧轨迹；用 `runtime/` 中的 `p2lrt-conformance` 比较 | `runtime-conformance/<用例>/`、`runtime-physics/<用例>/` |
+| `WarpProbeTool` | 编辑器求值器的黑盒探测：Warp 映射（格子内外）、Warp 下的旋转框架、翻转、混合形、稀疏网格，供运行时独立实现对照 | `warp-probe/*.tsv` |
 | `SwingCostTool` | tml 上两个摆动的生成耗时、朴素哈希其输入的耗时与全部编辑重放耗时，用于判断生成器是否值得接入生成缓存 | `swing-cost/report.txt` |
 | `ExportGoldenTool` | `tml`、`ds` 的无骨架、自动骨架和自定义动作三种变体的全部导出文件摘要（cmo3 取读回后降级为 moc3 的摘要），用于逐字节对比重构前后的导出；`PSD2LIVE_GOLDEN_LABEL` 指定输出名 | `export-golden/<名称>.txt` |
 | `CommitPerfTool.profile` / `.desktop` | 单次作者提交的耗时：`profile` 走应用层命令边界并按阶段拆分（修订号、配置解码、重建、几何检查）；`desktop` 走桌面视图模型与适配器，连续提交网格顶点编辑和画笔笔触，报告提交耗时与界面线程最长停顿。可配合 `JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` 采样 | `commit-perf/report.txt`、`desktop.txt` |
@@ -119,7 +122,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 
 ## 代码结构
 
-源码分为多个 Gradle 模块，依赖只能向下，由编译期保证：从 Umamo 移植的引擎 `org.umamo.*` 在 `:umamo`（`umamo/src/main/kotlin/`，不依赖产品代码）；中立绑定 IR `:format-model`、导出框架 `:format-compile` 与光栅导出 `:targets:raster` 为 MIT，不依赖任何 GPL 模块；`:targets:cubism`（IR 转换器、moc3、cmo3）与 `:targets:psd` 使用引擎；产品层 `io.github.psd2live.*` 在根项目（`src/main/kotlin/`）。导出模块见[中立绑定 IR 与导出目标](../spec/EXPORT_TARGETS.md)。引擎包如下：
+源码分为多个 Gradle 模块，依赖只能向下，由编译期保证：从 Umamo 移植的引擎 `org.umamo.*` 在 `:umamo`（`umamo/src/main/kotlin/`，不依赖产品代码）；中立绑定 IR `:format-model`、导出框架 `:format-compile` 与光栅导出 `:targets:raster`、运行时模型 `:targets:runtime` 与运行时绑定 `:format-eval` 为 MIT，不依赖任何 GPL 模块；`:targets:cubism`（IR 转换器、moc3、cmo3）与 `:targets:psd` 使用引擎；产品层 `io.github.psd2live.*` 在根项目（`src/main/kotlin/`）。导出模块见[中立绑定 IR 与导出目标](../spec/EXPORT_TARGETS.md)。引擎包如下：
 
 | 包 | 职责 |
 | --- | --- |

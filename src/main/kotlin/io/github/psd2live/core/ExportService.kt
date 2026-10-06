@@ -21,6 +21,7 @@ internal object ExportService {
 		Cmo3Target { BezierWarp.configureEditor(it, config.rigEdits) },
 		io.github.psd2live.targets.psd.PosedPsdTarget(IrFrameRenderer),
 		io.github.psd2live.targets.spine.SpineTarget(IrGeometryEvaluator),
+		io.github.psd2live.targets.runtime.P2lrtTarget,
 	) + RasterTargets(IrFrameRenderer).all)
 
 	/** Built-in options for [target] from the document's export settings; explicit [settings] win. */

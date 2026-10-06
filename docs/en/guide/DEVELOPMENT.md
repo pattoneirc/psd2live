@@ -82,6 +82,7 @@ The `export` command exports a `.psd2live` project (its current history state) o
 - Official SDK resources (`src/main/resources/cubism/`) are excluded unless you pass `-Ppsd2live.includeCubism=true` or set `PSD2LIVE_INCLUDE_CUBISM=true`. Packages with the SDK must not be distributed publicly; see [CI and releases](CUBISM_CI_RELEASE.md).
 - On Linux, `./native/package_linux.sh` builds a local launcher package that needs a system JDK 21 (written to `dist/linux-<timestamp>/`); see [native/README.md](../../../native/README.md).
 - There is no separate lint task; code style is `kotlin.code.style=official`.
+- The Rust runtime builds in `runtime/` with `cargo test` and `cargo build --release`; tests that load it, such as `NativeRuntimeConformanceTest`, run once it is built and skip otherwise. See [Runtime (中文)](../../zh/spec/RUNTIME.md).
 
 ## Development tools
 
@@ -99,6 +100,8 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `MotionSheetTool.idle` | Twelve seconds of the idle, frame by frame | `motion-frames/<sample>-idle/` |
 | `ModelProfileTool.cmo3` | A `.cmo3`'s parameters, deformer tree (grid axes and bounds), drawables, band motion profile and per-drawable motion under the body parameters, silhouettes over body X × body Y, and its physics groups | `model-profile/<name>.txt`, `.png`, `-physics.txt` |
 | `ModelProfileTool.sample` | The band motion profile of a generated model (without a skeleton and on the auto skeleton), its body layers and auto bones | `model-profile/<sample>.txt` |
+| `RuntimeConformanceTool` | Reference data for the Rust runtime: random rigs (warps, rotations, nesting, sparse grids, blend shapes, glue, channels, parts), the samples and a local project evaluated by the editor at random poses, plus frame-by-frame traces of random pendulum groups and the samples' physics; compare with `p2lrt-conformance` in `runtime/` | `runtime-conformance/<case>/`, `runtime-physics/<case>/` |
+| `WarpProbeTool` | Black-box probes of the editor's evaluator: the warp mapping inside and outside the lattice, rotation frames under warps, flips, blend shapes and sparse grids, for the runtime's independent implementation | `warp-probe/*.tsv` |
 | `SwingCostTool` | Time of two swings generating on tml, of naively hashing their inputs and of the whole edit replay, to judge whether a generator is worth a generation cache | `swing-cost/report.txt` |
 | `ExportGoldenTool` | Digests of every exported file of `tml` and `ds`, plain, on the auto skeleton and with an authored motion (a cmo3 by its read-back lowered to moc3), to compare exports byte for byte across a refactor; `PSD2LIVE_GOLDEN_LABEL` names the output | `export-golden/<label>.txt` |
 | `SimBakeBenchmark` | Bakes the `tml` back hair at a few settings and compares the simulation with the export on motion the fit never saw | standard output |
@@ -118,7 +121,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 
 ## Code layout
 
-Sources are split into Gradle modules whose dependencies only point downward, which the build enforces: the engine ported from Umamo, `org.umamo.*`, lives in `:umamo` (`umamo/src/main/kotlin/`; it cannot depend on product code); the neutral rig IR `:format-model`, the export framework `:format-compile` and the raster exports `:targets:raster` are MIT and depend on no GPL module; `:targets:cubism` (IR converter, moc3, cmo3) and `:targets:psd` use the engine; the product layer, `io.github.psd2live.*`, lives in the root project (`src/main/kotlin/`). See [Neutral rig IR and export targets (中文)](../../zh/spec/EXPORT_TARGETS.md). The engine packages:
+Sources are split into Gradle modules whose dependencies only point downward, which the build enforces: the engine ported from Umamo, `org.umamo.*`, lives in `:umamo` (`umamo/src/main/kotlin/`; it cannot depend on product code); the neutral rig IR `:format-model`, the export framework `:format-compile` and the raster exports `:targets:raster`, the runtime rig `:targets:runtime` and the runtime bindings `:format-eval` are MIT and depend on no GPL module; `:targets:cubism` (IR converter, moc3, cmo3) and `:targets:psd` use the engine; the product layer, `io.github.psd2live.*`, lives in the root project (`src/main/kotlin/`). See [Neutral rig IR and export targets (中文)](../../zh/spec/EXPORT_TARGETS.md). The engine packages:
 
 | Package | Responsibility |
 | --- | --- |
