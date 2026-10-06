@@ -19,6 +19,10 @@ import kotlin.math.roundToInt
  *
  * Deform keys interpolation can rebuild within `key_tolerance` pixels (default 0.25) are dropped.
  *
+ * Masks become clipping attachments in a slot just before the masked one, ending at it: the outline of a
+ * single mask mesh, or the convex hull of several masks' outlines, deformed with them. Spine clips by the
+ * polygon rather than the texture's alpha; inverted masks are dropped.
+ *
  * Settings: `clip_fps` (default 15), `clips` (default true), `key_tolerance` (default 0.25), `sample_pairs` (default 48).
  */
 public class SpineTarget(private val evaluator: GeometryEvaluator) : ExportTarget {
@@ -37,9 +41,16 @@ public class SpineTarget(private val evaluator: GeometryEvaluator) : ExportTarge
 		require(clipFps in 1f..60f) { "clip_fps must be within 1..60" }
 		val losses = ArrayList(CapabilityScan.scan(ir, capabilities, options, defaults = mapOf(
 			Feature.PARAMETERS to Handling.BAKED, Feature.WARP_LATTICE to Handling.BAKED, Feature.BLEND_SHAPES to Handling.BAKED, Feature.GLUE to Handling.BAKED)))
-		// Not yet lowered: pendulums to physics constraints, texture masks to clipping polygons.
+		// Not yet lowered: pendulums to physics constraints.
 		ir.physics.groups.forEach { losses += LossEntry(it.id, Feature.PHYSICS, Handling.DROPPED, note = "Pendulum physics is not converted to physics constraints") }
-		losses.replaceAll { if (it.feature == Feature.MASK) it.copy(handling = Handling.DROPPED, note = "Texture masks are not converted to clipping polygons") else it }
+		val inverted = ir.meshes.filter { it.invertMask && it.maskedBy.isNotEmpty() }.map { it.id }.toSet()
+		losses.replaceAll {
+			when {
+				it.feature != Feature.MASK -> it
+				it.objectId in inverted -> it.copy(handling = Handling.DROPPED, note = "Spine clipping cannot invert a mask")
+				else -> it.copy(handling = Handling.APPROXIMATED, note = "The mask clips by its outline polygon, not its texture alpha")
+			}
+		}
 		val meshes = ir.meshes.filter { it.visible && it.geometry != null }
 		val json = evaluator.open(ir).use { session ->
 			val bake = ParameterBake(ir, session, linkedPairs = false)
@@ -74,8 +85,17 @@ public class SpineTarget(private val evaluator: GeometryEvaluator) : ExportTarge
 		val rest = bake.rest
 		val tolerance = options.float("key_tolerance", 0.25f)
 		val ordered = meshes.withIndex().sortedWith(compareBy({ rest.drawOrder[it.value.id] ?: it.value.drawOrder }, { it.index })).map { it.value }
-		val slotIndex = ordered.withIndex().associate { it.value.id to it.index }
 		val vertices = ordered.associate { it.id to spine(rest.positions.getValue(it.id)) }
+		val clips = ordered.filter { it.maskedBy.isNotEmpty() && !it.invertMask }.mapNotNull { mesh ->
+			Clipping.polygon(mesh.maskedBy.mapNotNull { id -> ir.meshes.firstOrNull { it.id == id } }, rest)?.let { mesh.id to it }
+		}.toMap()
+		clips.forEach { (mesh, clip) ->
+			if (clip.hull) losses += LossEntry(mesh, Feature.MASK, Handling.APPROXIMATED, note = "Several masks or outlines clip by their convex hull")
+		}
+		/** Slot names in setup order: each clipped mesh follows its clipping slot. */
+		fun slotsOf(meshOrder: List<String>) = meshOrder.flatMap { id -> if (id in clips) listOf("clip/$id", id) else listOf(id) }
+		val slotNames = slotsOf(ordered.map { it.id })
+		val slotIndex = slotNames.withIndex().associate { it.value to it.index }
 		var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE
 		for (points in vertices.values) for (i in points.indices step 2) {
 			minX = minOf(minX, points[i]); maxX = maxOf(maxX, points[i]); minY = minOf(minY, points[i + 1]); maxY = maxOf(maxY, points[i + 1])
@@ -85,9 +105,11 @@ public class SpineTarget(private val evaluator: GeometryEvaluator) : ExportTarge
 		ordered.filter { it.screen != Rgb.Black }.forEach {
 			losses += LossEntry(it.id, Feature.BLEND_MODE, Handling.DROPPED, note = "Screen color is not written")
 		}
-		val slots = ordered.map { mesh ->
-			J.obj("name" to J.Str(mesh.id), "bone" to J.Str("root"), "attachment" to J.Str(mesh.id),
-				"color" to J.Str(color(mesh, rest.opacity[mesh.id] ?: mesh.opacity)), "blend" to J.Str(blend(mesh.blend)))
+		val slots = ordered.flatMap { mesh ->
+			listOfNotNull(
+				clips[mesh.id]?.let { J.obj("name" to J.Str("clip/${mesh.id}"), "bone" to J.Str("root"), "attachment" to J.Str("clip/${mesh.id}")) },
+				J.obj("name" to J.Str(mesh.id), "bone" to J.Str("root"), "attachment" to J.Str(mesh.id),
+					"color" to J.Str(color(mesh, rest.opacity[mesh.id] ?: mesh.opacity)), "blend" to J.Str(blend(mesh.blend))))
 		}
 		val attachments = ordered.map { mesh ->
 			val geometry = mesh.geometry!!
@@ -96,6 +118,11 @@ public class SpineTarget(private val evaluator: GeometryEvaluator) : ExportTarge
 				"uvs" to J.floats(geometry.uvs.shared()),
 				"triangles" to J.arr((0 until geometry.indices.size).map { J.Num(geometry.indices[it]) }),
 				"vertices" to J.floats(vertices.getValue(mesh.id)),
+			))
+		} + clips.map { (mesh, clip) ->
+			"clip/$mesh" to J.obj("clip/$mesh" to J.obj(
+				"type" to J.Str("clipping"), "end" to J.Str(mesh), "vertexCount" to J.Num(clip.points.size),
+				"vertices" to J.floats(spine(clip.positions(rest))),
 			))
 		}
 
@@ -129,14 +156,25 @@ public class SpineTarget(private val evaluator: GeometryEvaluator) : ExportTarge
 						J.obj("time" to J.Num(time), "color" to J.Str(color(mesh, pose.opacity[mesh.id] ?: restOpacity)))
 					}))
 			}
+			for ((mesh, clip) in clips) {
+				val restPoints = clip.positions(rest)
+				val offsets = samples.map { (time, pose) ->
+					val posed = clip.positions(pose, rest)
+					time to delta(FloatArray(posed.size) { posed[it] - restPoints[it] })
+				}
+				if (offsets.any { (_, values) -> values.any { abs(it) > 1e-4f } }) {
+					val kept = KeyReduction.reduce(offsets.map { it.first }, offsets.map { it.second }, tolerance)
+					deforms += "clip/$mesh" to J.obj("clip/$mesh" to J.obj("deform" to J.arr(kept.map { offsets[it] }.map { (time, values) -> deformKey(time, values) })))
+				}
+			}
 			val orders = samples.map { (time, pose) ->
-				time to ordered.withIndex().sortedWith(compareBy({ pose.drawOrder[it.value.id] ?: rest.drawOrder[it.value.id] ?: it.value.drawOrder }, { it.index }))
-					.map { it.value.id }
+				time to slotsOf(ordered.withIndex().sortedWith(compareBy({ pose.drawOrder[it.value.id] ?: rest.drawOrder[it.value.id] ?: it.value.drawOrder }, { it.index }))
+					.map { it.value.id })
 			}
 			val entries = ArrayList<Pair<String, J>>()
 			if (slotTimelines.isNotEmpty()) entries += "slots" to J.Obj(slotTimelines)
 			if (deforms.isNotEmpty()) entries += "attachments" to J.obj("default" to J.Obj(deforms))
-			if (orders.any { (_, order) -> order != ordered.map { it.id } }) entries += "drawOrder" to J.arr(orders.map { (time, order) ->
+			if (orders.any { (_, order) -> order != slotNames }) entries += "drawOrder" to J.arr(orders.map { (time, order) ->
 				val moved = order.withIndex().filter { (index, id) -> slotIndex.getValue(id) != index }.sortedBy { slotIndex.getValue(it.value) }
 				if (moved.isEmpty()) J.obj("time" to J.Num(time))
 				else J.obj("time" to J.Num(time), "offsets" to J.arr(moved.map { (index, id) ->
