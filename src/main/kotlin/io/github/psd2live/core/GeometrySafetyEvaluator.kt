@@ -1,7 +1,11 @@
 package io.github.psd2live.core
 
 import kotlinx.serialization.json.*
+import org.umamo.render.eval.meshBlendState
+import org.umamo.runtime.eval.cellsByLinearIndex
+import org.umamo.runtime.eval.gridCorners
 import org.umamo.runtime.model.*
+import kotlin.math.abs
 
 /** Stable machine-readable reasons returned by the Agent geometry commit gate. */
 internal enum class GeometrySafetyReason {
@@ -52,6 +56,7 @@ internal data class GeometrySafetyReport(
     val violations: List<GeometrySafetyViolation>,
     val diagnostics: List<JsonObject>,
     val warnings: List<GeometrySafetyViolation> = emptyList(),
+    val coverage: GeometrySafetyCoverage = GeometrySafetyCoverage(GeometrySafetyCoverage.FULL, 0, 0),
 ) {
     fun toJson(): JsonObject = buildJsonObject {
         put("safe", safe)
@@ -76,7 +81,9 @@ internal data class GeometrySafetyReport(
         put("violations", JsonArray(violations.map { it.toJson() }))
         put("warnings", JsonArray(warnings.map { it.toJson() }))
         put("diagnostics", JsonArray(diagnostics))
-        put("scope", "Affected parent-local native key coordinates only; large Cartesian products are sampled. No parent composition, masks, painted coverage, physics, or aesthetics.")
+        put("scope", "Affected parent-local native key coordinates only; large Cartesian products are sampled. No parent composition, masks, painted coverage, physics, or aesthetics." +
+            if (coverage.mode == GeometrySafetyCoverage.SCOPED) " Targets compared: only those the committed commands address, their deformer descendants, glue partners and generator-owned targets; the other targets were not compared." else "")
+        put("coverage", coverage.toJson())
     }
 
     companion object {
@@ -98,34 +105,65 @@ internal data class GeometrySafetyReport(
     }
 }
 
+/**
+ * Which targets a report compared: [FULL] every mesh, Warp and Rotation of both models, [SCOPED] only those
+ * derived from the committed commands. [checkedTargets] counts the compared targets, [totalTargets] those the
+ * two models hold.
+ */
+internal data class GeometrySafetyCoverage(val mode: String, val checkedTargets: Int, val totalTargets: Int) {
+    fun toJson(): JsonObject = buildJsonObject {
+        put("mode", mode); put("checkedTargets", checkedTargets); put("totalTargets", totalTargets)
+    }
+
+    companion object {
+        const val FULL = "full"
+        const val SCOPED = "scoped"
+    }
+}
+
 internal class GeometrySafetyRejectedException(val safetyReport: GeometrySafetyReport) :
     IllegalArgumentException("Geometry safety gate rejected the candidate: " +
         safetyReport.violations.map { it.reason.name }.distinct().joinToString(","))
 
 internal object GeometrySafetyEvaluator {
-    private data class Target(
+    private class Target(
         val ref: String,
         val kind: String,
         val id: String,
         val parent: String?,
-        val signature: Any,
+        /** The Drawable or Deformer whose geometry this target compares; see [sameGeometry]. */
+        val source: Any,
         val coordinateSource: () -> List<Map<String, Float>>,
-        val triangles: IntArray,
-        val reference: FloatArray,
+        val triangleSource: () -> IntArray,
+        val referenceSource: () -> FloatArray,
         val pointCount: Int,
         val rawValidation: () -> String?,
     ) {
         val coordinates by lazy(coordinateSource)
+        val triangles by lazy(triangleSource)
+        val reference by lazy(referenceSource)
     }
 
-    fun evaluate(before: PuppetModel, candidate: PuppetModel, blockFoldovers: Boolean = true): GeometrySafetyReport {
-        val beforeTargets = targets(before)
-        val afterTargets = targets(candidate)
+    /**
+     * Compares [before] with [candidate]. A null [scope] compares every mesh, Warp and Rotation. A [scope] of
+     * target refs (`mesh:`, `warp:`, `rotation:`) compares only those, every deformer descendant of them and the
+     * glue partners of the meshes among them; the caller derives it from the commands that produced
+     * [candidate] and must fall back to null whenever it cannot name every target they may move. Within the
+     * compared set the classification is the same as a full evaluation, so a scope covering every changed
+     * target yields the full result.
+     */
+    fun evaluate(before: PuppetModel, candidate: PuppetModel, blockFoldovers: Boolean = true, scope: Set<String>? = null): GeometrySafetyReport {
+        val included = scope?.let { closure(before, candidate, it) }
+        val beforeTargets = targets(before, included)
+        val afterTargets = targets(candidate, included)
+        val coverage = GeometrySafetyCoverage(if (included == null) GeometrySafetyCoverage.FULL else GeometrySafetyCoverage.SCOPED,
+            (beforeTargets.keys + afterTargets.keys).size,
+            if (included == null) (beforeTargets.keys + afterTargets.keys).size else totalTargets(before, candidate))
         val beforeParameters = before.parameters.mapTo(HashSet()) { it.id.raw }
         val direct = (beforeTargets.keys + afterTargets.keys).filterTo(mutableSetOf()) { ref ->
-            beforeTargets[ref]?.let { old -> afterTargets[ref]?.let { next -> old.signature != next.signature || old.parent != next.parent } ?: true } ?: true
+            beforeTargets[ref]?.let { old -> afterTargets[ref]?.let { next -> old.parent != next.parent || !sameGeometry(old, next) } ?: true } ?: true
         }
-        if (direct.isEmpty()) return GeometrySafetyReport.noGeometryChange()
+        if (direct.isEmpty()) return GeometrySafetyReport.noGeometryChange().copy(coverage = coverage)
 
         // A changed Warp changes the inherited path of descendants even where their local forms are
         // unchanged. Include those descendants in the evidence scope instead of silently skipping them.
@@ -151,6 +189,8 @@ internal object GeometrySafetyEvaluator {
         val violations = mutableListOf<GeometrySafetyViolation>()
         val diagnostics = mutableListOf<JsonObject>()
         val coordinateEvidence = linkedMapOf<String, List<Map<String, Float>>>()
+        val beforeSampler = Sampler(before)
+        val candidateSampler = Sampler(candidate)
 
         for (ref in affected.sorted()) {
             checkpoint()
@@ -168,9 +208,12 @@ internal object GeometrySafetyEvaluator {
                 continue
             }
             coordinateEvidence[ref] = next.coordinates
+            val comparable = old?.takeIf { it.pointCount == next.pointCount && it.triangles.contentEquals(next.triangles) }
+            // The reference and triangles are the same at every coordinate: their validity and areas once per target.
+            val inspections = HashMap<FloatArray, Inspection>(2)
             for (coordinate in next.coordinates) {
                 checkpoint()
-                val candidatePoints = sample(candidate, next, coordinate)
+                val candidatePoints = candidateSampler.points(next, coordinate)
                 if (candidatePoints == null) {
                     invalid++
                     violations += GeometrySafetyViolation(GeometrySafetyReason.GEOMETRY_INVALID_TOPOLOGY, ref, coordinate, detail = "Geometry cannot be evaluated at native coordinate")
@@ -186,19 +229,17 @@ internal object GeometrySafetyEvaluator {
                     continue
                 }
 
-                val oldComparable = old?.takeIf {
-                    it.pointCount == next.pointCount && it.triangles.contentEquals(next.triangles)
-                }?.let { comparable -> sample(before, comparable, coordinate.filterKeys { it in beforeParameters }) }
+                val oldComparable = comparable?.let { beforeSampler.points(it, coordinate.filterKeys { id -> id in beforeParameters }) }
                 val reference = if (oldComparable != null) old.reference else next.reference
-                val referenceStatus = runCatching { RigGeometryDiagnostics.inspect(reference, reference, next.triangles) }.getOrNull()
-                val candidateStatus = runCatching { RigGeometryDiagnostics.inspect(reference, candidatePoints, next.triangles) }.getOrNull()
-                if (referenceStatus == null || candidateStatus == null) {
+                val inspection = inspections.getOrPut(reference) { Inspection(reference, next.triangles) }
+                val candidateStatus = inspection.inspect(candidatePoints)
+                if (!inspection.valid || candidateStatus == null) {
                     invalid++
                     violations += GeometrySafetyViolation(GeometrySafetyReason.GEOMETRY_INVALID_TOPOLOGY, ref, coordinate, detail = "Geometry scalar count or triangle indices are malformed")
                     continue
                 }
                 val oldStatus = oldComparable?.takeIf { it.all(Float::isFinite) }?.let {
-                    runCatching { RigGeometryDiagnostics.inspect(reference, it, next.triangles) }.getOrNull()
+                    if (it.contentEquals(candidatePoints)) candidateStatus else inspection.inspect(it)
                 }
                 if (oldComparable != null && oldStatus == null) {
                     invalid++
@@ -250,8 +291,45 @@ internal object GeometrySafetyEvaluator {
         }
         val blockers = violations - warnings.toSet()
         return GeometrySafetyReport(blockers.isEmpty(), affected.sorted(), coordinateEvidence, newFlips, newDegenerates,
-            invalid, nonFinite, oldFlips, oldDegenerates, oldCollapses, newCollapses, blockers, diagnostics, warnings)
+            invalid, nonFinite, oldFlips, oldDegenerates, oldCollapses, newCollapses, blockers, diagnostics, warnings, coverage)
     }
+
+    /** [scope], then every deformer descendant of it in either model, then the glue partners of its meshes. */
+    private fun closure(before: PuppetModel, candidate: PuppetModel, scope: Set<String>): Set<String> {
+        val included = scope.toMutableSet()
+        val children = HashMap<String, MutableList<String>>()
+        for (model in listOf(before, candidate)) {
+            model.drawables.forEach { drawable ->
+                drawable.parentDeformerId?.let { children.getOrPut(it.raw) { ArrayList() } += "mesh:${drawable.id.raw}" }
+            }
+            model.deformers.forEach { deformer ->
+                deformer.parent?.let { children.getOrPut(it.raw) { ArrayList() } += refOf(deformer) }
+            }
+        }
+        val queue = ArrayDeque(included)
+        while (queue.isNotEmpty()) {
+            val ref = queue.removeFirst()
+            if (!ref.startsWith("warp:") && !ref.startsWith("rotation:")) continue
+            children[ref.substringAfter(':')]?.forEach { if (included.add(it)) queue += it }
+        }
+        for (model in listOf(before, candidate)) model.glues.forEach { glue ->
+            val a = "mesh:${glue.meshA.raw}"; val b = "mesh:${glue.meshB.raw}"
+            if (a in scope || b in scope || a in included || b in included) { included += a; included += b }
+        }
+        return included
+    }
+
+    private fun refOf(deformer: Deformer) = when (deformer) {
+        is Deformer.Warp -> "warp:${deformer.id.raw}"
+        is Deformer.Rotation -> "rotation:${deformer.id.raw}"
+    }
+
+    private fun totalTargets(before: PuppetModel, candidate: PuppetModel): Int = HashSet<String>().apply {
+        for (model in listOf(before, candidate)) {
+            model.drawables.forEach { if (it.mesh != null) add("mesh:${it.id.raw}") }
+            model.deformers.forEach { add(refOf(it)) }
+        }
+    }.size
 
     private fun coordinateDiagnostic(ref: String, coordinate: Map<String, Float>, status: String, points: Int) = buildJsonObject {
         put("target", ref)
@@ -260,36 +338,118 @@ internal object GeometrySafetyEvaluator {
         put("pointCount", points)
     }
 
-    private fun targets(model: PuppetModel): Map<String, Target> = buildMap {
-        model.drawables.filter { it.mesh != null }.forEach { drawable ->
-            val mesh = drawable.mesh!!
+    /** The targets of [model], or only those in [included]; nothing here copies or boxes geometry. */
+    private fun targets(model: PuppetModel, included: Set<String>?): Map<String, Target> = buildMap {
+        model.drawables.forEach { drawable ->
+            val mesh = drawable.mesh ?: return@forEach
             val ref = "mesh:${drawable.id.raw}"
-            put(ref, Target(ref, "mesh", drawable.id.raw, drawable.parentDeformerId?.raw,
-                listOf(drawableGeometrySignature(drawable), blendIdentity(drawable.blendShapes) { it.positionDeltas }),
-                { coordinates(drawable.geometryGrid, drawable.blendShapes) }, mesh.indices, mesh.positions,
+            if (included != null && ref !in included) return@forEach
+            put(ref, Target(ref, "mesh", drawable.id.raw, drawable.parentDeformerId?.raw, drawable,
+                { coordinates(drawable.geometryGrid, drawable.blendShapes) }, { mesh.indices }, { mesh.positions },
                 mesh.positions.size / 2) { validateMesh(drawable) })
         }
         model.deformers.forEach { deformer ->
+            val ref = refOf(deformer)
+            if (included != null && ref !in included) return@forEach
             when (deformer) {
                 is Deformer.Warp -> {
-                    val ref = "warp:${deformer.id.raw}"
-                    val domain = warpDomain(deformer.rows, deformer.columns)
-                    put(ref, Target(ref, "warp", deformer.id.raw, deformer.parent?.raw,
-                        listOf(warpGeometrySignature(deformer), blendIdentity(deformer.blendShapes) { it.controlPoints }), { coordinates(deformer.geometryGrid, deformer.blendShapes) },
-                        RigGeometryDiagnostics.lattice(deformer.rows, deformer.columns), domain, domain.size / 2) { validateWarp(deformer) })
+                    put(ref, Target(ref, "warp", deformer.id.raw, deformer.parent?.raw, deformer,
+                        { coordinates(deformer.geometryGrid, deformer.blendShapes) },
+                        { RigGeometryDiagnostics.lattice(deformer.rows, deformer.columns) }, { warpDomain(deformer.rows, deformer.columns) },
+                        if (deformer.rows < 1 || deformer.columns < 1) 0 else (deformer.rows + 1) * (deformer.columns + 1)) { validateWarp(deformer) })
                 }
                 is Deformer.Rotation -> {
-                    val ref = "rotation:${deformer.id.raw}"
-                    put(ref, Target(ref, "rotation", deformer.id.raw, deformer.parent?.raw,
-                        listOf(rotationGeometrySignature(deformer), blendIdentity(deformer.blendShapes) { floatArrayOf(it.originX, it.originY, it.angle, it.scale) }),
-                        { coordinates(deformer.geometryGrid, deformer.blendShapes) }, IntArray(0), FloatArray(4), 2) { validateRotation(deformer) })
+                    put(ref, Target(ref, "rotation", deformer.id.raw, deformer.parent?.raw, deformer,
+                        { coordinates(deformer.geometryGrid, deformer.blendShapes) }, { IntArray(0) }, { FloatArray(4) }, 2) { validateRotation(deformer) })
                 }
             }
         }
     }
 
-    private fun sample(model: PuppetModel, target: Target, coordinate: Map<String, Float>): FloatArray? =
-        runCatching { RigGeometryTools.geometry(model, target.kind, target.id, coordinate).points }.getOrNull()
+    /**
+     * [RigGeometryTools.geometry]`(model, kind, id, pose).points`, or null where that throws. Meshes, which
+     * dominate the sampling, skip its selector domain and rebuild nothing per coordinate: the same pose check,
+     * grid interpolation and blend-shape sum, in the same float operation order, so the points are identical.
+     */
+    private class Sampler(private val model: PuppetModel) {
+        private val parameters by lazy { model.parameters.associateBy { it.id.raw } }
+        private val defaults by lazy { model.parameters.associate { it.id to it.default } }
+        private val meshes by lazy { model.drawables.groupBy { it.id.raw }.mapNotNull { (id, list) -> list.singleOrNull()?.let { id to it } }.toMap() }
+
+        fun points(target: Target, pose: Map<String, Float>): FloatArray? =
+            if (target.kind == "mesh") runCatching { mesh(target.id, pose) }.getOrNull()
+            else runCatching { RigGeometryTools.geometry(model, target.kind, target.id, pose).points }.getOrNull()
+
+        private fun mesh(id: String, pose: Map<String, Float>): FloatArray {
+            require(pose.entries.none { (parameter, value) -> parameters[parameter]?.let { value.isFinite() && value in it.min..it.max } != true })
+            val drawable = meshes.getValue(id)
+            val base = requireNotNull(drawable.mesh).positions
+            // RigGeometryTools.bounds, which the selector domain needs, rejects these.
+            require(base.size >= 2 && base.size % 2 == 0 && base.all(Float::isFinite))
+            val points = base.copyOf()
+            drawable.geometryGrid?.let { grid ->
+                val cells = cellsByLinearIndex(grid)
+                val corners = requireNotNull(gridCorners(grid) { parameters[it.raw]?.let { p -> pose[it.raw] ?: p.default } ?: 0f })
+                for (corner in corners) {
+                    val form = requireNotNull(cells[corner.linearIndex]).form.positionDeltas
+                    require(form.size == points.size)
+                    for (i in points.indices) points[i] += corner.weight * form[i]
+                }
+            }
+            val blend = meshBlendState(drawable, { pose[it.raw] ?: defaults[it] ?: 0f }, { defaults[it] ?: 0f })
+            if (blend != null) {
+                for (contribution in blend.contributions) {
+                    val deltas = contribution.form.positionDeltas
+                    for (i in points.indices) {
+                        val reference = blend.referenceDeltas?.getOrElse(i) { 0f } ?: 0f
+                        val component = deltas.getOrElse(i) { 0f }
+                        points[i] += contribution.weight * (component - reference)
+                    }
+                }
+            }
+            return points
+        }
+    }
+
+    /**
+     * [RigGeometryDiagnostics.inspect] against one fixed [reference] and [triangles]: their checks and areas
+     * are computed once, then each [inspect] gives the same status the diagnostics would, or null where they throw.
+     */
+    private class Inspection(private val reference: FloatArray, private val triangles: IntArray) {
+        val valid = reference.size % 2 == 0 && reference.all(Float::isFinite) &&
+            triangles.size % 3 == 0 && triangles.all { it in 0 until reference.size / 2 }
+        private val areas = if (!valid) DoubleArray(0) else DoubleArray(triangles.size / 3) { area(reference, it * 3) }
+
+        private fun area(p: FloatArray, i: Int): Double {
+            val a = triangles[i]; val b = triangles[i + 1]; val c = triangles[i + 2]
+            return (p[b*2].toDouble()-p[a*2])*(p[c*2+1]-p[a*2+1]) - (p[b*2+1].toDouble()-p[a*2+1])*(p[c*2]-p[a*2])
+        }
+
+        fun inspect(points: FloatArray): RigGeometryDiagnostics.TriangleStatus? {
+            if (!valid || points.size != reference.size || !points.all(Float::isFinite)) return null
+            val flipped = mutableSetOf<Int>()
+            val collapsed = mutableSetOf<Int>()
+            val degenerate = mutableSetOf<Int>()
+            val degenerateReference = mutableSetOf<Int>()
+            var minimum: Double? = null
+            var maximum: Double? = null
+            for (triangle in areas.indices) {
+                val a = areas[triangle]
+                if (abs(a) < RigGeometryDiagnostics.DEGENERATE_AREA_EPSILON) {
+                    degenerateReference += triangle
+                    continue
+                }
+                val b = area(points, triangle * 3)
+                val ratio = b / a
+                minimum = minimum?.let { minOf(it, ratio) } ?: ratio
+                maximum = maximum?.let { maxOf(it, ratio) } ?: ratio
+                if (ratio < 0) flipped += triangle
+                if (abs(b) < RigGeometryDiagnostics.DEGENERATE_AREA_EPSILON || abs(ratio) <= RigGeometryDiagnostics.DEGENERATE_AREA_RATIO) degenerate += triangle
+                else if (abs(ratio) < RigGeometryDiagnostics.COLLAPSE_AREA_RATIO) collapsed += triangle
+            }
+            return RigGeometryDiagnostics.TriangleStatus(flipped, collapsed, degenerate, degenerateReference, minimum, maximum)
+        }
+    }
 
     private fun warpDomain(rows: Int, columns: Int): FloatArray {
         if (rows < 1 || columns < 1) return FloatArray(0)
@@ -377,9 +537,6 @@ internal object GeometrySafetyEvaluator {
         return null
     }
 
-    private fun <T : Any> blendIdentity(blends: List<BlendShapeBinding<T>>, values: (T) -> FloatArray): Any =
-        blends.map { listOf(it.parameterId.raw, it.keys.toList(), it.neutralIndex, it.forms.map { form -> form?.let { values(it).toList() } }, it.limits) }
-
     private fun checkpoint() { if (Thread.currentThread().isInterrupted) throw java.util.concurrent.CancellationException("Geometry evaluation cancelled") }
 
     private fun invertibleAffine(before: FloatArray, after: FloatArray, triangles: IntArray): Boolean {
@@ -424,18 +581,66 @@ internal object GeometrySafetyEvaluator {
         return null
     }
 
-    private fun drawableGeometrySignature(drawable: Drawable): Any = listOf(drawable.parentDeformerId?.raw,
-        drawable.mesh?.positions?.toList(), drawable.mesh?.uvs?.toList(), drawable.mesh?.indices?.toList(),
-        gridSignature(drawable.geometryGrid) { it.positionDeltas })
+    /**
+     * Whether two targets of the same ref hold the same geometry: the mesh (positions, UVs, triangles), the
+     * Warp lattice size, the Rotation's base angle and handle, the geometry keyform grid and the blend shapes.
+     * Floats compare by bits as boxed equality does (NaN equals NaN, -0 differs from 0). Unchanged objects are
+     * usually the same instance across rebuilds, which answers at once.
+     */
+    private fun sameGeometry(a: Target, b: Target): Boolean {
+        if (a.source === b.source) return true
+        val x = a.source; val y = b.source
+        return when {
+            x is Drawable && y is Drawable -> {
+                val m = x.mesh; val n = y.mesh
+                (m === n || (m != null && n != null && m.positions.contentEquals(n.positions) && m.uvs.contentEquals(n.uvs) &&
+                    m.indices.contentEquals(n.indices))) &&
+                    sameGrid(x.geometryGrid, y.geometryGrid) { f, g -> f.positionDeltas.contentEquals(g.positionDeltas) } &&
+                    sameBlends(x.blendShapes, y.blendShapes) { f, g -> f.positionDeltas.contentEquals(g.positionDeltas) }
+            }
+            x is Deformer.Warp && y is Deformer.Warp -> x.rows == y.rows && x.columns == y.columns &&
+                sameGrid(x.geometryGrid, y.geometryGrid) { f, g -> f.controlPoints.contentEquals(g.controlPoints) } &&
+                sameBlends(x.blendShapes, y.blendShapes) { f, g -> f.controlPoints.contentEquals(g.controlPoints) }
+            x is Deformer.Rotation && y is Deformer.Rotation -> same(x.baseAngle, y.baseAngle) && (x.handleLength as Any?) == (y.handleLength as Any?) &&
+                sameGrid(x.geometryGrid, y.geometryGrid) { f, g -> samePivot(f.originX, f.originY, f.angle, f.scale, g.originX, g.originY, g.angle, g.scale) } &&
+                sameBlends(x.blendShapes, y.blendShapes) { f, g -> samePivot(f.originX, f.originY, f.angle, f.scale, g.originX, g.originY, g.angle, g.scale) }
+            else -> false
+        }
+    }
 
-    private fun warpGeometrySignature(warp: Deformer.Warp): Any = listOf(
-        warp.parent?.raw, warp.rows, warp.columns, gridSignature(warp.geometryGrid) { it.controlPoints })
+    private fun same(a: Float, b: Float) = a.toBits() == b.toBits()
 
-    private fun rotationGeometrySignature(rotation: Deformer.Rotation): Any = listOf(
-        rotation.parent?.raw, rotation.baseAngle, rotation.handleLength,
-        gridSignature(rotation.geometryGrid) { floatArrayOf(it.originX, it.originY, it.angle, it.scale) })
+    private fun samePivot(ax: Float, ay: Float, aa: Float, ascale: Float, bx: Float, by: Float, ba: Float, bscale: Float) =
+        same(ax, bx) && same(ay, by) && same(aa, ba) && same(ascale, bscale)
 
-    private fun <T> gridSignature(grid: KeyformGrid<T>?, form: (T) -> FloatArray): Any = listOf(
-        grid?.axes?.map { listOf(it.parameterId.raw, it.keys.toList()) },
-        grid?.cells?.map { listOf(it.coordinate.toList(), form(it.form).toList()) })
+    private inline fun <T> sameGrid(a: KeyformGrid<T>?, b: KeyformGrid<T>?, form: (T, T) -> Boolean): Boolean {
+        if (a === b) return true
+        if (a == null || b == null || a.axes.size != b.axes.size || a.cells.size != b.cells.size) return false
+        for (i in a.axes.indices) {
+            if (a.axes[i].parameterId != b.axes[i].parameterId || !a.axes[i].keys.contentEquals(b.axes[i].keys)) return false
+        }
+        for (i in a.cells.indices) {
+            val c = a.cells[i]; val d = b.cells[i]
+            if (c !== d && (!c.coordinate.contentEquals(d.coordinate) || !form(c.form, d.form))) return false
+        }
+        return true
+    }
+
+    private inline fun <T : Any> sameBlends(a: List<BlendShapeBinding<T>>, b: List<BlendShapeBinding<T>>, form: (T, T) -> Boolean): Boolean {
+        if (a === b) return true
+        if (a.size != b.size) return false
+        for (i in a.indices) {
+            val c = a[i]; val d = b[i]
+            if (c === d) continue
+            if (c.parameterId != d.parameterId || !c.keys.contentEquals(d.keys) || c.neutralIndex != d.neutralIndex ||
+                c.forms.size != d.forms.size || c.limits != d.limits) return false
+            for (j in c.forms.indices) {
+                val f = c.forms[j]; val g = d.forms[j]
+                if (f === g) continue
+                if (f == null || g == null || !form(f, g)) return false
+            }
+        }
+        return true
+    }
 }
+

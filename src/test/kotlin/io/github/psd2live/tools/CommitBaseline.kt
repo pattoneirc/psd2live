@@ -323,7 +323,8 @@ internal class CommitBaseline(private val sample: Sample, private val out: File)
 		split["candidate edit (journal compile / paint prepare)"] = candidateMs
 		split["normalizeMeshEdits"] = timed { builder.normalizeMeshEdits(draft, before.model) }.second
 		split["rebuild (runtime, last commit)"] = lastRebuild
-		split["geometry safety"] = timed { GeometrySafetyEvaluator.evaluate(before.model.rig.puppet, after.model.rig.puppet, blockFoldovers = false) }.second
+		split["geometry safety"] = timed { GeometrySafetyEvaluator.evaluate(before.model.rig.puppet, after.model.rig.puppet, blockFoldovers = false,
+			scope = io.github.psd2live.application.WorkspaceGeometrySafety.scope(before.document, after.document)) }.second
 		val revision = mean(5) { WorkspaceRevisions.of(after.document) }
 		split["revision hash ×4 (warm raster digests)"] = revision * 4
 		split["persist history"] = persists.last()

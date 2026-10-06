@@ -13,7 +13,8 @@ internal object WorkspaceGeometrySafetySchemas {
         "preexistingFlipCount", "preexistingDegenerateCount", "preexistingCollapseCount", "newCollapseCount")
     val report = s.obj(mapOf("safe" to s.boolean(), "affectedTargets" to s.array(s.handle()),
         "affectedCoordinates" to s.dictionary(s.array(coordinate)), "violations" to s.array(violation), "warnings" to s.array(violation),
-        "scope" to s.string(), "diagnostics" to s.array(s.obj(mapOf(
+        "scope" to s.string(), "coverage" to s.obj(mapOf("mode" to s.choices("full", "scoped"),
+            "checkedTargets" to s.integer(0), "totalTargets" to s.integer(0))), "diagnostics" to s.array(s.obj(mapOf(
             "target" to s.handle(), "coordinate" to coordinate, "status" to s.choices("removed", "invalid_topology", "finite"),
             "detail" to s.string(), "pointCount" to s.integer(0),
             "preexistingFlipCount" to s.integer(0), "preexistingDegenerateCount" to s.integer(0), "preexistingCollapseCount" to s.integer(0),

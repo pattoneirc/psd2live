@@ -112,7 +112,8 @@ internal class WorkspaceDocumentCommands(private val runtime: WorkspaceRuntime<R
     private suspend fun checkGeometry(prepared: WorkspacePreparedDraft<RigPreviewModel>): GeometrySafetyReport =
         runInterruptible(Dispatchers.Default) {
             if (WorkspaceGeometrySafety.changed(prepared.before.document, prepared.draft.document))
-                GeometrySafetyEvaluator.evaluate(prepared.before.model.rig.puppet, prepared.model.rig.puppet, blockFoldovers = false)
+                GeometrySafetyEvaluator.evaluate(prepared.before.model.rig.puppet, prepared.model.rig.puppet, blockFoldovers = false,
+                    scope = WorkspaceGeometrySafety.scope(prepared.before.document, prepared.draft.document))
             else GeometrySafetyReport.noGeometryChange()
         }
 
