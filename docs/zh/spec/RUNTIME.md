@@ -15,7 +15,7 @@
 
 构建：在 `runtime/` 运行 `cargo build --release`，库位于 `runtime/target/release/`（Windows 为 `p2l_runtime.dll`）。Gradle 的 `buildRuntime` 在有 cargo 时自动构建：`./gradlew run` 使用它，打包时随应用资源分发；没有 cargo 时跳过，应用回退到编辑器求值器。`P2lRuntime.locate()` 依次查找系统属性 `psd2live.runtime.library`、环境变量 `PSD2LIVE_RUNTIME`（文件或目录）、系统属性 `psd2live.runtime.dir`、打包应用的资源目录和 `java.library.path`。
 
-编辑器的导出烘焙（Spine、DragonBones、glTF）在运行时库可用时经 `NativeGeometryEvaluator` 求值，否则使用引擎求值器；两者逐姿势一致（`NativeRuntimeConformanceTest`）。
+编辑器的导出烘焙（Spine、DragonBones、glTF）在运行时库可用时经 `NativeGeometryEvaluator` 求值，否则使用引擎求值器；两者逐姿势一致（`NativeRuntimeConformanceTest`）。编辑器软件预览（`RigCanvasSupport.evaluate`）同样经 `NativePreview` 使用运行时：首次遇到某个预览模型时由引擎作答并在后台编译，之后的帧走运行时；拖动中的临时模型不等待编译，失败或 `-Dpsd2live.preview.runtime=false` 时保持引擎。`NativePreviewTest` 在带骨架的 tml 上逐姿势比对，单次求值约 0.5 毫秒，与引擎相当（JNA 调用与结果转换抵消了原生速度）。
 
 ## `.p2lrt` 格式
 
@@ -60,7 +60,6 @@
 
 - 网格渲染（遮罩、混合模式）由宿主完成，运行时只提供几何与属性。
 - Godot 节点中反相遮罩按无遮罩绘制（Godot 的画布组无法移除覆盖）。
-- 编辑器内的运行时预览与导出烘焙改用运行时在后续阶段加入，见 [ROADMAP](../ROADMAP.md)。
 
 ## 网页播放器
 

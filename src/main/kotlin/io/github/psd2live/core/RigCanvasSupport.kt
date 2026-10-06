@@ -42,8 +42,9 @@ internal data class CubismViewport(val scale: Float, val offsetX: Float, val off
 internal object RigCanvasSupport {
 	private val evaluator = CpuDeformationEvaluator()
 
+	/** The preview at [parameters]: through the Rust runtime once it has compiled the model, else the engine. */
 	fun evaluate(model: RigPreviewModel, parameters: Map<ParameterId, Float> = emptyMap()): DeformedGeometry =
-		evaluator.evaluate(model.rig.puppet, parameters)
+		NativePreview.evaluate(model, parameters) ?: evaluator.evaluate(model.rig.puppet, parameters)
 
 	fun paintTexturedRig(
 		g: Graphics2D,
