@@ -192,19 +192,28 @@ fn blend<'a, S>(binding: &'a Binding<S>, values: &[f32], out: &mut Vec<(&'a S, f
     }
 }
 
-/// Meshes back to front: each render group sorts its children by draw order, keeping tree order on
-/// ties, and draws them in place. Hidden meshes are left out.
+/// A draw order as the sort key: plus a thousandth, truncated, so nearly tied blended orders tie.
+fn order_key(value: f32) -> i64 {
+    (value + 0.001).floor() as i64
+}
+
+/// Meshes back to front: each render group sorts its children by draw order (a group by its part's
+/// pose-blended draw order, else its static one), keeping tree order on ties, and draws them in place.
+/// Hidden meshes are left out.
 pub fn render_order(rig: &Rig, pose: &Pose) -> Vec<u32> {
     fn group(rig: &Rig, pose: &Pose, g: &RenderGroup, out: &mut Vec<u32>) {
-        let mut children: Vec<(f32, &RenderNode)> = g
+        let mut children: Vec<(i64, &RenderNode)> = g
             .children
             .iter()
             .map(|c| match c {
-                RenderNode::Mesh(m) => (pose.draw_order[*m], c),
-                RenderNode::Group(child) => (child.draw_order as f32, c),
+                RenderNode::Mesh(m) => (order_key(pose.draw_order[*m]), c),
+                RenderNode::Group(child) => {
+                    let order = child.part.and_then(|p| pose.part_draw_order.get(p).copied()).unwrap_or(child.draw_order as f32);
+                    (order_key(order), c)
+                }
             })
             .collect();
-        children.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        children.sort_by_key(|c| c.0);
         for (_, c) in children {
             match c {
                 RenderNode::Mesh(m) => {
@@ -256,6 +265,8 @@ pub struct Pose {
     pub deformers: Vec<Transform>,
     /// Accumulated opacity of each deformer.
     pub deformer_opacity: Vec<f32>,
+    /// Draw order of each part, blended from its channels and blend shapes.
+    pub part_draw_order: Vec<f32>,
 }
 
 #[derive(Default)]
@@ -404,6 +415,22 @@ impl Evaluator {
             pose.screen.push(state.screen);
         }
 
+        pose.part_draw_order.clear();
+        let mut shapes_part: Vec<(&PartShape, f32)> = Vec::new();
+        for part in &rig.parts {
+            let mut state = part_state(part, values, cells);
+            if !part.shapes.is_empty() {
+                let base = part_state(part, defaults, cells);
+                for binding in &part.shapes {
+                    blend(binding, values, &mut shapes_part);
+                    for (s, w) in shapes_part.drain(..) {
+                        toward(&mut state, &base, s.opacity, Some(s.draw_order), s.multiply, s.screen, w);
+                    }
+                }
+            }
+            pose.part_draw_order.push(state.draw_order);
+        }
+
         for glue in &rig.glues {
             let mut state = ChannelState {
                 draw_order: 0.0, opacity: 1.0, multiply: WHITE, screen: BLACK, flip_x: false, flip_y: false, glue_intensity: glue.intensity,
@@ -439,6 +466,14 @@ fn deformer_state(d: &Deformer, values: &[f32], cells: &mut Vec<(usize, f32)>) -
         state.flip_y = flip_y;
     }
     apply_channels(&d.channels, values, &mut state, cells);
+    state
+}
+
+fn part_state(part: &Part, values: &[f32], cells: &mut Vec<(usize, f32)>) -> ChannelState {
+    let mut state = ChannelState {
+        draw_order: part.draw_order as f32, opacity: 1.0, multiply: WHITE, screen: BLACK, flip_x: false, flip_y: false, glue_intensity: 1.0,
+    };
+    apply_channels(&part.channels, values, &mut state, cells);
     state
 }
 

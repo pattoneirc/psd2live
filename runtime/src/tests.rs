@@ -210,3 +210,26 @@ fn behaviors_blink_breathe_and_follow_the_gaze() {
     assert_eq!(last[3], 0.5);
     assert_eq!(last[1], 0.0, "breathing is off");
 }
+
+#[test]
+fn groups_sort_by_their_parts_blended_draw_order_and_orders_tie_within_one() {
+    use crate::eval::render_order;
+    let part = |id: &str, order: i32, channels: Channels| Part {
+        id: id.into(), name: id.into(), visible: true, sketch: false, group_mode: 0, draw_order: order, children: vec![], channels,
+        composite: Composite { blend: 0, alpha_blend: 0, masked_by: vec![], masked_by_parts: vec![], invert_mask: false, opacity: 1.0, multiply: WHITE, screen: BLACK },
+        shapes: vec![],
+    };
+    let keyed = vec![(Channel::DrawOrder, grid(0, &[0.0, 1.0], vec![ChannelValue::Scalar(500.0), ChannelValue::Scalar(100.0)]))];
+    let mut r = rig(vec![parameter("A", 0.0, 1.0, 0.0)], vec![], vec![mesh("a", None, vec![0.0; 6]), mesh("b", None, vec![0.0; 6]), mesh("c", None, vec![0.0; 6])]);
+    r.parts = vec![part("P", 500, keyed), part("Q", 300, vec![])];
+    let group = |part: usize, meshes: &[usize]| RenderNode::Group(RenderGroup {
+        part: Some(part), draw_order: 0, channels: vec![], composite: None, children: meshes.iter().map(|m| RenderNode::Mesh(*m)).collect(),
+    });
+    r.render = RenderGroup { part: None, draw_order: 500, channels: vec![], composite: None, children: vec![group(0, &[0, 1]), group(1, &[2])] };
+    // Within P, a (500.6) and b (500.4) tie at 500 and keep tree order.
+    r.meshes[0].draw_order = 500.6;
+    r.meshes[1].draw_order = 500.4;
+    let mut e = Evaluator::new();
+    assert_eq!(render_order(&r, e.evaluate(&r, &[0.0])), vec![2, 0, 1], "Q (300) behind P (500)");
+    assert_eq!(render_order(&r, e.evaluate(&r, &[1.0])), vec![0, 1, 2], "P keyed to 100 moves behind Q");
+}
