@@ -51,6 +51,8 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `view_render_model / view_render_layer / view_render_context / view_render_poses / view_check_coverage / view_compare_history / view_sample_motion` | `request` | `model/layer/context/poses/coverage/compare/motion`；动作采样返回只读任务句柄，终态包含采样拼图与参数范围 |
 | `parameter_create / parameter_update / parameter_delete` | `request` | `create/update/delete`；删除时按最后一次默认值选择最近的已写关键点切片并折叠轴 |
 | `layer_import_images` | `request` | 从 PNG、无损 WebP、TIFF 或 BMP 文件一次导入多层源图，后台完成后返回图层与网格句柄 |
+| `layer_get_texture / atlas_get / atlas_render_page` | `layer_id`；`atlas_get` 可选 `page`；渲染要求 `page`，可选 `max_size` | 从同一捕获读取图层画布矩形、栅格像素、原生密度、纹理覆盖与图块，或纹理集预算、fit、提示、页面占用与全部图块；渲染页面为只读后台任务，终态返回 PNG |
+| `layer_set_canvas_rect / layer_replace_image / layer_set_pixel_density / atlas_set_tile / atlas_set_budget / atlas_pack` | `request` 内 `state` 及各自字段 | 后台修改图层画布矩形、替换任意分辨率图像、设置纹理密度与锁定、固定图块、修改纹理集预算或重排；均可加入原子批量，见[纹理与纹理集](#纹理与纹理集) |
 | `source_get_components / source_split_components / source_split_polygon / source_split_depth / asset_prepare_reference / asset_import_png / asset_register / asset_preview_composite / layer_add_from_asset / layer_set_placement / layer_finalize_placement / asset_inspect / asset_reprocess / layer_soft_delete / layer_restore` | `request` | 源图拆分与素材的参考、导入、配准、预览、添加、定位、确认、检查、重处理、软删除和恢复 |
 | `swing_put / swing_delete` | `request` | `put/delete`，在 Warp 或 Mesh（自动包一层 Warp）上生成左右 / 上下摇摆及摆锤；`motions` 组合左右与上下，`parallel` 让多束头发平行摆动，`tilt` / `offset_along` / `offset_across` 旋转和平移摇摆矩形；`delete` 可 `bake` 为普通关键，见[摇摆生成](../guide/SWING.md) |
 | `physics_put / physics_delete / physics_simulate / physics_fit / physics_config / physics_import` | `request` | `put/delete/simulate/fit/config/import`：按 ID 新建或局部修改任意物理组（含生成的预设、骨骼、摆动组）、删除自定义组或恢复生成值、后台只读阶跃采样，通过任务结果返回峰值与稳定时间、按标准晃动或 `observed_peaks` 实测峰值调整输出倍率、设置计算顺序与计算 FPS、导入 physics3.json，见[物理](../guide/PHYSICS.md) |
@@ -64,11 +66,27 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 
 表中列出业务字段；所有修改还须携带 `request_id`，工作区修改须携带 `project_id` 和 `state`。只读后台采样 `physics_simulate/simulation_simulate/view_sample_motion` 同样要求这三个字段，用于去重并固定采样版本。各项操作字段不同，调用前读取当前服务提供的 JSON Schema。所有公开工具统一使用 `{"request": {...}}` 包装。发布与校验保留同一份 `oneOf`、`const`、字段约束及说明，外层和业务对象都拒绝未知字段。结果统一为 `{"ok":true,"operation":"...","data":{...}}`；错误包含 `ok:false` 和 `error.code/message`，字段校验错误还带 `field`。PNG 以 MCP 图片内容返回。
 
-全部 170 项公开操作（其中 58 项后台、79 项可批量）都必须声明并发布完整 `outputSchema`，能力详情中的 `output_schema` 与其一致；成功 data 和失败 error 严格互斥。注册表在执行及去重边界校验业务结果，MCP 校验完整返回包装，遗漏结果契约不能注册。后台操作必须另有终态 `job_result_schema`，非后台操作不允许该字段。能力详情通过本地 `$defs/$ref` 描述嵌套 schema，查询自己的 schema 也可校验；实际 HTTP 保留所有根约束。`output_contract` 表示服务实现的结果与声明不符，不能作为修改已回滚的证据。
+全部 180 项公开操作（其中 66 项后台、85 项可批量）都必须声明并发布完整 `outputSchema`，能力详情中的 `output_schema` 与其一致；成功 data 和失败 error 严格互斥。注册表在执行及去重边界校验业务结果，MCP 校验完整返回包装，遗漏结果契约不能注册。后台操作必须另有终态 `job_result_schema`，非后台操作不允许该字段。能力详情通过本地 `$defs/$ref` 描述嵌套 schema，查询自己的 schema 也可校验；实际 HTTP 保留所有根约束。`output_contract` 表示服务实现的结果与声明不符，不能作为修改已回滚的证据。
 
 图片追加使用 `layer_import_images`：必需 `state` 和 1–128 个绝对路径组成的 `paths`，可选 `parent_deformer_id` 指向已有父变形器；省略时绑定模型根。透明边缘裁剪后居中，仅在超过画布时缩小。单文件最多 64 MiB、16 百万像素，整批最多 32 百万像素。一次成功只追加一个历史节点，任意文件失败则整批不发布；它读取文件，不能作为原子文档批量成员。新增源图及网格句柄从任务终态 `affectedLayerIds/affectedObjectIds` 获取。原图像素写入工程，后续重开不依赖输入文件。
 
 文件导入图层定位使用 `layer_set_bounds`：`layer_id/left/top/width/height` 为必需，`name` 可选；坐标是源画布像素，提交时四舍五入为整数，宽高必须为正且不超过 16MP。重复缩放从已保存在工程的导入像素计算，保留原网格 ID、父级及其他对象的运动；已绘画或有专属绑定、Glue/遮罩依赖时拒绝定位。`layer_cancel_import` 接收 1–128 个唯一 `layer_ids`，整批一次历史提交；普通新增图层移除，旧生成基线及最后源图保留像素并软删除，重复取消无变化。两项均返回后台任务，也可加入原子文档批量；任务终态返回 `affectedLayerIds/state/history_node_id`。它们针对文件导入图层，素材配准图层继续使用 `layer_set_placement`。
+
+### 纹理与纹理集
+
+图层的画布矩形（画布单位，可为小数）与栅格像素相互独立：原生密度是每画布单位的栅格像素，纹理集图块保存 `栅格像素 × 密度 × fit`。密度默认 1；超出预算时，未锁定图块共用一个 fit（≤1）统一缩小，锁定与固定位置放不下时被取消并在 `notices` 中说明。几何不感知纹理集：密度、预算、固定位置和重排只改变图块与绑定 UV，不改变网格。
+
+- `layer_get_texture`（查询）：`layer_id`；返回 `canvas_rect`、整数外包 `bounds`、`raster`、`native_density`、`override{density,lock,pin}`、`deleted`、`tile`（页、纹理像素矩形、每栅格像素的纹理像素 `scale_x/scale_y`、密度、锁定与固定；透明或已删除图层为 null）及 `atlas_fit`，全部来自同一捕获版本。
+- `atlas_get`（查询）：可选 `page` 过滤图块；返回有效 `budget{page_size,max_pages,padding}`、`fit`、`notices`、`pages[{index,width,height,tile_count,occupancy}]` 与 `tiles`。
+- `atlas_render_page`（只读后台任务，要求 `request_id/project_id/state`）：`page`，可选 `max_size`（64–16384，默认 2048，按长边缩小）；终态含 `revision`、原尺寸与渲染尺寸、`sha256`、该页图层，PNG 以图片内容返回，`job_get/job_wait` 可重复取图。
+- `layer_set_canvas_rect`：`layer_id`、`rect{left,top,width,height}`；栅格拉伸到新矩形，整数 bounds 取外包框，生成输入同步移动，由生成器按新矩形放置网格。网格带作者编辑（关键形、路径、Glue 等日志引用）、骨架/摆动/模拟绑定、物化几何（拆分、新建或重建网格；文件导入图层改用 `layer_set_bounds`）或导入 CMO3 时拒绝（`invalid_argument`）。相同矩形无变化。
+- `layer_replace_image`：`layer_id` 与 `path`（绝对路径，PNG/WebP/TIFF/BMP，仅单项）或 `png_base64` 二选一，可选 `fit`（`stretch` 默认铺满，`contain` 保持比例居中补透明）与 `rebuild_mesh`（默认 false）。画布矩形不变，生成输入冻结在首次替换前的像素，网格、关键形与绑定保留，仅图块和 UV 改变；`rebuild_mesh=true` 改由新像素重新生成该层网格，带作者编辑或物化几何时拒绝。单项先核对状态再读取文件；批量成员只接受 `png_base64`，给出 `path` 时整批以 `invalid_edit` 失败。最多 16MP，像素相同为无变化。
+- `layer_set_pixel_density`：1–128 个唯一 `layer_ids`、必需的 `density`（1/64–16，`null` 恢复为 1），可选 `lock`（省略保持原值）。
+- `atlas_set_tile`：`layer_id` 与 `pin{page,x,y}`（纹理像素）或 `null` 释放；页号须在预算内。
+- `atlas_set_budget`：`page_size`（256–16384 的 2 的幂）、`max_pages`（1–64）、`padding`（0–32），至少给一项，省略项沿用当前有效预算；写入 `atlas` 设置。
+- `atlas_pack`：可选 `keep_pins`；清除全部固定位置（`keep_pins=true` 时保留）并删除已不存在图层的覆盖。布局本身始终是规范布局，没有可清除内容时无变化。
+
+六项编辑均为进程任务和原子批量成员，经 `WorkspaceTextureEdits` 纯候选、完整重建与 CAS 提交，一次成功只追加一个历史节点，撤销恢复此前图块。终态为 `project_id/state/history_node_id/revision/applied/layers/atlas_fit/notices`（可含 `geometry_diagnostics`），`layers` 为纹理实际变化的图层。
 
 
 ## 工程与导出任务
@@ -169,7 +187,7 @@ GUI 参数定义、文件夹位置和参数关键点可组合为一次共享提�
 
 参数定义现在按实际编辑顺序写入 journal，删除会读取此前关键形及最后一次默认值；旧工程静态参数覆盖保持兼容读取，不改写历史。透明度和颜色等纯通道修改也会持久化，重复捕获已存在且相同的关键点不追加历史。
 
-当前 79 项支持批量（包含素材图层添加、配准定位、确认及图片定位/取消）：设置、图层分类/网格配置、源图多边形/连通块/深度拆分及软删除/恢复、参数定义、独立 Warp 创建、Rig 变形/关键形/结构/外观/顶点组、六种源图绘画、七种骨架修改、六种动作修改、四种画布编辑、路径 put/delete/deform、摇摆 put/delete、物理 put/delete/config/fit，以及 simulation put/delete/bake/clear_bake 和 model_apply_preset。设置、分类、网格配置、源图拆分、图片定位/取消、图层软删除/恢复、独立 Warp、绘画、物理、模拟与预设的单项调用使用后台任务；批量直接执行同一应用层候选，拆分、绘画、烘焙和拟合进度包含所在批量成员，准备期间可取消整批，不嵌套成员的单项任务；`classic_front_hair/classic_back_hair` 支持 `sway:false`，移除模拟后关闭该类传统摆动。发现工具返回 `batchable:true` 才表示支持；GUI 字段完成已接入异步候选队列，生成设置/分类/网格草稿转换为共享纯候选，其余业务准备和文档命令仍在迁移，见 [验收进度](REFACTOR_PROGRESS.md)。
+当前 85 项支持批量（包含素材图层添加、配准定位、确认、图片定位/取消及六项纹理编辑）：设置、图层分类/网格配置、源图多边形/连通块/深度拆分及软删除/恢复、参数定义、独立 Warp 创建、Rig 变形/关键形/结构/外观/顶点组、六种源图绘画、七种骨架修改、六种动作修改、四种画布编辑、路径 put/delete/deform、摇摆 put/delete、物理 put/delete/config/fit，以及 simulation put/delete/bake/clear_bake 和 model_apply_preset。设置、分类、网格配置、源图拆分、图片定位/取消、图层软删除/恢复、独立 Warp、绘画、物理、模拟与预设的单项调用使用后台任务；批量直接执行同一应用层候选，拆分、绘画、烘焙和拟合进度包含所在批量成员，准备期间可取消整批，不嵌套成员的单项任务；`classic_front_hair/classic_back_hair` 支持 `sway:false`，移除模拟后关闭该类传统摆动。发现工具返回 `batchable:true` 才表示支持；GUI 字段完成已接入异步候选队列，生成设置/分类/网格草稿转换为共享纯候选，其余业务准备和文档命令仍在迁移，见 [验收进度](REFACTOR_PROGRESS.md)。
 
 素材图层添加支持导入模型及自建父变形器。应用候选将源画布几何转换到实际父级的中性坐标，并保存网格创建记录；重新配准使用原处理像素，原位替换创建几何而保留对象 ID 和父级。已有专属绑定或遮罩依赖仍拒绝单层定位。归一化分配前检查坐标及 16MP 像素预算，准备阶段响应取消；GUI 连续放置经独立应用会话，保存排除预览并等待正式确认。
 

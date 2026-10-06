@@ -101,6 +101,17 @@ interface WorkspaceSourcePort {
     suspend fun restoreDeletedLayers(layerIds: List<String>?, expectedState: String, taskId: String? = null): WorkspaceMutationResult
 }
 
+/**
+ * The texture workspace: each layer's canvas rectangle, raster pixels and texture density, and the atlas they pack into.
+ * Reads come from one captured version; every edit is one candidate, rebuild and CAS on [state] with one history node.
+ */
+interface WorkspaceTexturePort {
+    /** A detached read of the committed textures and atlas; it never revisits live state. */
+    fun captureTextures(): WorkspaceTextureView
+    /** Commits [edit] on [state]; an edit that changes nothing returns applied=false and adds no history node. */
+    suspend fun editTexture(state: String, edit: WorkspaceTextureEdit, author: MutationAuthor = MutationAuthor.AGENT): WorkspaceTextureResult
+}
+
 /** Private raster drafts share stroke history and only publish on an explicit once commit. */
 interface WorkspacePaintPort {
     fun listPaintSessions(): List<JsonObject>
@@ -336,6 +347,7 @@ interface WorkspaceBackend :
     WorkspaceEditorDraftPort,
     WorkspaceReadPort,
     WorkspaceSourcePort,
+    WorkspaceTexturePort,
     WorkspacePaintPort,
     WorkspaceSettingsPort,
     WorkspaceParameterPort,

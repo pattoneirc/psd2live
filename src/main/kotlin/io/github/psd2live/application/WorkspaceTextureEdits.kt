@@ -1,0 +1,419 @@
+package io.github.psd2live.application
+
+import io.github.psd2live.core.*
+import io.github.psd2live.project.*
+import kotlinx.serialization.json.*
+import org.umamo.format.FileKind
+import org.umamo.format.FormatRegistry
+import org.umamo.format.art.LayerBounds
+import org.umamo.format.art.LayerRaster
+import org.umamo.format.art.SourceArt
+import org.umamo.format.art.SourceLayer
+import org.umamo.format.raster.RasterCodec
+import java.nio.ByteBuffer
+import java.nio.file.Path
+import kotlin.math.ceil
+import kotlin.math.floor
+
+/** How a replacement raster of another aspect ratio lies on the layer's unchanged canvas rectangle. */
+enum class WorkspaceImageFit { STRETCH, CONTAIN }
+
+/** Where a replacement image comes from. A file is read only by the single command, after its state check. */
+sealed interface WorkspaceTextureImage {
+    /** An absolute local PNG, WebP, TIFF or BMP file of at most 64 MiB and 16 megapixels. */
+    data class File(val path: Path) : WorkspaceTextureImage
+    /** Encoded PNG bytes, as `png_base64` carries them. */
+    class Png(val bytes: ByteArray) : WorkspaceTextureImage
+    /** Already decoded straight RGBA pixels. */
+    class Raster(val raster: LayerRaster) : WorkspaceTextureImage
+}
+
+/** One texture edit. Each is a pure document candidate; single commands and atomic batches share it. */
+sealed interface WorkspaceTextureEdit {
+    val operation: String
+
+    /** Moves or resizes [layerId] to [rect] (canvas units, fractional allowed); its raster is stretched over it. */
+    data class SetCanvasRect(val layerId: String, val rect: LayerCanvasRect) : WorkspaceTextureEdit {
+        override val operation get() = "layer_set_canvas_rect"
+    }
+
+    /**
+     * Replaces [layerId]'s pixels with [image] at any resolution, keeping its canvas rectangle. The rig keeps its
+     * generation input unless [rebuildMesh] regenerates the layer's mesh from the new pixels.
+     */
+    data class ReplaceImage(val layerId: String, val image: WorkspaceTextureImage, val fit: WorkspaceImageFit = WorkspaceImageFit.STRETCH,
+                            val rebuildMesh: Boolean = false) : WorkspaceTextureEdit {
+        override val operation get() = "layer_replace_image"
+    }
+
+    /** Sets the texture density (texture pixels per raster pixel; null resets to 1) and, when given, the lock. */
+    data class SetPixelDensity(val layerIds: List<String>, val density: Float?, val lock: Boolean? = null) : WorkspaceTextureEdit {
+        override val operation get() = "layer_set_pixel_density"
+    }
+
+    /** Pins [layerId]'s tile at [pin] on the atlas, or releases it to the automatic layout when null. */
+    data class SetTile(val layerId: String, val pin: TexturePin?) : WorkspaceTextureEdit {
+        override val operation get() = "atlas_set_tile"
+    }
+
+    /** Changes the atlas budget; omitted values keep the current effective budget's. */
+    data class SetBudget(val pageSize: Int? = null, val maxPages: Int? = null, val padding: Int? = null) : WorkspaceTextureEdit {
+        override val operation get() = "atlas_set_budget"
+    }
+
+    /** Clears every pin unless [keepPins], and drops overrides of layers that no longer exist; the layout is canonical. */
+    data class Pack(val keepPins: Boolean = false) : WorkspaceTextureEdit {
+        override val operation get() = "atlas_pack"
+    }
+}
+
+/** A committed texture edit and the atlas the new state packs into. */
+data class WorkspaceTextureResult(
+    val mutation: WorkspaceMutationResult,
+    val layerIds: List<String>,
+    val atlasFit: Float,
+    val notices: List<String>,
+)
+
+/** One layer's atlas tile; positions and sizes are texture pixels. */
+data class WorkspaceAtlasTile(
+    val layerId: String,
+    val page: Int,
+    val x: Int,
+    val y: Int,
+    val width: Int,
+    val height: Int,
+    /** Texture pixels per raster pixel on each axis: density times fit. */
+    val scaleX: Float,
+    val scaleY: Float,
+    /** The layer's density override, 1 by default. */
+    val density: Float,
+    val locked: Boolean,
+    val pinned: Boolean,
+)
+
+data class WorkspaceAtlasPage(val index: Int, val width: Int, val height: Int, val tileCount: Int, val occupancy: Float)
+
+data class WorkspaceAtlasSnapshot(
+    val budget: AtlasBudget,
+    val pages: List<WorkspaceAtlasPage>,
+    /** The common scale of every unlocked tile; 1 unless the budget forced textures smaller. */
+    val fit: Float,
+    val notices: List<String>,
+    val tiles: List<WorkspaceAtlasTile>,
+)
+
+/** One layer's committed texture: where it sits on the canvas, its pixels, its override and its tile. */
+data class WorkspaceLayerTexture(
+    val layerId: String,
+    val name: String,
+    val canvasRect: LayerCanvasRect,
+    val bounds: LayerBounds,
+    val rasterWidth: Int,
+    val rasterHeight: Int,
+    /** Raster pixels per canvas unit on each axis. */
+    val nativeDensityX: Float,
+    val nativeDensityY: Float,
+    val override: TextureOverride,
+    val deleted: Boolean,
+    /** Null when the layer packs no tile (deleted or fully transparent). */
+    val tile: WorkspaceAtlasTile?,
+    val fit: Float,
+)
+
+/** A read of one committed version; later commits and reloads cannot mix into it. */
+class WorkspaceTextureView internal constructor(private val capture: WorkspaceCapture<RigPreviewModel>) {
+    val projectId: String get() = capture.projectId
+    val state: String get() = capture.state
+    val revision: String get() = capture.revision
+    val historyNodeId: String get() = capture.historyHead
+
+    private val model get() = capture.model
+    private val document get() = capture.document
+
+    private fun tile(id: String): WorkspaceAtlasTile? {
+        val placement = model.atlas.placementByLayerId[id] ?: return null
+        val override = document.textureOverrides[id] ?: TextureOverride()
+        return WorkspaceAtlasTile(id, placement.page, placement.x, placement.y, placement.width, placement.height,
+            placement.scaleX, placement.scaleY, override.density ?: 1f, override.lock, override.pin != null)
+    }
+
+    fun layer(layerId: String): WorkspaceLayerTexture {
+        WorkspaceArtPrimitives.requireCurrent(document.rigEdits, layerId)
+        val layer = document.source.layers.firstOrNull { it.id.raw == layerId }
+            ?: model.analysis.layers.firstOrNull { it.source.id.raw == layerId }?.source?.textureLayer
+            ?: throw IllegalArgumentException("Layer not found: $layerId")
+        val space = LayerSpace.of(layer)
+        return WorkspaceLayerTexture(layerId, layer.name, layer.canvasRect(), layer.bounds, layer.raster.width, layer.raster.height,
+            space.scaleX, space.scaleY, document.textureOverrides[layerId] ?: TextureOverride(), layerId in document.deletedLayerIds,
+            tile(layerId), model.atlas.fit)
+    }
+
+    fun atlas(): WorkspaceAtlasSnapshot {
+        val tiles = model.atlas.placementByLayerId.keys.sorted().mapNotNull(::tile)
+        val pages = model.atlas.pages.mapIndexed { index, page ->
+            val onPage = tiles.filter { it.page == index }
+            val area = page.image.width.toLong() * page.image.height
+            WorkspaceAtlasPage(index, page.image.width, page.image.height, onPage.size,
+                if (area == 0L) 0f else (onPage.sumOf { it.width.toLong() * it.height } / area.toDouble()).toFloat().coerceIn(0f, 1f))
+        }
+        return WorkspaceAtlasSnapshot(document.config().effectiveAtlasBudget(), pages, model.atlas.fit, model.atlas.notices, tiles)
+    }
+
+    /** The page's canonical PNG, byte for byte what exports write. */
+    fun pagePng(page: Int): ByteArray {
+        require(page in model.atlas.pages.indices) { "Atlas page $page does not exist; the atlas has ${model.atlas.pages.size} page(s)" }
+        return model.atlas.pages[page].png
+    }
+
+    /** The layer ids of the tiles on [page]. */
+    fun pageLayers(page: Int): List<String> = model.atlas.placementByLayerId.filterValues { it.page == page }.keys.sorted()
+}
+
+/** Pure texture candidates: no files, jobs, projection or history. */
+internal object WorkspaceTextureEdits {
+    val supported = setOf("layer_set_canvas_rect", "layer_replace_image", "layer_set_pixel_density", "atlas_set_tile",
+        "atlas_set_budget", "atlas_pack")
+
+    const val MIN_DENSITY = 1f / 64f
+    const val MAX_DENSITY = 16f
+    private const val MAX_PIXELS = 16L * 1024 * 1024
+    private const val MAX_PNG_BYTES = 64 * 1024 * 1024
+    private val pageSizes = (8..14).map { 1 shl it }
+
+    fun apply(operation: WorkspaceDocumentOperation, document: WorkspaceDocument, model: RigPreviewModel,
+              checkCancelled: () -> Unit = {}): WorkspaceDocument = apply(document, model, parse(operation), checkCancelled)
+
+    fun parse(operation: WorkspaceDocumentOperation): WorkspaceTextureEdit {
+        val request = operation.request
+        fun text(key: String) = request.getValue(key).jsonPrimitive.content
+        fun int(key: String) = request[key]?.jsonPrimitive?.int
+        return when (operation.operation) {
+            "layer_set_canvas_rect" -> {
+                val rect = request.getValue("rect").jsonObject
+                fun value(key: String) = rect.getValue(key).jsonPrimitive.float
+                WorkspaceTextureEdit.SetCanvasRect(text("layer_id"), LayerCanvasRect(value("left"), value("top"), value("width"), value("height")))
+            }
+            "layer_replace_image" -> {
+                val path = request["path"]?.jsonPrimitive?.content
+                val png = request["png_base64"]?.jsonPrimitive?.content
+                require((path == null) != (png == null)) { "Give exactly one of path or png_base64" }
+                val image = if (path != null) WorkspaceTextureImage.File(Path.of(path).also {
+                    require(it.isAbsolute) { "Provide an absolute local path" }
+                }) else WorkspaceTextureImage.Png(decodePngBase64(requireNotNull(png)))
+                WorkspaceTextureEdit.ReplaceImage(text("layer_id"), image,
+                    request["fit"]?.jsonPrimitive?.content?.let { WorkspaceImageFit.valueOf(it.uppercase()) } ?: WorkspaceImageFit.STRETCH,
+                    request["rebuild_mesh"]?.jsonPrimitive?.boolean ?: false)
+            }
+            "layer_set_pixel_density" -> WorkspaceTextureEdit.SetPixelDensity(
+                request.getValue("layer_ids").jsonArray.map { it.jsonPrimitive.content },
+                request.getValue("density").let { if (it is JsonNull) null else it.jsonPrimitive.float },
+                request["lock"]?.jsonPrimitive?.boolean)
+            "atlas_set_tile" -> WorkspaceTextureEdit.SetTile(text("layer_id"), request.getValue("pin").let { pin ->
+                if (pin is JsonNull) null else pin.jsonObject.let {
+                    TexturePin(it.getValue("page").jsonPrimitive.int, it.getValue("x").jsonPrimitive.int, it.getValue("y").jsonPrimitive.int)
+                }
+            })
+            "atlas_set_budget" -> WorkspaceTextureEdit.SetBudget(int("page_size"), int("max_pages"), int("padding"))
+            "atlas_pack" -> WorkspaceTextureEdit.Pack(request["keep_pins"]?.jsonPrimitive?.boolean ?: false)
+            else -> throw IllegalArgumentException("Not a texture operation: ${operation.operation}")
+        }
+    }
+
+    fun apply(document: WorkspaceDocument, model: RigPreviewModel, edit: WorkspaceTextureEdit, checkCancelled: () -> Unit = {}): WorkspaceDocument {
+        checkCancelled()
+        return when (edit) {
+            is WorkspaceTextureEdit.SetCanvasRect -> canvasRect(document, model, edit)
+            is WorkspaceTextureEdit.ReplaceImage -> replace(document, model, edit, checkCancelled)
+            is WorkspaceTextureEdit.SetPixelDensity -> density(document, model, edit)
+            is WorkspaceTextureEdit.SetTile -> tile(document, model, edit)
+            is WorkspaceTextureEdit.SetBudget -> budget(document, edit)
+            is WorkspaceTextureEdit.Pack -> pack(document, model, edit)
+        }
+    }
+
+    /** The layers whose texture [edit] changed between [before] and [after]. */
+    fun changedLayers(edit: WorkspaceTextureEdit, before: WorkspaceDocument, after: WorkspaceDocument): List<String> = when (edit) {
+        is WorkspaceTextureEdit.SetCanvasRect -> listOf(edit.layerId).filter { before.source !== after.source }
+        is WorkspaceTextureEdit.ReplaceImage -> listOf(edit.layerId).filter { before.source !== after.source }
+        is WorkspaceTextureEdit.SetTile -> listOf(edit.layerId).filter { before.textureOverrides[it] != after.textureOverrides[it] }
+        else -> (before.textureOverrides.keys + after.textureOverrides.keys).filter { before.textureOverrides[it] != after.textureOverrides[it] }.sorted()
+    }
+
+    /** A source layer the document holds and has not deleted. */
+    private fun sourceLayer(document: WorkspaceDocument, id: String): SourceLayer {
+        WorkspaceArtPrimitives.requireCurrent(document.rigEdits, id)
+        val layer = document.source.layers.singleOrNull { it.id.raw == id }
+            ?: throw IllegalArgumentException("Source layer not found: $id")
+        require(id !in document.deletedLayerIds) { "Layer is deleted: $id" }
+        return layer
+    }
+
+    /** Ids that own an atlas tile or a texture: source layers and the analysed layers derived from them. */
+    private fun requireTextureLayer(document: WorkspaceDocument, model: RigPreviewModel, id: String) {
+        WorkspaceArtPrimitives.requireCurrent(document.rigEdits, id)
+        require(document.source.layers.any { it.id.raw == id } || model.analysis.layers.any { it.source.id.raw == id }) { "Layer not found: $id" }
+        require(id !in document.deletedLayerIds) { "Layer is deleted: $id" }
+    }
+
+    private fun canvasRect(document: WorkspaceDocument, model: RigPreviewModel, edit: WorkspaceTextureEdit.SetCanvasRect): WorkspaceDocument {
+        val layer = sourceLayer(document, edit.layerId)
+        val rect = edit.rect
+        require(rect.width > 0f && rect.height > 0f) { "Canvas rectangle needs a positive width and height" }
+        val left = floor(rect.left.toDouble()); val top = floor(rect.top.toDouble())
+        val right = ceil(rect.right.toDouble()); val bottom = ceil(rect.bottom.toDouble())
+        require(left >= Int.MIN_VALUE / 2 && top >= Int.MIN_VALUE / 2 && right <= Int.MAX_VALUE / 2 && bottom <= Int.MAX_VALUE / 2) {
+            "Canvas rectangle exceeds the canvas coordinate range"
+        }
+        val bounds = LayerBounds(left.toInt(), top.toInt(), (right - left).toInt().coerceAtLeast(1), (bottom - top).toInt().coerceAtLeast(1))
+        require(bounds.width.toLong() * bounds.height <= MAX_PIXELS) { "Canvas rectangle covers more than 16 megapixels" }
+        val stored = rect.takeUnless { it.matches(bounds) }
+        if (layer.bounds == bounds && layer.canvasRect() == (stored ?: LayerCanvasRect.of(bounds))) return document
+        requireUnbound(document, model, edit.layerId, "Moving a layer's canvas rectangle")
+        fun moved(old: SourceLayer) = (WorkspaceSourceLayer.copyOf(old, old.order) as WorkspaceSourceLayer).copy(bounds = bounds, rect = stored)
+        // The generation inputs move with the layer, so the generator places its mesh by the new rectangle.
+        return document.copy(source = swap(document.source, edit.layerId, ::moved)!!,
+            generationSource = swap(document.generationSource, edit.layerId, ::moved),
+            meshSource = swap(document.meshSource, edit.layerId, ::moved))
+    }
+
+    private fun replace(document: WorkspaceDocument, model: RigPreviewModel, edit: WorkspaceTextureEdit.ReplaceImage,
+                        checkCancelled: () -> Unit): WorkspaceDocument {
+        val layer = sourceLayer(document, edit.layerId)
+        require(document.rigEdits.importedCmo3 == null) { "Replacing the image of an imported CMO3 layer is not supported" }
+        val raster = when (val image = edit.image) {
+            is WorkspaceTextureImage.Raster -> image.raster
+            is WorkspaceTextureImage.Png -> decodePng(image.bytes, checkCancelled)
+            is WorkspaceTextureImage.File -> throw IllegalArgumentException(
+                "A file path is read only by a single layer_replace_image; in a batch give png_base64")
+        }
+        checkCancelled()
+        val fit = if (edit.fit == WorkspaceImageFit.CONTAIN) LayerImageReplace.Fit.CONTAIN else LayerImageReplace.Fit.STRETCH
+        val replaced = LayerImageReplace.replace(document, edit.layerId, raster, fit)
+        val laid = replaced.source.layers.single { it.id.raw == edit.layerId }
+        val samePixels = laid.raster.width == layer.raster.width && laid.raster.height == layer.raster.height &&
+            laid.raster.rgba.contentEquals(layer.raster.rgba)
+        if (!edit.rebuildMesh) return if (samePixels) document else replaced
+        requireUnbound(document, model, edit.layerId, "Rebuilding the mesh of a replaced layer")
+        // The new pixels also become this layer's generation input; other layers keep theirs.
+        val generation = document.generationSource?.let { swap(it, edit.layerId) { laid } }
+        val mesh = swap(document.meshSource, edit.layerId) { laid }
+        return replaced.copy(generationSource = generation, meshSource = mesh)
+    }
+
+    private fun density(document: WorkspaceDocument, model: RigPreviewModel, edit: WorkspaceTextureEdit.SetPixelDensity): WorkspaceDocument {
+        require(edit.layerIds.size in 1..128 && edit.layerIds.distinct().size == edit.layerIds.size) { "Give 1..128 unique layer ids" }
+        edit.density?.let { require(it.isFinite() && it in MIN_DENSITY..MAX_DENSITY) { "Density must lie in $MIN_DENSITY..$MAX_DENSITY" } }
+        edit.layerIds.forEach { requireTextureLayer(document, model, it) }
+        val density = edit.density?.takeUnless { it == 1f }
+        val overrides = document.textureOverrides.toMutableMap()
+        for (id in edit.layerIds) {
+            val current = overrides[id] ?: TextureOverride()
+            put(overrides, id, current.copy(density = density, lock = edit.lock ?: current.lock))
+        }
+        return withOverrides(document, overrides)
+    }
+
+    private fun tile(document: WorkspaceDocument, model: RigPreviewModel, edit: WorkspaceTextureEdit.SetTile): WorkspaceDocument {
+        requireTextureLayer(document, model, edit.layerId)
+        edit.pin?.let { pin ->
+            require(edit.layerId in model.atlas.placementByLayerId) { "Layer ${edit.layerId} has no atlas tile to pin" }
+            val budget = document.config().effectiveAtlasBudget()
+            require(pin.page < budget.maxPages) { "Page ${pin.page} is outside the budget of ${budget.maxPages} page(s)" }
+            val pageSize = model.atlas.pages.firstOrNull()?.image?.width ?: budget.pageSize
+            require(pin.x < pageSize && pin.y < pageSize) { "Pin lies outside the ${pageSize}px page" }
+        }
+        val overrides = document.textureOverrides.toMutableMap()
+        put(overrides, edit.layerId, (overrides[edit.layerId] ?: TextureOverride()).copy(pin = edit.pin))
+        return withOverrides(document, overrides)
+    }
+
+    private fun budget(document: WorkspaceDocument, edit: WorkspaceTextureEdit.SetBudget): WorkspaceDocument {
+        require(edit.pageSize != null || edit.maxPages != null || edit.padding != null) { "Give page_size, max_pages or padding" }
+        edit.pageSize?.let { require(it in pageSizes) { "page_size must be a power of two in 256..16384" } }
+        edit.maxPages?.let { require(it in 1..64) { "max_pages must lie in 1..64" } }
+        edit.padding?.let { require(it in 0..32) { "padding must lie in 0..32" } }
+        val stored = WorkspaceSettingsCodec.decodeAtlasBudget(document.settings)
+        val current = stored ?: WorkspaceSettingsCodec.atlasBudget(document.settings)
+        val next = AtlasBudget(edit.pageSize ?: current.pageSize, edit.maxPages ?: current.maxPages, edit.padding ?: current.padding)
+        if (next == current) return document
+        return document.copy(settings = JsonObject(document.settings + (WorkspaceSettingsCodec.ATLAS to WorkspaceSettingsCodec.encodeAtlasBudget(next))))
+    }
+
+    private fun pack(document: WorkspaceDocument, model: RigPreviewModel, edit: WorkspaceTextureEdit.Pack): WorkspaceDocument {
+        val known = document.source.layers.mapTo(HashSet()) { it.id.raw } + model.analysis.layers.map { it.source.id.raw }
+        val overrides = document.textureOverrides.filterKeys { it in known }.mapValues { (_, value) ->
+            if (edit.keepPins) value else value.copy(pin = null)
+        }.filterValues { !it.isDefault }
+        return withOverrides(document, overrides.toMutableMap())
+    }
+
+    private fun put(overrides: MutableMap<String, TextureOverride>, id: String, value: TextureOverride) {
+        if (value.isDefault) overrides.remove(id) else overrides[id] = value
+    }
+
+    private fun withOverrides(document: WorkspaceDocument, overrides: Map<String, TextureOverride>): WorkspaceDocument =
+        if (overrides == document.storedTextureOverrides) document else document.copy(textureOverrides = overrides.toMap())
+
+    private fun swap(source: SourceArt?, id: String, transform: (SourceLayer) -> SourceLayer): SourceArt? {
+        if (source == null || source.layers.none { it.id.raw == id }) return source
+        return WorkspaceSourceArt(source.widthPx, source.heightPx, source.layers.map { if (it.id.raw == id) transform(it) else it }, source.groups)
+    }
+
+    /** Journal records that only fix identities or generation rules; they place no geometry of their own. */
+    private val identityRecords = setOf(MeshGenerationBaseline.OP, RigGenerationBaseline.OP, RigGenerationFrames.OP, "rig_generation_transition",
+        "rig_generation_scaffold", RigLayerDeletion.OP, "rig_mesh_activation", "layer_draw_order")
+    /** Records that hold a layer's mesh geometry themselves, so the generator no longer places it. */
+    private val materializedRecords = setOf(ArtPrimitiveJournal.OP, RasterMeshCreation.OP, "canvas_mesh_rebuild", "canvas_source_partition", "canvas_depth_split")
+
+    /**
+     * Rejects moving or regenerating a layer whose meshes carry authored geometry or bindings: those are stored in
+     * the mesh's old coordinates and would not follow. Generated keyforms, masks and glue are regenerated and follow.
+     */
+    private fun requireUnbound(document: WorkspaceDocument, model: RigPreviewModel, id: String, action: String) {
+        require(document.rigEdits.importedCmo3 == null) { "$action is not supported for imported CMO3 models" }
+        val meshes = model.rig.puppet.drawables.filter { model.rig.layerIdByDrawableId[it.id.raw] == id }.mapTo(HashSet()) { it.id.raw }
+        fun references(value: JsonElement): Boolean = when (value) {
+            is JsonObject -> value.any { (key, nested) -> key !in setOf("name", "user_data") && references(nested) }
+            is JsonArray -> value.any(::references)
+            is JsonPrimitive -> value.isString && (value.content == id || value.content in meshes || value.content.substringAfter(':') in meshes)
+        }
+        val edits = document.rigEdits
+        for (entry in edits.authoringJournal) {
+            val op = entry["op"]?.jsonPrimitive?.contentOrNull
+            if (op in identityRecords || !references(entry)) continue
+            require(op !in materializedRecords) {
+                "$action is not supported for layer $id: its mesh geometry is materialized by a $op record (split, created or rebuilt mesh). " +
+                    "Use layer_set_bounds for file-imported layers, or history_checkout before that record"
+            }
+            throw IllegalArgumentException("$action is not supported for layer $id: authored edits ($op) are bound to its meshes. " +
+                "Move it before authoring, or undo those edits first")
+        }
+        require(edits.structureEdits.none(::references) && edits.warpEdits.none { w -> w.meshIds.any { it in meshes } } &&
+            edits.keyformSetEdits.none { it.target.id in meshes } && edits.keyformCopyEdits.none { it.destinationTarget.id in meshes } &&
+            edits.keyformDeleteEdits.none { it.target.id in meshes }) { "$action is not supported for layer $id: it has authored Warp or keyform edits" }
+        require(edits.skeleton?.let { skeleton ->
+            skeleton.bones.any { bone -> bone.drawableIds.any { it in meshes } } || skeleton.manualWeights.keys.any { it in meshes }
+        } != true && edits.swingEdits.none { edit -> edit.targets.any { it == id || it in meshes } } &&
+            edits.simEdits.none { edit -> edit.targets.any { it == id || it in meshes } }) { "$action is not supported for layer $id: it has skeleton, swing or simulation bindings" }
+    }
+
+    /** A PNG of at most 64 MiB and 16 megapixels, checked from its header before decoding. */
+    fun decodePng(bytes: ByteArray, checkCancelled: () -> Unit = {}): LayerRaster {
+        require(bytes.size in 1..MAX_PNG_BYTES) { "PNG must hold 1 byte to 64 MiB" }
+        val codec = FormatRegistry.detect(bytes, "image.png") as? RasterCodec
+        require(codec?.kind == FileKind.Png && bytes.size >= 24 && bytes.copyOfRange(12, 16).decodeToString() == "IHDR") { "png_base64 is not a PNG image" }
+        val width = ByteBuffer.wrap(bytes).getInt(16).toLong(); val height = ByteBuffer.wrap(bytes).getInt(20).toLong()
+        require(width > 0 && height > 0 && width * height <= MAX_PIXELS) { "Image exceeds 16 megapixels" }
+        checkCancelled()
+        val image = requireNotNull(codec).read(bytes)
+        checkCancelled()
+        return LayerRaster(image.width, image.height, image.rgba)
+    }
+
+    /** A decoded image file of any supported transparent format. */
+    fun decodeFile(path: Path, checkCancelled: () -> Unit): LayerRaster {
+        val image = LayerImport.decodeRasterFile(path.toFile(), checkCancelled)
+        return LayerRaster(image.width, image.height, image.rgba)
+    }
+}

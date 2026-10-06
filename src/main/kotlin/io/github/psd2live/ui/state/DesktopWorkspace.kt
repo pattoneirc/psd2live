@@ -528,6 +528,7 @@ class DesktopWorkspace(
     private val draftQueue = WorkspaceDraftQueue(runtime, draftScope)
     private val imagePlacements = java.util.concurrent.CopyOnWriteArrayList<WorkspaceImagePlacementSession>()
     private val imagePlacementCommands = WorkspaceImagePlacementCommands(runtime)
+    private val textureCommands = WorkspaceTextureCommands(runtime)
     private val sourceImporter = WorkspaceSourceImporter(runtime, { document -> previewBuilder.build(document) })
     private val cmo3Importer = WorkspaceCmo3Importer(runtime, { document, current -> previewBuilder.build(document, current) })
     private fun runtimeModel(): io.github.psd2live.core.RigPreviewModel? = runtime.state.value.capture?.model
@@ -952,6 +953,22 @@ class DesktopWorkspace(
             scheduleHistoryPersistence(before.projectId); viewModel.updateHistorySnapshot(history()); viewModel.refreshWorkspaceRenderer(result.commit.capture.model)
         }
         result.mutation
+    }
+
+    override fun captureTextures(): WorkspaceTextureView = WorkspaceTextureView(runtime.capture())
+
+    override suspend fun editTexture(state: String, edit: WorkspaceTextureEdit, author: MutationAuthor): WorkspaceTextureResult = editMutex.withLock {
+        val before = captureForMutation(); requireExpected(state, before)
+        require(recoveringProjectId != before.projectId) { "Workspace is still being restored; retry shortly" }
+        val ui = viewModel.state.value
+        if (ui.isAnalyzing || ui.isGenerating) throw WorkspaceBusy()
+        val result = textureCommands.execute(before.projectId, before.state, edit, mutationAuthor(author)) { _, document, model ->
+            applyPreviewOrThrow(model, documentFrom(ui), document, "Texture edit: ${edit.operation}", ui)
+        }
+        if (result.commit.applied) {
+            scheduleHistoryPersistence(before.projectId); viewModel.updateHistorySnapshot(history()); viewModel.refreshWorkspaceRenderer(result.commit.capture.model)
+        }
+        result.result
     }
 
 	override suspend fun softDeleteLayer(
