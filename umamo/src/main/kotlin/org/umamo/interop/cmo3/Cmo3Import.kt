@@ -660,7 +660,7 @@ object Cmo3Import {
 	 * @param Any? collection The raw `_sources`/`_childGuids`/etc. field, held as `Any?`.
 	 * @return List<Any?> The contained elements, or empty when the field is null/unrecognised.
 	 */
-	internal fun elementsOf(collection: Any?): List<Any?> =
+	fun elementsOf(collection: Any?): List<Any?> =
 		when (collection) {
 			is Map<*, *> -> collection.values.toList()
 			is Iterable<*> -> collection.toList()
@@ -720,7 +720,7 @@ object Cmo3Import {
 	 * @param Any? value A field expected to hold a `Guid`.
 	 * @return String? The uuid, or null.
 	 */
-	internal fun uuidOf(value: Any?): String? = (value as? Guid)?.uuid?.takeIf { it.isNotEmpty() }
+	fun uuidOf(value: Any?): String? = (value as? Guid)?.uuid?.takeIf { it.isNotEmpty() }
 
 	/**
 	 * Extracts the id string from a CMO3 `Id` object, or null if absent/empty.
@@ -728,7 +728,7 @@ object Cmo3Import {
 	 * @param Any? value A field expected to hold an `Id`.
 	 * @return String? The idstr (e.g. `ParamAngleX`, `ArtMesh82`), or null.
 	 */
-	internal fun idStrOf(value: Any?): String? = (value as? Id)?.idstr?.takeIf { it.isNotEmpty() }
+	fun idStrOf(value: Any?): String? = (value as? Id)?.idstr?.takeIf { it.isNotEmpty() }
 
 	/**
 	 * Converts a CMO3 `CFloatColor` field to the runtime [ColorRgb].

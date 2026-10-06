@@ -132,7 +132,7 @@ internal fun limitMultiplier(limits: List<BlendWeightLimit>, paramValue: (Parame
 }
 
 /** One active mesh blend contribution: the form, its net weight, and its (binding, key) identity. */
-internal class MeshBlendContribution(
+class MeshBlendContribution(
 	val bindingIndex: Int,
 	val keyIndex: Int,
 	val form: MeshForm,
@@ -144,7 +144,7 @@ internal class MeshBlendContribution(
  * delta reference (the grid form at the DEFAULT pose, as deltas vs the rest mesh - static per
  * drawable, null when the drawable is ungridded so the reference is zero).
  */
-internal class MeshBlendState(
+class MeshBlendState(
 	val contributions: List<MeshBlendContribution>,
 	val referenceDeltas: FloatArray?,
 	val referenceDrawOrder: Float,
@@ -164,7 +164,7 @@ internal class MeshBlendState(
  * @param Function defaultValue Default value per parameter id (the neutral pose).
  * @return MeshBlendState? The resolved state, or null when binding-free.
  */
-internal fun meshBlendState(
+fun meshBlendState(
 	drawable: Drawable,
 	paramValue: (ParameterId) -> Float,
 	defaultValue: (ParameterId) -> Float,
@@ -208,7 +208,7 @@ internal fun meshBlendState(
  * @param Function      defaultValue Default value per parameter id.
  * @return FloatArray? Interleaved control-point deltas to ADD to the grid-blended lattice, or null.
  */
-internal fun warpBlendDeltas(
+fun warpBlendDeltas(
 	warp: Deformer.Warp,
 	paramValue: (ParameterId) -> Float,
 	defaultValue: (ParameterId) -> Float,
@@ -236,7 +236,7 @@ internal fun warpBlendDeltas(
 }
 
 /** A rotation deformer's summed weighted blend deltas (the reflect flags are not blendable). */
-internal class RotationBlendDeltas(
+class RotationBlendDeltas(
 	val originX: Float,
 	val originY: Float,
 	val angle: Float,
@@ -253,7 +253,7 @@ internal class RotationBlendDeltas(
  * @param Function          defaultValue Default value per parameter id.
  * @return RotationBlendDeltas? The deltas to ADD to the grid-blended transform, or null.
  */
-internal fun rotationBlendDeltas(
+fun rotationBlendDeltas(
 	rotation: Deformer.Rotation,
 	paramValue: (ParameterId) -> Float,
 	defaultValue: (ParameterId) -> Float,

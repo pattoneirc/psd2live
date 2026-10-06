@@ -101,7 +101,7 @@ class WorkspaceGenerationIntegrationTest {
                     } })
                     val publicMesh = workspace.currentPuppet()!!.drawables.single()
                     assertContentEquals(guiMesh.mesh!!.positions, publicMesh.mesh!!.positions)
-                    guiMesh.geometryGrid.cells.zip(publicMesh.geometryGrid!!.cells).forEach { (a, b) ->
+                    guiMesh.geometryGrid!!.cells.zip(publicMesh.geometryGrid!!.cells).forEach { (a, b) ->
                         assertContentEquals(a.form.positionDeltas, b.form.positionDeltas)
                     }
                     val count = workspace.history().nodes.size

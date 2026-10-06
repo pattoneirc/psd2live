@@ -101,8 +101,8 @@ class CanvasDeformStrokeTest {
         val result = stroke.step(sample(7f, 4f))
         assertEquals(3, stroke.commands.size)
         result.drawables.forEach { drawable ->
-            assertEquals(7f, drawable.mesh!!.positions[0]); assertEquals(4f, drawable.mesh.positions[1])
-            assertContentEquals(source.drawables.single { it.id == drawable.id }.mesh!!.positions.sliceArray(2..5), drawable.mesh.positions.sliceArray(2..5))
+            assertEquals(7f, drawable.mesh!!.positions[0]); assertEquals(4f, drawable.mesh!!.positions[1])
+            assertContentEquals(source.drawables.single { it.id == drawable.id }.mesh!!.positions.sliceArray(2..5), drawable.mesh!!.positions.sliceArray(2..5))
         }
         assertSame(source.glues, result.glues)
     }

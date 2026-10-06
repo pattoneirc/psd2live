@@ -90,13 +90,13 @@ class DepthSplitTest {
         assertSame(back.geometryGrid, front.geometryGrid)
         assertNotEquals(back.atlasTileId, front.atlasTileId)
         assertNotSame(back.mesh!!.positions, front.mesh!!.positions)
-        assertContentEquals(back.mesh.indices, front.mesh.indices)
+        assertContentEquals(back.mesh!!.indices, front.mesh!!.indices)
         val oldRaster = before.analysis.layers.single { it.source.id.raw == "collar" }.source.raster.rgba
         val copiedRaster = after.analysis.layers.single { it.source.id.raw == result.frontLayerId }.source.raster.rgba
         assertNotSame(oldRaster, copiedRaster)
         assertContentEquals(oldRaster, copiedRaster)
         val glue = after.rig.puppet.glues.single { it.meshB == front.id }
-        assertEquals(back.mesh.vertexCount, glue.pairs.size)
+        assertEquals(back.mesh!!.vertexCount, glue.pairs.size)
         assertTrue(glue.pairs.all { it.indexA == it.indexB && it.weightA == 0f && it.weightB == 1f })
         val runtime = Moc3Import.fromMocDocument(Moc3.read(after.runtimeBundle.assets.first { it.path.endsWith(".moc3") }.bytes), null)
         assertEquals(glue.pairs.size, runtime.glues.single().pairs.size)
@@ -138,7 +138,7 @@ class DepthSplitTest {
         val back = mesh(reopened, "collar")
         val front = mesh(reopened, result.frontLayerId)
         assertContentEquals(mesh(edited, "collar").mesh!!.positions, back.mesh!!.positions)
-        assertContentEquals(back.mesh.positions, front.mesh!!.positions)
+        assertContentEquals(back.mesh!!.positions, front.mesh!!.positions)
         assertEquals(after.rig.puppet.glues.single().pairs.size, reopened.rig.puppet.glues.single().pairs.size)
         val eval = CpuDeformationEvaluator()
         val pose = mapOf(StandardParameters.ANGLE_X to 24f, StandardParameters.ANGLE_Y to -15f)
@@ -179,7 +179,7 @@ class DepthSplitTest {
                 assertEquals(split.rig.puppet.glues.single().pairs.size, painted.rig.puppet.glues.single().pairs.size)
                 val reopened = pipeline.buildPreview(painted.analysis.source, painted.config)
                 val loadedFront = mesh(reopened, result.frontLayerId)
-                assertContentEquals(front.mesh.indices, loadedFront.mesh!!.indices)
+                assertContentEquals(front.mesh!!.indices, loadedFront.mesh!!.indices)
                 assertEquals(frontSource.bounds.width, reopened.rig.puppet.atlas.tiles.single { it.id == loadedFront.atlasTileId }.width)
                 assertEquals(split.rig.puppet.glues.single().pairs.size, reopened.rig.puppet.glues.single().pairs.size)
                 assertEquals(2, workspace.history().nodes.size)

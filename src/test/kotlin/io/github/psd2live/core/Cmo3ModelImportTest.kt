@@ -95,7 +95,7 @@ class Cmo3ModelImportTest {
         for (drawable in before.rig.puppet.drawables) {
             val after = result.capture.model.rig.puppet.drawables.single { it.id == drawable.id }
             assertContentEquals(drawable.mesh!!.positions, after.mesh!!.positions)
-            assertContentEquals(drawable.mesh.indices, after.mesh.indices)
+            assertContentEquals(drawable.mesh!!.indices, after.mesh!!.indices)
         }
         val store = WorkspaceStore(temp.resolve("paint-store"))
         val repository = ProjectRepository()

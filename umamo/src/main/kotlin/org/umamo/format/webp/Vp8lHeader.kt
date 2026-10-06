@@ -9,7 +9,7 @@ import org.umamo.format.binary.ByteReader
  * The parsed VP8L header: image dimensions and the byte offset where the LSB-first VP8L bit stream
  * begins (just past the 1-byte signature and 4-byte packed dimensions).
  */
-internal class Vp8lHeader(val width: Int, val height: Int, val bitStreamStart: Int)
+class Vp8lHeader(val width: Int, val height: Int, val bitStreamStart: Int)
 
 // VP8L bitstream signature byte, per the WebP container spec.
 private const val VP8L_SIGNATURE = 0x2f
@@ -21,7 +21,7 @@ private const val VP8L_SIGNATURE = 0x2f
  * @param ByteArray bytes The complete `.webp` file.
  * @return Vp8lHeader The dimensions and bit-stream start offset.
  */
-internal fun parseVp8lHeader(bytes: ByteArray): Vp8lHeader {
+fun parseVp8lHeader(bytes: ByteArray): Vp8lHeader {
 	require(bytes.size >= 12) { "WebP too short for a RIFF header" }
 	require(fourCC(bytes, 0) == "RIFF" && fourCC(bytes, 8) == "WEBP") { "Not a WebP (bad RIFF/WEBP magic)" }
 	val reader = ByteReader(bytes, littleEndian = true)

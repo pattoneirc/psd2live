@@ -49,20 +49,6 @@ sealed interface FileKind {
 		override val writable = false
 	}
 
-	// --- Clip Studio Paint CLIP Layered Artwork ---
-	data object Clip : FileKind {
-		override val extension = "clip"
-		override val readable = true
-		override val writable = false
-	}
-
-	// --- Krita KRA Layered Artwork ---
-	data object Kra : FileKind {
-		override val extension = "kra"
-		override val readable = true
-		override val writable = false
-	}
-
 	// --- PNG Raster Artwork ---
 	data object Png : FileKind {
 		override val extension = "png"

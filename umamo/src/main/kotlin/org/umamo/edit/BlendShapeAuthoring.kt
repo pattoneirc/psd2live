@@ -1,6 +1,5 @@
 package org.umamo.edit
 
-import io.github.psd2live.core.RigKeyformChannelsEdit
 import org.umamo.render.eval.activeBlendKeys
 import org.umamo.render.eval.limitMultiplier
 import org.umamo.runtime.eval.EPS_KEY
@@ -35,14 +34,14 @@ import kotlin.math.abs
  * row and stores no form. Any other key stores the absolute form whose difference from the
  * default-pose grid is the delta the evaluator adds.
  */
-internal fun PuppetModel.blendParametersIn(coordinate: Map<String, Float>): List<Parameter> =
+fun PuppetModel.blendParametersIn(coordinate: Map<String, Float>): List<Parameter> =
 	coordinate.mapNotNull { (name, value) ->
 		val parameter = parameters.firstOrNull { it.id.raw == name } ?: return@mapNotNull null
 		if (parameter.kind != ParameterKind.BLEND_SHAPE || abs(value) < EPS_KEY) null else parameter
 	}
 
 /** Grid axes named in a keyform coordinate. Blend-shape parameters are never grid axes. */
-internal fun PuppetModel.gridCoordinateOf(coordinate: Map<String, Float>): Map<String, Float> {
+fun PuppetModel.gridCoordinateOf(coordinate: Map<String, Float>): Map<String, Float> {
 	val blendIds = parameters.filter { it.kind == ParameterKind.BLEND_SHAPE }.map { it.id.raw }.toSet()
 	return coordinate.filterKeys { it !in blendIds }
 }
@@ -53,13 +52,13 @@ internal fun PuppetModel.gridCoordinateOf(coordinate: Map<String, Float>): Map<S
  * so that grid(pose) + blends reproduces [observed].
  * [coordinate] chooses the destination; [poseCoordinate] retains the other viewed blends and limits.
  */
-internal fun PuppetModel.withBlendShapeCaptured(
+fun PuppetModel.withBlendShapeCaptured(
 	owner: KeyformOwner,
 	coordinate: Map<String, Float>,
 	observedMesh: FloatArray? = null,
 	observedWarp: FloatArray? = null,
 	observedRotation: RotationPivotForm? = null,
-	channels: RigKeyformChannelsEdit? = null,
+	channels: KeyformChannelsEdit? = null,
 	poseCoordinate: Map<String, Float> = coordinate,
 ): PuppetModel {
 	val targets = blendParametersIn(coordinate)
@@ -109,7 +108,7 @@ internal fun PuppetModel.withoutBlendParameter(id: ParameterId): PuppetModel {
 }
 
 /** Moves or removes [from] on every blend binding driven by [parameterId]. Value 0 stays the neutral key. */
-internal fun PuppetModel.retargetBlendKeys(parameterId: ParameterId, from: Float, to: Float?): PuppetModel {
+fun PuppetModel.retargetBlendKeys(parameterId: ParameterId, from: Float, to: Float?): PuppetModel {
 	require(abs(from) >= EPS_KEY) { "The blend shape neutral key stays at 0" }
 	if (to != null) require(abs(to) >= EPS_KEY) { "The blend shape neutral key stays at 0" }
 	fun <T : Any> List<BlendShapeBinding<T>>.retarget(): List<BlendShapeBinding<T>> =
@@ -128,7 +127,7 @@ internal fun PuppetModel.retargetBlendKeys(parameterId: ParameterId, from: Float
 	)
 }
 
-internal fun PuppetModel.removeBlendBinding(owner: KeyformOwner, parameterId: ParameterId): PuppetModel {
+fun PuppetModel.removeBlendBinding(owner: KeyformOwner, parameterId: ParameterId): PuppetModel {
 	fun <T : Any> List<BlendShapeBinding<T>>.cut(): List<BlendShapeBinding<T>> = filterNot { it.parameterId == parameterId }
 	return when (owner) {
 		is KeyformOwner.Drawable -> copy(drawables = drawables.map { if (it.id == owner.id) it.copy(blendShapes = it.blendShapes.cut()) else it })
@@ -143,7 +142,7 @@ internal fun PuppetModel.removeBlendBinding(owner: KeyformOwner, parameterId: Pa
 	}
 }
 
-internal fun PuppetModel.removeBlendKey(owner: KeyformOwner, parameterId: ParameterId, value: Float): PuppetModel {
+fun PuppetModel.removeBlendKey(owner: KeyformOwner, parameterId: ParameterId, value: Float): PuppetModel {
 	require(abs(value) >= EPS_KEY) { "The blend shape neutral key stays at 0" }
 	fun <T : Any> List<BlendShapeBinding<T>>.cut(): List<BlendShapeBinding<T>> =
 		mapNotNull { binding -> if (binding.parameterId == parameterId) binding.retargetKey(value, null) else binding }
@@ -182,7 +181,7 @@ private fun PuppetModel.captureDrawableBlend(
 	pose: (ParameterId) -> Float,
 	defaultValue: (ParameterId) -> Float,
 	observedMesh: FloatArray?,
-	channels: RigKeyformChannelsEdit?,
+	channels: KeyformChannelsEdit?,
 ): PuppetModel {
 	val drawable = drawables.firstOrNull { it.id == owner.id } ?: return this
 	val count = drawable.mesh?.positions?.size ?: observedMesh?.size ?: return this
@@ -215,7 +214,7 @@ private fun PuppetModel.captureDeformerBlend(
 	defaultValue: (ParameterId) -> Float,
 	observedWarp: FloatArray?,
 	observedRotation: RotationPivotForm?,
-	channels: RigKeyformChannelsEdit?,
+	channels: KeyformChannelsEdit?,
 ): PuppetModel {
 	val deformer = deformers.firstOrNull { it.id == owner.id } ?: return this
 	return when (deformer) {
@@ -290,7 +289,7 @@ private fun PuppetModel.capturePartBlend(
 	value: Float,
 	pose: (ParameterId) -> Float,
 	defaultValue: (ParameterId) -> Float,
-	channels: RigKeyformChannelsEdit?,
+	channels: KeyformChannelsEdit?,
 ): PuppetModel {
 	val part = parts.firstOrNull { it.id == owner.id } ?: return this
 	val binding = part.blendShapes.find { it.parameterId == parameter.id }
@@ -396,7 +395,7 @@ private fun <T : Any> addWeighted(
 	return out
 }
 
-private fun RigKeyformChannelsEdit?.colorOr(explicit: List<Float>?, existing: ColorRgb?, fallback: () -> ColorRgb): ColorRgb {
+private fun KeyformChannelsEdit?.colorOr(explicit: List<Float>?, existing: ColorRgb?, fallback: () -> ColorRgb): ColorRgb {
 	if (explicit != null && explicit.size == 3) return ColorRgb(explicit[0], explicit[1], explicit[2])
 	return existing ?: fallback()
 }

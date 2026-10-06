@@ -28,7 +28,7 @@ import org.umamo.runtime.model.WarpLatticeForm
  */
 public const val EPS_KEY: Float = 0.001f
 
-internal const val EPS_SPAN = 0.0015f
+const val EPS_SPAN = 0.0015f
 
 // The Umamo C++ Runtime caps the multilinear corner set at 16 (kbCorners `maxc`); past that an axis snaps to its
 // lower key instead of splitting. Replicated for fidelity (matters only for >4 fractional axes).

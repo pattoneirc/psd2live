@@ -135,7 +135,7 @@ class GlueEditingTest {
         assertEquals(6, glued.glues.single().pairs.size)
         assertEquals(9, cover.vertexCount)
         // Every triangle keeps the original winding and a real area, and no triangle sticks out of B.
-        assertSameWinding(b.mesh!!.positions, b.mesh.indices, cover.indices, cover.positions)
+        assertSameWinding(b.mesh!!.positions, b.mesh!!.indices, cover.indices, cover.positions)
         for (i in 0 until cover.vertexCount) {
             val x = cover.positions[i * 2]
             val y = cover.positions[i * 2 + 1]

@@ -8,7 +8,6 @@ import org.umamo.format.art.SourceArt
 import org.umamo.format.art.SourceGroup
 import org.umamo.format.art.SourceLayer
 import org.umamo.format.binary.encodeUtf16Be
-import io.github.psd2live.core.PreviewRenderer
 import java.awt.AlphaComposite
 import java.awt.Color
 import java.awt.image.BufferedImage
@@ -228,7 +227,7 @@ object PsdWriter {
 			if (srcW <= 0 || srcH <= 0) return LayerRaster(0, 0, ByteArray(0))
 			val dstW = srcW * scale
 			val dstH = srcH * scale
-			val srcImg = PreviewRenderer.rasterImage(srcW, srcH, layer.raster.rgba)
+			val srcImg = rgbaImage(srcW, srcH, layer.raster.rgba)
 			val dstImg = BufferedImage(dstW, dstH, BufferedImage.TYPE_INT_ARGB)
 			val g = dstImg.createGraphics()
 			g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR)
@@ -425,7 +424,7 @@ object PsdWriter {
 		g.fillRect(0, 0, canvasWidth, canvasHeight)
 		for (record in records) {
 			if (record is NormalLayerRecord && record.visible && record.raster.width > 0 && record.raster.height > 0) {
-				val img = PreviewRenderer.rasterImage(record.raster.width, record.raster.height, record.raster.rgba)
+				val img = rgbaImage(record.raster.width, record.raster.height, record.raster.rgba)
 				g.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, record.opacity.coerceIn(0f, 1f))
 				g.drawImage(img, record.bounds.left, record.bounds.top, null)
 			}
@@ -482,4 +481,14 @@ object PsdWriter {
 
 		return fileBuf.readByteArray()
 	}
+}
+
+/** Straight RGBA bytes as an ARGB image, copying RGB even where alpha is zero. */
+private fun rgbaImage(width: Int, height: Int, rgba: ByteArray): BufferedImage {
+	val argb = IntArray(width * height) { index ->
+		val offset = index * 4
+		((rgba[offset + 3].toInt() and 0xff) shl 24) or ((rgba[offset].toInt() and 0xff) shl 16) or
+			((rgba[offset + 1].toInt() and 0xff) shl 8) or (rgba[offset + 2].toInt() and 0xff)
+	}
+	return BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB).also { it.setRGB(0, 0, width, height, argb, 0, width) }
 }

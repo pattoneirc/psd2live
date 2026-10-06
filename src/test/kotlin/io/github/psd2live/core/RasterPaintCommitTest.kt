@@ -155,7 +155,7 @@ class RasterPaintCommitTest {
         }
         val commands = WorkspaceDocumentCommands(runtime)
         val rigged = commands.execute(before.projectId, before.state, "Prepare paint rig", edits, MutationAuthor.USER).capture
-        val group = VertexGroup("paintPin", first.id, VertexGroupKind.PIN, FloatArray(first.mesh.vertexCount) { 0.65f })
+        val group = VertexGroup("paintPin", first.id, VertexGroupKind.PIN, FloatArray(first.mesh!!.vertexCount) { 0.65f })
         return commands.executeJournal(rigged.projectId, rigged.state, "Pin weights",
             buildJsonArray { add(VertexGroupJournal.encode(group)) }, MutationAuthor.USER).capture.model
     }
@@ -184,14 +184,14 @@ class RasterPaintCommitTest {
         for (id in listOf("art0", "art1")) {
             val prior = drawable(before, id); val next = drawable(after, id)
             assertContentEquals(prior.mesh!!.positions, next.mesh!!.positions)
-            assertContentEquals(prior.mesh.indices, next.mesh.indices)
+            assertContentEquals(prior.mesh!!.indices, next.mesh!!.indices)
             assertSame(prior.geometryGrid, next.geometryGrid)
             assertEquals(prior.parentDeformerId, next.parentDeformerId)
             assertEquals(before.rig.sourceBoundsByDrawableId[prior.id.raw], after.rig.sourceBoundsByDrawableId[next.id.raw])
             val from = slice(before, id); val to = slice(after, id)
-            for (index in prior.mesh.uvs.indices step 2) {
-                assertEquals(from.canvasX(prior.mesh.uvs[index]), to.canvasX(next.mesh.uvs[index]), 0.0001f)
-                assertEquals(from.canvasY(prior.mesh.uvs[index + 1]), to.canvasY(next.mesh.uvs[index + 1]), 0.0001f)
+            for (index in prior.mesh!!.uvs.indices step 2) {
+                assertEquals(from.canvasX(prior.mesh!!.uvs[index]), to.canvasX(next.mesh!!.uvs[index]), 0.0001f)
+                assertEquals(from.canvasY(prior.mesh!!.uvs[index + 1]), to.canvasY(next.mesh!!.uvs[index + 1]), 0.0001f)
             }
             assertContentEquals(oldPixels.getValue(id), before.analysis.source.layers.single { it.id.raw == id }.raster.rgba)
         }
@@ -211,35 +211,35 @@ class RasterPaintCommitTest {
         assertContentEquals(drawable(before, "art1").mesh!!.positions, drawable(after, "art1").mesh!!.positions)
         val path = after.rig.puppet.deformPaths.single()
         assertEquals("paintPath", path.id)
-        val oldPathPoints = DeformPathTools.positions(before.rig.puppet.deformPaths.single(), prior.mesh.positions)
-        val newPathPoints = DeformPathTools.positions(path, next.mesh.positions)
+        val oldPathPoints = DeformPathTools.positions(before.rig.puppet.deformPaths.single(), prior.mesh!!.positions)
+        val newPathPoints = DeformPathTools.positions(path, next.mesh!!.positions)
         oldPathPoints.zip(newPathPoints).forEach { (old, new) ->
             assertEquals(old.first, new.first, 0.0001f); assertEquals(old.second, new.second, 0.0001f)
         }
         val group = after.rig.puppet.vertexGroups.single()
-        assertEquals(next.mesh.vertexCount, group.weights.size)
+        assertEquals(next.mesh!!.vertexCount, group.weights.size)
         group.weights.forEach { assertEquals(0.65f, it, 0.0001f) }
         assertEquals(prior.geometryGrid!!.axes, next.geometryGrid!!.axes)
-        assertTrue(prior.geometryGrid.cells.any { it.form.positionDeltas.any { delta -> delta != 0f } })
-        assertEquals(prior.geometryGrid.cells.size, next.geometryGrid.cells.size)
-        prior.geometryGrid.cells.zip(next.geometryGrid.cells).forEach { (oldCell, cell) ->
+        assertTrue(prior.geometryGrid!!.cells.any { it.form.positionDeltas.any { delta -> delta != 0f } })
+        assertEquals(prior.geometryGrid!!.cells.size, next.geometryGrid!!.cells.size)
+        prior.geometryGrid!!.cells.zip(next.geometryGrid!!.cells).forEach { (oldCell, cell) ->
             assertContentEquals(oldCell.coordinate, cell.coordinate)
-            assertEquals(next.mesh.positions.size, cell.form.positionDeltas.size)
+            assertEquals(next.mesh!!.positions.size, cell.form.positionDeltas.size)
             cell.form.positionDeltas.forEach { assertEquals(oldCell.form.positionDeltas.first(), it, 0.0001f) }
         }
         assertEquals(prior.blendShapes.single().keys.toList(), next.blendShapes.single().keys.toList())
         next.blendShapes.single().forms.filterNotNull().forEach { form ->
-            assertEquals(next.mesh.positions.size, form.positionDeltas.size)
+            assertEquals(next.mesh!!.positions.size, form.positionDeltas.size)
             form.positionDeltas.forEach { assertEquals(0.02f, it, 0.0001f) }
         }
         val glue = after.rig.puppet.glues.single()
         assertTrue(glue.pairs.isNotEmpty())
-        assertTrue(glue.pairs.all { it.indexA in 0 until next.mesh.vertexCount && it.indexB in 0 until drawable(after, "art1").mesh!!.vertexCount })
+        assertTrue(glue.pairs.all { it.indexA in 0 until next.mesh!!.vertexCount && it.indexB in 0 until drawable(after, "art1").mesh!!.vertexCount })
         assertEquals(before.rig.puppet.glues.single().intensity, glue.intensity)
         assertSame(before.rig.puppet.glues.single().channelGrids, glue.channelGrids)
         val journal = after.config.rigEdits.authoringJournal
         assertEquals(1, journal.count { it["op"]?.jsonPrimitive?.content == "path_put" })
-        assertEquals(next.mesh.vertexCount, journal.single { it["op"]?.jsonPrimitive?.content == VertexGroupJournal.PUT }
+        assertEquals(next.mesh!!.vertexCount, journal.single { it["op"]?.jsonPrimitive?.content == VertexGroupJournal.PUT }
             .getValue("weights").jsonArray.size)
     }
 
@@ -271,7 +271,7 @@ class RasterPaintCommitTest {
         val after = RasterPaintCommit.prepare(pipeline, before, split.frontLayerId, image(128, 160), true)
         val frontBefore = drawable(before, split.frontLayerId); val frontAfter = drawable(after, split.frontLayerId)
         assertContentEquals(frontBefore.mesh!!.positions, frontAfter.mesh!!.positions)
-        assertContentEquals(frontBefore.mesh.indices, frontAfter.mesh.indices)
+        assertContentEquals(frontBefore.mesh!!.indices, frontAfter.mesh!!.indices)
         assertSame(frontBefore.geometryGrid, frontAfter.geometryGrid)
         assertEquals(before.rig.puppet.glues, after.rig.puppet.glues)
         val oldLayer = before.analysis.source.layers.single { it.id.raw == split.frontLayerId }
@@ -282,7 +282,7 @@ class RasterPaintCommitTest {
         assertContentEquals(before.analysis.source.layers.single { it.id.raw == "collar" }.raster.rgba,
             after.analysis.source.layers.single { it.id.raw == "collar" }.raster.rgba)
         val replayed = pipeline.buildPreview(after.analysis.source, after.config)
-        assertContentEquals(frontAfter.mesh.positions, drawable(replayed, split.frontLayerId).mesh!!.positions)
+        assertContentEquals(frontAfter.mesh!!.positions, drawable(replayed, split.frontLayerId).mesh!!.positions)
         val expectedGlue = after.rig.puppet.glues.single()
         val actualGlue = replayed.rig.puppet.glues.single()
         assertEquals(expectedGlue.id, actualGlue.id)
@@ -324,7 +324,7 @@ class RasterPaintCommitTest {
         assertTrue(committed.applied)
         assertEquals(2, runtime.history().selections.size)
         val after = committed.capture.model
-        assertEquals(target.mesh.vertexCount + 1, drawable(after, "art0").mesh!!.vertexCount)
+        assertEquals(target.mesh!!.vertexCount + 1, drawable(after, "art0").mesh!!.vertexCount)
         val document = committed.capture.document
         val store = WorkspaceStore(temp)
         store.persistHistory("mesh-project", runtime.history())
@@ -335,7 +335,7 @@ class RasterPaintCommitTest {
         assertContentEquals(drawable(after, "art0").mesh!!.uvs, drawable(reopened, "art0").mesh!!.uvs)
         assertEquals(after.rig.puppet.vertexGroups, reopened.rig.puppet.vertexGroups)
         val undone = runtime.checkout(root.projectId, committed.capture.state, root.historyHead)
-        assertEquals(target.mesh.vertexCount, drawable(undone.model, "art0").mesh!!.vertexCount)
+        assertEquals(target.mesh!!.vertexCount, drawable(undone.model, "art0").mesh!!.vertexCount)
         val redone = runtime.checkout(root.projectId, undone.state, committed.capture.historyHead)
         assertContentEquals(drawable(after, "art0").mesh!!.positions, drawable(redone.model, "art0").mesh!!.positions)
         val noOp = WorkspaceDocumentCommands(runtime).executeJournal(redone.projectId, redone.state, "Same mesh",
@@ -827,17 +827,17 @@ class RasterPaintCommitTest {
         val keyed = commands.execute(root.projectId, noOp.capture.state, "New mesh form", listOf(
             WorkspaceDocumentOperation("keyform_apply", buildJsonObject { putJsonArray("changes") { add(buildJsonObject {
                 put("op", "set"); put("target", "mesh:${created.id.raw}"); putJsonObject("key") { put("CreationAxis", 1) }
-                putJsonObject("geometry") { put("positionDeltas", JsonArray(List(created.mesh.positions.size) { JsonPrimitive(0.02f) })) }
+                putJsonObject("geometry") { put("positionDeltas", JsonArray(List(created.mesh!!.positions.size) { JsonPrimitive(0.02f) })) }
                 putJsonObject("channels") { put("opacity", 0.4) }
             }) } }),
             WorkspaceDocumentOperation("path_put", buildJsonObject {
                 put("id", "creationPath"); put("target", "mesh:${created.id.raw}"); putJsonArray("points") {
-                    add(buildJsonArray { add(created.mesh.positions[0]); add(created.mesh.positions[1]) })
-                    add(buildJsonArray { add(created.mesh.positions[2]); add(created.mesh.positions[3]) })
+                    add(buildJsonArray { add(created.mesh!!.positions[0]); add(created.mesh!!.positions[1]) })
+                    add(buildJsonArray { add(created.mesh!!.positions[2]); add(created.mesh!!.positions[3]) })
                 }
             }),
         ), MutationAuthor.USER).capture
-        val pin = VertexGroup("creationPin", created.id, VertexGroupKind.PIN, FloatArray(created.mesh.vertexCount) { 0.65f })
+        val pin = VertexGroup("creationPin", created.id, VertexGroupKind.PIN, FloatArray(created.mesh!!.vertexCount) { 0.65f })
         val bound = commands.executeJournal(root.projectId, keyed.state, "Created pin",
             buildJsonArray { add(VertexGroupJournal.encode(pin)) }, MutationAuthor.USER).capture
         val expanded = commands.execute(root.projectId, bound.state, "Expand created mesh", listOf(
@@ -865,7 +865,7 @@ class RasterPaintCommitTest {
         val cleared = commands.execute(root.projectId, settings.state, "Clear born mesh", listOf(
             WorkspaceDocumentOperation("source_paint_clear", buildJsonObject { put("layer_id", "art1") })), MutationAuthor.USER).capture
         assertEquals(created.id, drawable(cleared.model, "art1").id)
-        assertContentEquals(regenerated.mesh.positions, drawable(cleared.model, "art1").mesh!!.positions)
+        assertContentEquals(regenerated.mesh!!.positions, drawable(cleared.model, "art1").mesh!!.positions)
         assertEquals(listOf(0, 0, 0, 0), cleared.document.sampleSourceColor("art1", 50, 50))
         val repainted = commands.execute(root.projectId, cleared.state, "Repaint born mesh", listOf(shape()), MutationAuthor.USER).capture
         assertEquals(created.id, drawable(repainted.model, "art1").id)
@@ -1099,13 +1099,13 @@ class RasterPaintCommitTest {
         val (same, journal) = RigAuthoringJournal.compile(model, buildJsonArray { add(identity) })
         assertSame(model, same)
         assertTrue(journal.isEmpty())
-        val duplicate = DrawableMesh(target.mesh.positions + target.mesh.positions.take(2),
-            target.mesh.uvs + target.mesh.uvs.take(2), target.mesh.indices)
+        val duplicate = DrawableMesh(target.mesh!!.positions + target.mesh!!.positions.take(2),
+            target.mesh!!.uvs + target.mesh!!.uvs.take(2), target.mesh!!.indices)
         val uvOnly = DrawableMesh(duplicate.positions, FloatArray(duplicate.uvs.size) { duplicate.uvs[it] + 0.001f }, duplicate.indices)
         val duplicatePlan = RasterMeshJournal.prepare(duplicate, uvOnly)
         assertContentEquals(IntArray(duplicate.vertexCount) { it }, duplicatePlan.glueMap)
         assertEquals(List(duplicate.vertexCount) { org.umamo.edit.VertexSource.FromOld(it) }, duplicatePlan.sources)
-        val valid = RasterMeshJournal.encode(model, target.id, withTriangleCenter(target.mesh))
+        val valid = RasterMeshJournal.encode(model, target.id, withTriangleCenter(target.mesh!!))
         val invalid = listOf(
             "before_mesh" to JsonPrimitive("stale"), "parent" to JsonPrimitive("different"),
             "triangles" to buildJsonArray { add(0); add(1); add(Int.MAX_VALUE) },
@@ -1113,14 +1113,14 @@ class RasterPaintCommitTest {
             "glue_map" to JsonArray(emptyList()),
             "previous_parent_points" to buildJsonArray { add(0) },
         )
-        val positions = target.mesh.positions.copyOf()
+        val positions = target.mesh!!.positions.copyOf()
         invalid.forEach { (field, value) ->
             assertFailsWith<IllegalArgumentException>(field) { RasterMeshJournal.replay(model, JsonObject(valid + (field to value))) }
-            assertContentEquals(positions, target.mesh.positions)
+            assertContentEquals(positions, target.mesh!!.positions)
         }
         val changedGeometry = model.copy(drawables = model.drawables.map { drawable ->
             if (drawable.id != target.id) drawable else drawable.copy(mesh = DrawableMesh(
-                target.mesh.positions.copyOf().also { it[0] += 1 }, target.mesh.uvs, target.mesh.indices))
+                target.mesh!!.positions.copyOf().also { it[0] += 1 }, target.mesh!!.uvs, target.mesh!!.indices))
         })
         assertFailsWith<IllegalArgumentException> { RasterMeshJournal.replay(changedGeometry, valid) }
     }
@@ -1159,7 +1159,7 @@ class RasterPaintCommitTest {
         }
         val evaluated = evaluator.evaluate(after, emptyMap()).worldPositions
         assertContentEquals(expectedA, evaluated.getValue(old.meshA)); assertContentEquals(expectedB, evaluated.getValue(old.meshB))
-        assertContentEquals(mesh.positions, target.mesh.positions)
+        assertContentEquals(mesh.positions, target.mesh!!.positions)
         assertSame(directional.channelGrids, after.glues.single().channelGrids)
     }
 }

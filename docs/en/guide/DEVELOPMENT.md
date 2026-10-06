@@ -102,7 +102,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 
 ## Code layout
 
-Sources live in `src/main/kotlin/` under two top-level packages:
+Sources are split into two Gradle modules: the engine ported from Umamo, `org.umamo.*`, lives in `:umamo` (`umamo/src/main/kotlin/`; it cannot depend on product code, which the build enforces), and the product layer, `io.github.psd2live.*`, lives in the root project (`src/main/kotlin/`):
 
 | Package | Responsibility |
 | --- | --- |

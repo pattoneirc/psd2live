@@ -111,7 +111,7 @@ class WorkspaceCanvasDeformTest {
                 assertEquals(before.historyHead, runtime.history().selections.last().node.parentId)
                 assertEquals(before.document.rigEdits.authoringJournal.size + 2, after.document.rigEdits.authoringJournal.size, "Direct target and welded partner share one history candidate")
                 before.model.rig.puppet.drawables.zip(after.model.rig.puppet.drawables).forEach { (old, fresh) ->
-                    assertContentEquals(old.mesh!!.uvs, fresh.mesh!!.uvs); assertContentEquals(old.mesh.indices, fresh.mesh.indices)
+                    assertContentEquals(old.mesh!!.uvs, fresh.mesh!!.uvs); assertContentEquals(old.mesh!!.indices, fresh.mesh!!.indices)
                 }
                 samePoses(after.model.rig.puppet, builder.build(after.document).rig.puppet)
                 val archive = temporary.resolve("deform-$imported.psd2live")

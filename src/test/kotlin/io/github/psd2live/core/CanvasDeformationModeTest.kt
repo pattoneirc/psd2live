@@ -52,7 +52,7 @@ class CanvasDeformationModeTest {
         val command = canvasGeometryCommand(EditHierarchyMode.EDIT, "mesh", "mesh", mapOf("pose" to 0f), points)
         val next = CanvasEdits.apply(source, command).drawables.single()
         assertContentEquals(points, next.mesh!!.positions)
-        assertEquals(.2f, next.mesh.uvs[0], .0001f)
+        assertEquals(.2f, next.mesh!!.uvs[0], .0001f)
         assertSame(source.drawables.single().geometryGrid, next.geometryGrid)
     }
     @Test fun structuralEditingAtNonDefaultPoseAppliesOnlyPointerDisplacement() {

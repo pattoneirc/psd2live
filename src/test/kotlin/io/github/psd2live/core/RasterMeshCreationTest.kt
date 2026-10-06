@@ -87,7 +87,7 @@ class RasterMeshCreationTest {
             assertFailsWith<IllegalArgumentException>(field) { RigAuthoringJournal.compile(input,
                 buildJsonArray { add(JsonObject(command + (field to value))) }) }
             assertTrue(input.drawables.none { it.id == target.id })
-            assertContentEquals(positions, target.mesh.positions)
+            assertContentEquals(positions, target.mesh!!.positions)
         }
         assertFailsWith<IllegalArgumentException> { RasterMeshCreation.replay(preview.rig.puppet, command) }
     }

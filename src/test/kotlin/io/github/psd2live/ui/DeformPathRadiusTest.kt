@@ -64,7 +64,7 @@ class DeformPathRadiusTest {
                 WarpLatticeForm(floatArrayOf(0f, 0f, span, 0f, 0f, span, span, span))))),
         )
         val drawable = source.drawables.single().let { d ->
-            d.copy(mesh = DrawableMesh(floatArrayOf(0.2f, 0.2f, 0.7f, 0.2f, 0.2f, 0.7f), d.mesh!!.uvs, d.mesh.indices),
+            d.copy(mesh = DrawableMesh(floatArrayOf(0.2f, 0.2f, 0.7f, 0.2f, 0.2f, 0.7f), d.mesh!!.uvs, d.mesh!!.indices),
                 geometryGrid = KeyformGrid(emptyList(), listOf(KeyformCell(intArrayOf(), MeshDeltaForm(FloatArray(6))))))
         }
         return source.copy(deformers = listOf(warp), drawables = listOf(drawable),

@@ -103,7 +103,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 
 ## 代码结构
 
-源码位于 `src/main/kotlin/`，分为两个顶层包：
+源码分为两个 Gradle 模块：从 Umamo 移植的引擎 `org.umamo.*` 在 `:umamo`（`umamo/src/main/kotlin/`，不依赖产品代码，依赖方向由编译期保证），产品层 `io.github.psd2live.*` 在根项目（`src/main/kotlin/`）：
 
 | 包 | 职责 |
 | --- | --- |

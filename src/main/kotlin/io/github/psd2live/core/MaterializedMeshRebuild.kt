@@ -72,7 +72,7 @@ internal object MaterializedMeshRebuild {
             if (RasterMeshJournal.isNoOp(model, command)) continue
             val mesh = requireNotNull(previous.mesh)
             val plan = RasterMeshJournal.prepare(previousPositions?.let { DrawableMesh(it, mesh.uvs, mesh.indices) } ?: mesh, replacement, checkpoint)
-            overlay = migrateSimulations(overlay, raw, previous.mesh.vertexCount, plan.sources, checkpoint)
+            overlay = migrateSimulations(overlay, raw, mesh.vertexCount, plan.sources, checkpoint)
             overlay = overlay.copy(authoringJournal = overlay.authoringJournal + command)
             model = RasterMeshJournal.replay(model, command)
         }

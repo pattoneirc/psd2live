@@ -64,7 +64,7 @@ class RigWarpEditTest {
             val after = RigWarpEdit("child", "Child", parentId.raw, listOf(meshId.raw), 16, 16, true).applyTo(before)
             sameMotion(before, after)
             val mesh = after.drawables.single()
-            assertContentEquals(original.mesh!!.uvs, mesh.mesh!!.uvs); assertContentEquals(original.mesh.indices, mesh.mesh.indices)
+            assertContentEquals(original.mesh!!.uvs, mesh.mesh!!.uvs); assertContentEquals(original.mesh!!.indices, mesh.mesh!!.indices)
             assertEquals(before.deformPaths, after.deformPaths)
             assertEquals(before.vertexGroups, after.vertexGroups)
             original.blendShapes.forEachIndexed { index, binding ->

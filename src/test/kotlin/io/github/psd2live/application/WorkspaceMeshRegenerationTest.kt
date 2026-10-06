@@ -114,11 +114,11 @@ class WorkspaceMeshRegenerationTest {
             assertFalse(old.mesh!!.positions.contentEquals(next.mesh!!.positions))
             assertEquals(old.parentDeformerId, next.parentDeformerId)
             assertEquals(old.geometryGrid!!.axes.map { it.parameterId }, next.geometryGrid!!.axes.map { it.parameterId })
-            old.geometryGrid.axes.zip(next.geometryGrid.axes).forEach { (a, b) -> assertContentEquals(a.keys, b.keys) }
+            old.geometryGrid!!.axes.zip(next.geometryGrid!!.axes).forEach { (a, b) -> assertContentEquals(a.keys, b.keys) }
             assertEquals(old.blendShapes.size, next.blendShapes.size)
-            assertEquals(result.document.rigEdits.simEdits.single().bake!!.vertexCounts[next.id.raw], next.mesh.vertexCount)
+            assertEquals(result.document.rigEdits.simEdits.single().bake!!.vertexCounts[next.id.raw], next.mesh!!.vertexCount)
             assertEquals("synthetic", result.document.rigEdits.simEdits.single().bake!!.fingerprint)
-            assertEquals(next.mesh.vertexCount, result.model.rig.puppet.vertexGroups.single().weights.size)
+            assertEquals(next.mesh!!.vertexCount, result.model.rig.puppet.vertexGroups.single().weights.size)
             assertEquals(before.model.rig.puppet.deformPaths.map { it.id }, result.model.rig.puppet.deformPaths.map { it.id })
             val record = result.document.rigEdits.authoringJournal.last { it["op"]?.jsonPrimitive?.content == RasterMeshJournal.OP }
             val working = if (!imported) before.model else Cmo3ModelImport.paintingPreview(pipeline, before.document.source,

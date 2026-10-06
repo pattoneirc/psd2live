@@ -222,7 +222,7 @@ internal object PsdRaster {
 	 *
 	 * PSD ZIP channels are standard zlib streams (header + Adler-32), so the shared platform bridge
 	 * decodes them.  A short or malformed stream yields a partially filled (zero-padded) buffer rather
-	 * than throwing, mirroring [org.umamo.format.clip.ClipRaster].
+	 * than throwing.
 	 *
 	 * @param ByteArray bytes   The buffer holding the compressed stream.
 	 * @param Int offset        Offset of the zlib stream.

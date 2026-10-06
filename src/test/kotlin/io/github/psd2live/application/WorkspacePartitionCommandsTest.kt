@@ -105,7 +105,7 @@ class WorkspacePartitionCommandsTest {
                         (0..2).sumOf { k -> values[s[k].jsonPrimitive.int * stride + axis].toDouble() * s[k + 3].jsonPrimitive.float }.toFloat() }
                 }.toFloatArray()
                 assertEquals(original.geometryGrid!!.axes.map { it.parameterId }, actual.geometryGrid!!.axes.map { it.parameterId })
-                original.geometryGrid.cells.zip(actual.geometryGrid.cells).forEach { (old, next) ->
+                original.geometryGrid!!.cells.zip(actual.geometryGrid!!.cells).forEach { (old, next) ->
                     val expected = interpolate(old.form.positionDeltas, 2)
                     assertEquals(expected.size, next.form.positionDeltas.size)
                     expected.indices.forEach { assertEquals(expected[it], next.form.positionDeltas[it], 0.00001f) }
@@ -493,9 +493,9 @@ internal fun assertPartitionDeformers(before: List<org.umamo.runtime.model.Defor
                 val actual = assertIs<org.umamo.runtime.model.Deformer.Warp>(second)
                 assertEquals(first, actual.copy(geometryGrid = first.geometryGrid))
                 assertEquals(first.geometryGrid!!.axes.map { it.parameterId }, actual.geometryGrid!!.axes.map { it.parameterId })
-                first.geometryGrid.axes.zip(actual.geometryGrid.axes).forEach { (expectedAxis, axis) -> assertContentEquals(expectedAxis.keys, axis.keys) }
-                assertEquals(first.geometryGrid.cells.size, actual.geometryGrid.cells.size)
-                first.geometryGrid.cells.zip(actual.geometryGrid.cells).forEach { (expectedCell, cell) ->
+                first.geometryGrid!!.axes.zip(actual.geometryGrid!!.axes).forEach { (expectedAxis, axis) -> assertContentEquals(expectedAxis.keys, axis.keys) }
+                assertEquals(first.geometryGrid!!.cells.size, actual.geometryGrid!!.cells.size)
+                first.geometryGrid!!.cells.zip(actual.geometryGrid!!.cells).forEach { (expectedCell, cell) ->
                     assertContentEquals(expectedCell.coordinate, cell.coordinate); assertContentEquals(expectedCell.form.controlPoints, cell.form.controlPoints)
                 }
             }
@@ -503,9 +503,9 @@ internal fun assertPartitionDeformers(before: List<org.umamo.runtime.model.Defor
                 val actual = assertIs<org.umamo.runtime.model.Deformer.Rotation>(second)
                 assertEquals(first, actual.copy(geometryGrid = first.geometryGrid))
                 assertEquals(first.geometryGrid!!.axes.map { it.parameterId }, actual.geometryGrid!!.axes.map { it.parameterId })
-                first.geometryGrid.axes.zip(actual.geometryGrid.axes).forEach { (expectedAxis, axis) -> assertContentEquals(expectedAxis.keys, axis.keys) }
-                assertEquals(first.geometryGrid.cells.size, actual.geometryGrid.cells.size)
-                first.geometryGrid.cells.zip(actual.geometryGrid.cells).forEach { (expectedCell, cell) ->
+                first.geometryGrid!!.axes.zip(actual.geometryGrid!!.axes).forEach { (expectedAxis, axis) -> assertContentEquals(expectedAxis.keys, axis.keys) }
+                assertEquals(first.geometryGrid!!.cells.size, actual.geometryGrid!!.cells.size)
+                first.geometryGrid!!.cells.zip(actual.geometryGrid!!.cells).forEach { (expectedCell, cell) ->
                     assertContentEquals(expectedCell.coordinate, cell.coordinate)
                     assertEquals(expectedCell.form.originX, cell.form.originX); assertEquals(expectedCell.form.originY, cell.form.originY)
                     assertEquals(expectedCell.form.angle, cell.form.angle); assertEquals(expectedCell.form.scale, cell.form.scale)

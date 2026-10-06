@@ -44,12 +44,8 @@ kotlin {
 
 dependencies {
 	implementation(platform("io.ktor:ktor-bom:3.5.1"))
-	// Core engine dependencies (ported from Umamo: format, runtime, interop, render, edit)
-	implementation(kotlin("reflect"))
-	implementation("org.jdom:jdom:1.1.3")
-	implementation("com.squareup.okio:okio:3.17.0")
-	implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.8.0")
-	implementation("app.cash.sqldelight:sqlite-driver:2.0.2")
+	// Engine ported from Umamo (format, runtime, interop, render, edit); it brings its own libraries.
+	implementation(project(":umamo"))
 
 	// LWJGL (OpenGL rendering pipeline)
 	val lwjglNatives = "natives-$hostOs" + if (hostArm) "-arm64" else ""
@@ -80,12 +76,11 @@ dependencies {
 	testImplementation(kotlin("test"))
 }
 
-// JNA and sqlite-jdbc bundle native libraries for every platform. Resolve them with only the build
+// JNA bundles native libraries for every platform. Resolve them with only the build
 // host's, so run, tests and every Compose package (app image, Exe, Msi, Deb) carry just those.
 abstract class KeepHostNatives : TransformAction<KeepHostNatives.Parameters> {
 	interface Parameters : TransformParameters {
 		@get:Input val jnaDir: Property<String>
-		@get:Input val sqliteDir: Property<String>
 	}
 
 	@get:InputArtifact
@@ -93,17 +88,15 @@ abstract class KeepHostNatives : TransformAction<KeepHostNatives.Parameters> {
 
 	override fun transform(outputs: TransformOutputs) {
 		val jar = input.get().asFile
-		if (!jar.name.startsWith("jna-") && !jar.name.startsWith("sqlite-jdbc-")) {
+		if (!jar.name.startsWith("jna-")) {
 			outputs.file(input)
 			return
 		}
 		val jnaDir = "com/sun/jna/${parameters.jnaDir.get()}/"
-		val sqliteDir = "org/sqlite/native/${parameters.sqliteDir.get()}/"
 		// Platform directories are the hyphenated ones (linux-x86-64); ptr/, win32/ etc. hold classes.
 		val jnaPlatform = Regex("com/sun/jna/[^/]+-[^/]+/.*")
 		fun keep(name: String) = when {
 			name.matches(jnaPlatform) -> name.startsWith(jnaDir)
-			name.startsWith("org/sqlite/native/") -> name.endsWith("/") || name.startsWith(sqliteDir)
 			else -> true
 		}
 		ZipFile(jar).use { zin ->
@@ -129,7 +122,6 @@ dependencies {
 		parameters {
 			val arch = if (hostArm) "aarch64" else "x86-64"
 			jnaDir.set(if (hostOs == "windows") "win32-$arch" else "${hostOs.replace("macos", "darwin")}-$arch")
-			sqliteDir.set(mapOf("windows" to "Windows", "macos" to "Mac", "linux" to "Linux")[hostOs] + "/" + if (hostArm) "aarch64" else "x86_64")
 		}
 	}
 }
@@ -147,6 +139,8 @@ val testForks = providers.gradleProperty("psd2live.testForks").map(String::toInt
 tasks.withType<Test>().configureEach {
 	useJUnitPlatform()
 	maxHeapSize = "2g"
+	// `--tests` names one class from either module; the other module simply has nothing to run.
+	filter.isFailOnNoMatchingTests = false
 	maxParallelForks = testForks.get()
 	// App settings use Java Preferences, which the platform shares between processes (and with the
 	// user's real settings); every test JVM gets its own in-memory store instead.

@@ -20,7 +20,7 @@ import org.umamo.format.cmo3.model.gen.CPartSourceSet
  * Cmo3Import's pass 1, in the opposite direction: where import resolves graph references to runtime
  * ids, the lowering resolves runtime ids back to the graph objects it must mutate.
  */
-internal class Cmo3GraphIndex(val modelSource: CModelSource) {
+class Cmo3GraphIndex(val modelSource: CModelSource) {
 	val parameterSources: List<CParameterSource> =
 		Cmo3Import.elementsOf((modelSource.parameterSourceSet as? CParameterSourceSet)?._sources)
 			.filterIsInstance<CParameterSource>()

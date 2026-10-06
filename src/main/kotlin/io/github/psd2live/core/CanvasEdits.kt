@@ -243,10 +243,11 @@ internal object CanvasEdits {
                     val remapped = model.deformers.map { d ->
                         if (d.id != childId) d else when (d) {
                             is Deformer.Warp -> {
-                                d.geometryGrid?.cells?.firstOrNull() ?: return@map d.copy(parent = warp.id)
+                                val lattice = d.geometryGrid
+                                lattice?.cells?.firstOrNull() ?: return@map d.copy(parent = warp.id)
                                 d.copy(
                                     parent = warp.id,
-                                    geometryGrid = d.geometryGrid.let { grid ->
+                                    geometryGrid = lattice.let { grid ->
                                         KeyformGrid(grid.axes, grid.cells.map { cell ->
                                             KeyformCell(cell.coordinate, WarpLatticeForm(FloatArray(cell.form.controlPoints.size) { j ->
                                                 if (j % 2 == 0) (cell.form.controlPoints[j] - x) / w else (cell.form.controlPoints[j] - y) / h
@@ -552,8 +553,8 @@ internal object CanvasEdits {
                     whole -> emptyList()
                     else -> prior.filterNot(::touched)
                 }
-                val seedsA = if (whole) outlineVertices(drawableA.mesh!!.indices, drawableA.mesh.vertexCount) else hitsA
-                val seedsB = if (whole) outlineVertices(drawableB.mesh!!.indices, drawableB.mesh.vertexCount) else hitsB
+                val seedsA = if (whole) drawableA.mesh!!.let { outlineVertices(it.indices, it.vertexCount) } else hitsA
+                val seedsB = if (whole) drawableB.mesh!!.let { outlineVertices(it.indices, it.vertexCount) } else hitsB
                 val welded = weldGlueSeam(
                     model, meshA, meshB, seedsA, seedsB, parameters, distance,
                     occupiedA = kept.mapTo(HashSet()) { it.indexA },
@@ -592,8 +593,8 @@ internal object CanvasEdits {
         val scratch = FloatArray(2)
 
         val updatedDrawables = model.drawables.map { d ->
-            if (d.parentDeformerId != oldWarp.id || d.mesh == null) d else {
-                val mesh = d.mesh
+            val mesh = d.mesh
+            if (d.parentDeformerId != oldWarp.id || mesh == null) d else {
                 if (key.isEmpty()) {
                     val newPositions = warpRemapPoints(cpOld, cpNew, cols, rows, bilinear, mesh.positions, scratch, tolSq)
                     val newGrid = d.geometryGrid?.let { grid ->

@@ -29,7 +29,7 @@ import kotlin.math.atan2
  * show and hide a whole subtree, so these are not a decorative extra - ignoring them renders effect
  * subtrees permanently visible.
  */
-internal sealed interface DeformerWorld {
+sealed interface DeformerWorld {
 	val accY: Float
 
 	/** This deformer's opacity times every ancestor's; multiplies each descendant drawable's own. */
@@ -118,7 +118,7 @@ internal fun screenCompose(a: Float, b: Float): Float = a + b - a * b
  * fields are `internal` (not `private`) so the GPU renderer in this module can upload them as the
  * shader's lattice uniforms - the same baked data the CPU `apply` walks via [warpApply].
  */
-internal class WarpWorld(
+class WarpWorld(
 	internal val cp: FloatArray,
 	internal val cols: Int,
 	internal val rows: Int,
@@ -143,8 +143,8 @@ internal class WarpWorld(
 
 /** A rotation deformer's world transform: a baked affine. [xform] is `internal` so the GPU renderer can
  *  upload its 6 coefficients as shader uniforms (the same affine the CPU `apply` evaluates). */
-internal class RotationWorld(
-	internal val xform: RotationXform,
+class RotationWorld(
+	val xform: RotationXform,
 	override val accY: Float,
 	override val accumulatedOpacity: Float = 1f,
 	override val accumulatedMultiplyColor: ColorRgb = ColorRgb.MultiplyIdentity,
@@ -176,7 +176,7 @@ internal class RotationWorld(
  * @param Map      channelOverrides Pending unkeyed channel edits, which win over a deformer's stored channel value.
  * @return Map<DeformerId, DeformerWorld> The built world transforms, keyed by deformer id.
  */
-internal fun buildDeformerWorlds(
+fun buildDeformerWorlds(
 	deformers: List<Deformer>,
 	paramValue: (ParameterId) -> Float,
 	defaultValue: (ParameterId) -> Float,
@@ -342,7 +342,7 @@ private fun buildWarpWorld(
  * @param Map               channelOverrides Pending unkeyed channel edits, which win over the rotation's stored channel value.
  * @return DeformerWorld? The world transform, or null when hidden.
  */
-internal fun buildRotationWorld(
+fun buildRotationWorld(
 	rotation: Deformer.Rotation,
 	paramValue: (ParameterId) -> Float,
 	defaultValue: (ParameterId) -> Float,

@@ -180,8 +180,9 @@ object SimGenerator {
             for ((mesh, count) in bake.vertexCounts) {
                 val offsets = axis.offsets[mesh] ?: continue
                 val drawable = current.drawables.firstOrNull { it.id.raw == mesh }
-                if (drawable?.mesh == null) { issues += "${sim.id}: mesh $mesh not found"; continue }
-                if (drawable.mesh.vertexCount != count || offsets.any { it.size != count * 2 }) {
+                val target = drawable?.mesh
+                if (target == null) { issues += "${sim.id}: mesh $mesh not found"; continue }
+                if (target.vertexCount != count || offsets.any { it.size != count * 2 }) {
                     issues += "${sim.id}: $mesh was remeshed since the bake"; continue
                 }
                 val next = if (asBlend) drawable.copy(blendShapes = drawable.blendShapes.filter { it.parameterId != parameter.id } +

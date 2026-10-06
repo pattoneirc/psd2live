@@ -331,7 +331,7 @@ internal object RasterPaintCommit {
                         geometryGrid = drawable.geometryGrid ?: rebuilt.geometryGrid,
                     )
                 } else {
-                    val oldMesh = drawable.mesh
+                    val oldMesh = requireNotNull(drawable.mesh)
                     val oldSlice = sliceOf(oldAtlas, drawable.id.raw, layerId, oldBounds)
                     val newSlice = sliceOf(newAtlas, drawable.id.raw, layerId, newBounds)
                     if (oldSlice != null && newSlice != null) {

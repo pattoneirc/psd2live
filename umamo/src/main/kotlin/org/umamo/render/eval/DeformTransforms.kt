@@ -279,7 +279,7 @@ internal fun warpExtrap(cp: FloatArray, cols: Int, rows: Int, u: Float, v: Float
  * @param FloatArray out      Destination for the transformed point.
  * @param Int        outIndex Index of the x slot in [out] (y is `outIndex+1`).
  */
-internal fun warpApply(
+fun warpApply(
 	cp: FloatArray,
 	cols: Int,
 	rows: Int,
@@ -298,7 +298,7 @@ internal fun warpApply(
  * A rotation deformer's baked world affine - the per-vertex-invariant coefficients (xformSetup's exact
  * grouping), applied as `x' = c15·y + c12·x + ox`, `y' = c13·y + c14·x + oy`.
  */
-internal class RotationXform(
+class RotationXform(
 	val c12: Float,
 	val c13: Float,
 	val c14: Float,
@@ -332,7 +332,7 @@ internal class RotationXform(
  * @param Float   oy           World origin y.
  * @return RotationXform The baked affine.
  */
-internal fun rotationXform(
+fun rotationXform(
 	angleDegrees: Float,
 	scale: Float,
 	flipX: Boolean,
@@ -359,7 +359,7 @@ internal fun rotationXform(
  * Inverts point (u, v) under [cpOld] and maps it to the equivalent (u', v') under [cpNew] such that
  * `warpApply(cpNew, u', v') == warpApply(cpOld, u, v)`.
  */
-internal fun warpRemapPoint(
+fun warpRemapPoint(
 	cpOld: FloatArray,
 	cpNew: FloatArray,
 	cols: Int,
@@ -413,7 +413,7 @@ internal fun warpRemapPoint(
 /**
  * Remaps an interleaved array of (u, v) points from [cpOld] to [cpNew] preserving their parent-space positions.
  */
-internal fun warpRemapPoints(
+fun warpRemapPoints(
 	cpOld: FloatArray,
 	cpNew: FloatArray,
 	cols: Int,

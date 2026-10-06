@@ -65,7 +65,7 @@ fun PuppetModel.freshParameterId(): ParameterId {
  * @return List<ParameterNode> The existing tree with any unplaced parameter appended, or a freshly
  *   materialized flat one.
  */
-internal fun PuppetModel.materializedParameterTree(): List<ParameterNode> {
+fun PuppetModel.materializedParameterTree(): List<ParameterNode> {
 	if (parameterTree.isEmpty()) {
 		return parameters.map { parameter -> ParameterNode.Param(parameter.id) }
 	}

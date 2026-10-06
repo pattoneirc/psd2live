@@ -15,3 +15,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "psd2live"
+
+include(":umamo")

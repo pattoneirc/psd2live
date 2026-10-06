@@ -43,11 +43,11 @@ private const val RIGID_INVERSE_MAX_ITERATIONS = 24
  *
  * ドロウアブルのローカル座標と評価器のワールド座標を、固定ポーズで相互変換する。
  */
-class DrawableSpaceMapping internal constructor(
+class DrawableSpaceMapping(
 	private val parentWorld: DeformerWorld?,
 ) {
 	/** Rotation handles use the runtime's rigid parent frame, not the warp's UV Jacobian. */
-	internal fun rotationFrame(originX: Float, originY: Float): DrawableSpaceMapping {
+	fun rotationFrame(originX: Float, originY: Float): DrawableSpaceMapping {
 		val reference = Deformer.Rotation(
 			DeformerId("__rotation_guide__"), "", null, null, 0f,
 			KeyformGrid(emptyList(), listOf(KeyformCell(intArrayOf(), RotationPivotForm(originX, originY, 0f, 1f)))),
@@ -368,7 +368,7 @@ private fun invertWarp(warp: WarpWorld, targetX: Float, targetY: Float, local: F
  * @param FloatArray cp The lattice's world control points, interleaved x,y.
  * @return Float The squared world-distance tolerance.
  */
-internal fun warpInverseToleranceSquared(cp: FloatArray): Float {
+fun warpInverseToleranceSquared(cp: FloatArray): Float {
 	var minX = Float.MAX_VALUE
 	var maxX = -Float.MAX_VALUE
 	var minY = Float.MAX_VALUE

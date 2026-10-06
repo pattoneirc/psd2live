@@ -1541,7 +1541,7 @@ internal class CanvasEditor(
             kind = "rotation"; id = deformer.id.raw; parent = deformer.parent; indices = IntArray(0)
         } else if (drawable?.mesh != null) {
             if (layerId !in state.effectiveVisibleLayerIds || !drawable.isSelectable) return null
-            kind = "mesh"; id = drawable.id.raw; parent = drawable.parentDeformerId; indices = drawable.mesh.indices
+            kind = "mesh"; id = drawable.id.raw; parent = drawable.parentDeformerId; indices = drawable.mesh!!.indices
         } else return null
         if (cachedSource !== resolvedSource || cachedPose != state.parameterValues) {
             cachedSource = resolvedSource; cachedPose = state.parameterValues; cachedTargets.clear()

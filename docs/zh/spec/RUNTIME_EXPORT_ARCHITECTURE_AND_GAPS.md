@@ -79,6 +79,6 @@ CMO3 的格式库可以保留原对象图中的部分未知信息，但从 PSD �
 
 新增功能至少覆盖：领域数据 → 历史重放 → 工程保存恢复 → 目标版本处理 → 导出读回 → 视觉检查。只有测试实际覆盖的范围才能写成兼容性结论。
 
-源码：[工程](../../../src/main/kotlin/io/github/psd2live/project/) · [核心流水线](../../../src/main/kotlin/io/github/psd2live/core/) · [运行时](../../../src/main/kotlin/org/umamo/runtime/) · [格式转换](../../../src/main/kotlin/org/umamo/interop/)。
+源码：[工程](../../../src/main/kotlin/io/github/psd2live/project/) · [核心流水线](../../../src/main/kotlin/io/github/psd2live/core/) · [运行时](../../../umamo/src/main/kotlin/org/umamo/runtime/) · [格式转换](../../../umamo/src/main/kotlin/org/umamo/interop/)。
 
 文件图片放置的 GUI 预览、确认和取消已进入独立应用会话，与 `layer_set_bounds/layer_cancel_import` 共用文档候选。预览不改持久源图，保存等待确认；定位保留身份、实际父级和原生成帧，重复缩放读取保存的原像素。自建父级的后续网格重生使用同一核心中性坐标转换。完整源图/分类迁移及其余 GUI 业务验收仍见重构进度。

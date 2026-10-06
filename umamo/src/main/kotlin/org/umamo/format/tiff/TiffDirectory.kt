@@ -11,7 +11,7 @@ import org.umamo.format.binary.ByteReader
  * stream that way).  Other non-numeric fields (ASCII, RATIONAL, …) the baseline reader does not need
  * are dropped during parsing.
  */
-internal class TiffDirectory(
+class TiffDirectory(
 	private val values: Map<Int, LongArray>,
 	private val rawValues: Map<Int, ByteArray>,
 	val littleEndian: Boolean,
@@ -64,7 +64,7 @@ internal class TiffDirectory(
  * @param ByteArray bytes The complete `.tiff` file.
  * @return TiffDirectory The first directory's numeric fields.
  */
-internal fun parseFirstDirectory(bytes: ByteArray): TiffDirectory {
+fun parseFirstDirectory(bytes: ByteArray): TiffDirectory {
 	require(bytes.size >= 8) { "TIFF too short for a header" }
 	// TIFF: byte-order mark @ +0x00 - 'II' little-endian, 'MM' big-endian.
 	val littleEndian =

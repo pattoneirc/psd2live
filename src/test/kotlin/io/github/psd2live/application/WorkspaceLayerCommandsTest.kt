@@ -150,7 +150,7 @@ class WorkspaceLayerCommandsTest {
             assertEquals(restored.model.rig.puppet.vertexGroups, replayed.rig.puppet.vertexGroups)
             for (expected in visible.model.rig.puppet.drawables) {
                 assertContentEquals(expected.mesh!!.positions, restored.model.rig.puppet.drawables.single { it.id == expected.id }.mesh!!.positions)
-                assertContentEquals(expected.mesh.positions, replayed.rig.puppet.drawables.single { it.id == expected.id }.mesh!!.positions)
+                assertContentEquals(expected.mesh!!.positions, replayed.rig.puppet.drawables.single { it.id == expected.id }.mesh!!.positions)
             }
             val prior = created.document.rigEdits.authoringJournal.single { it["op"]?.jsonPrimitive?.content == RasterMeshCreation.OP }
             val after = restored.document.rigEdits.authoringJournal.single { it["op"]?.jsonPrimitive?.content == RasterMeshCreation.OP }
