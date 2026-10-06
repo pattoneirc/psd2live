@@ -170,7 +170,8 @@ object SkeletonAutoBuilder {
 					fit.getOrPut(body.sideOf(part)) { mutableListOf() } += part.points to part.indices
 				}
 			}
-			return (bind.keys + fit.keys).associateWith { SideParts(bind[it].orEmpty(), fit[it].orEmpty()) }
+			// Declaration order, not hash order: enum hash codes change between processes.
+			return (bind.keys + fit.keys).sorted().associateWith { SideParts(bind[it].orEmpty(), fit[it].orEmpty()) }
 		}
 
 		// Arms: from the shoulder joint, just inside the torso's edge below the shoulder line.
