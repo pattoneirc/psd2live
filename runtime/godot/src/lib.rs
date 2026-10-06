@@ -1,13 +1,16 @@
 //! `P2LCharacter`: a Godot 4 node that plays a `.p2lrt` rig through the PSD2Live runtime.
 //!
 //! Each mesh draws into its own canvas item under the node, reordered every frame by the rig's draw
-//! order. Add and multiply blending use a CanvasItemMaterial; a masked mesh draws inside a clip-only
-//! canvas group holding its masks. Inverted masks, screen colors and the extended blend modes draw as
-//! normal meshes.
+//! order. Cubism's add and multiply use a CanvasItemMaterial; screen colors and the extended blend modes
+//! use shaders, the latter reading the screen below (each such item copies the back buffer first). A
+//! masked mesh draws inside a clip-only canvas group holding its masks. Godot's canvas groups offer no
+//! way to remove coverage, so inverted masks draw unmasked.
+
+mod shaders;
 
 use godot::classes::canvas_item_material::BlendMode;
 use godot::classes::rendering_server::CanvasGroupMode;
-use godot::classes::{CanvasItemMaterial, FileAccess, INode2D, Image, ImageTexture, Node2D, RenderingServer};
+use godot::classes::{CanvasItemMaterial, FileAccess, INode2D, Image, ImageTexture, Material, Node2D, RenderingServer, Shader, ShaderMaterial};
 use godot::prelude::*;
 use p2l_runtime::behavior::Behaviors;
 use p2l_runtime::clip::Player;
@@ -53,7 +56,9 @@ pub struct P2LCharacter {
     /// The values of the last frame.
     values: Vec<f32>,
     textures: Vec<Gd<ImageTexture>>,
-    materials: Vec<Option<Gd<CanvasItemMaterial>>>,
+    materials: Vec<Option<Gd<Material>>>,
+    /// Shader materials taking each mesh's screen color, where it has one.
+    screens: Vec<Option<Gd<ShaderMaterial>>>,
     slots: Vec<Slot>,
     base: Base<Node2D>,
 }
@@ -64,7 +69,8 @@ impl INode2D for P2LCharacter {
         P2LCharacter {
             rig_path: GString::new(), centered: true, autoplay: GString::new(), behaviors: 3, look_at_mouse: false,
             rig: None, evaluator: Evaluator::new(), player: Player::new(), behavior: Behaviors::default(), physics: None,
-            pose: Vec::new(), values: Vec::new(), textures: Vec::new(), materials: Vec::new(), slots: Vec::new(), base,
+            pose: Vec::new(), values: Vec::new(), textures: Vec::new(), materials: Vec::new(), screens: Vec::new(),
+            slots: Vec::new(), base,
         }
     }
 
@@ -114,35 +120,66 @@ impl P2LCharacter {
             }
             ImageTexture::create_from_image(&image).unwrap_or_else(ImageTexture::new_gd)
         }).collect();
+        // Shaders are shared per blend mode; each mesh with a screen color gets its own material.
+        let mut shader_cache: std::collections::HashMap<u8, Gd<Shader>> = std::collections::HashMap::new();
+        let mut shader = |mode: u8| {
+            shader_cache
+                .entry(mode)
+                .or_insert_with(|| {
+                    let mut shader = Shader::new_gd();
+                    shader.set_code(&shaders::mesh(mode));
+                    shader
+                })
+                .clone()
+        };
+        let mut screens = Vec::with_capacity(rig.meshes.len());
         self.materials = rig.meshes.iter().map(|m| {
+            let black = p2l_runtime::rig::BLACK;
+            let screened = m.screen != black
+                || m.channels.iter().any(|(c, _)| *c == p2l_runtime::rig::Channel::ScreenColor)
+                || m.shapes.iter().flat_map(|b| b.shapes.iter().flatten()).any(|s| s.screen != black);
+            if screened || shaders::reads_below(m.blend) {
+                let mut material = ShaderMaterial::new_gd();
+                material.set_shader(&shader(m.blend));
+                screens.push(Some(material.clone()));
+                return Some(material.upcast::<Material>());
+            }
+            screens.push(None);
             // The IR's blend order: normal, Cubism's add and multiply, then the extended modes.
             let mode = match m.blend {
-                1 | 3 | 4 => BlendMode::ADD,
-                2 | 6 => BlendMode::MUL,
+                1 | 4 => BlendMode::ADD,
+                2 => BlendMode::MUL,
                 _ => return None,
             };
             let mut material = CanvasItemMaterial::new_gd();
             material.set_blend_mode(mode);
-            Some(material)
+            Some(material.upcast::<Material>())
         }).collect();
+        self.screens = screens;
         let mut rs = RenderingServer::singleton();
         let parent = self.base().get_canvas_item();
+        let everywhere = Rect2::new(Vector2::new(-1e6, -1e6), Vector2::new(2e6, 2e6));
         self.slots = rig.meshes.iter().enumerate().map(|(i, m)| {
             let item = rs.canvas_item_create();
             rs.canvas_item_set_parent(item, parent);
-            let content = if m.masked_by.is_empty() || m.invert_mask {
-                None
-            } else {
+            let mut slot = Slot { item, content: None };
+            if !m.masked_by.is_empty() && !m.invert_mask {
+                // A clip-only group keeps its child where the masks drew.
                 rs.canvas_item_set_canvas_group_mode(item, CanvasGroupMode::CLIP_ONLY);
                 let content = rs.canvas_item_create();
                 rs.canvas_item_set_parent(content, item);
-                Some(content)
-            };
-            if let Some(material) = &self.materials[i] {
-                rs.canvas_item_set_material(content.unwrap_or(item), material.get_rid());
+                slot.content = Some(content);
             }
-            Slot { item, content }
+            let target = slot.content.unwrap_or(item);
+            if let Some(material) = &self.materials[i] {
+                rs.canvas_item_set_material(target, material.get_rid());
+            }
+            if shaders::reads_below(m.blend) {
+                rs.canvas_item_set_copy_to_backbuffer(target, true, everywhere);
+            }
+            slot
         }).collect();
+
         self.pose = rig.defaults();
         self.player = Player::new();
         self.behavior = Behaviors::default();
@@ -268,6 +305,10 @@ impl P2LCharacter {
             let slot = &self.slots[m];
             rs.canvas_item_set_visible(slot.item, true);
             rs.canvas_item_set_draw_index(slot.item, draw_index as i32);
+            if let Some(material) = &self.screens[m] {
+                let s = self.evaluator.pose.screen[m];
+                material.clone().set_shader_parameter("screen", &Vector3::new(s[0], s[1], s[2]).to_variant());
+            }
             match slot.content {
                 Some(content) => {
                     // The masks draw into the clip group; the mesh inside it shows only where they cover.

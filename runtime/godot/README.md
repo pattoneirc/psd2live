@@ -21,9 +21,10 @@ a `P2LCharacter` node and set **Rig Path** to an exported `.p2lrt`.
 | `set_parameter(id, value)`, `get_parameter(id)`, `get_parameter_ids()` | The pose under clips and behaviors |
 | `advance(delta)`, `reset_physics()` | Step manually (the node steps itself every frame) |
 
-Each mesh draws in its own canvas item in the rig's draw order; add and multiply blending use a
-CanvasItemMaterial and masks use a clip-only canvas group. Inverted masks, screen colors and the
-extended blend modes draw as normal meshes.
+Each mesh draws in its own canvas item in the rig's draw order. Cubism's add and multiply use a
+CanvasItemMaterial; screen colors and the extended blend modes use shaders that read the screen below;
+masks use a clip-only canvas group. Inverted masks draw unmasked: Godot's canvas groups cannot remove
+coverage.
 
 The demo (`demo/`) loads a rig given on the command line:
 

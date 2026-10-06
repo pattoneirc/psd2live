@@ -59,7 +59,7 @@
 ## 尚未完成
 
 - 网格渲染（遮罩、混合模式）由宿主完成，运行时只提供几何与属性。
-- Godot 节点中反相遮罩、屏幕色和扩展混合模式按普通绘制。
+- Godot 节点中反相遮罩按无遮罩绘制（Godot 的画布组无法移除覆盖）。
 - 编辑器内的运行时预览与导出烘焙改用运行时在后续阶段加入，见 [ROADMAP](../ROADMAP.md)。
 
 ## 网页播放器
@@ -68,4 +68,4 @@
 
 ## Godot
 
-`runtime/godot/` 用 `cargo build --release` 构建，`P2LCharacter` 的属性与方法见其 README。每个网格绘制在自己的画布项中，每帧按绘制顺序重排；加算/乘算用 CanvasItemMaterial，遮罩用仅裁剪的画布组。验证：演示工程的 `smoke_test.gd` 在无界面模式加载模型并推进一秒；`--shot` 在窗口中渲染一帧，tml 样例显示正确（含眼部遮罩）。
+`runtime/godot/` 用 `cargo build --release` 构建，`P2LCharacter` 的属性与方法见其 README。每个网格绘制在自己的画布项中，每帧按绘制顺序重排；Cubism 的加算/乘算用 CanvasItemMaterial，屏幕色与扩展混合模式用着色器（后者读取下方屏幕纹理，绘制前复制后缓冲），遮罩用仅裁剪的画布组。`RuntimeSamplesTool`（`PSD2LIVE_TOOLS=1`）生成覆盖全部混合模式、乘算/屏幕色与遮罩的合成模型及软件光栅器参考图，Godot 渲染除反相遮罩外与参考图一致（差值 ≤ 8/255）。验证：演示工程的 `smoke_test.gd` 在无界面模式加载模型并推进一秒；`--shot` 在窗口中渲染一帧，tml 样例显示正确（含眼部遮罩）。
