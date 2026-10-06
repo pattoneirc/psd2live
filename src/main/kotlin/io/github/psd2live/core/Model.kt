@@ -306,12 +306,65 @@ data class AtlasPlacement(
 	val scaleY: Float = 1f,
 )
 
-data class AtlasPage(val image: BufferedImage, val png: ByteArray)
+/**
+ * One atlas page: its pixels and two lazily made PNG encodings of them. [png] is the canonical encoding
+ * every export writes; [previewPng] encodes the same pixels in independently compressed row strips, so a
+ * page that differs from [base] only in some rows re-encodes just those ([AtlasPagePng]). The image must
+ * not be modified once the page exists. Equality is identity, as the encodings are memoized on it.
+ */
+class AtlasPage private constructor(
+	val image: BufferedImage,
+	private val encoded: ByteArray?,
+	@Volatile private var base: AtlasPage?,
+	@Volatile private var dirtyRows: java.util.BitSet?,
+	/** What [AtlasLayout] composed this page from, or null for a page made otherwise. */
+	internal val recipe: AtlasLayout.Recipe? = null,
+) {
+	/** A page whose canonical encoding is already known, as an imported model's pages are. */
+	constructor(image: BufferedImage, png: ByteArray) : this(image, png, null, null)
+
+	/** A page encoded on first use. */
+	constructor(image: BufferedImage) : this(image, null, null, null)
+
+	/** The canonical PNG (ImageIO), byte for byte what exports have always written. */
+	val png: ByteArray by lazy { encoded ?: AtlasPagePng.canonical(image) }
+
+	private val stripEncoding = lazy {
+		val reused = base?.takeIf { it.image.width == image.width && it.image.height == image.height }?.strips
+		AtlasPagePng.strips(image, reused, dirtyRows).also {
+			// Strips are all a derived page needs from its base: drop it, or every page would keep its history alive.
+			base = null; dirtyRows = null
+		}
+	}
+
+	internal val strips: AtlasPagePng.Strips by stripEncoding
+
+	/** The same pixels as a quickly made, strip-wise PNG for the editor's runtime bundle. */
+	val previewPng: ByteArray by lazy { encoded ?: AtlasPagePng.assemble(image.width, image.height, strips) }
+
+	/** This page with [previewPng] as its PNG, for the preview bundle. One instance per page, so bytes keep their identity. */
+	internal val forPreview: AtlasPage by lazy { if (encoded != null) this else AtlasPage(image, previewPng, null, null) }
+
+	companion object {
+		/**
+		 * A page composed from [recipe] whose pixels equal [base]'s outside [dirtyRows]: its preview encoding
+		 * reuses [base]'s strips there, if [base] has encoded them (a base that never needed them is not kept).
+		 * [dirtyRows] must cover every row whose pixels differ.
+		 */
+		internal fun composed(image: BufferedImage, recipe: AtlasLayout.Recipe, base: AtlasPage?, dirtyRows: java.util.BitSet?): AtlasPage {
+			val reusable = base?.takeIf { it.stripEncoding.isInitialized() && dirtyRows != null }
+			return AtlasPage(image, null, reusable, dirtyRows.takeIf { reusable != null }, recipe)
+		}
+	}
+}
 
 data class PackedAtlas(
 	val pages: List<AtlasPage>,
 	val placementByLayerId: Map<String, AtlasPlacement>,
-)
+) {
+	/** These pages with their preview encodings, for the editor's runtime bundle. */
+	internal fun forPreview(): PackedAtlas = copy(pages = pages.map { it.forPreview })
+}
 
 data class PipelineAnalysis(
 	val source: SourceArt,

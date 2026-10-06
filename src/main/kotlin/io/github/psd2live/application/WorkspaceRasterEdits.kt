@@ -19,11 +19,15 @@ data class WorkspacePaintRaster(val layerId: String, val raster: LayerRaster,
                     checkpoint: () -> Unit = {}): WorkspacePaintRaster {
             require(image.width.toLong() * image.height <= 16_777_216) { "Painting requires a canvas of at most 16 megapixels" }
             val rgba = ByteArray(Math.multiplyExact(Math.multiplyExact(image.width, image.height), 4))
-            for (y in 0 until image.height) for (x in 0 until image.width) {
-                if (x == 0) checkpoint()
-                val pixel = image.getRGB(x, y); val index = (y * image.width + x) * 4
-                rgba[index] = (pixel ushr 16).toByte(); rgba[index + 1] = (pixel ushr 8).toByte()
-                rgba[index + 2] = pixel.toByte(); rgba[index + 3] = (pixel ushr 24).toByte()
+            val row = IntArray(image.width)
+            for (y in 0 until image.height) {
+                checkpoint()
+                image.getRGB(0, y, image.width, 1, row, 0, image.width)
+                for (x in 0 until image.width) {
+                    val pixel = row[x]; val index = (y * image.width + x) * 4
+                    rgba[index] = (pixel ushr 16).toByte(); rgba[index + 1] = (pixel ushr 8).toByte()
+                    rgba[index + 2] = pixel.toByte(); rgba[index + 3] = (pixel ushr 24).toByte()
+                }
             }
             return WorkspacePaintRaster(layerId, LayerRaster(image.width, image.height, rgba), rebuildMesh, preserveSourceRaster)
         }
@@ -51,16 +55,20 @@ internal object WorkspaceRasterEdits {
         val layer = document.source.layers.singleOrNull { it.id.raw == id && id !in document.deletedLayerIds }
             ?: throw IllegalArgumentException("Paint target must be a source artwork layer: $id")
         val image = BufferedImage(request.raster.width, request.raster.height, BufferedImage.TYPE_INT_ARGB)
-        for (y in 0 until image.height) for (x in 0 until image.width) {
-            if (x == 0) work.checkpoint()
-            val index = (y * image.width + x) * 4; val rgba = request.raster.rgba
-            image.setRGB(x, y, ((rgba[index + 3].toInt() and 255) shl 24) or
-                ((rgba[index].toInt() and 255) shl 16) or ((rgba[index + 1].toInt() and 255) shl 8) or
-                (rgba[index + 2].toInt() and 255))
+        val argb = IntArray(image.width * image.height)
+        val rgba = request.raster.rgba
+        for (y in 0 until image.height) {
+            work.checkpoint()
+            for (x in 0 until image.width) {
+                val pixel = y * image.width + x; val index = pixel * 4
+                argb[pixel] = ((rgba[index + 3].toInt() and 255) shl 24) or ((rgba[index].toInt() and 255) shl 16) or
+                    ((rgba[index + 1].toInt() and 255) shl 8) or (rgba[index + 2].toInt() and 255)
+            }
         }
+        image.setRGB(0, 0, image.width, image.height, argb, 0, image.width)
         val original = document.sourceLayerImage(id, work::checkpoint)
         val samePixels = original.getRGB(0, 0, image.width, image.height, null, 0, image.width)
-            .contentEquals(image.getRGB(0, 0, image.width, image.height, null, 0, image.width))
+            .contentEquals(argb)
         val missingMesh = model.rig.puppet.drawables.none { drawable -> drawable.mesh != null && model.rig.layerIdByDrawableId[drawable.id.raw] == id }
         val visiblePixels = (0 until request.raster.width * request.raster.height).any {
             if (it % request.raster.width == 0) work.checkpoint()
@@ -68,11 +76,19 @@ internal object WorkspaceRasterEdits {
         }
         val rebuild = visiblePixels && (request.rebuildMesh || missingMesh) && !DepthSplit.isFrontLayer(model, id)
         if (samePixels && !rebuild) return document
+        if (!rebuild && document.rigEdits.importedCmo3 == null) {
+            // A repaint that keeps every mesh commits pixels only: no journal record, no mesh input. The new rig,
+            // atlas and bundle are the rebuild's, which reads the frozen generation input below, so geometry
+            // stays and only the textures follow the pixels.
+            val painted = RasterPaintCommit.paintedSource(model, id, image, request.preserveSourceRaster, work::checkpoint)
+            work.progress(1f, "Prepared painted document")
+            return document.copy(source = painted.source, generationSource = document.generationSource ?: document.source)
+        }
         val working = if (document.rigEdits.importedCmo3 == null) model else Cmo3ModelImport.paintingPreview(pipeline, document.source,
             document.config().copy(generationSource = document.generationSource ?: document.source))
         val prepared = RasterPaintCommit.prepare(pipeline, working, id, image, rebuild,
             request.preserveSourceRaster || samePixels, work::checkpoint,
-            ProgressListener { stage, fraction -> work.progress(0.35f + 0.45f * fraction.toFloat(), stage) })
+            ProgressListener { stage, fraction -> work.progress(0.35f + 0.45f * fraction.toFloat(), stage) }, runtimeBundle = false)
         val beforeIds = model.rig.puppet.drawables.mapTo(HashSet()) { it.id }
         val migrations = if (!rebuild) emptyList() else prepared.rig.puppet.drawables.mapNotNull { drawable ->
             work.checkpoint()

@@ -25,24 +25,43 @@ private fun remapUvs(mesh: DrawableMesh, from: LayerTexture, to: LayerTexture): 
 
 /** Shared raster/atlas/mesh preparation. Adapters own gestures, prompts and durable submission. */
 internal object RasterPaintCommit {
-    fun prepare(pipeline: PSD2LivePipeline, currentPreview: RigPreviewModel, layerId: String,
-                image: BufferedImage, rebuildMesh: Boolean, preserveSourceRaster: Boolean = false,
-                checkpoint: () -> Unit = {}, progress: ProgressListener = ProgressListener { _, _ -> }): RigPreviewModel {
+    /** A painted layer's new pixels as a commit stores them, and the source holding them. */
+    class Painted(val bounds: LayerBounds, val raster: LayerRaster, val source: WorkspaceSourceArt)
+
+    /**
+     * [image] (the whole canvas) cropped into [layerId]'s new pixels, and the source with them in place: all a
+     * repaint that keeps every mesh commits. Every other layer keeps its own raster.
+     */
+    fun paintedSource(currentPreview: RigPreviewModel, layerId: String, image: BufferedImage,
+                      preserveSourceRaster: Boolean = false, checkpoint: () -> Unit = {}): Painted {
         checkpoint()
-        progress.update("Cropping painted source", 0.0)
         require(image.width == currentPreview.analysis.source.widthPx && image.height == currentPreview.analysis.source.heightPx) {
             "Paint image dimensions must match the source canvas"
         }
         require(sourceLayerFor(currentPreview, currentPreview.analysis, layerId) != null) { "Paint layer not found: $layerId" }
-        val rebuild = rebuildMesh && !DepthSplit.isFrontLayer(currentPreview, layerId)
         val currentAnalysis = currentPreview.analysis
-        // The frames the live rig was built on. Rebuilt from the previous analysis on purpose: the
-        // commit preserves every deformer, so a mesh rebuilt against frames moved by the new paint
-        // would no longer line up with the parent deformer it hangs under.
-        val geometryAnalysis = if (currentPreview.config.generationSource == null) currentAnalysis
-            else RigGenerationSource.prepare(currentAnalysis, currentPreview.config).geometry
-        // Only a rebuilt or newly created mesh needs the frames; a plain repaint keeps every mesh.
-        val rigContext by lazy { RigBuilder.rigContext(geometryAnalysis, currentPreview.config, pipeline.meshCache) }
+        val (newBounds, newRaster) = crop(currentPreview, layerId, image, preserveSourceRaster, checkpoint)
+        val targetClassified = classifiedLayerFor(currentPreview, currentAnalysis, layerId)
+        val targetSourceLayerId = targetClassified?.source?.id?.raw ?: layerId.substringBefore(':').substringBeforeLast('-')
+        val updatedSrcLayers = currentAnalysis.source.layers.map { sl ->
+            if (sl.id.raw == targetSourceLayerId || sl.id.raw == layerId || sl.id.raw == targetClassified?.source?.id?.raw) {
+                val base = if (sl is WorkspaceSourceLayer) sl else WorkspaceSourceLayer.copyOf(sl, sl.order) as WorkspaceSourceLayer
+                base.copy(bounds = newBounds, raster = newRaster)
+            } else {
+                if (sl is WorkspaceSourceLayer) sl else WorkspaceSourceLayer.copyOf(sl, sl.order)
+            }
+        }
+        return Painted(newBounds, newRaster, WorkspaceSourceArt(
+            widthPx = currentAnalysis.source.widthPx,
+            heightPx = currentAnalysis.source.heightPx,
+            layers = updatedSrcLayers,
+            groups = currentAnalysis.source.groups,
+        ))
+    }
+
+    private fun crop(currentPreview: RigPreviewModel, layerId: String, image: BufferedImage, preserveSourceRaster: Boolean,
+                     checkpoint: () -> Unit): Pair<LayerBounds, LayerRaster> {
+        val currentAnalysis = currentPreview.analysis
         val img = image
         val docW = image.width
         val docH = image.height
@@ -119,6 +138,27 @@ internal object RasterPaintCommit {
                 newRaster = LayerRaster(cropW, cropH, rgba)
             }
         }
+        return newBounds to newRaster
+    }
+
+    fun prepare(pipeline: PSD2LivePipeline, currentPreview: RigPreviewModel, layerId: String,
+                image: BufferedImage, rebuildMesh: Boolean, preserveSourceRaster: Boolean = false,
+                checkpoint: () -> Unit = {}, progress: ProgressListener = ProgressListener { _, _ -> },
+                runtimeBundle: Boolean = true): RigPreviewModel {
+        progress.update("Cropping painted source", 0.0)
+        val painted = paintedSource(currentPreview, layerId, image, preserveSourceRaster, checkpoint)
+        val newBounds = painted.bounds
+        val newRaster = painted.raster
+        val updatedSourceArt = painted.source
+        val rebuild = rebuildMesh && !DepthSplit.isFrontLayer(currentPreview, layerId)
+        val currentAnalysis = currentPreview.analysis
+        // The frames the live rig was built on. Rebuilt from the previous analysis on purpose: the
+        // commit preserves every deformer, so a mesh rebuilt against frames moved by the new paint
+        // would no longer line up with the parent deformer it hangs under.
+        val geometryAnalysis = if (currentPreview.config.generationSource == null) currentAnalysis
+            else RigGenerationSource.prepare(currentAnalysis, currentPreview.config).geometry
+        // Only a rebuilt or newly created mesh needs the frames; a plain repaint keeps every mesh.
+        val rigContext by lazy { RigBuilder.rigContext(geometryAnalysis, currentPreview.config, pipeline.meshCache) }
 
         // 2. Identify target Drawable, ClassifiedLayer, and SourceLayer
         val targetLid = layerId
@@ -126,25 +166,9 @@ internal object RasterPaintCommit {
             it.id.raw == targetLid || currentPreview.rig.layerIdByDrawableId[it.id.raw] == targetLid
         }
         val targetClassified = classifiedLayerFor(currentPreview, currentAnalysis, targetLid)
-        val targetSourceLayerId = targetClassified?.source?.id?.raw
-            ?: targetLid.substringBefore(':').substringBeforeLast('-')
         val oldBounds = sourceLayerFor(currentPreview, currentAnalysis, targetLid)?.bounds ?: newBounds
 
-        // 3. Update Source Art and Classified Layers
-        val updatedSrcLayers = currentAnalysis.source.layers.map { sl ->
-            if (sl.id.raw == targetSourceLayerId || sl.id.raw == targetLid || sl.id.raw == targetClassified?.source?.id?.raw) {
-                val base = if (sl is WorkspaceSourceLayer) sl else WorkspaceSourceLayer.copyOf(sl, sl.order) as WorkspaceSourceLayer
-                base.copy(bounds = newBounds, raster = newRaster)
-            } else {
-                if (sl is WorkspaceSourceLayer) sl else WorkspaceSourceLayer.copyOf(sl, sl.order)
-            }
-        }
-        val updatedSourceArt = WorkspaceSourceArt(
-            widthPx = currentAnalysis.source.widthPx,
-            heightPx = currentAnalysis.source.heightPx,
-            layers = updatedSrcLayers,
-            groups = currentAnalysis.source.groups,
-        )
+        // 3. Update Classified Layers
 
         val updatedClassifiedLayers = currentAnalysis.layers.map { cl ->
             checkpoint()
@@ -182,12 +206,13 @@ internal object RasterPaintCommit {
                 }
             },
         )
-        val newAtlas = AtlasPacker.pack(
+        val newAtlas = AtlasLayout.pack(
             effectiveAnalysis.layers,
             currentPreview.config.atlasSize,
             currentPreview.config.texturePadding,
             currentPreview.config.textureUpscale,
             ProgressListener { stage, fraction -> checkpoint(); progress.update(stage, 0.15 + 0.35 * fraction) },
+            currentPreview.atlas,
         )
         progress.update("Preparing painted mesh", 0.55)
         val oldAtlas = currentPreview.atlas
@@ -460,13 +485,15 @@ internal object RasterPaintCommit {
 
         progress.update("Preparing painted runtime", 0.85)
         checkpoint()
-        val (runtimeBundle, _) = pipeline.buildRuntimeBundle(
+        // A caller that only reads the candidate's rig and source - the document commit, whose rebuild compiles
+        // its own bundle - skips this one; the result then carries the previous bundle.
+        val runtimeBundle = if (!runtimeBundle) currentPreview.runtimeBundle else pipeline.buildRuntimeBundle(
             "psd2live-preview",
             effectiveAnalysis,
             newAtlas,
             updatedRig,
             currentPreview.config,
-        )
+        ).first
 
         val committedConfig = if (rebuild && targetDrawable != null) {
             val rebuiltMesh = updatedRig.puppet.drawables

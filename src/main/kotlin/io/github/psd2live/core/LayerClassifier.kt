@@ -114,18 +114,29 @@ object LayerClassifier {
 			else -> Side.RIGHT
 		}
 
-	fun classify(layer: SourceLayer, alphaThreshold: Int): ClassifiedLayer {
-		val rgba = layer.raster.rgba
-		var minX = layer.raster.width
-		var minY = layer.raster.height
+	/** A raster's opaque box, pixel count and coordinate sums at one threshold - all [classify] reads of its pixels. */
+	private class AlphaStats(val width: Int, val threshold: Int, val minX: Int, val minY: Int, val maxX: Int, val maxY: Int,
+	                         val count: Int, val sumX: Long, val sumY: Long)
+
+	/**
+	 * Stats by raster array. Rasters keep their identity across rebuilds - only a painted or replaced layer gets
+	 * a new one - so every rebuild after a paint scans just that layer.
+	 */
+	private val alphaStats = java.util.Collections.synchronizedMap(java.util.WeakHashMap<ByteArray, AlphaStats>())
+
+	private fun alphaStats(raster: org.umamo.format.art.LayerRaster, alphaThreshold: Int): AlphaStats {
+		alphaStats[raster.rgba]?.takeIf { it.width == raster.width && it.threshold == alphaThreshold }?.let { return it }
+		val rgba = raster.rgba
+		var minX = raster.width
+		var minY = raster.height
 		var maxX = -1
 		var maxY = -1
 		var count = 0
 		var sumX = 0L
 		var sumY = 0L
-		for (y in 0 until layer.raster.height) {
-			for (x in 0 until layer.raster.width) {
-				if ((rgba[(y * layer.raster.width + x) * 4 + 3].toInt() and 0xff) < alphaThreshold) continue
+		for (y in 0 until raster.height) {
+			for (x in 0 until raster.width) {
+				if ((rgba[(y * raster.width + x) * 4 + 3].toInt() and 0xff) < alphaThreshold) continue
 				minX = minOf(minX, x)
 				minY = minOf(minY, y)
 				maxX = maxOf(maxX, x)
@@ -135,6 +146,13 @@ object LayerClassifier {
 				sumY += y
 			}
 		}
+		return AlphaStats(raster.width, alphaThreshold, minX, minY, maxX, maxY, count, sumX, sumY).also { alphaStats[rgba] = it }
+	}
+
+	fun classify(layer: SourceLayer, alphaThreshold: Int): ClassifiedLayer {
+		val stats = alphaStats(layer.raster, alphaThreshold)
+		val minX = stats.minX; val minY = stats.minY; val maxX = stats.maxX; val maxY = stats.maxY
+		val count = stats.count; val sumX = stats.sumX; val sumY = stats.sumY
 		val bounds = if (count == 0) {
 			Bounds(
 				layer.bounds.left.toFloat(),

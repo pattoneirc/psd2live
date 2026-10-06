@@ -45,20 +45,26 @@ class PSD2LivePipeline {
 	fun buildPreview(psd: Path, config: PipelineConfig = PipelineConfig()): RigPreviewModel =
 		buildPreview(inspect(psd, config), config)
 
+	/**
+	 * The preview of [source] under [config]. [previousAtlas] - the atlas of the model a commit starts from - only
+	 * lends its unchanged pages and preview PNG strips ([AtlasLayout]); the layout and pixels are the same without it.
+	 */
 	fun buildPreview(
 		source: SourceArt,
 		config: PipelineConfig = PipelineConfig(),
 		progress: ProgressListener = ProgressListener { _, _ -> },
+		previousAtlas: PackedAtlas? = null,
 	): RigPreviewModel = buildPreview(if (config.rigEdits.importedCmo3 != null) Cmo3ModelImport.analysis(source, config)
-		else RigGenerationSource.analyze(source, config), config, progress)
+		else RigGenerationSource.analyze(source, config), config, progress, previousAtlas)
 
 	fun buildPreview(
 		analysis: PipelineAnalysis,
 		config: PipelineConfig = PipelineConfig(),
 		progress: ProgressListener = ProgressListener { _, _ -> },
+		previousAtlas: PackedAtlas? = null,
 	): RigPreviewModel {
         if (RigLayerDeletion.deferred(config)) {
-            return RigLayerDeletion.preview(buildPreview(analysis.source, RigLayerDeletion.generationConfig(config), progress), config)
+            return RigLayerDeletion.preview(buildPreview(analysis.source, RigLayerDeletion.generationConfig(config), progress, previousAtlas), config)
         }
         if (config.rigEdits.importedCmo3 != null) {
             val importedAnalysis = Cmo3ModelImport.analysis(analysis.source, config)
@@ -67,7 +73,7 @@ class PSD2LivePipeline {
             val bundle = buildRuntimeBundle("psd2live-preview", importedAnalysis, atlas, rig, config).first
             return RigPreviewModel(importedAnalysis, atlas, rig, config, bundle, baseRig)
         }
-        val (effectiveAnalysis, atlas, baseRig) = generatedBase(analysis, config, progress)
+        val (effectiveAnalysis, atlas, baseRig) = generatedBase(analysis, config, progress, previousAtlas)
 		val rig = baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides)
 		val runtimeBundle = buildRuntimeBundle("psd2live-preview", effectiveAnalysis, atlas, rig, config).first
 		return RigPreviewModel(effectiveAnalysis, atlas, rig, config, runtimeBundle, baseRig = baseRig)
@@ -76,7 +82,8 @@ class PSD2LivePipeline {
 	private data class GeneratedBase(val analysis: PipelineAnalysis, val atlas: PackedAtlas, val rig: BuiltRig)
 
 	/** Preview, path normalization and export must use the same saved generation input. */
-	private fun generatedBase(input: PipelineAnalysis, config: PipelineConfig, progress: ProgressListener): GeneratedBase {
+	private fun generatedBase(input: PipelineAnalysis, config: PipelineConfig, progress: ProgressListener,
+	                          previousAtlas: PackedAtlas? = null): GeneratedBase {
 		val baselineConfig = RigGenerationBaseline.restore(MeshGenerationBaseline.restore(config))
 		val analyses = RigGenerationSource.prepare(input, baselineConfig, config)
 		val createdLayers = config.rigEdits.authoringJournal.filter { it["op"]?.jsonPrimitive?.contentOrNull == RasterMeshCreation.OP }
@@ -84,16 +91,42 @@ class PSD2LivePipeline {
 		createdLayers += SourcePartitionJournal.commands(config.rigEdits).flatMap(SourcePartitionJournal::pieces)
 			.map { it.getValue("layer_id").jsonPrimitive.content }
 		val generationConfig = baselineConfig.copy(parentOverrides = config.parentOverrides - createdLayers)
-		val atlas = AtlasPacker.pack(analyses.textures.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
+		val atlas = AtlasLayout.pack(analyses.textures.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress, previousAtlas)
 		if (config.generationSource == null) return GeneratedBase(analyses.textures, atlas,
 			withoutCreatedMeshes(RigBuilder.build(analyses.geometry, atlas, generationConfig, meshCache), config))
 		val geometry = generatedGeometry.getOrPut(analyses.geometry.source, generationConfig, baselineConfig) {
-			val geometryAtlas = AtlasPacker.pack(analyses.geometry.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
+			val geometryAtlas = AtlasLayout.pack(analyses.geometry.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
 			GeneratedGeometryCache.Entry(geometryAtlas, RigBuilder.build(analyses.geometry, geometryAtlas, generationConfig, meshCache))
 		}
-		return GeneratedBase(analyses.textures, atlas,
-			withoutCreatedMeshes(RigGenerationSource.repack(geometry.rig, analyses.geometry, geometry.atlas, analyses.textures, atlas), config))
+		// The repacked base depends on the cached geometry, the layout and the texture layers' metadata - never
+		// on their pixels - so a repaint that keeps every tile's size and spot gets the very same base instance,
+		// and replay checkpoints keyed by it keep hitting.
+		val key = BoundBaseKey(geometry, atlas.placementByLayerId, atlas.pages.map { it.image.width to it.image.height },
+			analyses.textures.layers.map { layer -> val s = layer.source
+				listOf(s.id.raw, s.name, s.groupPath, s.visible, s.idIsStable, s.bounds, s.raster.width, s.raster.height) },
+			createdIds(config))
+		val rig = synchronized(boundBases) { boundBases[key] } ?: withoutCreatedMeshes(
+			RigGenerationSource.repack(geometry.rig, analyses.geometry, geometry.atlas, analyses.textures, atlas), config)
+			.also { synchronized(boundBases) { boundBases[key] = it } }
+		return GeneratedBase(analyses.textures, atlas, rig)
 	}
+
+	private data class BoundBaseKey(val geometry: GeneratedGeometryCache.Entry, val placements: Map<String, AtlasPlacement>,
+	                                val pages: List<Pair<Int, Int>>, val layers: List<List<Any>>, val created: Set<String>) {
+		// The cached geometry entry counts by identity: the cache hands out the same entry for the same input.
+		override fun equals(other: Any?) = other is BoundBaseKey && geometry === other.geometry && placements == other.placements &&
+			pages == other.pages && layers == other.layers && created == other.created
+		override fun hashCode() = java.util.Objects.hash(System.identityHashCode(geometry), placements, pages, layers, created)
+	}
+
+	private val boundBases = object : LinkedHashMap<BoundBaseKey, BuiltRig>(8, 0.75f, true) {
+		override fun removeEldestEntry(eldest: MutableMap.MutableEntry<BoundBaseKey, BuiltRig>?) = size > 4
+	}
+
+	private fun createdIds(config: PipelineConfig): Set<String> =
+		config.rigEdits.authoringJournal.filter { it["op"]?.jsonPrimitive?.contentOrNull == RasterMeshCreation.OP }
+			.mapTo(HashSet()) { it.getValue("id").jsonPrimitive.content } +
+			SourcePartitionJournal.commands(config.rigEdits).flatMap(SourcePartitionJournal::pieces).map { it.getValue("id").jsonPrimitive.content }
 
     /** Keep the original analysis/parent frames, but let journal creations own their mesh IDs. */
     private fun withoutCreatedMeshes(rig: BuiltRig, config: PipelineConfig): BuiltRig {
@@ -115,7 +148,7 @@ class PSD2LivePipeline {
 		config: PipelineConfig,
 	): RigPreviewModel {
 		val analysis = MouthLipLayers.prepare(CharacterAnalyzer.analyze(source, config), config)
-		val atlas = AtlasPacker.pack(analysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale)
+		val atlas = AtlasLayout.pack(analysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale)
 		val existingIds = current.rig.layerIdByDrawableId.map { (drawableId, layerId) -> layerId to DrawableId(drawableId) }.toMap() +
 			config.rigEdits.splitDrawableIds.mapValues { DrawableId(it.value) }
 		val ids = RigBuilder.assignSplitDrawableIds(analysis, existingIds)
@@ -177,11 +210,11 @@ class PSD2LivePipeline {
             return RigLayerDeletion.preview(rebuilt, config.copy(rigEdits = rebuilt.config.rigEdits))
         }
         if (config.rigEdits.importedCmo3 != null) return buildPreview(current.analysis, config, progress)
-		if (MeshGenerationBaseline.present(config.rigEdits)) return buildPreview(current.analysis.source, config, progress)
+		if (MeshGenerationBaseline.present(config.rigEdits)) return buildPreview(current.analysis.source, config, progress, current.atlas)
 		if (current.config.copy(parentOverrides = config.parentOverrides, rigEdits = config.rigEdits, drawOrderOverrides = config.drawOrderOverrides,
 				hairSimulationFront = config.hairSimulationFront, hairSimulationBack = config.hairSimulationBack) == config) {
 			val baseRig = if (config.generationSource == null) RigBuilder.build(current.analysis, current.atlas, config, meshCache)
-				else generatedBase(current.analysis, config, progress).rig
+				else generatedBase(current.analysis, config, progress, current.atlas).rig
 			val rig = baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides)
 			val bundle = buildRuntimeBundle("psd2live-preview", current.analysis, current.atlas, rig, config).first
 			return current.copy(rig = rig, config = config, runtimeBundle = bundle, baseRig = baseRig)
@@ -228,7 +261,7 @@ class PSD2LivePipeline {
 			val customLayers = custom.mapTo(HashSet()) { it.getValue("layer_id").jsonPrimitive.content }
 			val meshConfig = config.copy(parentOverrides = config.parentOverrides - customCreations.map { it.getValue("layer_id").jsonPrimitive.content })
 			val meshAnalysis = MouthLipLayers.prepare(CharacterAnalyzer.analyze(meshInput, meshConfig), meshConfig)
-			val meshAtlas = AtlasPacker.pack(meshAnalysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
+			val meshAtlas = AtlasLayout.pack(meshAnalysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale, progress)
 			val stableIds = RigBuilder.assignSplitDrawableIds(meshAnalysis, current.rig.layerIdByDrawableId
 				.map { (id, layer) -> layer to DrawableId(id) }.toMap())
 			val originalFrames = RigGenerationSource.prepare(current.analysis, current.config).geometry
@@ -261,7 +294,7 @@ class PSD2LivePipeline {
 			if (command["op"]?.jsonPrimitive?.contentOrNull == RasterMeshCreation.OP)
 				refreshedCreations[command["id"]?.jsonPrimitive?.contentOrNull] ?: command else command
 		})
-		val (effectiveAnalysis, atlas, baseRig) = generatedBase(analysis, config, progress)
+		val (effectiveAnalysis, atlas, baseRig) = generatedBase(analysis, config, progress, current.atlas)
 		for (drawableId in rebuiltMeshIds) {
 			val previousVertexCount = current.baseRig.puppet.drawables
 				.firstOrNull { it.id.raw == drawableId }?.mesh?.vertexCount
@@ -463,7 +496,7 @@ class PSD2LivePipeline {
 		Files.createDirectories(outputRoot)
 		val files = mutableListOf<ExportedFile>()
 		val warnings = (analysis.warnings + rig.warnings + neutralRig.warnings + generatedAngleWarnings + generatedWarpWarnings).toMutableList()
-		val (runtimeBundle, runtimeReport) = buildRuntimeBundle(baseName, analysis, atlas, rig, config, validate = true)
+		val (runtimeBundle, runtimeReport) = buildRuntimeBundle(baseName, analysis, atlas, rig, config, validate = true, preview = false)
 
 		if (config.exportMoc3) {
 			for (file in runtimeBundle.assets) files += writeContained(outputRoot, file.path, file.bytes)
@@ -509,7 +542,9 @@ class PSD2LivePipeline {
 	/**
 	 * The moc3 runtime bundle of [rig]. [validate] reads the manifest and every sidecar back: files written for
 	 * the user always are, while the editor's preview bundles - the same compile, rebuilt on every edit and only
-	 * loaded by the preview - skip it unless [validatesPreviewBundles].
+	 * loaded by the preview - skip it unless [validatesPreviewBundles]. A [preview] bundle carries the pages'
+	 * strip-encoded PNGs ([AtlasPage.previewPng]), which re-encode only changed rows; files written for the user
+	 * carry the canonical encoding.
 	 */
 	internal fun buildRuntimeBundle(
 		baseName: String,
@@ -518,8 +553,9 @@ class PSD2LivePipeline {
 		rig: BuiltRig,
 		config: PipelineConfig,
 		validate: Boolean = validatesPreviewBundles(),
+		preview: Boolean = true,
 	): Pair<CubismRuntimeBundle, org.umamo.interop.ExportReport> {
-		val ir = RigIrCompiler.compile(analysis, atlas, rig, config)
+		val ir = RigIrCompiler.compile(analysis, if (preview) atlas.forPreview() else atlas, rig, config)
 		val bundle = io.github.psd2live.targets.cubism.Moc3Target.bundle(ir, moc3ExportOptions(baseName, config))
 		if (validate) validateBundle(bundle)
 		val manifest = bundle.files.single { it.name.endsWith(".model3.json") }.name

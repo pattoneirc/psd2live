@@ -365,10 +365,13 @@ internal class CommitBaseline(private val sample: Sample, private val out: File)
 		lateinit var analyses: RigGenerationSource.Analyses
 		stages["analysis prepare (geometry/texture inputs)"] = mean(2) { analyses = RigGenerationSource.prepare(analysis, baseline, config) }
 		lateinit var atlas: PackedAtlas
-		stages["atlas pack (incl. PNG)"] = mean(2) { atlas = AtlasPacker.pack(analyses.textures.layers, config.atlasSize, config.texturePadding, config.textureUpscale) }
-		stages["  of which PNG encode"] = mean(2) { atlas.pages.forEach { ImageIO.write(it.image, "png", ByteArrayOutputStream()) } }
+		stages["atlas layout (page recipe cache warm)"] = mean(2) { atlas = AtlasLayout.pack(analyses.textures.layers, config.atlasSize, config.texturePadding, config.textureUpscale) }
+		stages["  preview PNG strips, every page from scratch"] = mean(2) {
+			atlas.pages.forEach { AtlasPagePng.assemble(it.image.width, it.image.height, AtlasPagePng.strips(it.image, null, null)) }
+		}
+		stages["  canonical PNG (exports only)"] = mean(2) { atlas.pages.forEach { ImageIO.write(it.image, "png", ByteArrayOutputStream()) } }
 		val geometryAtlas = if (config.generationSource == null) atlas
-			else AtlasPacker.pack(analyses.geometry.layers, config.atlasSize, config.texturePadding, config.textureUpscale)
+			else AtlasLayout.pack(analyses.geometry.layers, config.atlasSize, config.texturePadding, config.textureUpscale)
 		val generation = baseline.copy(parentOverrides = config.parentOverrides)
 		val plain = generation.copy(rigEdits = generation.rigEdits.copy(skeleton = null))
 		val noSkeleton = mean(2) { RigBuilder.build(analyses.geometry, geometryAtlas, plain, probe.meshCache) }

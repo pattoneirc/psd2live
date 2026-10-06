@@ -256,7 +256,7 @@ internal object Cmo3ModelImport {
                     !current.raster.rgba.contentEquals(old.raster.rgba)
             }) }
             if (analysis.layers.isEmpty()) return doc.atlas to rig
-            val atlas = AtlasPacker.pack(analysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale)
+            val atlas = AtlasLayout.pack(analysis.layers, config.atlasSize, config.texturePadding, config.textureUpscale)
             val packedLayers = analysis.layers.associateBy { it.source.id.raw }
             val offset = if (normalizeAllTextures) 0 else doc.atlas.pages.size
             val pages = doc.pages.toMutableMap()

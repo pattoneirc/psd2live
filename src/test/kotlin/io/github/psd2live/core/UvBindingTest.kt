@@ -14,8 +14,8 @@ class UvBindingTest {
 	@Test fun repackingLeavesTheUnboundRigAndMovesOnlyTheBoundUvs() {
 		val preview = PSD2LivePipeline().buildPreview(Path.of("examples/tml/psd-input/tml.psd"))
 		val analysis = preview.analysis
-		val small = AtlasPacker.pack(analysis.layers, 1024, 2)
-		val large = AtlasPacker.pack(analysis.layers, 4096, 9)
+		val small = AtlasLayout.pack(analysis.layers, 1024, 2)
+		val large = AtlasLayout.pack(analysis.layers, 4096, 9)
 		assertNotEquals(small.placementByLayerId, large.placementByLayerId)
 		assertNotEquals(small.pages.size, large.pages.size)
 
