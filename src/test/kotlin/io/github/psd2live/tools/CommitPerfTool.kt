@@ -19,6 +19,7 @@ import kotlin.test.Test
  *
  * PSD2LIVE_TOOLS=1 ./gradlew test --tests '*CommitPerfTool'
  * PSD2LIVE_SAMPLE picks the PSD (tml by default). Writes build/tools/commit-perf/report.txt.
+ * [baseline] times each stage of the commit paths across scenarios into baseline.json and baseline.md.
  */
 class CommitPerfTool {
 	private fun ms(start: Long) = (System.nanoTime() - start) / 1_000_000.0
@@ -66,6 +67,16 @@ class CommitPerfTool {
 		}
 		out.resolve("report.txt").writeText(report.toString())
 		println(report)
+	}
+
+	/**
+	 * The per-stage baseline: a rig with a skeleton, two swings and a baked simulation, then geometry, paint,
+	 * image-replace and unrelated topology commits and a journal grown to 50 and 200 geometry entries.
+	 * Writes baseline.json (machine-readable) and baseline.md. The native preview reload is not measured.
+	 */
+	@Test fun baseline() {
+		requireTools()
+		CommitBaseline(Sample.fromEnvironment(), output("commit-perf")).run()
 	}
 
 	/** The editor's own path: view model, desktop adapter, projection and persistence, with EDT stalls. */
