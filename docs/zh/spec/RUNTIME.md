@@ -13,7 +13,9 @@
 | 网页播放器 | `:targets:web`（导出目标 `web`：页面、`p2l.js`、运行时的 WebAssembly 构建） | MIT |
 | Godot 4 节点 `P2LCharacter` | `runtime/godot/`（GDExtension，godot-rust，Godot 4.3+），演示工程 `runtime/godot/demo/` | MIT |
 
-构建：在 `runtime/` 运行 `cargo build --release`，库位于 `runtime/target/release/`（Windows 为 `p2l_runtime.dll`）。`P2lRuntime.locate()` 依次查找系统属性 `psd2live.runtime.library`、环境变量 `PSD2LIVE_RUNTIME`（文件或目录）、系统属性 `psd2live.runtime.dir` 和 `java.library.path`。
+构建：在 `runtime/` 运行 `cargo build --release`，库位于 `runtime/target/release/`（Windows 为 `p2l_runtime.dll`）。Gradle 的 `buildRuntime` 在有 cargo 时自动构建：`./gradlew run` 使用它，打包时随应用资源分发；没有 cargo 时跳过，应用回退到编辑器求值器。`P2lRuntime.locate()` 依次查找系统属性 `psd2live.runtime.library`、环境变量 `PSD2LIVE_RUNTIME`（文件或目录）、系统属性 `psd2live.runtime.dir`、打包应用的资源目录和 `java.library.path`。
+
+编辑器的导出烘焙（Spine、DragonBones、glTF）在运行时库可用时经 `NativeGeometryEvaluator` 求值，否则使用引擎求值器；两者逐姿势一致（`NativeRuntimeConformanceTest`）。
 
 ## `.p2lrt` 格式
 

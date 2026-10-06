@@ -13,7 +13,8 @@ import java.io.File
 /**
  * The PSD2Live runtime (runtime/, a native library) loaded through JNA. [locate] finds it from the
  * `psd2live.runtime.library` system property, the `PSD2LIVE_RUNTIME` environment variable (a file or a
- * directory), the `psd2live.runtime.dir` system property, or the library path.
+ * directory), the `psd2live.runtime.dir` system property, a packaged app's resources directory, or the library
+ * path.
  */
 public class P2lRuntime private constructor(private val native: Bindings) {
 	@Suppress("FunctionName", "LocalVariableName")
@@ -114,6 +115,8 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 				return if (f.isDirectory) File(f, name).takeIf(File::isFile) else f.takeIf(File::isFile)
 			}
 			System.getProperty("psd2live.runtime.dir")?.let { File(it, name) }?.takeIf(File::isFile)?.let { return it }
+			// A packaged app keeps it among its resources.
+			System.getProperty("compose.application.resources.dir")?.let { File(it, name) }?.takeIf(File::isFile)?.let { return it }
 			return System.getProperty("java.library.path").orEmpty().split(File.pathSeparator).filter { it.isNotBlank() }
 				.map { File(it, name) }.firstOrNull(File::isFile)
 		}

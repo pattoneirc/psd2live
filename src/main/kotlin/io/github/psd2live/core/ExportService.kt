@@ -13,19 +13,30 @@ import io.github.psd2live.targets.raster.RasterTargets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import io.github.psd2live.format.compile.GeometryEvaluator
+import io.github.psd2live.format.eval.NativeGeometryEvaluator
+import io.github.psd2live.format.eval.P2lRuntime
 
 /** Every export target this build offers, compiled from one rig through the neutral IR. */
 internal object ExportService {
+	/**
+	 * Geometry for targets that bake deformation: the Rust runtime when its library is present (faster, and
+	 * pose for pose the editor's evaluation, see NativeRuntimeConformanceTest), else the editor's evaluator.
+	 */
+	val geometry: GeometryEvaluator by lazy {
+		runCatching { P2lRuntime.load()?.let(::NativeGeometryEvaluator) }.getOrNull() ?: IrGeometryEvaluator
+	}
+
 	fun registry(config: PipelineConfig): ExportRegistry = ExportRegistry(listOf(
 		Moc3Target,
 		Cmo3Target { BezierWarp.configureEditor(it, config.rigEdits) },
 		io.github.psd2live.targets.cubism.VTubeStudioTarget,
 		io.github.psd2live.targets.psd.PosedPsdTarget(IrFrameRenderer),
-		io.github.psd2live.targets.spine.SpineTarget(IrGeometryEvaluator),
-		io.github.psd2live.targets.dragonbones.DragonBonesTarget(IrGeometryEvaluator),
+		io.github.psd2live.targets.spine.SpineTarget(geometry),
+		io.github.psd2live.targets.dragonbones.DragonBonesTarget(geometry),
 		io.github.psd2live.targets.runtime.P2lrtTarget,
 		io.github.psd2live.targets.web.WebTarget,
-		io.github.psd2live.targets.gltf.GltfTarget(IrGeometryEvaluator),
+		io.github.psd2live.targets.gltf.GltfTarget(geometry),
 	) + RasterTargets(IrFrameRenderer).all)
 
 	/** Built-in options for [target] from the document's export settings; explicit [settings] win. */

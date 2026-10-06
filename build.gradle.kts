@@ -193,10 +193,35 @@ tasks.named<Jar>("jar") {
 	}
 }
 
-// License texts ship inside every package, under the app's resources directory.
+// The Rust runtime (runtime/), built when cargo is available: exports bake through it and packages ship
+// it; without it the app falls back to the editor's evaluator.
+val runtimeLibrary = file("runtime/target/release/" + System.mapLibraryName("p2l_runtime"))
+val cargoAvailable: Boolean = runCatching { ProcessBuilder("cargo", "--version").start().waitFor() == 0 }.getOrDefault(false)
+val buildRuntime = tasks.register<Exec>("buildRuntime") {
+	group = "build"
+	description = "Builds the Rust runtime library with cargo (skipped without cargo)."
+	onlyIf { cargoAvailable }
+	workingDir = file("runtime")
+	commandLine("cargo", "build", "--release", "--lib")
+	inputs.dir("runtime/src")
+	inputs.file("runtime/Cargo.toml")
+	outputs.file(runtimeLibrary)
+}
+
+// Compose registers `run` once the project is evaluated.
+afterEvaluate {
+	tasks.named<JavaExec>("run") {
+		dependsOn(buildRuntime)
+		systemProperty("psd2live.runtime.dir", runtimeLibrary.parentFile.absolutePath)
+	}
+}
+
+// License texts ship inside every package, under the app's resources directory, beside the runtime.
 tasks.withType<Sync>().matching { it.name == "prepareAppResources" }.configureEach {
+	dependsOn(buildRuntime)
 	from("LICENSE", "THIRD_PARTY_NOTICES.md")
 	from("licenses") { into("licenses") }
+	from(runtimeLibrary.parentFile) { include(runtimeLibrary.name) }
 }
 
 compose.desktop {
