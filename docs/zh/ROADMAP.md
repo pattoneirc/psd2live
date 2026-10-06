@@ -33,7 +33,8 @@ PSD 自动建模、桌面四种编辑模式、绘画会话、工程与分支历�
 - [x] 视频与动图：MP4、WebM（带透明）、ProRes 4444、APNG、动态 WebP，经系统或指定的 ffmpeg 编码。
 - [x] VTube Studio：moc3 模型包与 `.vtube.json`（标准参数的面部跟踪映射、动作热键）；尚未在 VTube Studio 中实测加载。
 - [x] glTF 2.0（`.glb`）：参数关键点烘焙为变形目标，动作片段为权重动画；经 Khronos 校验器与 Godot 验证。
-- [ ] DragonBones 等目标。
+- [x] DragonBones 5.5（JSON + 图集）：与 Spine 相同的参数动画与片段烘焙，经官方 DragonBones 5.7 运行时核心验证。
+- [ ] DragonBones：骨架模型的整身片段受运行时每动画数据上限影响，可改为参数动画叠加播放或拆分片段。
 - [x] `.p2lrt` 与 Rust 运行时（MIT）：变形、物理、动作片段与 C ABI，规则由黑盒探测编辑器得到，与编辑器求值器逐姿势一致；JVM 绑定 `:format-eval`（见[运行时](spec/RUNTIME.md)）。
 - [x] 运行时程序化行为（眨眼、呼吸、视线、口型）与 Godot 4 节点 `P2LCharacter`（GDExtension）。
 - [x] 网页播放器（`web`）：运行时的 WebAssembly 构建与 WebGL 播放器，支持遮罩、叠加/乘算与动作、视线、口型。

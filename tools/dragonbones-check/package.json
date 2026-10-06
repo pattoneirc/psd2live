@@ -1,0 +1,9 @@
+{
+  "name": "dragonbones-check",
+  "private": true,
+  "description": "Development check: plays DragonBones exports with the official DragonBones 5.7 runtime core (no renderer).",
+  "type": "module",
+  "dependencies": {
+    "pixi-dragonbones": "5.7.0-1"
+  }
+}

@@ -10,6 +10,7 @@
 | `:format-compile` | 导出框架：`ExportTarget`、`CapabilityProfile`、`LossEntry`、`ExportReport`、`Compiler`；降级步骤：能力扫描、按参数烘焙与交叉项误差测量（`ParameterBake`）、关键帧精简（`KeyReduction`）、动作片段采样；宿主接口 `FrameRenderer`、`GeometryEvaluator` | MIT |
 | `:targets:raster` | `png-sequence`、`sprite-sheet`、`gif`，以及经 ffmpeg 编码的 `mp4`、`webm`、`mov`、`apng`、`webp` | MIT |
 | `:targets:spine` | `spine`：Spine 4.2 骨骼 JSON + 图集，由宿主提供的几何求值器烘焙变形 | MIT |
+| `:targets:dragonbones` | `dragonbones`：DragonBones 5.5 骨骼 JSON + 图集，由宿主提供的几何求值器烘焙变形 | MIT |
 | `:targets:runtime` | `p2lrt`：PSD2Live 运行时模型，见[运行时](RUNTIME.md) | MIT |
 | `:format-eval` | Rust 运行时的 JVM 绑定（JNA），可作为几何求值器 | MIT |
 | `:targets:gltf` | `gltf`：glTF 2.0 二进制（`.glb`），变形按参数关键点烘焙为变形目标，由宿主提供的几何求值器采样 | MIT |
@@ -34,6 +35,7 @@ MIT 模块不依赖任何 GPL 模块，由 Gradle 依赖关系在编译期保证
 | --- | --- | --- | --- |
 | `moc3` | 结构化绑定 | `.moc3`、model3、physics3、motion3、cdi3、贴图 | 按目标运行时版本剥离不支持的功能 |
 | `cmo3` | 结构化绑定 | Cubism Editor 工程 | 生成器意图不保留；动作片段不写入 |
+| `dragonbones` | 结构化绑定 | `_ske.json`、每页 `_tex_<i>.json` 与贴图 | 与 Spine 相同的参数动画与片段烘焙；关键点取整到帧；透明度以整百分比记录；运行时以 16 位偏移寻址每个动画的变形数据，超出时按更大容差精简并报告（骨架模型的整身片段误差较大）；遮罩、屏幕色、物理未写入 |
 | `vtube-studio` | 结构化绑定 | `moc3` 的全部文件 + `.vtube.json` | 同 `moc3`；面部跟踪只映射标准参数（头、身体、眼、视线、眉、嘴、呼吸），每个动作片段一个热键；其余设置由 VTube Studio 取默认值 |
 | `spine` | 结构化绑定 | 骨骼 JSON、`.atlas`、贴图页 | 每个参数成为一段 1 秒动画（时间即参数归一化值），交叉项近似并报告误差；动作片段按帧采样后精简关键帧；无 Warp、混合形、Glue（已烘焙）；物理、遮罩、屏幕色未写入 |
 | `p2lrt` | 结构化绑定 | `.p2lrt`（PSD2Live 运行时） | 编辑器附带数据（来源图层、图块、编辑路径）不写入；渲染（遮罩、混合模式）由宿主完成 |
@@ -70,6 +72,10 @@ Spine 有骨骼没有参数。导出用一根根骨骼承载全部网格（无�
 - 每个动作片段一段动画 `clip/<名称>`，按 `clip_fps` 采样，再用 `KeyReduction` 去掉线性插值可重建（容差 `key_tolerance` 像素）的关键帧，偏移保留到千分之一像素。示例工程 13 段动作的 JSON 由 49 MB 降到 13 MB。
 - 图集为每页一个覆盖整页的区域 `page<i>`，网格 UV 直接引用该页。
 - 验证：单元测试按 Spine 运行时的规则（无权重 deform 键为相对设置姿势的增量、按 offset 写入、线性插值；绘制顺序按偏移算法重排）重建姿势并与求值器比较。未使用官方 Spine 运行时（其许可证要求持有 Spine 许可），也未在 Spine Editor 中打开验证。
+
+## DragonBones
+
+与 Spine 相同的烘焙方式：一根根骨骼，每个可见网格为无权重网格显示（原点为画布底边中点，y 向下）；每个参数一段 1 秒的动画 `param/<参数 ID>`，变形（ffd）帧位于参数关键点取整后的帧上，宿主可按参数值定位并分层叠加；每个片段按帧采样后精简。帧间插值显式写 `tweenEasing: 0`（缺省为阶梯）。DragonBones 运行时用 16 位偏移寻址每个动画的变形浮点数据（每帧存满该网格全部顶点），超出约 3.2 万个浮点数时按倍增再二分的容差精简关键帧，并在损失报告中写出所用容差。验证：`DragonBonesFidelityTool`（`PSD2LIVE_TOOLS=1`，需要 node）用 `tools/dragonbones-check`（官方 DragonBones 5.7 运行时核心，无渲染）播放导出：无骨架样例的单参数姿势在关键帧上与编辑器误差小于 0.25 像素；带骨架时受上述上限影响的动画误差不超过报告的容差，片段误差见报告。
 
 ## glTF
 

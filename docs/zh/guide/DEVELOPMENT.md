@@ -102,6 +102,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `ModelProfileTool.sample` | 生成模型（无骨架和自动骨架）的分段运动剖面、身体图层与自动骨骼 | `model-profile/<示例>.txt` |
 | `SimBakeBenchmark` | 在 `tml` 后发上按几组设置烘焙模拟，在未参与拟合的动作上对比模拟与导出结果，见[模拟与烘焙](SIMULATION.md) | 标准输出 |
 | `CanvasPerfTool` | 在 Xvfb 下打开真实窗口，对编辑画布依次做静止、悬停、滚轮缩放、中键平移、变形模式拖动脸部全部点，GPU 渲染与软件渲染各一轮，报告帧间隔、界面线程延迟与界面线程热点；需 `xvfb-run -a -s "-screen 0 1920x1080x24"` | `canvas-perf/report.txt`、各阶段截图与 `.jfr` |
+| `DragonBonesFidelityTool` | 把 `tml`、`ds`（无骨架和自动骨架）导出为 DragonBones，用 `tools/dragonbones-check`（官方 DragonBones 5.7 运行时核心，需要 node）播放：参数动画在每个关键帧上与编辑器求值器比较（误差不超过导出报告的容差），并测量片段误差 | `dragonbones-fidelity/report.txt` |
 | `RuntimeConformanceTool` | Rust 运行时的参考数据：随机模型（Warp、旋转、嵌套、稀疏网格、混合形、Glue、通道、部件）、样例与本地工程在随机姿势下的编辑器求值结果，以及随机摆锤组和样例物理的逐帧轨迹；用 `runtime/` 中的 `p2lrt-conformance` 比较 | `runtime-conformance/<用例>/`、`runtime-physics/<用例>/` |
 | `WarpProbeTool` | 编辑器求值器的黑盒探测：Warp 映射（格子内外）、Warp 下的旋转框架、翻转、混合形、稀疏网格，供运行时独立实现对照 | `warp-probe/*.tsv` |
 | `SwingCostTool` | tml 上两个摆动的生成耗时、朴素哈希其输入的耗时与全部编辑重放耗时，用于判断生成器是否值得接入生成缓存 | `swing-cost/report.txt` |

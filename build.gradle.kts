@@ -55,6 +55,7 @@ dependencies {
 	implementation(project(":format-eval"))
 	implementation(project(":targets:web"))
 	implementation(project(":targets:gltf"))
+	implementation(project(":targets:dragonbones"))
 
 	// LWJGL (OpenGL rendering pipeline)
 	val lwjglNatives = "natives-$hostOs" + if (hostArm) "-arm64" else ""

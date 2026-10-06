@@ -374,8 +374,8 @@ internal fun ExportActionSection(
 	}
 }
 
-/** The neutral export targets beyond Cubism: Spine, VTube Studio, the PSD2Live runtime rig and web player, glTF, a pose as layered PSD, image sequences, sprite sheets and GIF. */
-private val otherFormatTargets = listOf("spine", "vtube-studio", "p2lrt", "web", "gltf", "psd-pose", "png-sequence", "sprite-sheet", "gif", "mp4", "webm", "mov", "apng", "webp")
+/** The neutral export targets beyond Cubism: Spine, DragonBones, VTube Studio, the PSD2Live runtime rig and web player, glTF, a pose as layered PSD, image sequences, sprite sheets and GIF. */
+private val otherFormatTargets = listOf("spine", "dragonbones", "vtube-studio", "p2lrt", "web", "gltf", "psd-pose", "png-sequence", "sprite-sheet", "gif", "mp4", "webm", "mov", "apng", "webp")
 private val rasterTargets = setOf("png-sequence", "sprite-sheet", "gif", "mp4", "webm", "mov", "apng", "webp")
 
 @Composable

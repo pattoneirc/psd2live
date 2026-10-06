@@ -22,6 +22,7 @@ internal object ExportService {
 		io.github.psd2live.targets.cubism.VTubeStudioTarget,
 		io.github.psd2live.targets.psd.PosedPsdTarget(IrFrameRenderer),
 		io.github.psd2live.targets.spine.SpineTarget(IrGeometryEvaluator),
+		io.github.psd2live.targets.dragonbones.DragonBonesTarget(IrGeometryEvaluator),
 		io.github.psd2live.targets.runtime.P2lrtTarget,
 		io.github.psd2live.targets.web.WebTarget,
 		io.github.psd2live.targets.gltf.GltfTarget(IrGeometryEvaluator),
