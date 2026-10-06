@@ -22,7 +22,7 @@ internal object MeshRebuildEdits {
                 "canvas_geometry" -> {
                     val isTargetMesh = command["kind"]?.jsonPrimitive?.content == "mesh" &&
                         command["id"]?.jsonPrimitive?.content == drawableId
-                    val pointsMatch = command["points"]?.jsonArray?.size == vertexCount * 2
+                    val pointsMatch = CanvasGeometryJournal.size(command) == vertexCount * 2
                     val isBaseMove = command["key"]?.jsonObject.isNullOrEmpty()
                     if (isTargetMesh && (meshSettingsChanged || isBaseMove || !pointsMatch)) null else command
                 }

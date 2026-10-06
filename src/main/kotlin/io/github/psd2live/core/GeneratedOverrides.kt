@@ -56,7 +56,7 @@ internal object GeneratedOverrides {
 			val (base, points) = when (kind) {
 				"warp" -> {
 					val cell = warpCell(model, id, key) ?: return@map command
-					cell.form.controlPoints to command.getValue("points").jsonArray.map { it.jsonPrimitive.float }.toFloatArray()
+					cell.form.controlPoints to (runCatching { CanvasGeometryJournal.points(model, command) }.getOrNull() ?: return@map command)
 				}
 				else -> {
 					val cell = meshCell(model, id, key) ?: return@map command

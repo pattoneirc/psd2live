@@ -142,14 +142,14 @@ internal object RigCommandDelta {
     }
 
     /**
-     * `canvas_geometry` carries absolute points, and apply branches on the kind and on whether the
+     * `canvas_geometry` resolves to absolute points, and apply branches on the kind and on whether the
      * coordinate is empty — so the comparison branches the same way rather than comparing the evaluated
      * lattice in every case.
      */
     private fun RigAuthoringJournal.isCanvasGeometryNoOp(model: PuppetModel, command: JsonObject): Boolean {
         val kind = command.text("kind")
         val id = command.text("id")
-        val points = command.getValue("points").jsonArray.map { it.jsonPrimitive.float }.toFloatArray()
+        val points = runCatching { CanvasGeometryJournal.points(model, command) }.getOrNull() ?: return false
         val key = command.coordinate("key")
 
         if (key.isEmpty()) {

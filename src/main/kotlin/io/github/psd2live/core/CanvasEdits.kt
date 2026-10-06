@@ -333,11 +333,12 @@ internal object CanvasEdits {
             }
             "canvas_geometry" -> {
                 val kind = edit.getValue("kind").jsonPrimitive.content
-                val points = edit.getValue("points").jsonArray.map { it.jsonPrimitive.float }.toFloatArray()
-                require(points.isNotEmpty() && points.size % 2 == 0 && points.all(Float::isFinite))
                 val key = edit.getValue("key").jsonObject.mapValues { it.value.jsonPrimitive.float }
                 val pose = edit["pose"]?.jsonObject?.mapValues { it.value.jsonPrimitive.float } ?: key
                 val geometry = RigGeometryTools.geometry(model, kind, id, if (pose.isEmpty()) key else pose)
+                // Version 2 journal entries hold the change from this same geometry (CanvasGeometryJournal).
+                val points = CanvasGeometryJournal.points(edit, geometry.points)
+                require(points.isNotEmpty() && points.size % 2 == 0 && points.all(Float::isFinite))
                 val blendEdit = model.parameters.any { parameter ->
                     parameter.kind == org.umamo.runtime.model.ParameterKind.BLEND_SHAPE &&
                         abs((key[parameter.id.raw] ?: 0f)) >= org.umamo.runtime.eval.EPS_KEY
