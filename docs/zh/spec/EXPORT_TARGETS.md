@@ -7,8 +7,9 @@
 | 模块 | 内容 | 许可证 |
 | --- | --- | --- |
 | `:format-model` | 中立绑定 IR（`RigIR`）：参数、部件、Warp / 旋转变形器、网格、关键形网格、通道、混合形、Glue、绘制树、贴图页与图块、物理组、动作片段、编辑器附带数据 | MIT |
-| `:format-compile` | 导出框架：`ExportTarget`、`CapabilityProfile`、`LossEntry`、`ExportReport`、`Compiler`、能力扫描、动作片段采样、`FrameRenderer` 接口 | MIT |
+| `:format-compile` | 导出框架：`ExportTarget`、`CapabilityProfile`、`LossEntry`、`ExportReport`、`Compiler`；降级步骤：能力扫描、按参数烘焙与交叉项误差测量（`ParameterBake`）、关键帧精简（`KeyReduction`）、动作片段采样；宿主接口 `FrameRenderer`、`GeometryEvaluator` | MIT |
 | `:targets:raster` | `png-sequence`、`sprite-sheet`、`gif` | MIT |
+| `:targets:spine` | `spine`：Spine 4.2 骨骼 JSON + 图集，由宿主提供的几何求值器烘焙变形 | MIT |
 | `:targets:cubism` | `PuppetModel` 与 IR 的双向转换器（`PuppetIr`）、`moc3`、`cmo3`、motion3 / physics3 写出 | GPL-3 |
 | `:targets:psd` | `psd-pose`：指定姿势的分层 PSD | GPL-3 |
 | 根项目 | `RigIrCompiler`（预览模型 → IR）、`IrFrameRenderer`（宿主提供的渲染器）、`ExportService`、CLI 与界面 | GPL-3 |
@@ -29,6 +30,7 @@ MIT 模块不依赖任何 GPL 模块，由 Gradle 依赖关系在编译期保证
 | --- | --- | --- | --- |
 | `moc3` | 结构化绑定 | `.moc3`、model3、physics3、motion3、cdi3、贴图 | 按目标运行时版本剥离不支持的功能 |
 | `cmo3` | 结构化绑定 | Cubism Editor 工程 | 生成器意图不保留；动作片段不写入 |
+| `spine` | 结构化绑定 | 骨骼 JSON、`.atlas`、贴图页 | 每个参数成为一段 1 秒动画（时间即参数归一化值），交叉项近似并报告误差；动作片段按帧采样后精简关键帧；无 Warp、混合形、Glue（已烘焙）；物理、遮罩、屏幕色未写入 |
 | `psd-pose` | 合成/时间轴 | 每个可见网格一层，按静止绘制顺序 | 变形器和参数不保留；按参数变化的绘制顺序取静止值 |
 | `png-sequence` | 光栅 | 编号 PNG 帧 | 结构全部烘焙为像素 |
 | `sprite-sheet` | 光栅 | 网格排列的精灵表 PNG + TexturePacker（hash）JSON | 同上 |
@@ -42,8 +44,18 @@ MIT 模块不依赖任何 GPL 模块，由 Gradle 依赖关系在编译期保证
 | --- | --- |
 | `moc3` | `physics`、`user_data`、`display_info`、`hidden_parts`、`hidden_meshes`、`guide_parts`（布尔）、`pixels_per_unit`（正数）；缺省取工程导出设置 |
 | `cmo3` | `timestamp`（毫秒，默认 0） |
+| `spine` | `clip_fps`（动作采样帧率，默认 15）、`clips`（是否写出动作，默认 true）、`key_tolerance`（关键帧精简容差，像素，默认 0.25）、`sample_pairs` |
 | `psd-pose` | `clip` 与 `time`（秒）按动作片段摆姿势，或 `pose`（`ParamAngleX=20,ParamEyeLOpen=0`，覆盖片段）；`scale`（0.25–2，默认 1） |
 | 光栅类 | `clip`（默认第一个片段，无片段时为静止姿势）、`fps`（默认片段帧率）、`size`（长边像素，默认 1024）、`background`（ARGB 十六进制，默认透明）、`physics`（默认 true） |
+
+## Spine
+
+Spine 有骨骼没有参数。导出用一根根骨骼承载全部网格（无权重网格附件，原点为画布底边中点，y 向上），并：
+
+- 每个参数一段动画 `param/<参数 ID>`，长 1 秒，时间为参数归一化值（最小 0、最大 1），deform 键位于参数的采样点；运行时为每个参数开一个轨道、用叠加混合（`MixBlend.add`）并按参数值设置轨道时间。关键形透明度写成槽位 `rgba`，按参数变化的绘制顺序写成 `drawOrder`。
+- 每个动作片段一段动画 `clip/<名称>`，按 `clip_fps` 采样，再用 `KeyReduction` 去掉线性插值可重建（容差 `key_tolerance` 像素）的关键帧，偏移保留到千分之一像素。示例工程 13 段动作的 JSON 由 49 MB 降到 13 MB。
+- 图集为每页一个覆盖整页的区域 `page<i>`，网格 UV 直接引用该页。
+- 验证：单元测试按 Spine 运行时的规则（无权重 deform 键为相对设置姿势的增量、按 offset 写入、线性插值；绘制顺序按偏移算法重排）重建姿势并与求值器比较。未使用官方 Spine 运行时（其许可证要求持有 Spine 许可），也未在 Spine Editor 中打开验证。
 
 ## 损失报告
 

@@ -374,8 +374,9 @@ internal fun ExportActionSection(
 	}
 }
 
-/** The neutral export targets beyond Cubism: a pose as layered PSD, image sequences, sprite sheets and GIF. */
-private val otherFormatTargets = listOf("psd-pose", "png-sequence", "sprite-sheet", "gif")
+/** The neutral export targets beyond Cubism: Spine, a pose as layered PSD, image sequences, sprite sheets and GIF. */
+private val otherFormatTargets = listOf("spine", "psd-pose", "png-sequence", "sprite-sheet", "gif")
+private val rasterTargets = setOf("png-sequence", "sprite-sheet", "gif")
 
 @Composable
 private fun OtherFormatsSection(state: PSD2LiveState, viewModel: PSD2LiveViewModel) {
@@ -388,7 +389,7 @@ private fun OtherFormatsSection(state: PSD2LiveState, viewModel: PSD2LiveViewMod
 	var size by remember { mutableStateOf(1024.0) }
 	var fps by remember { mutableStateOf(30.0) }
 	val result by viewModel.otherExportResult.collectAsState()
-	val animated = targetId != "psd-pose"
+	val animated = targetId in rasterTargets
 
 	Column(
 		modifier = Modifier.fillMaxWidth()
@@ -402,7 +403,7 @@ private fun OtherFormatsSection(state: PSD2LiveState, viewModel: PSD2LiveViewMod
 			CompactDropdown(items = otherFormatTargets, selectedItem = targetId, onItemSelected = { targetId = it },
 				itemLabel = { tr("export.target.$it") }, modifier = Modifier.weight(1f), enabled = !isBusy, height = 22.dp)
 		}
-		ExportLabeledRow(label = tr("export.other.clip")) {
+		if (targetId != "spine") ExportLabeledRow(label = tr("export.other.clip")) {
 			CompactDropdown(items = clips, selectedItem = clip, onItemSelected = { clip = it },
 				itemLabel = { it?.second ?: tr("export.other.restPose") }, modifier = Modifier.weight(1f), enabled = !isBusy, height = 22.dp)
 		}
@@ -419,7 +420,7 @@ private fun OtherFormatsSection(state: PSD2LiveState, viewModel: PSD2LiveViewMod
 			text = if (isBusy) tr("export.other.running") else tr("export.other.export"),
 			onClick = {
 				viewModel.exportOtherFormat(targetId, buildMap {
-					clip?.let { put("clip", it.first) }
+					if (targetId != "spine") clip?.let { put("clip", it.first) }
 					if (animated) { put("size", size.toInt().toString()); put("fps", fps.toInt().toString()) }
 				})
 			},

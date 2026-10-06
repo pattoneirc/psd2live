@@ -50,6 +50,7 @@ dependencies {
 	implementation(project(":targets:cubism"))
 	implementation(project(":targets:raster"))
 	implementation(project(":targets:psd"))
+	implementation(project(":targets:spine"))
 
 	// LWJGL (OpenGL rendering pipeline)
 	val lwjglNatives = "natives-$hostOs" + if (hostArm) "-arm64" else ""

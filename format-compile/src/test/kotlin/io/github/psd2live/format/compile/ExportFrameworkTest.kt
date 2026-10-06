@@ -80,4 +80,14 @@ class ExportFrameworkTest {
 		assertFailsWith<IllegalArgumentException> { ExportRegistry(listOf(target(), target())) }
 		assertFailsWith<IllegalArgumentException> { ExportRegistry(listOf(target()))["missing"] }
 	}
+
+	@Test fun keyReductionKeepsOnlyKeysInterpolationCannotRebuild() {
+		val times = (0..10).map { it / 10f }
+		// Linear up to 0.5, flat after: the corner at 0.5 is the only interior key needed.
+		val values = times.map { t -> floatArrayOf(if (t <= 0.5f) t * 10f else 5f) }
+		assertEquals(listOf(0, 5, 10), KeyReduction.reduce(times, values, 0.01f))
+		// A larger tolerance drops the corner too.
+		assertEquals(listOf(0, 10), KeyReduction.reduce(times, values, 10f))
+		assertEquals(listOf(0, 1), KeyReduction.reduce(times.take(2), values.take(2), 0.01f))
+	}
 }

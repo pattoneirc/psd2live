@@ -81,7 +81,7 @@ Linux 原生预览不支持无 XWayland 的纯 Wayland、aarch64 和 musl（如 
 | `.model3.json` + `.moc3` + 纹理、物理、动作等 | 运行时模型文件族，需一起交付，从 `.model3.json` 加载 |
 | `.psd2live.json` | 导出诊断报告，不能代替工程 |
 
-导出目标可选 Cubism 3.0 – 5.0（默认 5.0），不支持的功能会按目标版本降级并在报告中提示。导出成功不等于在所有运行时中效果一致，正式交付前请在目标编辑器和运行环境中检查；支持范围见[运行时与导出边界](docs/zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)。此外可经中立绑定 IR 导出分层 PSD 姿势、PNG 序列帧、精灵表和 GIF，每次导出附带损失报告，见[导出目标](docs/zh/spec/EXPORT_TARGETS.md)。
+导出目标可选 Cubism 3.0 – 5.0（默认 5.0），不支持的功能会按目标版本降级并在报告中提示。导出成功不等于在所有运行时中效果一致，正式交付前请在目标编辑器和运行环境中检查；支持范围见[运行时与导出边界](docs/zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)。此外可经中立绑定 IR 导出 Spine 4.2 骨骼、分层 PSD 姿势、PNG 序列帧、精灵表和 GIF，每次导出附带损失报告，见[导出目标](docs/zh/spec/EXPORT_TARGETS.md)。
 
 内置渲染无需任何官方 SDK；[Cubism Native 预览](docs/zh/guide/CUBISM_SDK_SETUP.md)是可选项，用于对照官方运行时的渲染与物理。
 

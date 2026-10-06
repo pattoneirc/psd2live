@@ -151,3 +151,23 @@ public interface FrameSession : AutoCloseable {
 	 */
 	public fun render(parameters: Map<String, Float>, deltaSeconds: Float, frame: FrameSpec, meshes: Set<String>? = null): RasterImage
 }
+
+/** Evaluated geometry of a rig at one pose: mesh vertices in canvas pixels (y down), opacity and draw order. */
+public class PoseGeometry(
+	public val positions: Map<String, FloatArray>,
+	public val opacity: Map<String, Float>,
+	public val drawOrder: Map<String, Float>,
+)
+
+/**
+ * Evaluates an IR rig's geometry at parameter poses. The host supplies the implementation, so targets that
+ * bake deformation into their own representation stay free of any particular evaluator.
+ */
+public interface GeometryEvaluator {
+	public fun open(ir: RigIR): GeometrySession
+}
+
+public interface GeometrySession : AutoCloseable {
+	/** The rig at [parameters]; parameters left out sit at their defaults. */
+	public fun evaluate(parameters: Map<String, Float>): PoseGeometry
+}
