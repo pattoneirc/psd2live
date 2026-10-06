@@ -292,11 +292,13 @@ data class RigEditOverlay(
 				val (deferred, early) = edits.partition(::generatedPanelEdit)
 				deferredJournalEdits += deferred
 				model = RigStructureEdits.replay(model, early)
-			} else {
+			} else if (command["op"]?.jsonPrimitive?.contentOrNull != GeneratedOverrides.OP) {
 				model = RigAuthoringJournal.replay(model, command)
 			}
 		}
 		model = io.github.psd2live.core.sim.SimGenerator.apply(SwingGenerator.apply(model, swingEdits), simEdits)
+		// Edits of generated keyforms merge with what the generators produce now.
+		model = GeneratedOverrides.applyAll(model, authoringJournal).model
 		return RigStructureEdits.replay(model, generatedPanelEdits + deferredJournalEdits).withParametersSyncedFromTree()
 	}
 

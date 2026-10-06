@@ -99,6 +99,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `MotionSheetTool.idle` | 待機 12 秒のフレーム画像 | `motion-frames/<サンプル>-idle/` |
 | `ModelProfileTool.cmo3` | `.cmo3` のパラメータ、デフォーマツリー（グリッド軸と範囲）、メッシュ、帯ごとの動きのプロファイル、体パラメータでの各メッシュの移動、体 X × 体 Y のシルエット、物理グループ | `model-profile/<名前>.txt`、`.png`、`-physics.txt` |
 | `ModelProfileTool.sample` | 生成モデル（スケルトンなしと自動スケルトン）の帯ごとの動きのプロファイル、体レイヤーと自動ボーン | `model-profile/<サンプル>.txt` |
+| `SwingCostTool` | tml での 2 つのスイングの生成時間、その入力の単純なハッシュ時間、編集全体の再生時間。生成器に生成キャッシュを付ける価値があるかの判断に使う | `swing-cost/report.txt` |
 | `ExportGoldenTool` | `tml` と `ds` の、スケルトンなし・自動スケルトン・作成したモーションの 3 種での全書き出しファイルのダイジェスト（cmo3 は読み戻して moc3 に下げたもの）。リファクタリング前後の書き出しをバイト単位で比較する。`PSD2LIVE_GOLDEN_LABEL` で出力名を指定 | `export-golden/<名前>.txt` |
 | `SimBakeBenchmark` | `tml` の後ろ髪をいくつかの設定で焼き込み、フィットに使わなかった動きでシミュレーションと書き出し結果を比較 | 標準出力 |
 | `CommitPerfTool.profile` / `.desktop` | 1 回の編集コミットにかかる時間。`profile` はアプリケーション層のコマンド境界を通し、段階別（リビジョン、設定のデコード、再構築、ジオメトリ検査）に分けて計測。`desktop` はデスクトップのビューモデルとアダプタを通してメッシュ頂点編集とブラシのストロークを続けてコミットし、コミット時間と UI スレッドの最長停止を報告。`JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` と併用してサンプリング可能 | `commit-perf/report.txt`、`desktop.txt` |

@@ -101,6 +101,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `ModelProfileTool.sample` | 生成模型（无骨架和自动骨架）的分段运动剖面、身体图层与自动骨骼 | `model-profile/<示例>.txt` |
 | `SimBakeBenchmark` | 在 `tml` 后发上按几组设置烘焙模拟，在未参与拟合的动作上对比模拟与导出结果，见[模拟与烘焙](SIMULATION.md) | 标准输出 |
 | `CanvasPerfTool` | 在 Xvfb 下打开真实窗口，对编辑画布依次做静止、悬停、滚轮缩放、中键平移、变形模式拖动脸部全部点，GPU 渲染与软件渲染各一轮，报告帧间隔、界面线程延迟与界面线程热点；需 `xvfb-run -a -s "-screen 0 1920x1080x24"` | `canvas-perf/report.txt`、各阶段截图与 `.jfr` |
+| `SwingCostTool` | tml 上两个摆动的生成耗时、朴素哈希其输入的耗时与全部编辑重放耗时，用于判断生成器是否值得接入生成缓存 | `swing-cost/report.txt` |
 | `ExportGoldenTool` | `tml`、`ds` 的无骨架、自动骨架和自定义动作三种变体的全部导出文件摘要（cmo3 取读回后降级为 moc3 的摘要），用于逐字节对比重构前后的导出；`PSD2LIVE_GOLDEN_LABEL` 指定输出名 | `export-golden/<名称>.txt` |
 | `CommitPerfTool.profile` / `.desktop` | 单次作者提交的耗时：`profile` 走应用层命令边界并按阶段拆分（修订号、配置解码、重建、几何检查）；`desktop` 走桌面视图模型与适配器，连续提交网格顶点编辑和画笔笔触，报告提交耗时与界面线程最长停顿。可配合 `JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` 采样 | `commit-perf/report.txt`、`desktop.txt` |
 
