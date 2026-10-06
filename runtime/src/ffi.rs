@@ -2,6 +2,7 @@
 //! Strings and arrays returned stay valid until the handle is freed or, for pose data, until the
 //! next evaluation. Every function tolerates a null handle. See `include/p2l_runtime.h`.
 
+use crate::behavior::Behaviors;
 use crate::clip::Player;
 use crate::eval::Evaluator;
 use crate::physics::Physics;
@@ -13,6 +14,7 @@ pub struct Handle {
     rig: Rig,
     evaluator: Evaluator,
     player: Player,
+    behaviors: Behaviors,
     physics: Physics,
     values: Vec<f32>,
     parameter_ids: Vec<CString>,
@@ -55,6 +57,7 @@ pub unsafe extern "C" fn p2l_rig_load(bytes: *const u8, len: usize, error: *mut 
                 clip_ids: c_strings(rig.clips.iter().map(|c| &c.id)),
                 evaluator: Evaluator::new(),
                 player: Player::new(),
+                behaviors: Behaviors::default(),
                 physics,
                 values,
                 render_order: Vec::new(),
@@ -193,11 +196,12 @@ pub unsafe extern "C" fn p2l_evaluate(handle: *mut Handle) {
     with_mut!(handle, (), |h| evaluate(h))
 }
 
-/// Advances clips and physics by [dt] seconds over the current values, then evaluates.
+/// Advances clips, behaviors and physics by [dt] seconds over the current values, then evaluates.
 #[no_mangle]
 pub unsafe extern "C" fn p2l_update(handle: *mut Handle, dt: f32) {
     with_mut!(handle, (), |h| {
         h.player.update(&h.rig, dt, &mut h.values);
+        h.behaviors.update(&h.rig, dt, &mut h.values);
         h.physics.step(&h.rig, dt, &mut h.values);
         evaluate(h)
     })
@@ -206,6 +210,26 @@ pub unsafe extern "C" fn p2l_update(handle: *mut Handle, dt: f32) {
 #[no_mangle]
 pub unsafe extern "C" fn p2l_physics_reset(handle: *mut Handle) {
     with_mut!(handle, (), |h| h.physics = Physics::new(&h.rig))
+}
+
+// --- behaviors ---
+
+/// Switches behaviors on: 1 blink, 2 breathing, 4 gaze, 8 lip sync. Blinking and breathing start on.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_behaviors(handle: *mut Handle, flags: u32) {
+    with_mut!(handle, (), |h| h.behaviors.enabled = flags)
+}
+
+/// Where to look, each axis -1..1 (x right, y up); gaze follows smoothly.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_look_at(handle: *mut Handle, x: f32, y: f32) {
+    with_mut!(handle, (), |h| h.behaviors.look_at(x, y))
+}
+
+/// The mouth opening 0..1 for lip sync.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_lip_sync(handle: *mut Handle, level: f32) {
+    with_mut!(handle, (), |h| h.behaviors.lip_sync(level))
 }
 
 // --- clips ---

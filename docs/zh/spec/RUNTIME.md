@@ -10,6 +10,7 @@
 | 读取、求值、物理、动作片段、C ABI | `runtime/`（crate `p2l-runtime`，cdylib + staticlib） | MIT |
 | C 头文件 | `runtime/include/p2l_runtime.h` | MIT |
 | JVM 绑定 | `:format-eval`（`P2lRuntime`、`NativeGeometryEvaluator`） | MIT |
+| Godot 4 节点 `P2LCharacter` | `runtime/godot/`（GDExtension，godot-rust，Godot 4.3+），演示工程 `runtime/godot/demo/` | MIT |
 
 构建：在 `runtime/` 运行 `cargo build --release`，库位于 `runtime/target/release/`（Windows 为 `p2l_runtime.dll`）。`P2lRuntime.locate()` 依次查找系统属性 `psd2live.runtime.library`、环境变量 `PSD2LIVE_RUNTIME`（文件或目录）、系统属性 `psd2live.runtime.dir` 和 `java.library.path`。
 
@@ -38,6 +39,10 @@
 
 曲线段与编辑器相同（线性、Bezier（时间控制点限制在段内）、阶梯、反阶梯）；循环片段按时长回绕，单次片段停在末尾。`Player` 一次播放一个片段，切换时按片段的淡入淡出时间（缺省 1 秒，余弦缓动）交叉过渡。
 
+## 程序化行为
+
+宿主可开启：眨眼（`EyeBlink` 角色，每 2–6 秒一次，闭合 0.1 秒、保持 0.05 秒、睁开 0.15 秒，乘到当前值上）、呼吸（`Breath` 设置为范围内的正弦，`AngleX/Y/Z`、`BodyAngleX` 叠加小幅摆动）、视线（`look_at(x, y)` 经临界阻尼跟随，驱动 `AngleX/Y`、`BodyAngleX`、`EyeBallX/Y`，`AngleZ` 随 x·y 倾斜）和口型（`lip_sync(level)`，`LipSync` 参数取较大值）。角色由编辑器编译时按存在的标准参数写入；moc3 的 model3.json 仍只写 EyeBlink 与 LipSync 两组。更新顺序：动作片段 → 行为 → 物理 → 变形。
+
 ## C ABI
 
 一个句柄对应一个已加载模型，持有参数、动作播放器和物理状态。典型流程：`p2l_rig_load` → 设置参数（`p2l_parameter_values` / `p2l_set_parameter`）→ `p2l_update(dt)`（动作、物理、变形）或 `p2l_evaluate` → 读取 `p2l_mesh_vertices`、`p2l_mesh_opacity`、`p2l_mesh_colors`，按 `p2l_render_order` 由后往前绘制，贴图由 `p2l_texture_png` 提供。所有函数接受空句柄；返回的指针在句柄释放（姿势数据在下次求值）前有效。
@@ -51,4 +56,9 @@
 ## 尚未完成
 
 - 网格渲染（遮罩、混合模式）由宿主完成，运行时只提供几何与属性。
-- 程序化行为（眨眼、呼吸、视线跟随）、Godot GDExtension 与编辑器内的运行时预览在后续阶段加入，见 [ROADMAP](../ROADMAP.md)。
+- Godot 节点中反相遮罩、屏幕色和扩展混合模式按普通绘制。
+- 编辑器内的运行时预览与导出烘焙改用运行时在后续阶段加入，见 [ROADMAP](../ROADMAP.md)。
+
+## Godot
+
+`runtime/godot/` 用 `cargo build --release` 构建，`P2LCharacter` 的属性与方法见其 README。每个网格绘制在自己的画布项中，每帧按绘制顺序重排；加算/乘算用 CanvasItemMaterial，遮罩用仅裁剪的画布组。验证：演示工程的 `smoke_test.gd` 在无界面模式加载模型并推进一秒；`--shot` 在窗口中渲染一帧，tml 样例显示正确（含眼部遮罩）。

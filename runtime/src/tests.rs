@@ -181,3 +181,32 @@ fn opacity_clamps_at_every_stage() {
     let mut e = Evaluator::new();
     assert_eq!(e.evaluate(&r, &[]).opacity[0], 0.0);
 }
+
+#[test]
+fn behaviors_blink_breathe_and_follow_the_gaze() {
+    use crate::behavior::*;
+    let params = vec![parameter("Eye", 0.0, 1.0, 1.0), parameter("Breath", 0.0, 1.0, 0.0), parameter("AngleX", -30.0, 30.0, 0.0), parameter("Mouth", 0.0, 1.0, 0.0)];
+    let mut r = rig(params, vec![], vec![]);
+    r.roles = vec![
+        Role { role: "EyeBlink".into(), parameters: vec![0] },
+        Role { role: "Breath".into(), parameters: vec![1] },
+        Role { role: "AngleX".into(), parameters: vec![2] },
+        Role { role: "LipSync".into(), parameters: vec![3] },
+    ];
+    let mut b = Behaviors::default();
+    b.enabled = BLINK | LOOK | LIP_SYNC;
+    b.look_at(1.0, 0.0);
+    b.lip_sync(0.5);
+    let mut closed = false;
+    let mut last = vec![];
+    for _ in 0..600 {
+        let mut values = r.defaults();
+        b.update(&r, 1.0 / 60.0, &mut values);
+        closed |= values[0] < 0.05;
+        last = values;
+    }
+    assert!(closed, "the eyes close within ten seconds");
+    assert!((last[2] - 30.0).abs() < 0.5, "gaze settles at the target: {}", last[2]);
+    assert_eq!(last[3], 0.5);
+    assert_eq!(last[1], 0.0, "breathing is off");
+}

@@ -1,0 +1,18 @@
+[package]
+name = "p2l-godot"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "P2LCharacter, a Godot 4 node that plays .p2lrt rigs through the PSD2Live runtime."
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+p2l-runtime = { path = ".." }
+# The 4.3 API, which later Godot 4 versions also load.
+godot = { version = "0.5.5", features = ["api-4-3"] }
+
+[profile.release]
+lto = true

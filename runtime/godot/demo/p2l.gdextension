@@ -1,0 +1,12 @@
+[configuration]
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = 4.3
+reloadable = true
+
+[libraries]
+windows.debug.x86_64 = "../target/release/p2l_godot.dll"
+windows.release.x86_64 = "../target/release/p2l_godot.dll"
+linux.debug.x86_64 = "../target/release/libp2l_godot.so"
+linux.release.x86_64 = "../target/release/libp2l_godot.so"
+macos.debug = "../target/release/libp2l_godot.dylib"
+macos.release = "../target/release/libp2l_godot.dylib"

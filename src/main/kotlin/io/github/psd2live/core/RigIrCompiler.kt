@@ -28,6 +28,11 @@ internal object RigIrCompiler {
 			parameterRoles = buildList {
 				if (config.motionBasic && config.motionBlink && !config.meshOnly) add(ParameterRole("EyeBlink", listOf("ParamEyeLOpen", "ParamEyeROpen")))
 				add(ParameterRole("LipSync", listOf("ParamMouthOpenY")))
+				// What a runtime's breathing and gaze drive, when the rig has them.
+				for ((role, id) in listOf("Breath" to "ParamBreath", "AngleX" to "ParamAngleX", "AngleY" to "ParamAngleY", "AngleZ" to "ParamAngleZ",
+						"BodyAngleX" to "ParamBodyAngleX", "EyeBallX" to "ParamEyeBallX", "EyeBallY" to "ParamEyeBallY")) {
+					if (id in parameterIds) add(ParameterRole(role, listOf(id)))
+				}
 			},
 		)
 		return base.copy(

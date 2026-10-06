@@ -1,0 +1,12 @@
+; P2LCharacter demo. Export a model from PSD2Live as .p2lrt (the export dialog's other formats, or
+; `export --target p2lrt`) and set the character's Rig Path to it.
+config_version=5
+
+[application]
+config/name="PSD2Live runtime demo"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.3")
+
+[display]
+window/size/viewport_width=1024
+window/size/viewport_height=1024

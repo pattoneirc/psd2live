@@ -39,9 +39,20 @@ uint32_t p2l_role_parameters(const P2lRig *rig, const char *role, uint32_t *out,
 
 /* Evaluation */
 void p2l_evaluate(P2lRig *rig);
-/* Advances clips and physics by [dt] seconds over the current values, then evaluates. */
+/* Advances clips, behaviors and physics by [dt] seconds over the current values, then evaluates. */
 void p2l_update(P2lRig *rig, float dt);
 void p2l_physics_reset(P2lRig *rig);
+
+/* Behaviors: P2L_BLINK | P2L_BREATH | P2L_LOOK | P2L_LIP_SYNC; blinking and breathing start on. */
+#define P2L_BLINK 1u
+#define P2L_BREATH 2u
+#define P2L_LOOK 4u
+#define P2L_LIP_SYNC 8u
+void p2l_behaviors(P2lRig *rig, uint32_t flags);
+/* Where to look, each axis -1..1 (x right, y up). */
+void p2l_look_at(P2lRig *rig, float x, float y);
+/* Mouth opening 0..1. */
+void p2l_lip_sync(P2lRig *rig, float level);
 
 /* Clips */
 uint32_t p2l_clip_count(const P2lRig *rig);
