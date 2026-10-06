@@ -74,6 +74,7 @@ internal object WorkspaceStateCodec {
             contextualWarp = booleanOr(obj, "contextualWarp", defaults.contextualWarp),
             showSelectionBounds = if (legacySelectionBounds) defaults.showSelectionBounds
                                   else booleanOr(obj, "showSelectionBounds", defaults.showSelectionBounds),
+            sourcePixels = booleanOr(obj, "sourcePixels", defaults.sourcePixels),
         )
     }
 
@@ -101,6 +102,8 @@ internal object WorkspaceStateCodec {
         put("dimUnselected", options.dimUnselected)
         put("contextualWarp", options.contextualWarp)
         put("showSelectionBounds", options.showSelectionBounds)
+        // Written only when on, so workspaces saved before the option keep their bytes.
+        if (options.sourcePixels) put("sourcePixels", true)
     }
 
     private fun encodeCamera(camera: TabCamera): JsonObject = buildJsonObject {

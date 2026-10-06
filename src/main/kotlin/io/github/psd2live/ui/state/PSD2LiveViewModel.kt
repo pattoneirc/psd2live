@@ -4050,6 +4050,138 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 	}
 
+	// ---- Texture workspace ----
+
+	private var textureSnapshotCache: TextureSnapshot? = null
+
+	/**
+	 * The committed textures and atlas, captured from the workspace runtime. Views key it on the preview model,
+	 * the history head and [TextureWorkspaceState.revision], so commits and undo show at once. Null without a
+	 * loaded project.
+	 */
+	fun textureSnapshot(): TextureSnapshot? {
+		val backend = workspaceBackend ?: return null
+		val view = try { backend.captureTextures() } catch (_: Exception) { return null }
+		textureSnapshotCache?.takeIf { it.projectId == view.projectId && it.state == view.state }?.let { return it }
+		return try { TextureSnapshot(view).also { textureSnapshotCache = it } } catch (_: Exception) { null }
+	}
+
+	private inline fun updateTextureWorkspace(crossinline transform: (TextureWorkspaceState) -> TextureWorkspaceState) {
+		updateState { it.copy(textureWorkspace = transform(it.textureWorkspace)) }
+	}
+
+	fun setTexturePage(page: Int) = updateTextureWorkspace { it.copy(selectedPage = page.coerceAtLeast(0), dragDraft = null) }
+	fun setTextureHeatmap(on: Boolean) = updateTextureWorkspace { it.copy(heatmap = on) }
+	fun setTextureOutlines(on: Boolean) = updateTextureWorkspace { it.copy(showOutlines = on) }
+	fun setTextureKeepPins(on: Boolean) = updateTextureWorkspace { it.copy(keepPins = on) }
+	fun setTextureReplaceOptions(fit: io.github.psd2live.application.WorkspaceImageFit, rebuildMesh: Boolean) =
+		updateTextureWorkspace { it.copy(replaceFit = fit, replaceRebuildMesh = rebuildMesh) }
+	fun clearTextureError() = updateTextureWorkspace { it.copy(error = null) }
+
+	/** Moves the dragged tile's draft; nothing is committed until [endTextureTileDrag]. */
+	fun dragTextureTile(snapshot: TextureSnapshot, layerId: String, x: Float, y: Float, snap: Float) {
+		val tile = snapshot.tilesByLayer[layerId] ?: return
+		val page = snapshot.atlas.pages.getOrNull(tile.page) ?: return
+		val draft = placeDraggedTile(tile, x, y, page.width, page.height, snapshot.tiles(tile.page), snapshot.atlas.budget.padding, snap)
+		updateTextureWorkspace { it.copy(dragDraft = draft) }
+	}
+
+	fun cancelTextureTileDrag() = updateTextureWorkspace { it.copy(dragDraft = null) }
+
+	/** Ends a tile drag: pins the tile once where it was dropped, unless it collides or did not move. */
+	fun endTextureTileDrag(snapshot: TextureSnapshot) {
+		val draft = _state.value.textureWorkspace.dragDraft ?: return
+		val tile = snapshot.tilesByLayer[draft.layerId]
+		if (tile == null || (tile.x == draft.x && tile.y == draft.y && tile.page == draft.page)) { cancelTextureTileDrag(); return }
+		if (draft.collides) {
+			updateTextureWorkspace { it.copy(dragDraft = null, error = tr("texture.drag.collides")) }
+			return
+		}
+		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetTile(draft.layerId,
+			io.github.psd2live.project.TexturePin(draft.page, draft.x, draft.y)))
+	}
+
+	fun releaseTexturePin(snapshot: TextureSnapshot, layerId: String) =
+		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetTile(layerId, null))
+
+	/** Sets the texture density of [layerIds] (null resets to 1), keeping each layer's lock. */
+	fun setTextureDensity(snapshot: TextureSnapshot, layerIds: List<String>, density: Float?) {
+		if (layerIds.isEmpty()) return
+		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetPixelDensity(layerIds, density))
+	}
+
+	/**
+	 * Locks or unlocks [layerIds] at their current densities. The command sets one density for all its layers, so
+	 * a selection of mixed densities sends one command per density.
+	 */
+	fun setTextureLock(snapshot: TextureSnapshot, layerIds: List<String>, lock: Boolean) {
+		val groups = layerIds.groupBy { snapshot.layer(it)?.override?.density }
+		val edits = groups.map { (density, ids) -> io.github.psd2live.application.WorkspaceTextureEdit.SetPixelDensity(ids, density, lock) }
+		if (edits.isEmpty()) return
+		commitTextureEdits(snapshot.state, edits)
+	}
+
+	fun setLayerCanvasRect(snapshot: TextureSnapshot, layerId: String, rect: io.github.psd2live.project.LayerCanvasRect) =
+		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetCanvasRect(layerId, rect))
+
+	/** Replaces [layerId]'s pixels from [file] with the workspace's fit and rebuild choices; the file is read by the command. */
+	fun replaceLayerImage(snapshot: TextureSnapshot, layerId: String, file: java.io.File) {
+		val options = _state.value.textureWorkspace
+		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.ReplaceImage(layerId,
+			io.github.psd2live.application.WorkspaceTextureImage.File(file.toPath().toAbsolutePath()), options.replaceFit, options.replaceRebuildMesh))
+	}
+
+	fun setAtlasBudget(snapshot: TextureSnapshot, pageSize: Int? = null, maxPages: Int? = null, padding: Int? = null) {
+		val current = snapshot.atlas.budget
+		if ((pageSize ?: current.pageSize) == current.pageSize && (maxPages ?: current.maxPages) == current.maxPages &&
+			(padding ?: current.padding) == current.padding) return
+		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetBudget(pageSize, maxPages, padding))
+	}
+
+	fun packAtlas(snapshot: TextureSnapshot) = commitTextureEdit(snapshot.state,
+		io.github.psd2live.application.WorkspaceTextureEdit.Pack(_state.value.textureWorkspace.keepPins))
+
+	private fun commitTextureEdit(state: String, edit: io.github.psd2live.application.WorkspaceTextureEdit) =
+		commitTextureEdits(state, listOf(edit))
+
+	/**
+	 * Runs [edits] in order off the UI thread, each one candidate, rebuild and CAS with the user as author; the
+	 * first starts from [state], the snapshot the gesture or field began on, and each later one from the state the
+	 * previous commit left. A refusal stops the chain and is shown in the texture panel.
+	 */
+	private fun commitTextureEdits(state: String, edits: List<io.github.psd2live.application.WorkspaceTextureEdit>) {
+		val current = _state.value
+		if (current.textureWorkspace.busy || current.workspaceEditBusy || current.editorDraftBusy) {
+			updateTextureWorkspace { it.copy(dragDraft = null, error = tr("texture.busy")) }
+			return
+		}
+		updateState { it.copy(canvasEditBusy = true, textureWorkspace = it.textureWorkspace.copy(busy = true, error = null)) }
+		scope.launch {
+			try {
+				var expected = state
+				for (edit in edits) expected = commitTextureEditNow(expected, edit).mutation.state ?: expected
+			} catch (failure: Exception) {
+				if (failure is kotlinx.coroutines.CancellationException) throw failure
+				updateTextureWorkspace { it.copy(error = failure.message ?: tr("texture.failed")) }
+			} finally {
+				updateState { it.copy(canvasEditBusy = false, textureWorkspace = it.textureWorkspace.copy(busy = false, dragDraft = null)) }
+			}
+		}
+	}
+
+	/** One texture command on [state] as the user, through the trusted execution context; publishes its notices. */
+	internal suspend fun commitTextureEditNow(state: String, edit: io.github.psd2live.application.WorkspaceTextureEdit):
+		io.github.psd2live.application.WorkspaceTextureResult {
+		val backend = requireNotNull(workspaceBackend) { "Project workspace unavailable" }
+		val port: io.github.psd2live.application.WorkspaceTexturePort = backend
+		val projectId = backend.captureTextures().projectId
+		val result = withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(projectId, state, MutationAuthor.USER)) {
+			port.editTexture(state, edit, MutationAuthor.USER)
+		}
+		updateTextureWorkspace { it.copy(notices = result.notices, revision = it.revision + 1) }
+		return result
+	}
+
 	fun openTextureUpscaleDialog() {
 		updateState { it.copy(showTextureUpscaleDialog = true) }
 	}

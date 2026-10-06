@@ -71,6 +71,8 @@ internal fun CanvasViewOptionsBar(
 	onOptionsChange: (TabViewOptions) -> Unit,
 	showPathGuides: Boolean = true,
 	showSelectionFocus: Boolean = true,
+	/** Edit canvases can sample layer rasters (source pixels) instead of the atlas. */
+	showSourcePixels: Boolean = false,
 	modifier: Modifier = Modifier,
 ) {
 	val colors = LocalToolColors.current
@@ -136,6 +138,17 @@ internal fun CanvasViewOptionsBar(
 			icon = { IconTextureView(tint = it, modifier = Modifier.size(14.dp)) },
 			onClick = { apply(options.copy(showTexture = !options.showTexture)) },
 		)
+		if (showSourcePixels) {
+			ViewOptionRow(
+				label = tr("canvas.visibility.sourcePixels"),
+				isChecked = options.sourcePixels,
+				isToolbarExpanded = isExpanded,
+				textAlpha = textAlpha,
+				textOffset = textOffset,
+				icon = { IconPixelSource(source = options.sourcePixels, tint = it, modifier = Modifier.size(14.dp)) },
+				onClick = { apply(options.copy(sourcePixels = !options.sourcePixels)) },
+			)
+		}
 		ViewOptionRow(
 			label = tr("canvas.visibility.mesh"),
 			isChecked = options.showMesh,
@@ -291,5 +304,22 @@ private fun ViewOptionRow(
 		) {
 			icon(tint)
 		}
+	}
+}
+
+/** Atlas pixels: a coarse 2x2 grid; source pixels: a fine 4x4 grid. */
+@Composable
+private fun IconPixelSource(source: Boolean, tint: Color, modifier: Modifier) {
+	androidx.compose.foundation.Canvas(modifier) {
+		val cells = if (source) 4 else 2
+		val inset = size.width * 0.12f
+		val side = (size.width - inset * 2) / cells
+		for (y in 0 until cells) for (x in 0 until cells) {
+			if ((x + y) % 2 != 0) continue
+			drawRect(tint, topLeft = androidx.compose.ui.geometry.Offset(inset + x * side, inset + y * side),
+				size = androidx.compose.ui.geometry.Size(side, side))
+		}
+		drawRect(tint, topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
+			size = androidx.compose.ui.geometry.Size(side * cells, side * cells), style = androidx.compose.ui.graphics.drawscope.Stroke(1f))
 	}
 }

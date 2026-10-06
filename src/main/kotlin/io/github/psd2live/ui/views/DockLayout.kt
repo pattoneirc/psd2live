@@ -3,6 +3,7 @@ package io.github.psd2live.ui.views
 import kotlinx.serialization.Serializable
 import java.util.UUID
 import io.github.psd2live.ui.state.DEFAULT_DOCK_MODULES
+import io.github.psd2live.ui.state.TEXTURE_DOCK_MODULES
 import io.github.psd2live.ui.state.EditorWorkspace
 import io.github.psd2live.ui.state.SidebarSide
 import kotlinx.serialization.json.Json
@@ -98,7 +99,11 @@ internal fun reconcileDockModules(
     placeModules.forEach { module ->
         if (result?.allModules()?.contains(module) != true) {
             val anchor = result?.allModules()?.firstOrNull(::isCanvasModule) ?: result?.allModules()?.firstOrNull()
-            val side = if (module == "history") DockSide.LEFT else DockSide.BOTTOM
+            val side = when (module) {
+                "history", "atlas" -> DockSide.LEFT
+                "texture" -> DockSide.RIGHT
+                else -> DockSide.BOTTOM
+            }
             result = dockBesideModule(result, module, anchor, side)
         }
     }
@@ -234,6 +239,9 @@ internal fun presetDockLayout(workspace: EditorWorkspace): DockNode {
         WorkspacePreset.PHYSICS -> row(.5f, column(.82f, leaf(names[0]), leaf("log", "animationEditor")),
             row(.5f, leaf("parameters", "hierarchy", "skeleton"),
                 leaf("physics", "simulation", "animation", "settings", "layers", "tools", "mesh", "inspector")))
+        WorkspacePreset.TEXTURE -> row(.40f, leaf("atlas", "hierarchy", "skeleton"),
+            row(.64f, column(.80f, leaf(names[0]), leaf("log", "animationEditor")),
+                column(.60f, leaf("texture"), leaf("layers", "inspector", "tools", "mesh", "parameters", "settings", "animation", "physics", "simulation"))))
         WorkspacePreset.HISTORY -> row(.5f, leaf("history"), defaultDockLayout(names[0]))
     }
     return names.filterIndexed { index, _ -> slots[index] == null }
@@ -254,7 +262,7 @@ internal val dockJson = Json { ignoreUnknownKeys = true }
  * known modules, otherwise its preset's. Hidden modules are still in it; the dock projects them out.
  */
 internal fun workspaceDockRoot(workspace: EditorWorkspace): DockNode {
-    val allowed = DEFAULT_DOCK_MODULES + setOf("history") + workspace.canvases.map { it.id }
+    val allowed = DEFAULT_DOCK_MODULES + setOf("history") + TEXTURE_DOCK_MODULES + workspace.canvases.map { it.id }
     val saved = workspace.layoutJson?.let { raw ->
         runCatching { dockJson.decodeFromString<DockNode>(raw) }.getOrNull()?.remove("export")
     }?.takeIf { node -> node.allModules().all { it in allowed } }

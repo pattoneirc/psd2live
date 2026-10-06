@@ -319,6 +319,14 @@ internal fun WorkspacePresetIcon(preset: WorkspacePreset, tint: Color, modifier:
 					}
 					drawLine(tint, Offset(w * 0.40f, h * 0.18f), Offset(w * 0.40f, h * 0.86f), strokeWidth = 1f)
 				}
+				// An atlas page: a frame packed with tiles of different sizes.
+				WorkspacePreset.TEXTURE -> {
+					drawRect(tint, topLeft = Offset(w * 0.12f, h * 0.12f), size = Size(w * 0.76f, h * 0.76f), style = stroke)
+					drawRect(tint, topLeft = Offset(w * 0.22f, h * 0.22f), size = Size(w * 0.30f, h * 0.30f))
+					drawRect(tint.copy(alpha = 0.6f), topLeft = Offset(w * 0.58f, h * 0.22f), size = Size(w * 0.20f, h * 0.20f))
+					drawRect(tint.copy(alpha = 0.6f), topLeft = Offset(w * 0.22f, h * 0.58f), size = Size(w * 0.18f, h * 0.20f))
+					drawRect(tint.copy(alpha = 0.35f), topLeft = Offset(w * 0.46f, h * 0.50f), size = Size(w * 0.32f, h * 0.28f))
+				}
 				// A trunk with one branch forking off, like the history tree.
 				WorkspacePreset.HISTORY -> {
 					val root = Offset(w * 0.30f, h * 0.84f)

@@ -10,7 +10,7 @@ Import PSD (`Ctrl+Shift+O`) → inspect classifications and preview → edit →
 
 ## Workspaces
 
-The UI is organized into workspace tabs, each with its own canvases and panel layout. Click **+** at the end of the tab bar to add one from seven presets or a blank layout; the right side previews the layout and its purpose. The screenshot shows the Chinese UI.
+The UI is organized into workspace tabs, each with its own canvases and panel layout. Click **+** at the end of the tab bar to add one from eight presets or a blank layout; the right side previews the layout and its purpose. The screenshot shows the Chinese UI.
 
 ![New workspace menu](../../imgs/workspace-presets.webp)
 
@@ -22,10 +22,21 @@ The UI is organized into workspace tabs, each with its own canvases and panel la
 | Animation | Motion list, preview canvas and animation editor |
 | Preview | Large preview with only the motion list |
 | Physics | Preview canvas with Parameters and Physics panels, to tune while moving the model |
+| Texture | Atlas pages, an edit canvas and the Texture panel, to check and adjust each layer's pixel size |
 | History | Only the history tree and its operation list, to browse and check out history |
 | Blank | Empty dock; add canvases and panels from the **Windows** menu |
 
 **Reset layout** restores the current workspace's preset layout.
+
+### Texture workspace
+
+Every layer has three sizes: the rectangle it covers on the canvas (canvas units), the pixels of its own raster, and the pixels of its tile in the texture atlas. The Texture workspace shows them side by side and adjusts them per layer:
+
+- **Atlas** (left): page tabs, the page image and each tile's outline. With **Density heatmap** on, tiles are tinted by atlas pixels per canvas unit: blue below 1, green around 1, orange above (legend ¼–4). Clicking a tile selects its layer (Shift adds), in sync with the canvas and the layer list; the wheel zooms, the middle or right button pans. Dragging a tile and releasing it **pins** it there with one commit; a drop over another pinned tile does not move it. **Auto pack** lays the tiles out again, keeping pinned tiles in place with **Keep pins**. The toolbar also sets the page size (1024–16384), the maximum page count and the padding; a fit below 100% means the budget is too small and every unlocked tile is scaled down together, with notices listed below.
+- **Texture panel** (right): the selected layer's canvas position and size (editable; the pixels stretch over the new rectangle), its source pixels and their density, and its atlas tile size and effective density. **Multiplier** is atlas pixels per source pixel (1/64–16, applied to the whole selection), **Lock size** keeps a layer's size when the atlas has to shrink, and **Release pin** frees a pinned tile. **Replace image…** replaces the pixels at any resolution, keeping the canvas rectangle, with Stretch or Contain and an optional mesh rebuild; **Texture upscale…** opens the project's upscale settings.
+- **Source pixels preview**: **Source pixels** on an edit canvas's bottom-right view rail makes that canvas sample each layer's own raster instead of its atlas tile, to compare against the packed sharpness. It is saved per canvas and draws that canvas in software while on; the preview canvas (Cubism runtime) and exports always use atlas pixels.
+
+Moving the canvas rectangle, or replacing an image with a mesh rebuild, is refused for layers with authored edits, bindings or materialized meshes; the reason shows at the top of the panel. Every change is one history node and can be undone. The matching Agent operations are listed in the Chinese [MCP_AUTHORING.md](../../zh/agent/MCP_AUTHORING.md#纹理与纹理集).
 
 ## Tutorial paths
 

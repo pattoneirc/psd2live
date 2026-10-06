@@ -1,0 +1,145 @@
+package io.github.psd2live.ui.state
+
+import androidx.compose.runtime.Immutable
+import io.github.psd2live.application.WorkspaceAtlasSnapshot
+import io.github.psd2live.application.WorkspaceAtlasTile
+import io.github.psd2live.application.WorkspaceImageFit
+import io.github.psd2live.application.WorkspaceLayerTexture
+import io.github.psd2live.application.WorkspaceTextureView
+import io.github.psd2live.core.RigPreviewModel
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.ln
+import kotlin.math.pow
+
+/**
+ * UI state of the texture workspace: which atlas page is shown, its overlays, the tile being dragged and the
+ * outcome of the last texture command. Nothing here is project data; every change to textures goes through
+ * `WorkspaceTexturePort.editTexture` and comes back as a new captured [TextureSnapshot].
+ */
+@Immutable
+data class TextureWorkspaceState(
+	val selectedPage: Int = 0,
+	/** Tiles are tinted by how many atlas pixels they spend per canvas unit. */
+	val heatmap: Boolean = true,
+	val showOutlines: Boolean = true,
+	/** Auto pack keeps pinned tiles where they are. */
+	val keepPins: Boolean = true,
+	/** How "Replace image" lays an image of another aspect ratio on the layer, and whether it rebuilds the mesh. */
+	val replaceFit: WorkspaceImageFit = WorkspaceImageFit.STRETCH,
+	val replaceRebuildMesh: Boolean = false,
+	/** The tile under the pointer while it is dragged; committed once when the gesture ends. */
+	val dragDraft: TileDragDraft? = null,
+	/** A texture command is running. */
+	val busy: Boolean = false,
+	/** Why the last texture command was refused, shown in the panel until the next command. */
+	val error: String? = null,
+	/** Notices the last committed layout reported (fit below 1, locks or pins that did not fit). */
+	val notices: List<String> = emptyList(),
+	/** Bumped after each texture commit so views capture again even when nothing else they read changed. */
+	val revision: Int = 0,
+)
+
+/** A tile dragged to ([x], [y]) on [page], in texture pixels. [collides] when it overlaps another pinned tile. */
+@Immutable
+data class TileDragDraft(
+	val layerId: String,
+	val page: Int,
+	val x: Int,
+	val y: Int,
+	val collides: Boolean,
+)
+
+/** One captured version of the textures and atlas, as the texture views read it. */
+class TextureSnapshot(private val view: WorkspaceTextureView) {
+	val projectId: String get() = view.projectId
+	val state: String get() = view.state
+	val revision: String get() = view.revision
+	val atlas: WorkspaceAtlasSnapshot = view.atlas()
+	val tilesByLayer: Map<String, WorkspaceAtlasTile> = atlas.tiles.associateBy { it.layerId }
+	private val layers = ConcurrentHashMap<String, Result<WorkspaceLayerTexture>>()
+
+	/** The layer's committed texture, or null when the id names no texture layer of this version. */
+	fun layer(layerId: String): WorkspaceLayerTexture? =
+		layers.getOrPut(layerId) { runCatching { view.layer(layerId) } }.getOrNull()
+
+	fun tiles(page: Int): List<WorkspaceAtlasTile> = atlas.tiles.filter { it.page == page }
+
+	/** The page's canonical PNG; encoding a large page takes a while, so read it off the UI thread. */
+	fun pagePng(page: Int): ByteArray = view.pagePng(page)
+
+	/** Whether [atlas] is the atlas this version packs, so its page images can be shown as they are. */
+	fun matches(atlas: io.github.psd2live.core.PackedAtlas?): Boolean = atlas != null && atlas.pages.size == this.atlas.pages.size &&
+		atlas.placementByLayerId.size == tilesByLayer.size && this.atlas.tiles.all { tile ->
+			atlas.placementByLayerId[tile.layerId]?.let { it.page == tile.page && it.x == tile.x && it.y == tile.y &&
+				it.width == tile.width && it.height == tile.height } == true
+		}
+
+	/**
+	 * The texture layer a selection id stands for: selections hold layer ids, but some views select a mesh by its
+	 * drawable id, and derived meshes share their source layer's tile.
+	 */
+	fun textureLayerId(selectionId: String, preview: RigPreviewModel?): String? {
+		if (selectionId in tilesByLayer) return selectionId
+		preview?.rig?.layerIdByDrawableId?.get(selectionId)?.let { if (it in tilesByLayer || layer(it) != null) return it }
+		return selectionId.takeIf { layer(it) != null }
+	}
+
+	/** Atlas texture pixels per canvas unit of [tile]: its scale times the layer's raster pixels per canvas unit. */
+	fun texelsPerCanvasUnit(tile: WorkspaceAtlasTile): Float {
+		val layer = layer(tile.layerId) ?: return tile.scaleX
+		return ((tile.scaleX * layer.nativeDensityX + tile.scaleY * layer.nativeDensityY) / 2f)
+	}
+}
+
+/** Density helpers shared by the atlas heatmap, its legend and the inspector slider. */
+object TextureDensity {
+	const val MIN = 1f / 64f
+	const val MAX = 16f
+	/** The heatmap's range in powers of two around one texel per canvas unit. */
+	const val HEAT_STOPS = 2f
+
+	fun log2(value: Float): Float = (ln(value.toDouble()) / ln(2.0)).toFloat()
+	fun pow2(exponent: Float): Float = 2.0.pow(exponent.toDouble()).toFloat()
+
+	/** -1..1: -1 at a quarter texel per canvas unit or less, 0 at one, 1 at four or more. */
+	fun heat(texelsPerUnit: Float): Float =
+		if (!(texelsPerUnit > 0f)) -1f else (log2(texelsPerUnit) / HEAT_STOPS).coerceIn(-1f, 1f)
+
+	/** A density rounded for display: two decimals below 10, one above. */
+	fun format(value: Float): String = if (value >= 10f) "%.1f".format(value) else "%.2f".format(value)
+}
+
+/** Tiles placed on a page collide when their rectangles, grown by the padding, overlap. */
+internal fun tilesOverlap(ax: Int, ay: Int, aw: Int, ah: Int, b: WorkspaceAtlasTile, padding: Int): Boolean =
+	ax < b.x + b.width + padding && b.x < ax + aw + padding && ay < b.y + b.height + padding && b.y < ay + ah + padding
+
+/**
+ * Where a tile dragged to ([x], [y]) lands: inside the page, snapped to a neighbour's edge (plus padding) within
+ * [snap] texture pixels, and whether it then overlaps a pinned tile (which keeps its place, unlike unpinned ones
+ * the packer moves around a pin).
+ */
+internal fun placeDraggedTile(
+	tile: WorkspaceAtlasTile, x: Float, y: Float, pageWidth: Int, pageHeight: Int,
+	others: List<WorkspaceAtlasTile>, padding: Int, snap: Float,
+): TileDragDraft {
+	var px = x.coerceIn(0f, (pageWidth - tile.width).coerceAtLeast(0).toFloat())
+	var py = y.coerceIn(0f, (pageHeight - tile.height).coerceAtLeast(0).toFloat())
+	fun nearest(value: Float, size: Int, edges: List<Float>): Float {
+		var best = value; var distance = snap
+		for (edge in edges) for (candidate in listOf(edge, edge - size)) {
+			val d = kotlin.math.abs(candidate - value)
+			if (d < distance) { distance = d; best = candidate }
+		}
+		return best
+	}
+	val neighbours = others.filter { it.layerId != tile.layerId && it.page == tile.page }
+	px = nearest(px, tile.width, listOf(0f, pageWidth.toFloat()) + neighbours.flatMap {
+		listOf((it.x + it.width + padding).toFloat(), (it.x - padding).toFloat(), it.x.toFloat())
+	}).coerceIn(0f, (pageWidth - tile.width).coerceAtLeast(0).toFloat())
+	py = nearest(py, tile.height, listOf(0f, pageHeight.toFloat()) + neighbours.flatMap {
+		listOf((it.y + it.height + padding).toFloat(), (it.y - padding).toFloat(), it.y.toFloat())
+	}).coerceIn(0f, (pageHeight - tile.height).coerceAtLeast(0).toFloat())
+	val ix = Math.round(px); val iy = Math.round(py)
+	val collides = neighbours.any { it.pinned && tilesOverlap(ix, iy, tile.width, tile.height, it, padding) }
+	return TileDragDraft(tile.layerId, tile.page, ix, iy, collides)
+}

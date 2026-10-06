@@ -107,7 +107,11 @@ class DockLayoutTest {
             val canvasIds = workspace.canvases.map { it.id }
 
             assertEquals(modules.size, modules.toSet().size, "$preset docks a panel twice")
-            val extra = if (preset == WorkspacePreset.HISTORY) setOf("history") else emptySet()
+            val extra = when (preset) {
+                WorkspacePreset.HISTORY -> setOf("history")
+                WorkspacePreset.TEXTURE -> io.github.psd2live.ui.state.TEXTURE_DOCK_MODULES
+                else -> emptySet()
+            }
             assertEquals(DEFAULT_DOCK_MODULES - PRIMARY_CANVAS_ID + canvasIds + extra, modules.toSet(), "$preset")
             if (preset == WorkspacePreset.BLANK || preset == WorkspacePreset.HISTORY) return@forEach
             assertTrue(preset.hiddenModules.none(::isCanvasModule), "$preset")

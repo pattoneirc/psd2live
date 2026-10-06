@@ -104,7 +104,7 @@ class InteractiveTutorialCatalogTest {
 	@Test
 	fun workspaceLessonCoversPresetsDockingSplitsAndFloating() {
 		assertEquals(
-			listOf("presets", "switch", "dockTabs", "split", "float", "memory", "sidebars", "viewMenu", "camera", "done"),
+			listOf("presets", "switch", "texture", "dockTabs", "split", "float", "memory", "sidebars", "viewMenu", "camera", "done"),
 			tutorialDefinition(TutorialId.WORKSPACE).steps.map { it.key },
 		)
 		assertEquals(TutorialTargetId.WORKSPACE_STRIP, tutorialDefinition(TutorialId.WORKSPACE).steps.first().targetId)

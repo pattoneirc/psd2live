@@ -7,6 +7,7 @@ import io.github.psd2live.core.CanvasViewport
 import io.github.psd2live.ui.utils.toSkiaImage
 import io.github.psd2live.core.PackedAtlas
 import io.github.psd2live.core.RigPreviewModel
+import io.github.psd2live.core.textureLayer
 import org.jetbrains.skia.*
 import org.umamo.render.eval.DeformedGeometry
 import io.github.psd2live.render.ArtworkDraw
@@ -39,13 +40,18 @@ internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
         tintLayerIds: Set<String>? = null,
         tintColor: Int = 0,
         tintAlpha: Float = HOVER_TINT_STRENGTH,
+        sources: SourcePixelImages? = null,
     ) = paint(canvas, model, geometry, viewport, ArtworkDrawList.build(model, geometry, ArtworkOptions(
         alpha, visibleLayerIds, drawOrderOverrides, dimUnselected, highlightedLayerIds, dimmedAlphaMultiplier,
         tintLayerIds, tintColor, tintAlpha,
-    )))
+    )), sources)
 
-    /** Draws [draws], the list the GPU renderer draws too, so the two paths cannot disagree about what shows. */
-    fun paint(canvas: Canvas, model: RigPreviewModel, geometry: DeformedGeometry, viewport: CanvasViewport, draws: List<ArtworkDraw>) {
+    /**
+     * Draws [draws], the list the GPU renderer draws too, so the two paths cannot disagree about what shows.
+     * With [sources], each mesh samples its layer's own raster instead of the atlas tile (source pixels).
+     */
+    fun paint(canvas: Canvas, model: RigPreviewModel, geometry: DeformedGeometry, viewport: CanvasViewport, draws: List<ArtworkDraw>,
+              sources: SourcePixelImages? = null) {
         val byId = model.rig.puppet.drawables.associateBy { it.id }
         val masks = mutableMapOf<List<DrawableId>, Path?>()
         Paint().use { paint ->
@@ -55,14 +61,23 @@ internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
                     val mesh = drawable.mesh ?: continue
                     val world = geometry.worldPositions[drawable.id] ?: continue
                     val image = images.getOrNull(draw.page) ?: continue
+                    // Source pixels: page texel (u * W, v * H) lies at raster pixel ((u * W - x) / scaleX, ...) of the tile's layer.
+                    val source = sources?.forDrawable(drawable.id.raw, draw.page)
                     val positions = FloatArray(mesh.indices.size * 2)
                     val uvs = FloatArray(positions.size)
                     // Expanded vertices avoid the unsigned-short index limit for large authored meshes.
                     mesh.indices.forEachIndexed { index, vertex ->
                         positions[index * 2] = viewport.x(world[vertex * 2]).toFloat()
                         positions[index * 2 + 1] = viewport.yFromWorld(world[vertex * 2 + 1]).toFloat()
-                        uvs[index * 2] = mesh.uvs[vertex * 2] * image.width
-                        uvs[index * 2 + 1] = mesh.uvs[vertex * 2 + 1] * image.height
+                        val u = mesh.uvs[vertex * 2] * image.width
+                        val v = mesh.uvs[vertex * 2 + 1] * image.height
+                        if (source == null) {
+                            uvs[index * 2] = u
+                            uvs[index * 2 + 1] = v
+                        } else {
+                            uvs[index * 2] = (u - source.placement.x) / source.placement.scaleX
+                            uvs[index * 2 + 1] = (v - source.placement.y) / source.placement.scaleY
+                        }
                     }
                     val mask = if (draw.maskIds.isNotEmpty()) {
                         masks.getOrPut(draw.maskIds) {
@@ -93,7 +108,7 @@ internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
                     val saved = canvas.save()
                     try {
                         mask?.let { canvas.clipPath(it, false) }
-                        paint.shader = shaders[draw.page]
+                        paint.shader = source?.shader ?: shaders[draw.page]
                         paint.setAlphaf(draw.opacity)
                         canvas.drawVertices(VertexMode.TRIANGLES, positions, null, uvs, null, BlendMode.MODULATE, paint)
                         // Hover annotation: wash the very triangles just drawn with the component colour
@@ -115,6 +130,34 @@ internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
     override fun close() {
         shaders.forEach { it.close() }
         images.forEach { it.close() }
+    }
+}
+
+/**
+ * Each textured layer's own raster as a Skia image, for edit canvases that show source pixels instead of the
+ * atlas. A mesh maps to its layer's raster through the layer's atlas placement, so the UVs need no rebuild; a
+ * mesh whose layer has no placement on the page it samples keeps the atlas. Images are made on first use.
+ */
+internal class SourcePixelImages(private val model: RigPreviewModel) : AutoCloseable {
+    class Source(val placement: io.github.psd2live.core.AtlasPlacement, val image: Image, val shader: Shader)
+
+    private val rasters = model.analysis.layers.associate { it.source.id.raw to it.source.textureLayer.raster }
+    private val byLayer = HashMap<String, Source?>()
+
+    fun forDrawable(drawableId: String, page: Int): Source? {
+        val layerId = model.rig.layerIdByDrawableId[drawableId] ?: return null
+        val placement = model.atlas.placementByLayerId[layerId]?.takeIf { it.page == page && it.scaleX > 0f && it.scaleY > 0f } ?: return null
+        return byLayer.getOrPut(layerId) {
+            val raster = rasters[layerId]?.takeIf { it.width > 0 && it.height > 0 } ?: return@getOrPut null
+            val image = Image.makeRaster(ImageInfo(raster.width, raster.height, ColorType.RGBA_8888, ColorAlphaType.UNPREMUL),
+                raster.rgba, raster.width * 4)
+            Source(placement, image, image.makeShader(FilterTileMode.CLAMP, FilterTileMode.CLAMP, SamplingMode.LINEAR, null))
+        }
+    }
+
+    override fun close() {
+        byLayer.values.forEach { source -> source?.shader?.close(); source?.image?.close() }
+        byLayer.clear()
     }
 }
 

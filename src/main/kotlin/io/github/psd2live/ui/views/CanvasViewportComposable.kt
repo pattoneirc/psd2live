@@ -103,6 +103,7 @@ import io.github.psd2live.core.CubismViewport
 import io.github.psd2live.core.RigCanvasSupport
 import io.github.psd2live.ui.CachedSkiaPicture
 import io.github.psd2live.ui.SkiaRigPainter
+import io.github.psd2live.ui.SourcePixelImages
 import io.github.psd2live.ui.visibleCanvasGuideIds
 import io.github.psd2live.ui.state.forCanvas
 import io.github.psd2live.ui.state.FramePacer
@@ -328,6 +329,11 @@ fun CanvasViewportComposable(
 	}
 	val editingPainter = remember(previewModel?.atlas) { previewModel?.atlas?.let(::SkiaRigPainter) }
 	DisposableEffect(editingPainter) { onDispose { editingPainter?.close() } }
+	// Source pixels: the edit canvas samples each layer's raster instead of its atlas tile. Only the software
+	// painter can, so such a canvas skips the GPU renderer while the option is on.
+	val sourcePixels = mode == CanvasMode.EDIT && viewOptions.sourcePixels
+	val sourceImages = remember(previewModel, sourcePixels) { if (sourcePixels) previewModel?.let(::SourcePixelImages) else null }
+	DisposableEffect(sourceImages) { onDispose { sourceImages?.close() } }
 	val artworkCache = remember { CachedSkiaPicture() }
 	DisposableEffect(artworkCache) { onDispose { artworkCache.close() } }
 	val snapshotArtworkCache = remember { CachedSkiaPicture() }
@@ -337,7 +343,7 @@ fun CanvasViewportComposable(
 	val softwareCanvas by AppSettings.softwareCanvasFlow.collectAsState()
 	LaunchedEffect(softwareCanvas) { if (!softwareCanvas) CanvasRenderService.ensureStarted() }
 	val gpuStatus by CanvasRenderService.status.collectAsState()
-	val gpuReady = !softwareCanvas && gpuStatus is CanvasRenderService.Status.Ready
+	val gpuReady = !softwareCanvas && !sourcePixels && gpuStatus is CanvasRenderService.Status.Ready
 	val gpuFrame by remember(renderKey) { CanvasRenderService.frames(renderKey) }.collectAsState()
 	val gpuImage = remember(gpuFrame) { gpuFrame?.bitmap?.asComposeImageBitmap() }
 	val gpuSubmission = remember(renderKey) { GpuSceneSubmission(renderKey) }
@@ -1304,7 +1310,7 @@ fun CanvasViewportComposable(
 						val key = listOf(
 							editingPainter, model.rig.puppet, geometry, viewport, w, h,
 							effectiveVisible, canvasState.drawOrderOverrides, dimUnselected,
-							highlightedLayerIds, hoverTintLayerIds, hoverTintColor,
+							highlightedLayerIds, hoverTintLayerIds, hoverTintColor, sourceImages,
 						)
 						artworkCache.draw(target.skiaCanvas, key, w, h, panShift(key)) { recording ->
 							editingPainter.paint(
@@ -1316,6 +1322,7 @@ fun CanvasViewportComposable(
 								dimmedAlphaMultiplier = 0.22f,
 								tintLayerIds = hoverTintLayerIds,
 								tintColor = hoverTintColor,
+								sources = sourceImages,
 							)
 						}
 					}
@@ -1666,6 +1673,7 @@ fun CanvasViewportComposable(
 				onOptionsChange = { viewModel.setCanvasViewOptions(canvasId, it, mode) },
 				showPathGuides = mode == CanvasMode.EDIT,
 				showSelectionFocus = mode == CanvasMode.EDIT,
+				showSourcePixels = mode == CanvasMode.EDIT,
 				modifier = Modifier
 					.align(Alignment.BottomEnd)
 					.padding(end = 8.dp, bottom = 8.dp),

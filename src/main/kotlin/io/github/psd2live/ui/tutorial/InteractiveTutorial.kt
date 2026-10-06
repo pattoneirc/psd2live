@@ -320,6 +320,7 @@ private fun buildTutorialCatalog(): Map<TutorialId, TutorialDefinition> = mapOf(
 		listOf(
 			step("presets", TutorialTargetId.WORKSPACE_STRIP, showAction = true),
 			step("switch", TutorialTargetId.WORKSPACE_STRIP, showAction = true),
+			step("texture", TutorialTargetId.WORKSPACE_STRIP),
 			step("dockTabs", TutorialTargetId.DOCK_AREA, ensureEditTab = true, showAction = true),
 			step("split", TutorialTargetId.DOCK_AREA, ensureEditTab = true),
 			step("float", TutorialTargetId.DOCK_AREA, ensureEditTab = true),

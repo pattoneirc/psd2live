@@ -47,6 +47,9 @@ internal val DEFAULT_DOCK_MODULES = setOf(
 	PRIMARY_CANVAS_ID, "hierarchy", "skeleton", "log", "animationEditor",
 ) + INSPECTOR_DOCK_MODULES
 
+/** The texture workspace's atlas page view and per-layer texture panel; like history, not in every layout. */
+internal val TEXTURE_DOCK_MODULES = setOf("atlas", "texture")
+
 /** Which edge of the dock a sidebar hugs, relative to the region holding the canvases. */
 enum class SidebarSide { LEFT, TOP, BOTTOM, RIGHT }
 
@@ -116,6 +119,11 @@ data class TabViewOptions(
 	val dimUnselected: Boolean = true,
 	val contextualWarp: Boolean = true,
 	val showSelectionBounds: Boolean = false,
+	/**
+	 * Edit canvases sample each layer's own raster instead of its atlas tile, so the artwork shows at
+	 * source resolution rather than at the packed density. The native preview always shows atlas pixels.
+	 */
+	val sourcePixels: Boolean = false,
 ) {
 	/** Point indices are only painted together with the warp overlay they annotate. */
 	fun normalized(): TabViewOptions = copy(showWarp = showWarp || warpShowIndices)
@@ -223,6 +231,16 @@ enum class WorkspacePreset(
 	PHYSICS(
 		listOf(CanvasMode.PREVIEW),
 		setOf("hierarchy", "skeleton", "log", "animationEditor", "settings", "layers", "tools", "mesh", "inspector", "animation"),
+	),
+
+	/**
+	 * Texture sizes: the atlas pages on the left, an edit canvas to compare atlas and source pixels, and the
+	 * per-layer texture panel with the layer list on the right. Its two panels ([TEXTURE_DOCK_MODULES]) are
+	 * docked by this preset only; other workspaces show them from the window menu like the history tree.
+	 */
+	TEXTURE(
+		listOf(CanvasMode.EDIT),
+		setOf("hierarchy", "skeleton", "log", "animationEditor", "settings", "tools", "mesh", "inspector", "parameters", "animation", "physics", "simulation"),
 	),
 
 	/**
@@ -534,6 +552,8 @@ data class PSD2LiveState(
 	val showSettingsDialog: Boolean = false,
 	/** App-level texture upscale prompt; must not be mounted inside a Column (scrim is fillMaxSize). */
 	val showTextureUpscaleDialog: Boolean = false,
+	/** The texture workspace's page, overlays and drag draft; UI-transient, never saved. */
+	val textureWorkspace: TextureWorkspaceState = TextureWorkspaceState(),
 	/**
 	 * Keyboard shortcuts. Not part of the project: like [uiScale] these are application preferences,
 	 * so they are absent from WorkspaceStateCodec and no edit here may mark the project dirty.
