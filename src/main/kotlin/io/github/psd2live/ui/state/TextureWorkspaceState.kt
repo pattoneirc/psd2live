@@ -22,8 +22,6 @@ data class TextureWorkspaceState(
 	/** Tiles are tinted by how many atlas pixels they spend per canvas unit. */
 	val heatmap: Boolean = true,
 	val showOutlines: Boolean = true,
-	/** Auto pack keeps pinned tiles where they are. */
-	val keepPins: Boolean = true,
 	/** How "Replace image" lays an image of another aspect ratio on the layer, and whether it rebuilds the mesh. */
 	val replaceFit: WorkspaceImageFit = WorkspaceImageFit.STRETCH,
 	val replaceRebuildMesh: Boolean = false,
@@ -62,7 +60,11 @@ class TextureSnapshot(private val view: WorkspaceTextureView) {
 	fun layer(layerId: String): WorkspaceLayerTexture? =
 		layers.getOrPut(layerId) { runCatching { view.layer(layerId) } }.getOrNull()
 
-	fun tiles(page: Int): List<WorkspaceAtlasTile> = atlas.tiles.filter { it.page == page }
+	/**
+	 * The tiles on [page] the views show: those of current texture layers. A soft-deleted layer, or the placeholder a
+	 * split part supersedes, is no art of the model even while a tile is packed for it.
+	 */
+	fun tiles(page: Int): List<WorkspaceAtlasTile> = atlas.tiles.filter { it.page == page && layer(it.layerId)?.deleted == false }
 
 	/** The page's canonical PNG; encoding a large page takes a while, so read it off the UI thread. */
 	fun pagePng(page: Int): ByteArray = view.pagePng(page)
@@ -107,6 +109,19 @@ object TextureDensity {
 
 	/** A density rounded for display: two decimals below 10, one above. */
 	fun format(value: Float): String = if (value >= 10f) "%.1f".format(value) else "%.2f".format(value)
+
+	/** [value] on the quarter-power-of-two grid the slider and the corner handles step along, within MIN..MAX. */
+	fun snap(value: Float): Float {
+		if (!(value > 0f)) return MIN
+		return pow2(Math.round(log2(value) * 4f) / 4f).coerceIn(MIN, MAX)
+	}
+
+	/**
+	 * The density a corner drag asks for: [current] scaled by how far the pointer is from the tile's opposite
+	 * corner, [distance], against that corner's own distance, [startDistance], snapped to the slider's grid.
+	 */
+	fun dragged(current: Float, startDistance: Float, distance: Float): Float =
+		if (!(startDistance > 0f)) current else snap(current * (distance / startDistance).coerceAtLeast(1e-3f))
 }
 
 /** Tiles placed on a page collide when their rectangles, grown by the padding, overlap. */

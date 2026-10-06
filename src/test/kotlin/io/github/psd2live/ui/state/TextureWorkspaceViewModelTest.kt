@@ -134,4 +134,40 @@ class TextureWorkspaceViewModelTest {
         vm.setTextureReplaceOptions(WorkspaceImageFit.CONTAIN, true)
         assertEquals(WorkspaceImageFit.CONTAIN, vm.state.value.textureWorkspace.replaceFit)
     }
+
+    @Test fun cornerScalingKeepsEachLayersRatioAndPinningKeepsTheTileWhereItIs() = fixture { vm, workspace, layers ->
+        val (first, second) = layers
+        vm.setTextureDensity(vm.textureSnapshot()!!, listOf(second), 0.5f)
+        settled(vm)
+        val nodes = workspace.history().nodes.size
+        vm.selectLayers(layers)
+        assertEquals(layers.toSet(), vm.state.value.selectedLayerIds)
+        // Twice the density for both: the second keeps half the first's, and 1x stores no override.
+        vm.scaleTextureDensity(vm.textureSnapshot()!!, layers, 2f)
+        settled(vm)
+        val scaled = vm.textureSnapshot()!!
+        assertEquals(2f, scaled.layer(first)!!.override.density)
+        assertNull(scaled.layer(second)!!.override.density)
+        assertEquals(nodes + 2, workspace.history().nodes.size, "One command per resulting density")
+
+        val tile = scaled.tilesByLayer.getValue(first)
+        vm.pinTextureTile(scaled, first)
+        settled(vm)
+        val pinned = vm.textureSnapshot()!!.tilesByLayer.getValue(first)
+        assertTrue(pinned.pinned)
+        assertEquals(Triple(tile.page, tile.x, tile.y), Triple(pinned.page, pinned.x, pinned.y))
+
+        // Repacking everything releases the pin; keeping pins would not.
+        vm.packAtlas(vm.textureSnapshot()!!, keepPins = true)
+        settled(vm)
+        assertTrue(vm.textureSnapshot()!!.tilesByLayer.getValue(first).pinned)
+        vm.packAtlas(vm.textureSnapshot()!!, keepPins = false)
+        settled(vm)
+        assertFalse(vm.textureSnapshot()!!.tilesByLayer.getValue(first).pinned)
+
+        vm.selectLayers(listOf(second), additive = true)
+        assertEquals(layers.toSet(), vm.state.value.selectedLayerIds)
+        vm.selectLayers(emptyList())
+        assertTrue(vm.state.value.selectedLayerIds.isEmpty())
+    }
 }

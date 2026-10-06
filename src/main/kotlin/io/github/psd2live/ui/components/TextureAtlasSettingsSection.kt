@@ -24,15 +24,12 @@ import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 
-private val atlasOptions = listOf(1024, 2048, 4096, 8192, 16384)
-
-/** Texture atlas settings of the export dialog: upscale, atlas size, padding and the alpha threshold. */
+/** Texture atlas settings of the export dialog: upscale, the atlas budget (as the texture workspace edits it) and the alpha threshold. */
 @Composable
 internal fun TextureAtlasSettingsSection(state: PSD2LiveState, viewModel: PSD2LiveViewModel) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	val isBusy = state.isAnalyzing || state.isGenerating
-	val minRequiredAtlasSize = state.minRequiredAtlasSize()
 
 	Column(
 		modifier = Modifier
@@ -68,59 +65,15 @@ internal fun TextureAtlasSettingsSection(state: PSD2LiveState, viewModel: PSD2Li
 			)
 		}
 
-		AtlasRow(tr("settings.atlasSize")) {
-			CompactDropdown(
-				items = atlasOptions,
-				selectedItem = state.atlasSize.takeIf { it in atlasOptions } ?: atlasOptions[2],
-				onItemSelected = { viewModel.setAtlasSize(it) },
-				itemLabel = { size ->
-					if (size < minRequiredAtlasSize) "$size × $size (${tr("settings.atlasTooSmall")})" else "$size × $size"
-				},
-				itemEnabled = { size -> size >= minRequiredAtlasSize },
-				modifier = Modifier.weight(1f),
-				enabled = !isBusy,
-				height = 22.dp,
-			)
-			Spacer(Modifier.width(4.dp))
-			CompactNumberSpinner(
-				onEditStart = { viewModel.beginEditorField("setAtlasSize") },
-				onEditEnd = { viewModel.endEditorField("setAtlasSize") },
-				value = state.atlasSize.toDouble(),
-				onValueChange = { viewModel.setAtlasSize(it.toInt()) },
-				min = maxOf(256.0, minRequiredAtlasSize.toDouble()),
-				max = 16384.0,
-				step = 256.0,
-				decimals = 0,
-				enabled = !isBusy,
-				modifier = Modifier.width(70.dp),
-				height = 22.dp,
-			)
+		// The atlas budget has one editor, shared with the texture workspace; the legacy size and padding
+		// fields stop applying once a project stores a budget, so they are not offered here.
+		val snapshot = io.github.psd2live.ui.views.texture.rememberTextureSnapshot(state, viewModel)
+		if (snapshot != null) {
+			io.github.psd2live.ui.views.texture.AtlasBudgetControls(viewModel, snapshot, enabled = !isBusy && !state.textureWorkspace.busy, labelWidth = 86.dp)
+			state.textureWorkspace.error?.let { Text(it, style = typography.caption.copy(fontSize = 10.5.sp), color = colors.error) }
 		}
 
-		AtlasRow(tr("settings.texturePadding")) {
-			CompactNumberSpinner(
-				onEditStart = { viewModel.beginEditorField("setTexturePadding") },
-				onEditEnd = { viewModel.endEditorField("setTexturePadding") },
-				value = state.texturePadding.toDouble(),
-				onValueChange = { viewModel.setTexturePadding(it.toInt()) },
-				min = 0.0,
-				max = 32.0,
-				step = 1.0,
-				decimals = 0,
-				unit = tr("settings.unit.px"),
-				enabled = !isBusy,
-				modifier = Modifier.weight(1f),
-				height = 22.dp,
-			)
-			Spacer(Modifier.width(6.dp))
-			Text(
-				text = tr("settings.alphaThreshold"),
-				style = typography.body.copy(fontSize = 11.sp),
-				color = colors.textPrimary,
-				modifier = Modifier.width(64.dp),
-				textAlign = TextAlign.Right,
-			)
-			Spacer(Modifier.width(4.dp))
+		AtlasRow(tr("settings.alphaThreshold")) {
 			CompactNumberSpinner(
 				onEditStart = { viewModel.beginEditorField("setAlphaThreshold") },
 				onEditEnd = { viewModel.endEditorField("setAlphaThreshold") },

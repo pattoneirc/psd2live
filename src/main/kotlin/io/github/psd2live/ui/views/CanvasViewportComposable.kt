@@ -482,7 +482,7 @@ fun CanvasViewportComposable(
 		val oldViewport = computeViewport(model, viewSize.width, viewSize.height)
 		val canvasX = (mouseX - oldViewport.offsetX) / oldViewport.scale
 		val canvasY = (mouseY - oldViewport.offsetY) / oldViewport.scale
-		val nextZoom = (zoom * 1.15.pow(-wheelDelta.toDouble())).coerceIn(0.05, 64.0)
+		val nextZoom = CanvasNavigation.wheelZoom(zoom, wheelDelta)
 		if (nextZoom == zoom) return
 		zoom = nextZoom
 		val centered = computeViewport(model, viewSize.width, viewSize.height)
@@ -880,8 +880,7 @@ fun CanvasViewportComposable(
                     return@onPointerEvent
                 }
                 // Middle mouse drag or Space + Left drag -> Canvas Pan
-                if (event.button == PointerButton.Tertiary ||
-                    (mode == CanvasMode.EDIT && event.button == PointerButton.Primary && editor.space)) {
+                if (CanvasNavigation.pans(event.button, mode == CanvasMode.EDIT && editor.space)) {
                     isDragging = true
                     lastDragPos = change.position
                     dragStartPos = change.position

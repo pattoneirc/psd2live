@@ -4073,7 +4073,6 @@ class PSD2LiveViewModel : AutoCloseable {
 	fun setTexturePage(page: Int) = updateTextureWorkspace { it.copy(selectedPage = page.coerceAtLeast(0), dragDraft = null) }
 	fun setTextureHeatmap(on: Boolean) = updateTextureWorkspace { it.copy(heatmap = on) }
 	fun setTextureOutlines(on: Boolean) = updateTextureWorkspace { it.copy(showOutlines = on) }
-	fun setTextureKeepPins(on: Boolean) = updateTextureWorkspace { it.copy(keepPins = on) }
 	fun setTextureReplaceOptions(fit: io.github.psd2live.application.WorkspaceImageFit, rebuildMesh: Boolean) =
 		updateTextureWorkspace { it.copy(replaceFit = fit, replaceRebuildMesh = rebuildMesh) }
 	fun clearTextureError() = updateTextureWorkspace { it.copy(error = null) }
@@ -4138,8 +4137,37 @@ class PSD2LiveViewModel : AutoCloseable {
 		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetBudget(pageSize, maxPages, padding))
 	}
 
-	fun packAtlas(snapshot: TextureSnapshot) = commitTextureEdit(snapshot.state,
-		io.github.psd2live.application.WorkspaceTextureEdit.Pack(_state.value.textureWorkspace.keepPins))
+	/** Packs the atlas again: pinned tiles stay where they are when [keepPins], otherwise every pin is released. */
+	fun packAtlas(snapshot: TextureSnapshot, keepPins: Boolean) = commitTextureEdit(snapshot.state,
+		io.github.psd2live.application.WorkspaceTextureEdit.Pack(keepPins))
+
+	/** The atlas budget back to its defaults; nothing is sent when it already is. */
+	fun resetAtlasBudget(snapshot: TextureSnapshot) {
+		val defaults = io.github.psd2live.core.AtlasBudget()
+		setAtlasBudget(snapshot, defaults.pageSize, defaults.maxPages, defaults.padding)
+	}
+
+	/**
+	 * Scales the density of [layerIds] by [factor], as a corner handle drag or a "×2" menu row does: each layer
+	 * keeps its own ratio to the others, snapped to the slider's grid. Layers that land on one density share
+	 * one command, keeping their locks.
+	 */
+	fun scaleTextureDensity(snapshot: TextureSnapshot, layerIds: List<String>, factor: Float) {
+		if (layerIds.isEmpty() || !(factor > 0f) || factor == 1f) return
+		val edits = layerIds.groupBy { id -> TextureDensity.snap((snapshot.layer(id)?.override?.density ?: 1f) * factor) }
+			.filter { (density, ids) -> ids.any { (snapshot.layer(it)?.override?.density ?: 1f) != density } }
+			.map { (density, ids) -> io.github.psd2live.application.WorkspaceTextureEdit.SetPixelDensity(ids, density.takeUnless { it == 1f }) }
+		if (edits.isEmpty()) return
+		commitTextureEdits(snapshot.state, edits)
+	}
+
+	/** Pins [layerId]'s tile where the current layout put it, so later packs keep it there. */
+	fun pinTextureTile(snapshot: TextureSnapshot, layerId: String) {
+		val tile = snapshot.tilesByLayer[layerId] ?: return
+		if (tile.pinned) return
+		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetTile(layerId,
+			io.github.psd2live.project.TexturePin(tile.page, tile.x, tile.y)))
+	}
 
 	private fun commitTextureEdit(state: String, edit: io.github.psd2live.application.WorkspaceTextureEdit) =
 		commitTextureEdits(state, listOf(edit))
@@ -4874,6 +4902,34 @@ class PSD2LiveViewModel : AutoCloseable {
 			subtractive && selectionAnchorId == layerId -> selectionAnchorId = _state.value.selectedLayerId
 		}
 	    markWorkspaceChanged()
+	}
+
+	/** Selects [layerIds] at once, as a marquee does: they replace the selection unless [additive]. */
+	fun selectLayers(layerIds: Collection<String>, additive: Boolean = false) {
+		if (layerIds.isEmpty()) {
+			if (!additive) selectLayer(null)
+			return
+		}
+		updateState { current ->
+			val selected = LinkedHashSet<String>()
+			if (additive) selected += current.selectedLayerIds.ifEmpty { setOfNotNull(current.selectedLayerId) }
+			selected += layerIds
+			current.copy(selectedLayerId = layerIds.last(), selectedLayerIds = selected, selectedDeformerId = null)
+		}
+		selectionAnchorId = layerIds.last()
+		markWorkspaceChanged()
+	}
+
+	/** Takes [layerIds] out of the selection, as an Alt box does. */
+	fun deselectLayers(layerIds: Collection<String>) {
+		val removed = layerIds.toSet()
+		if (removed.isEmpty()) return
+		updateState { current ->
+			val selected = LinkedHashSet(current.selectedLayerIds.ifEmpty { setOfNotNull(current.selectedLayerId) }.filter { it !in removed })
+			current.copy(selectedLayerId = current.selectedLayerId?.takeIf { it in selected } ?: selected.lastOrNull(), selectedLayerIds = selected)
+		}
+		if (selectionAnchorId in removed) selectionAnchorId = _state.value.selectedLayerId
+		markWorkspaceChanged()
 	}
 
 	fun beginClipMaskPick(sourceDrawableId: String) {
