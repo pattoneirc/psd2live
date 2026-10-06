@@ -266,6 +266,8 @@ internal class CommitBaseline(private val sample: Sample, private val out: File)
 							put("persist_ms_median_last5", r1(persists.takeLast(window.size).median()))
 							put("revision_hash_ms", r1(mean(5) { WorkspaceRevisions.of(after.document) }))
 							put("replay_ms", r1(mean(3) { after.model.baseRig.withRigEdits(after.model.config.rigEdits, after.model.config.layerVisibility, after.model.config.drawOrderOverrides) }))
+							put("replay_no_checkpoints_ms", r1(withoutCheckpoints { mean(3) { after.model.baseRig.withRigEdits(after.model.config.rigEdits, after.model.config.layerVisibility, after.model.config.drawOrderOverrides) } }))
+							put("replay_appended_ms", r1(appendedReplay(after.model.baseRig, after.model.config)))
 							put("snapshot_store_bytes", File(storeRoot, after.projectId).walk().filter { it.isFile }.sumOf { it.length() })
 						})
 					}
@@ -273,12 +275,12 @@ internal class CommitBaseline(private val sample: Sample, private val out: File)
 			}
 			report["journal_growth"] = growth
 			table.appendLine().appendLine("### (e) journal growth: appended canvas_geometry commits").appendLine()
-			table.appendLine("| appended | entries | journal chars | commit ms | rebuild ms | replay ms | revision hash ms | persist ms | store bytes |")
-			table.appendLine("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+			table.appendLine("| appended | entries | journal chars | commit ms | rebuild ms | replay ms | replay ms, no checkpoints | replay ms, one appended | revision hash ms | persist ms | store bytes |")
+			table.appendLine("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
 			growth.forEach { e ->
 				val o = e.jsonObject
 				fun v(k: String) = o.getValue(k).jsonPrimitive.content
-				table.appendLine("| ${v("appended")} | ${v("journal_entries")} | ${v("journal_chars")} | ${v("commit_ms_median_last5")} | ${v("rebuild_ms_median_last5")} | ${v("replay_ms")} | ${v("revision_hash_ms")} | ${v("persist_ms_median_last5")} | ${v("snapshot_store_bytes")} |")
+				table.appendLine("| ${v("appended")} | ${v("journal_entries")} | ${v("journal_chars")} | ${v("commit_ms_median_last5")} | ${v("rebuild_ms_median_last5")} | ${v("replay_ms")} | ${v("replay_no_checkpoints_ms")} | ${v("replay_appended_ms")} | ${v("revision_hash_ms")} | ${v("persist_ms_median_last5")} | ${v("snapshot_store_bytes")} |")
 			}
 		}
 		report["not_measured"] = JsonArray(listOf(JsonPrimitive("native Cubism model reload (CubismSdkPreviewSession.load): needs the native runtime and a GL context; only writing its runtime files is timed as materialize")))
@@ -396,12 +398,33 @@ internal class CommitBaseline(private val sample: Sample, private val out: File)
 		val stages = LinkedHashMap<String, Double>()
 		val overlay = config.rigEdits
 		stages["replay total (withRigEdits)"] = mean(3) { base.withRigEdits(overlay, config.layerVisibility, config.drawOrderOverrides) }
+		stages["replay total, no checkpoints or generator reuse"] = withoutCheckpoints { mean(3) { base.withRigEdits(overlay, config.layerVisibility, config.drawOrderOverrides) } }
+		stages["replay total, last entry appended"] = appendedReplay(base, config)
 		lateinit var replayed: PuppetModel
 		stages["  journal + static edits"] = mean(3) { replayed = overlay.copy(swingEdits = emptyList(), simEdits = emptyList()).applyTo(base.puppet) }
 		lateinit var generated: PuppetModel
 		stages["  swings + simulation write-back"] = mean(3) { generated = DocumentGenerators.generate(replayed, overlay) }
 		stages["  generated overrides"] = mean(5) { GeneratedOverrides.applyAll(generated, overlay.authoringJournal) }
 		return stages
+	}
+
+	private fun <T> withoutCheckpoints(block: () -> T): T {
+		val was = ReplayCheckpoints.enabled
+		ReplayCheckpoints.enabled = false
+		try { return block() } finally { ReplayCheckpoints.enabled = was }
+	}
+
+	/** The replay of a journal whose prefix (all but the last entry) was replayed just before. */
+	private fun appendedReplay(base: BuiltRig, config: PipelineConfig): Double {
+		val overlay = config.rigEdits
+		if (overlay.authoringJournal.isEmpty()) return 0.0
+		val prefix = overlay.copy(authoringJournal = overlay.authoringJournal.dropLast(1))
+		val runs = (0 until 3).map {
+			ReplayCheckpoints.clear()
+			base.withRigEdits(prefix, config.layerVisibility, config.drawOrderOverrides)
+			timed { base.withRigEdits(overlay, config.layerVisibility, config.drawOrderOverrides) }.second
+		}
+		return runs.average()
 	}
 
 	private fun bundleStages(model: RigPreviewModel): LinkedHashMap<String, Double> {

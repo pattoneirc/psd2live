@@ -78,10 +78,42 @@ internal object DocumentGenerators {
 		val sims = overlay.simEdits.associateBy(::simulationId)
 		var current = model
 		for (node in graph.order) {
-			swings[node.id]?.let { current = SwingGenerator.apply(current, listOf(it)) }
-			sims[node.id]?.let { current = SimGenerator.apply(current, listOf(it)) }
+			swings[node.id]?.let { swing ->
+				current = GeneratorReuse.run(node.id, swing, current, swingReads(current, swing)) { SwingGenerator.apply(it, listOf(swing)) }
+			}
+			sims[node.id]?.let { sim ->
+				current = GeneratorReuse.run(node.id, sim, current, simulationReads(current, sim)) { SimGenerator.apply(it, listOf(sim)) }
+			}
 		}
 		return current
+	}
+
+	/**
+	 * What a swing reads from the rig: each target Warp with all its ancestors (the parent world the swing
+	 * measures in), the parameters and their tree (it creates its own and reads defaults) and the world origin
+	 * (the automatic fulcrum). It writes its parameters, the tree and its target Warps.
+	 */
+	fun swingReads(model: PuppetModel, swing: RigSwingEdit): GeneratorReuse.Reads {
+		if (swing.baked) return GeneratorReuse.Reads.NONE
+		val byId = HashMap<String, org.umamo.runtime.model.Deformer>().apply { model.deformers.forEach { putIfAbsent(it.id.raw, it) } }
+		val chain = LinkedHashMap<String, Any?>()
+		for (target in swing.targets) {
+			var id: String? = target
+			while (id != null && id !in chain) { val deformer = byId[id]; chain[id] = deformer; id = deformer?.parent?.raw }
+		}
+		return GeneratorReuse.Reads(model.parameters, model.parameterTree, listOf(model.worldOriginX), chain.keys, chain.values.toList(), emptySet(), emptyList())
+	}
+
+	/**
+	 * What a baked simulation reads from the rig: its target and baked meshes (geometry, blend shapes and
+	 * channels), the parameters and their tree and the runtime target (whether blend shapes are available).
+	 * It writes its parameters, the tree and those meshes.
+	 */
+	fun simulationReads(model: PuppetModel, sim: io.github.psd2live.core.sim.RigSimEdit): GeneratorReuse.Reads {
+		val bake = sim.bake?.takeIf { sim.enabled } ?: return GeneratorReuse.Reads.NONE
+		val ids = (sim.targets + bake.vertexCounts.keys).toSortedSet()
+		val byId = HashMap<String, org.umamo.runtime.model.Drawable>().apply { model.drawables.forEach { putIfAbsent(it.id.raw, it) } }
+		return GeneratorReuse.Reads(model.parameters, model.parameterTree, listOf(model.runtimeTarget), emptySet(), emptyList(), ids, ids.map { byId[it] })
 	}
 
 	/** The document parts that differ between [before] and [after], as the graph's `document:` ids. */
@@ -112,5 +144,118 @@ internal object DocumentGenerators {
 		// What a changed or removed generator wrote before changes too.
 		val dropped = graph(before).order.filter { "document:${it.id}" in changed }.flatMap { it.writes }
 		return graph(after).stale(changed + dropped).map { it.id }
+	}
+}
+
+/**
+ * Reuse of a swing's or simulation's output while what it reads is unchanged.
+ *
+ * A generator declares its reads ([Reads]: the parameters and their tree, a few model scalars and the listed
+ * deformers or drawables). After it runs, its output is recorded as a patch - the new parameter list and tree
+ * and the replaced objects - if it changed nothing else and only objects it reads; otherwise it is not cached.
+ * A later run whose reads equal a recorded one (each object the same instance, else equal) applies the patch
+ * to its own input instead: objects outside the reads keep their current values. Comparing references first
+ * costs next to nothing; a content hash of the reads would cost more than the generators themselves.
+ */
+internal object GeneratorReuse {
+	private const val ENTRIES = 16
+
+	/** Off: every generator runs (the replay checkpoints' switch turns both off). */
+	val enabled: Boolean get() = ReplayCheckpoints.enabled
+
+	private val hitCount = java.util.concurrent.atomic.AtomicLong()
+	private val missCount = java.util.concurrent.atomic.AtomicLong()
+	val hits: Long get() = hitCount.get()
+	val misses: Long get() = missCount.get()
+
+	class Reads(
+		val parameters: List<org.umamo.runtime.model.Parameter>,
+		val tree: List<org.umamo.runtime.model.ParameterNode>,
+		val scalars: List<Any?>,
+		val deformerIds: Set<String>,
+		val deformers: List<Any?>,
+		val drawableIds: Set<String>,
+		val drawables: List<Any?>,
+	) {
+		fun sameAs(other: Reads): Boolean = same(parameters, other.parameters) && same(tree, other.tree) && same(scalars, other.scalars) &&
+			deformerIds == other.deformerIds && same(deformers, other.deformers) && drawableIds == other.drawableIds && same(drawables, other.drawables)
+
+		companion object {
+			/** The generator writes nothing (a baked swing, a simulation without an enabled bake). */
+			val NONE = Reads(emptyList(), emptyList(), emptyList(), emptySet(), emptyList(), emptySet(), emptyList())
+		}
+	}
+
+	private fun same(a: List<Any?>, b: List<Any?>): Boolean {
+		if (a === b) return true
+		if (a.size != b.size) return false
+		for (i in a.indices) { val x = a[i]; val y = b[i]; if (x !== y && x != y) return false }
+		return true
+	}
+
+	private class Entry(
+		val node: String,
+		val settings: Any,
+		val reads: Reads,
+		val parameters: List<org.umamo.runtime.model.Parameter>,
+		val tree: List<org.umamo.runtime.model.ParameterNode>,
+		val deformers: Map<String, org.umamo.runtime.model.Deformer>,
+		val drawables: Map<String, org.umamo.runtime.model.Drawable>,
+	) {
+		fun matches(node: String, settings: Any, reads: Reads) =
+			this.node == node && (this.settings === settings || this.settings == settings) && this.reads.sameAs(reads)
+	}
+
+	private val entries = ArrayList<Entry>()
+
+	fun clear() = synchronized(entries) { entries.clear() }
+
+	fun run(node: String, settings: Any, model: PuppetModel, reads: Reads, generate: (PuppetModel) -> PuppetModel): PuppetModel {
+		if (reads === Reads.NONE || !enabled) return generate(model)
+		val hit = synchronized(entries) {
+			entries.firstOrNull { it.matches(node, settings, reads) }?.also { entries.remove(it); entries.add(0, it) }
+		}
+		if (hit != null) {
+			hitCount.incrementAndGet()
+			return model.copy(parameters = hit.parameters, parameterTree = hit.tree,
+				deformers = if (hit.deformers.isEmpty()) model.deformers else model.deformers.map { hit.deformers[it.id.raw] ?: it },
+				drawables = if (hit.drawables.isEmpty()) model.drawables else model.drawables.map { hit.drawables[it.id.raw] ?: it })
+		}
+		missCount.incrementAndGet()
+		val output = generate(model)
+		record(node, settings, model, reads, output)?.let { entry ->
+			synchronized(entries) {
+				entries.removeAll { it.matches(node, settings, reads) }
+				entries.add(0, entry)
+				while (entries.size > ENTRIES) entries.removeAt(entries.size - 1)
+			}
+		}
+		return output
+	}
+
+	/** [output] as a patch of [input], or null when it changed anything beyond what a patch carries. */
+	private fun record(node: String, settings: Any, input: PuppetModel, reads: Reads, output: PuppetModel): Entry? {
+		fun <T : Any> changed(before: List<T>, after: List<T>, id: (T) -> String, allowed: Set<String>): Map<String, T>? {
+			if (before === after) return emptyMap()
+			if (before.size != after.size) return null
+			val out = HashMap<String, T>()
+			for (i in before.indices) {
+				val a = before[i]; val b = after[i]
+				if (a === b) continue
+				val key = id(a)
+				if (id(b) != key || key !in allowed || key in out) return null
+				out[key] = b
+			}
+			// A duplicated id elsewhere in the list would take the patch too.
+			if (out.isNotEmpty() && before.count { id(it) in out } != out.size) return null
+			return out
+		}
+		val deformers = changed(input.deformers, output.deformers, { it.id.raw }, reads.deformerIds) ?: return null
+		val drawables = changed(input.drawables, output.drawables, { it.id.raw }, reads.drawableIds) ?: return null
+		// Every other field must be untouched.
+		val rest = output.copy(parameters = input.parameters, parameterTree = input.parameterTree,
+			deformers = input.deformers, drawables = input.drawables)
+		if (rest != input) return null
+		return Entry(node, settings, reads, output.parameters, output.parameterTree, deformers, drawables)
 	}
 }

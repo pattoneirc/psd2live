@@ -246,21 +246,6 @@ data class RigEditOverlay(
 	}
 
 	fun applyTo(base: PuppetModel): PuppetModel {
-		var model = base
-		// 1. Delete removed parameters
-		for (id in deletedParameterIds.sorted()) model = model.withParameterDeleted(ParameterId(id))
-		// 2. Replay parameter creations and range/name updates
-		for (edit in parameterEdits) {
-			val id = ParameterId(edit.id)
-			if (model.parameters.none { it.id == id }) {
-				model = model.withParameterCreated(id, edit.name, edit.kind)
-			}
-			model = model.withParameterRange(id, edit.min, edit.default, edit.max)
-			val desired = edit.asParameter()
-			model = model.copy(parameters = model.parameters.map { current -> if (current.id == id) desired else current })
-		}
-		val journalWarpIds = structureEdits.filter { it["action"]?.jsonPrimitive?.contentOrNull == "create_warp" }.map { it.getValue("id").jsonPrimitive.content }.toSet()
-        for (warp in warpEdits) if(warp.id !in journalWarpIds) model = warp.applyTo(model)
 		// Generated axes do not exist until swing/simulation materialization. Replay their panel
 		// placement and links afterwards, including moves of another parameter relative to them.
 		val generatedIds = swingEdits.flatMap { it.parameterIds }.toSet() +
@@ -272,28 +257,47 @@ data class RigEditOverlay(
 					edit[field]?.jsonPrimitive?.contentOrNull in generatedIds
 				}
 		val (generatedPanelEdits, earlyStructureEdits) = structureEdits.partition(::generatedPanelEdit)
-        model = RigStructureEdits.replay(model, earlyStructureEdits)
-		// 3. Apply keyform sets
-		for (set in keyformSetEdits) {
-			model = applyKeyformSet(model, set)
-		}
-		// 4. Apply keyform copies
-		for (copy in keyformCopyEdits) {
-			model = applyKeyformCopy(model, copy)
-		}
-		// 5. Apply keyform deletions
-		for (delete in keyformDeleteEdits) {
-			model = applyKeyformDelete(model, delete)
-		}
 		val deferredJournalEdits = mutableListOf<kotlinx.serialization.json.JsonObject>()
-		for (command in authoringJournal) {
-			if (command["op"]?.jsonPrimitive?.contentOrNull == "structure") {
-				val edits = command.getValue("edits").jsonArray.map { it.jsonObject }
-				val (deferred, early) = edits.partition(::generatedPanelEdit)
-				deferredJournalEdits += deferred
-				model = RigStructureEdits.replay(model, early)
-			} else if (command["op"]?.jsonPrimitive?.contentOrNull != GeneratedOverrides.OP) {
-				model = RigAuthoringJournal.replay(model, command)
+		for (command in authoringJournal) if (command["op"]?.jsonPrimitive?.contentOrNull == "structure")
+			deferredJournalEdits += command.getValue("edits").jsonArray.map { it.jsonObject }.filter(::generatedPanelEdit)
+		// Everything the legacy stage reads, and what decides how the journal's structure edits split.
+		val legacy = ReplayCheckpoints.Legacy(listOf(deletedParameterIds, parameterEdits, warpEdits, structureEdits,
+			keyformSetEdits, keyformCopyEdits, keyformDeleteEdits, generatedIds, io.github.psd2live.i18n.I18n.currentLanguage.tag))
+		var model = ReplayCheckpoints.replay(base, legacy, authoringJournal, start = {
+			var model = base
+			// 1. Delete removed parameters
+			for (id in deletedParameterIds.sorted()) model = model.withParameterDeleted(ParameterId(id))
+			// 2. Replay parameter creations and range/name updates
+			for (edit in parameterEdits) {
+				val id = ParameterId(edit.id)
+				if (model.parameters.none { it.id == id }) {
+					model = model.withParameterCreated(id, edit.name, edit.kind)
+				}
+				model = model.withParameterRange(id, edit.min, edit.default, edit.max)
+				val desired = edit.asParameter()
+				model = model.copy(parameters = model.parameters.map { current -> if (current.id == id) desired else current })
+			}
+			val journalWarpIds = structureEdits.filter { it["action"]?.jsonPrimitive?.contentOrNull == "create_warp" }.map { it.getValue("id").jsonPrimitive.content }.toSet()
+			for (warp in warpEdits) if (warp.id !in journalWarpIds) model = warp.applyTo(model)
+			model = RigStructureEdits.replay(model, earlyStructureEdits)
+			// 3. Apply keyform sets
+			for (set in keyformSetEdits) {
+				model = applyKeyformSet(model, set)
+			}
+			// 4. Apply keyform copies
+			for (copy in keyformCopyEdits) {
+				model = applyKeyformCopy(model, copy)
+			}
+			// 5. Apply keyform deletions
+			for (delete in keyformDeleteEdits) {
+				model = applyKeyformDelete(model, delete)
+			}
+			model
+		}) { model, command ->
+			when (command["op"]?.jsonPrimitive?.contentOrNull) {
+				"structure" -> RigStructureEdits.replay(model, command.getValue("edits").jsonArray.map { it.jsonObject }.filterNot(::generatedPanelEdit))
+				GeneratedOverrides.OP -> model
+				else -> RigAuthoringJournal.replay(model, command)
 			}
 		}
 		// Swings and simulations write their keyforms onto the replayed rig, in the document graph's order.
