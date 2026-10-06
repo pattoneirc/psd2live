@@ -24,12 +24,13 @@ internal class AtlasSlice(
     /** The layer's source bounds in canvas pixels when this slice was packed. */
     val sourceBounds: Bounds,
 ) {
-    private val scale get() = placement.scale.coerceAtLeast(1)
+    private val scaleX get() = placement.scaleX.coerceAtLeast(1f)
+    private val scaleY get() = placement.scaleY.coerceAtLeast(1f)
 
-    fun canvasX(uv: Float): Float = sourceBounds.left + (uv * pageWidth - placement.x) / scale
-    fun canvasY(uv: Float): Float = sourceBounds.top + (uv * pageHeight - placement.y) / scale
-    fun uvX(canvasX: Float): Float = (placement.x + (canvasX - sourceBounds.left) * scale) / pageWidth
-    fun uvY(canvasY: Float): Float = (placement.y + (canvasY - sourceBounds.top) * scale) / pageHeight
+    fun canvasX(uv: Float): Float = sourceBounds.left + (uv * pageWidth - placement.x) / scaleX
+    fun canvasY(uv: Float): Float = sourceBounds.top + (uv * pageHeight - placement.y) / scaleY
+    fun uvX(canvasX: Float): Float = (placement.x + (canvasX - sourceBounds.left) * scaleX) / pageWidth
+    fun uvY(canvasY: Float): Float = (placement.y + (canvasY - sourceBounds.top) * scaleY) / pageHeight
 }
 
 /**

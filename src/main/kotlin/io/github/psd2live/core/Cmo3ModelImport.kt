@@ -271,8 +271,8 @@ internal object Cmo3ModelImport {
                 val uvs = FloatArray(mesh.positions.size)
                 val canvas = mesh.positions
                 for (index in uvs.indices step 2) {
-                    uvs[index] = (placement.x + (canvas[index] - layer.bounds.left) * placement.scale) / page.width
-                    uvs[index + 1] = (placement.y + (canvas[index + 1] - layer.bounds.top) * placement.scale) / page.height
+                    uvs[index] = (placement.x + (canvas[index] - layer.bounds.left) * placement.scaleX) / page.width
+                    uvs[index + 1] = (placement.y + (canvas[index + 1] - layer.bounds.top) * placement.scaleY) / page.height
                 }
                 pages[drawable.id.raw] = placement.page + offset
                 drawable.copy(mesh = org.umamo.runtime.model.DrawableMesh(mesh.positions, uvs, mesh.indices),

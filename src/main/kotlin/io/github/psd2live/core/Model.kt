@@ -286,14 +286,24 @@ data class LayerClassificationOverride(
 	)
 }
 
+/**
+ * Where one layer's raster sits on an atlas page. [x], [y], [width] and [height] are texture pixels
+ * on page [page]; [scaleX] and [scaleY] are texture pixels per raster pixel of the layer, so a tile
+ * maps raster point `(rx, ry)` to page pixel `(x + rx * scaleX, y + ry * scaleY)`.
+ *
+ * Placements live only in memory: the atlas is repacked from the source art on every rebuild, and
+ * exports convert them to the engine's own placement.
+ */
 data class AtlasPlacement(
 	val page: Int,
 	val x: Int,
 	val y: Int,
 	val width: Int,
 	val height: Int,
-	/** Texture pixels per original canvas pixel. */
-	val scale: Int = 1,
+	/** Texture pixels per layer raster pixel, horizontally. */
+	val scaleX: Float = 1f,
+	/** Texture pixels per layer raster pixel, vertically. */
+	val scaleY: Float = 1f,
 )
 
 data class AtlasPage(val image: BufferedImage, val png: ByteArray)

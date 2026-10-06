@@ -54,8 +54,8 @@ internal object PuppetSourceAtlas {
 					pageIndex = placement.page,
 					positionX = placement.x.toFloat(),
 					positionY = placement.y.toFloat(),
-					scaleX = placement.scale.toFloat(),
-					scaleY = placement.scale.toFloat(),
+					scaleX = placement.scaleX,
+					scaleY = placement.scaleY,
 					rotationDegrees = 0f,
 				),
 				source = SourceLayerRef(

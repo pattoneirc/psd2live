@@ -114,10 +114,11 @@ internal object MeshComponentSplit {
 
     fun detect(mesh: DrawableMesh, source: SourceLayer, placement: AtlasPlacement, pageWidth: Int, pageHeight: Int,
                checkpoint: () -> Unit = {}): Plan? {
-        val scale = placement.scale.toFloat().coerceAtLeast(1f)
+        val scaleX = placement.scaleX.coerceAtLeast(1f)
+        val scaleY = placement.scaleY.coerceAtLeast(1f)
         val local = FloatArray(mesh.uvs.size) { i ->
             (mesh.uvs[i] * (if (i % 2 == 0) pageWidth else pageHeight) -
-                (if (i % 2 == 0) placement.x else placement.y)) / scale
+                (if (i % 2 == 0) placement.x else placement.y)) / (if (i % 2 == 0) scaleX else scaleY)
         }
         return detect(mesh, source, local, checkpoint)
     }

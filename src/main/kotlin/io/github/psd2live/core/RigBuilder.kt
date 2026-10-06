@@ -1126,14 +1126,15 @@ object RigBuilder {
 		val placement = previous.placement ?: return null
 		val vertices = previous.mesh.positions.size / 2
 		if (vertices < 3 || previous.mesh.uvs.size < vertices * 2) return null
-		val scale = placement.scale.coerceAtLeast(1)
+		val textureScaleX = placement.scaleX.coerceAtLeast(1f)
+		val textureScaleY = placement.scaleY.coerceAtLeast(1f)
 		val canvasX = DoubleArray(vertices)
 		val canvasY = DoubleArray(vertices)
 		val localX = DoubleArray(vertices)
 		val localY = DoubleArray(vertices)
 		for (vertex in 0 until vertices) {
-			canvasX[vertex] = (previous.sourceBounds.left + (previous.mesh.uvs[vertex * 2] * previous.pageWidth - placement.x) / scale).toDouble()
-			canvasY[vertex] = (previous.sourceBounds.top + (previous.mesh.uvs[vertex * 2 + 1] * previous.pageHeight - placement.y) / scale).toDouble()
+			canvasX[vertex] = (previous.sourceBounds.left + (previous.mesh.uvs[vertex * 2] * previous.pageWidth - placement.x) / textureScaleX).toDouble()
+			canvasY[vertex] = (previous.sourceBounds.top + (previous.mesh.uvs[vertex * 2 + 1] * previous.pageHeight - placement.y) / textureScaleY).toDouble()
 			localX[vertex] = previous.mesh.positions[vertex * 2].toDouble()
 			localY[vertex] = previous.mesh.positions[vertex * 2 + 1].toDouble()
 		}
@@ -1995,8 +1996,8 @@ object RigBuilder {
 				positions[index + 1] = normalizeY(rigPoint.second, parentFrame)
 				canvas[index] = rigPoint.first
 				canvas[index + 1] = rigPoint.second
-				uvs[index] = (placement.x + localX * placement.scale) / atlasWidth
-				uvs[index + 1] = (placement.y + localY * placement.scale) / atlasHeight
+				uvs[index] = (placement.x + localX * placement.scaleX) / atlasWidth
+				uvs[index + 1] = (placement.y + localY * placement.scaleY) / atlasHeight
 			}
 			return MeshData(DrawableMesh(positions, uvs, adaptive.indices), canvas)
 		}
@@ -2064,8 +2065,8 @@ object RigBuilder {
 				positions[vertex * 2 + 1] = normalizeY(rigPoint.second, parentFrame)
 				canvas[vertex * 2] = rigPoint.first
 				canvas[vertex * 2 + 1] = rigPoint.second
-				uvs[vertex * 2] = (placement.x + u * width * placement.scale) / atlasWidth
-				uvs[vertex * 2 + 1] = (placement.y + v * height * placement.scale) / atlasHeight
+				uvs[vertex * 2] = (placement.x + u * width * placement.scaleX) / atlasWidth
+				uvs[vertex * 2 + 1] = (placement.y + v * height * placement.scaleY) / atlasHeight
 				vertex++
 			}
 		}
@@ -2389,8 +2390,8 @@ object RigBuilder {
                 val canvas = space?.toCanvas(col.x, y) ?: (col.x to y)
                 val localX = (canvas.first - layer.source.bounds.left).coerceIn(0f, width)
                 val localY = (canvas.second - layer.source.bounds.top).coerceIn(0f, height)
-                uvs[j] = (placement.x + localX * placement.scale) / atlasWidth
-                uvs[j + 1] = (placement.y + localY * placement.scale) / atlasHeight
+                uvs[j] = (placement.x + localX * placement.scaleX) / atlasWidth
+                uvs[j + 1] = (placement.y + localY * placement.scaleY) / atlasHeight
             }
         }
         val indices = (0 until columns.lastIndex).flatMap { i -> (0..1).flatMap { row ->
@@ -2436,8 +2437,8 @@ object RigBuilder {
             val canvas = space?.toCanvas(rx, ry) ?: (rx to ry)
             val localX = (canvas.first - layer.source.bounds.left).coerceIn(0f, texWidth)
             val localY = (canvas.second - layer.source.bounds.top).coerceIn(0f, texHeight)
-            uvs[i] = (placement.x + localX * placement.scale) / pageWidth
-            uvs[i + 1] = (placement.y + localY * placement.scale) / pageHeight
+            uvs[i] = (placement.x + localX * placement.scaleX) / pageWidth
+            uvs[i + 1] = (placement.y + localY * placement.scaleY) / pageHeight
         }
         val geometry = grid(mouthAxes()) { values ->
             val transformed = path.map { p ->

@@ -37,7 +37,7 @@ object AtlasPacker {
         for (item in items) {
             if (x + item.width + safePadding > pageSize) { x = safePadding; y += rowHeight + safePadding; rowHeight = 0 }
             if (y + item.height + safePadding > pageSize) { pageIndex++; x = safePadding; y = safePadding; rowHeight = 0 }
-            placements[item.layer.source.id.raw] = AtlasPlacement(pageIndex, x, y, item.width, item.height, upscale.scale)
+            placements[item.layer.source.id.raw] = AtlasPlacement(pageIndex, x, y, item.width, item.height, upscale.scale.toFloat(), upscale.scale.toFloat())
             x += item.width + safePadding * 2
             rowHeight = maxOf(rowHeight, item.height)
         }
