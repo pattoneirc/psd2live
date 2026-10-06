@@ -19,6 +19,7 @@ import java.security.MessageDigest
  * | `history/HEAD.json`, `history/nodes/` | the current node, node order and immutable node metadata (as v1) |
  * | `history/revisions/<key>.json` | per revision: the hash of each document node it is made of |
  * | `document/nodes/<kind>/<sha256>.json` | document nodes, `{schema, kind, value}` |
+ * | `document/nodes/payload/<sha256>.json` | large journal entries a schema-2 revision lists under `payloads` |
  * | `document/overrides/<sha256>.json` | generator overrides with their place in the journal |
  * | `document/clips/<sha256>.json` | motion clips and generated-motion settings |
  * | `assets/` | deduplicated rasters (PNG) |
@@ -27,16 +28,30 @@ import java.security.MessageDigest
  * A node's file name is the SHA-256 of its bytes. Splitting is lossless: unpacking rebuilds each snapshot with
  * the same content, so revision ids and history survive a v1 → v2 migration. The rig model is never stored;
  * opening rebuilds it from the document as before.
+ *
+ * A node holding a field that schema-1 readers would silently drop has schema 2, and a revision whose journal
+ * names payload nodes has schema 2; every other node and revision stays schema 1, byte for byte, so documents
+ * without the new fields still open in builds that read only schema 1, and builds that do reject the rest.
  */
 internal object ProjectFormatV2 {
 	const val VERSION = 2
+	/** Schema of document nodes v1 writers produced; still written for every node without newer fields. */
 	const val NODE_SCHEMA = 1
+	/** Schema of a node holding texture fields (layer `rect`, `textureOverrides`, the `atlas` setting). */
+	const val NODE_SCHEMA_TEXTURES = 2
+	/** Schema of a revision index whose journal names no payload node. */
 	const val REVISION_SCHEMA = 1
+	/** Schema of a revision index whose journal names payload nodes (listed under `payloads`). */
+	const val REVISION_SCHEMA_PAYLOADS = 2
+	/** Kind and folder of content-addressed payload nodes for large journal entries. */
+	const val PAYLOAD = "payload"
+	/** Key of a journal entry that stands for a payload node: `{"$payload": "<sha256>"}`. */
+	const val PAYLOAD_REF = "\$payload"
 
 	private val json = Json { ignoreUnknownKeys = true }
 
 	private val sourceKeys = listOf("canvasWidth", "canvasHeight", "groups", "layers")
-	private val layerKeys = listOf("layerVisibility", "deletedLayerIds", "layerOverrides", "parentOverrides", "meshOverrides")
+	private val layerKeys = listOf("layerVisibility", "deletedLayerIds", "layerOverrides", "parentOverrides", "meshOverrides", "textureOverrides")
 	private val sourceParts = mapOf("generationSource" to "generation-source", "meshSource" to "mesh-source", "placementSource" to "placement-source")
 	private val clipKeys = listOf("motions", "motionPresets")
 	private const val JOURNAL = "authoringJournal"
@@ -52,11 +67,15 @@ internal object ProjectFormatV2 {
 		move(store.resolve("HEAD.json"), history.resolve("HEAD.json"))
 		moveTree(store.resolve("history/nodes"), history.resolve("nodes"))
 		val snapshots = store.resolve("history/snapshots")
+		val shared = WorkspaceStore.SharedContent()
 		if (Files.isDirectory(snapshots)) Files.list(snapshots).use { paths -> paths.sorted().toList() }.forEach { file ->
-			val index = split(root, json.parseToJsonElement(Files.readString(file)).jsonObject)
+			val snapshot = WorkspaceStore.expandSnapshot(store, json.parseToJsonElement(Files.readString(file)).jsonObject, shared)
+			val index = split(root, snapshot)
 			write(history.resolve("revisions").resolve(file.fileName.toString()), index.toString().encodeToByteArray())
 			Files.delete(file)
 		}
+		// Journal chunks and payloads shared by working snapshots are now inside the document nodes.
+		WorkspaceStore.sharedContentFolders.forEach { deleteTree(store.resolve(it)) }
 		moveTree(store.resolve("blobs"), root.resolve("assets"))
 		for (folder in auxiliaryFolders) moveTree(store.resolve(folder), root.resolve("auxiliary").resolve(folder))
 		if (Files.isRegularFile(store.resolve("tasks.json"))) move(store.resolve("tasks.json"), root.resolve("auxiliary/tasks.json"))
@@ -85,11 +104,18 @@ internal object ProjectFormatV2 {
 		deleteTree(history); deleteTree(root.resolve("document")); deleteTree(root.resolve("auxiliary"))
 	}
 
-	/** Writes [snapshot]'s parts as content-addressed nodes under [root] and returns the revision index naming them. */
-	internal fun split(root: Path, snapshot: JsonObject): JsonObject {
+	/**
+	 * Writes [snapshot]'s parts as content-addressed nodes under [root] and returns the revision index naming them.
+	 *
+	 * With [payloadMinChars], authored journal entries whose text is at least that long are stored once each as
+	 * `payload` nodes and the journal node names them (`{"$PAYLOAD_REF": sha}`); such a revision has schema 2.
+	 * Saves do not pass it yet, so every revision they write stays readable by schema-1 builds.
+	 */
+	internal fun split(root: Path, snapshot: JsonObject, payloadMinChars: Int? = null): JsonObject {
 		val nodes = LinkedHashMap<String, String>()
 		var overrides: String? = null
 		var clips: String? = null
+		val payloads = LinkedHashSet<String>()
 		fun subset(keys: List<String>) = JsonObject(snapshot.filterKeys { it in keys })
 		subset(sourceKeys).takeIf { it.isNotEmpty() }?.let { nodes["source"] = node(root, "source", it) }
 		subset(layerKeys).takeIf { it.isNotEmpty() }?.let { nodes["layers"] = node(root, "layers", it) }
@@ -101,7 +127,11 @@ internal object ProjectFormatV2 {
 				val (generated, authored) = journal.withIndex().partition { (_, command) ->
 					(command as? JsonObject)?.get("op")?.jsonPrimitive?.contentOrNull == OVERRIDE
 				}
-				nodes["journal"] = node(root, "journal", buildJsonObject { put("entries", JsonArray(authored.map { it.value })) })
+				val entries = authored.map { (_, command) ->
+					if (payloadMinChars == null || command.toString().length < payloadMinChars) command
+					else buildJsonObject { put(PAYLOAD_REF, payload(root, command).also(payloads::add)) }
+				}
+				nodes["journal"] = node(root, "journal", buildJsonObject { put("entries", JsonArray(entries)) })
 				if (generated.isNotEmpty()) overrides = content(root, "document/overrides", buildJsonObject {
 					put("schema", NODE_SCHEMA); put("kind", "overrides")
 					putJsonArray("entries") { generated.forEach { (index, command) -> addJsonObject { put("index", index); put("command", command) } } }
@@ -114,25 +144,69 @@ internal object ProjectFormatV2 {
 		val known = sourceKeys + layerKeys + "settings" + sourceParts.keys + "rigEdits"
 		nodes["document"] = node(root, "document", JsonObject(snapshot.filterKeys { it !in known }))
 		return buildJsonObject {
-			put("schema", REVISION_SCHEMA)
+			put("schema", if (payloads.isEmpty()) REVISION_SCHEMA else REVISION_SCHEMA_PAYLOADS)
 			put("nodes", JsonObject(nodes.mapValues { JsonPrimitive(it.value) }))
 			overrides?.let { put("overrides", it) }
 			clips?.let { put("clips", it) }
+			if (payloads.isNotEmpty()) putJsonArray("payloads") { payloads.forEach { add(JsonPrimitive(it)) } }
 		}
+	}
+
+	/** Stores [value] once as a content-addressed `payload` node and returns its hash. */
+	internal fun payload(root: Path, value: JsonElement): String =
+		content(root, "document/nodes/$PAYLOAD", buildJsonObject { put("schema", NODE_SCHEMA); put("kind", PAYLOAD); put("value", value) })
+
+	/** The value of the `payload` node [hash], verified against its hash. */
+	internal fun readPayload(root: Path, hash: String): JsonElement {
+		val node = read(root, "document/nodes/$PAYLOAD", hash)
+		require(node["schema"]?.jsonPrimitive?.intOrNull == NODE_SCHEMA && node["kind"]?.jsonPrimitive?.contentOrNull == PAYLOAD) {
+			"Unsupported document node: $PAYLOAD $hash"
+		}
+		return node.getValue("value")
+	}
+
+	/**
+	 * The schema a node of [kind] needs: 2 when it holds a field schema-1 readers would drop (a layer's float
+	 * `rect`, `textureOverrides`, the `atlas` setting), so those builds reject it instead of losing data.
+	 */
+	private fun schemaOf(kind: String, value: JsonObject): Int {
+		fun layersHaveRect(source: JsonObject?) = source?.get("layers")?.jsonArray.orEmpty().any { (it as? JsonObject)?.containsKey("rect") == true }
+		val newer = when (kind) {
+			"source" -> layersHaveRect(value)
+			in sourceParts.values -> value.values.any { layersHaveRect(it as? JsonObject) }
+			"layers" -> "textureOverrides" in value
+			"settings" -> (value["settings"] as? JsonObject)?.containsKey(WorkspaceSettingsCodec.ATLAS) == true
+			else -> false
+		}
+		return if (newer) NODE_SCHEMA_TEXTURES else NODE_SCHEMA
 	}
 
 	/** The snapshot a revision [index] names, read from the nodes under [root]. */
 	internal fun join(root: Path, index: JsonObject, cache: MutableMap<String, JsonObject> = HashMap()): JsonObject {
-		require(index["schema"]?.jsonPrimitive?.intOrNull == REVISION_SCHEMA) { "Unsupported revision schema" }
+		val schema = index["schema"]?.jsonPrimitive?.intOrNull
+		require(schema == REVISION_SCHEMA || schema == REVISION_SCHEMA_PAYLOADS) { "Unsupported revision schema" }
 		val nodes = index.getValue("nodes").jsonObject.mapValues { it.value.jsonPrimitive.content }
 		val unknown = nodes.keys - (listOf("source", "layers", "settings", "rig", "journal", "document") + sourceParts.values).toSet()
 		require(unknown.isEmpty()) { "Unsupported document nodes: $unknown" }
+		val payloads = index["payloads"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet().orEmpty()
+		require((schema == REVISION_SCHEMA_PAYLOADS) == payloads.isNotEmpty()) { "Payloads need revision schema $REVISION_SCHEMA_PAYLOADS" }
 		fun load(folder: String, kind: String, hash: String): JsonObject {
 			val value = cache.getOrPut("$folder/$hash") { read(root, folder, hash) }
-			require(value["schema"]?.jsonPrimitive?.intOrNull == NODE_SCHEMA && value["kind"]?.jsonPrimitive?.contentOrNull == kind) {
+			require(value["schema"]?.jsonPrimitive?.intOrNull in NODE_SCHEMA..NODE_SCHEMA_TEXTURES && value["kind"]?.jsonPrimitive?.contentOrNull == kind) {
 				"Unsupported document node: $kind $hash"
 			}
 			return value
+		}
+		fun resolve(command: JsonElement): JsonElement {
+			val reference = (command as? JsonObject)?.takeIf { it.size == 1 }?.get(PAYLOAD_REF) ?: return command
+			val hash = reference.jsonPrimitive.content
+			require(hash in payloads) { "Journal names a payload its revision does not list: $hash" }
+			return cache.getOrPut("document/nodes/$PAYLOAD/$hash") { read(root, "document/nodes/$PAYLOAD", hash) }.let { node ->
+				require(node["schema"]?.jsonPrimitive?.intOrNull == NODE_SCHEMA && node["kind"]?.jsonPrimitive?.contentOrNull == PAYLOAD) {
+					"Unsupported document node: $PAYLOAD $hash"
+				}
+				node.getValue("value")
+			}
 		}
 		fun value(kind: String) = nodes[kind]?.let { load("document/nodes/$kind", kind, it).getValue("value").jsonObject }
 		val snapshot = LinkedHashMap<String, JsonElement>()
@@ -143,7 +217,9 @@ internal object ProjectFormatV2 {
 		val rig = value("rig")?.getValue("rigEdits")?.jsonObject
 		if (rig != null) {
 			val edits = LinkedHashMap<String, JsonElement>(rig)
-			val authored = value("journal")?.getValue("entries")?.jsonArray
+			val authored = value("journal")?.getValue("entries")?.jsonArray?.let { entries ->
+				if (payloads.isEmpty()) entries else JsonArray(entries.map(::resolve))
+			}
 			val generated = index["overrides"]?.jsonPrimitive?.content?.let { load("document/overrides", "overrides", it).getValue("entries").jsonArray }
 			if (authored != null || generated != null) {
 				val placed = generated.orEmpty().associate { it.jsonObject.getValue("index").jsonPrimitive.int to it.jsonObject.getValue("command") }
@@ -159,7 +235,7 @@ internal object ProjectFormatV2 {
 	}
 
 	private fun node(root: Path, kind: String, value: JsonObject): String =
-		content(root, "document/nodes/$kind", buildJsonObject { put("schema", NODE_SCHEMA); put("kind", kind); put("value", value) })
+		content(root, "document/nodes/$kind", buildJsonObject { put("schema", schemaOf(kind, value)); put("kind", kind); put("value", value) })
 
 	/** Writes [value] under [folder] named by the SHA-256 of its bytes, once. */
 	private fun content(root: Path, folder: String, value: JsonObject): String {

@@ -6,7 +6,9 @@ package io.github.psd2live.core
  *
  * Layers are packed at their raster resolution times their texture density; when that does not fit
  * the budget, unlocked layers are scaled down together by one common fit factor (at most 1).
- * Not used by the packer yet: today the page size and padding still come from [PipelineConfig].
+ * Stored as the optional `atlas` project setting (`WorkspaceSettingsCodec.ATLAS`); without it the budget is the
+ * legacy `atlasSize`/`texturePadding` with [DEFAULT_MAX_PAGES]. Not used by the packer yet: today the page size
+ * and padding still come from [PipelineConfig].
  */
 data class AtlasBudget(
 	val pageSize: Int = 4096,

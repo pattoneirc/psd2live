@@ -1941,6 +1941,7 @@ class PSD2LiveViewModel : AutoCloseable {
             rigEdits = document.rigEdits, generationSource = document.generationSource,
             meshSource = document.meshSource,
             placementSource = document.placementSource,
+            textureOverrides = document.textureOverrides,
             layerOverrides = document.layerOverrides, documentLayerVisibility = document.layerVisibility,
             deletedLayerIds = document.deletedLayerIds, parentOverrides = document.parentOverrides, meshOverrides = document.meshOverrides,
             layerVisibility = if (replacing) current.layerVisibility else emptyMap(),
@@ -5863,6 +5864,7 @@ class PSD2LiveViewModel : AutoCloseable {
         expectedGenerationSource: SourceArt? = null,
         expectedMeshSource: SourceArt? = null,
         expectedPlacementSource: SourceArt? = null,
+        expectedTextureOverrides: Map<String, io.github.psd2live.project.TextureOverride> = emptyMap(),
 		layerVisibility: Map<String, Boolean>,
 		deletedLayerIds: Set<String>,
 		layerOverrides: Map<String, LayerClassificationOverride>,
@@ -5874,6 +5876,7 @@ class PSD2LiveViewModel : AutoCloseable {
         generationSource: SourceArt? = null,
         meshSource: SourceArt? = null,
         placementSource: SourceArt? = null,
+        textureOverrides: Map<String, io.github.psd2live.project.TextureOverride> = emptyMap(),
 	): Boolean {
 		var applied = false
 		updateState { current ->
@@ -5889,6 +5892,7 @@ class PSD2LiveViewModel : AutoCloseable {
                 current.generationSource != expectedGenerationSource ||
                 current.meshSource != expectedMeshSource ||
                 current.placementSource != expectedPlacementSource ||
+                current.textureOverrides != expectedTextureOverrides ||
                 current.meshOverrides != expectedMeshOverrides ||
                 (expectedSettings.isNotEmpty() && io.github.psd2live.ui.state.WorkspaceStateCodec.settings(current) != expectedSettings)
 			) return@updateState current
@@ -5905,6 +5909,7 @@ class PSD2LiveViewModel : AutoCloseable {
 				generationSource = generationSource,
 				meshSource = meshSource,
                 placementSource = placementSource,
+                textureOverrides = textureOverrides,
 				meshOverrides = meshOverrides,
 				selectedLayerId = current.selectedLayerId?.takeIf { selected ->
 					preview.analysis.layers.any { it.source.id.raw == selected } && selected !in deletedLayerIds

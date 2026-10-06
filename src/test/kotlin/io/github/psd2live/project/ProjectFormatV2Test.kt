@@ -127,7 +127,156 @@ class ProjectFormatV2Test {
 		val source = Files.list(root.resolve("document/nodes/source")).use { it.toList().single() }
 		Files.writeString(source, Files.readString(source).replace("4", "5"))
 		assertFailsWith<IllegalArgumentException> { ProjectFormatV2.join(root, index) }
-		val newer = JsonObject(index + ("schema" to JsonPrimitive(2)))
+		val newer = JsonObject(index + ("schema" to JsonPrimitive(3)))
 		assertFailsWith<IllegalArgumentException> { ProjectFormatV2.join(root, newer) }
+		// Schema 2 is only for revisions that list payloads.
+		assertFailsWith<IllegalArgumentException> { ProjectFormatV2.join(root, JsonObject(index + ("schema" to JsonPrimitive(2)))) }
+	}
+
+	/** The nodes and revision indexes the v1 sample saved as before texture fields and shared working storage. */
+	private val legacyNodes = listOf(
+		"document/clips/6223e62d20d49fdd3c22b2cef3e3b5060844117d20d0e65f4204551e9312596e.json",
+		"document/nodes/document/1a96f27c97a7d0dc1a6d8ea0d81fa8652252adbde959b3fcf8ac95250d7be10f.json",
+		"document/nodes/generation-source/fbeea4d579a7d57823f306629ed438ef75d079899d95f511fa49e768fa24bca4.json",
+		"document/nodes/journal/67ddb6d429b7f0c82e15cb654b7574e9abed013843cce140658b00b47ad68db4.json",
+		"document/nodes/journal/9791ce52dd9704a236e82ebe2a5ee57c1e01532dd748ac07c40ae9953edb551a.json",
+		"document/nodes/layers/44a8b23f0d01bfa01a9f4b28e7bfa557a60074eca2dfe2c9063d7aaaca7edbcc.json",
+		"document/nodes/layers/58c5d9f27aabca80e9ff0ee879c1e8a15669bdb2c6688701793b00bc245e0f07.json",
+		"document/nodes/rig/e4b1ebd278d09557382db1138d63f7d68be583b38f2d86dc62292d859dde8275.json",
+		"document/nodes/settings/d18a4016d7a62f4e7dc028fc8de02b85f7ecfe4829dc263113c6ddbd203b63c0.json",
+		"document/nodes/source/18791148ca57e25c7f16bf149a1ffcf82dfe248e55d74884f5f07a6d5987b327.json",
+		"document/nodes/source/5bdbbb3d8b3b149c1ea9751d49441f6c623ecfbf877cb77ca8639a89ec52121f.json",
+		"document/overrides/a1a2306f464b083a779438f57a72416c0ce9c61f83769a30745d17ad241edf22.json",
+	)
+	private val legacyRevisions = mapOf(
+		"0c29b7bc4a35e902510cec30f804138b41cac63b0e0ef3d863af46560f6758e6" to
+			"""{"schema":1,"nodes":{"source":"18791148ca57e25c7f16bf149a1ffcf82dfe248e55d74884f5f07a6d5987b327","layers":"58c5d9f27aabca80e9ff0ee879c1e8a15669bdb2c6688701793b00bc245e0f07","settings":"d18a4016d7a62f4e7dc028fc8de02b85f7ecfe4829dc263113c6ddbd203b63c0","generation-source":"fbeea4d579a7d57823f306629ed438ef75d079899d95f511fa49e768fa24bca4","rig":"e4b1ebd278d09557382db1138d63f7d68be583b38f2d86dc62292d859dde8275","journal":"9791ce52dd9704a236e82ebe2a5ee57c1e01532dd748ac07c40ae9953edb551a","document":"1a96f27c97a7d0dc1a6d8ea0d81fa8652252adbde959b3fcf8ac95250d7be10f"},"overrides":"a1a2306f464b083a779438f57a72416c0ce9c61f83769a30745d17ad241edf22","clips":"6223e62d20d49fdd3c22b2cef3e3b5060844117d20d0e65f4204551e9312596e"}""",
+		"af4471bc85a71a93243d168de1fc4d426cdc6d429dc9e29aafe7928eb2cbb810" to
+			"""{"schema":1,"nodes":{"source":"5bdbbb3d8b3b149c1ea9751d49441f6c623ecfbf877cb77ca8639a89ec52121f","layers":"44a8b23f0d01bfa01a9f4b28e7bfa557a60074eca2dfe2c9063d7aaaca7edbcc","settings":"d18a4016d7a62f4e7dc028fc8de02b85f7ecfe4829dc263113c6ddbd203b63c0","generation-source":"fbeea4d579a7d57823f306629ed438ef75d079899d95f511fa49e768fa24bca4","rig":"e4b1ebd278d09557382db1138d63f7d68be583b38f2d86dc62292d859dde8275","journal":"67ddb6d429b7f0c82e15cb654b7574e9abed013843cce140658b00b47ad68db4","document":"1a96f27c97a7d0dc1a6d8ea0d81fa8652252adbde959b3fcf8ac95250d7be10f"},"clips":"6223e62d20d49fdd3c22b2cef3e3b5060844117d20d0e65f4204551e9312596e"}""",
+		"b63fa95ddef57f5d4c3b44f717f6b1f0522865e59d69c3c9b554b8dbb153696d" to
+			"""{"schema":1,"nodes":{"source":"5bdbbb3d8b3b149c1ea9751d49441f6c623ecfbf877cb77ca8639a89ec52121f","layers":"44a8b23f0d01bfa01a9f4b28e7bfa557a60074eca2dfe2c9063d7aaaca7edbcc","settings":"d18a4016d7a62f4e7dc028fc8de02b85f7ecfe4829dc263113c6ddbd203b63c0","generation-source":"fbeea4d579a7d57823f306629ed438ef75d079899d95f511fa49e768fa24bca4","rig":"e4b1ebd278d09557382db1138d63f7d68be583b38f2d86dc62292d859dde8275","journal":"9791ce52dd9704a236e82ebe2a5ee57c1e01532dd748ac07c40ae9953edb551a","document":"1a96f27c97a7d0dc1a6d8ea0d81fa8652252adbde959b3fcf8ac95250d7be10f"},"overrides":"a1a2306f464b083a779438f57a72416c0ce9c61f83769a30745d17ad241edf22","clips":"6223e62d20d49fdd3c22b2cef3e3b5060844117d20d0e65f4204551e9312596e"}""",
+		"c1171b8a0e6c902643accbeaf3c49323cf201eb3121149fc0dafef234d22cd51" to
+			"""{"schema":1,"nodes":{"source":"5bdbbb3d8b3b149c1ea9751d49441f6c623ecfbf877cb77ca8639a89ec52121f","layers":"58c5d9f27aabca80e9ff0ee879c1e8a15669bdb2c6688701793b00bc245e0f07","settings":"d18a4016d7a62f4e7dc028fc8de02b85f7ecfe4829dc263113c6ddbd203b63c0","generation-source":"fbeea4d579a7d57823f306629ed438ef75d079899d95f511fa49e768fa24bca4","rig":"e4b1ebd278d09557382db1138d63f7d68be583b38f2d86dc62292d859dde8275","journal":"9791ce52dd9704a236e82ebe2a5ee57c1e01532dd748ac07c40ae9953edb551a","document":"1a96f27c97a7d0dc1a6d8ea0d81fa8652252adbde959b3fcf8ac95250d7be10f"},"overrides":"a1a2306f464b083a779438f57a72416c0ce9c61f83769a30745d17ad241edf22","clips":"6223e62d20d49fdd3c22b2cef3e3b5060844117d20d0e65f4204551e9312596e"}""",
+	)
+
+	@Test fun aLegacyProjectSavesByteIdenticalNodes() = runBlocking<Unit> {
+		val file = fixture()
+		val repository = ProjectRepository()
+		repository.open(file).use { repository.save(capture(it), file) }
+		ZipFile(file.toFile()).use { zip ->
+			val names = zip.entries().asSequence().map { it.name }.toList()
+			assertEquals(legacyNodes, names.filter { it.startsWith("document/") }.sorted())
+			val revisions = names.filter { it.startsWith("history/revisions/") }.associate { name ->
+				name.removePrefix("history/revisions/").removeSuffix(".json") to zip.getInputStream(zip.getEntry(name)).readBytes().decodeToString()
+			}
+			assertEquals(legacyRevisions, revisions)
+			// Node file names are their SHA-256, so equal names mean equal bytes.
+			for (name in legacyNodes) assertEquals(name.substringAfterLast('/').removeSuffix(".json"),
+				java.security.MessageDigest.getInstance("SHA-256").digest(zip.getInputStream(zip.getEntry(name)).readBytes()).joinToString("") { "%02x".format(it.toInt() and 255) })
+		}
+	}
+
+	private fun nodeSchema(root: Path, kind: String, hash: String): Int =
+		Json.parseToJsonElement(Files.readString(root.resolve("document/nodes/$kind/$hash.json"))).jsonObject.getValue("schema").jsonPrimitive.int
+
+	@Test fun textureFieldsRaiseOnlyTheirNodesToSchema2() {
+		val root = Files.createDirectories(temporary.resolve("textures"))
+		fun layer(rect: Boolean) = buildJsonObject {
+			put("id", "a"); put("left", 1); put("top", 1); put("width", 3); put("height", 3)
+			if (rect) putJsonArray("rect") { add(1.5f); add(1.25f); add(2.5f); add(2.75f) }
+		}
+		val legacy = buildJsonObject {
+			put("settings", buildJsonObject { put("atlasSize", 2048) }); put("version", 1)
+			put("canvasWidth", 4); put("canvasHeight", 4); putJsonArray("groups") {}; putJsonArray("layers") { add(layer(false)) }
+			put("generationSource", buildJsonObject { put("canvasWidth", 4); putJsonArray("layers") { add(layer(false)) } })
+			putJsonObject("layerVisibility") {}
+			putJsonObject("rigEdits") { putJsonArray("authoringJournal") { add(buildJsonObject { put("op", "canvas_geometry") }) } }
+		}
+		val legacyIndex = ProjectFormatV2.split(root, legacy)
+		val legacyNodes = legacyIndex.getValue("nodes").jsonObject.mapValues { it.value.jsonPrimitive.content }
+		assertTrue(legacyNodes.all { (kind, hash) -> nodeSchema(root, kind, hash) == 1 }, "a document without texture fields stays schema 1")
+
+		val textured = JsonObject(legacy + mapOf(
+			"settings" to buildJsonObject { put("atlasSize", 2048); putJsonObject("atlas") { put("pageSize", 2048); put("maxPages", 2); put("padding", 4) } },
+			"layers" to buildJsonArray { add(layer(true)) },
+			"generationSource" to buildJsonObject { put("canvasWidth", 4); putJsonArray("layers") { add(layer(true)) } },
+			"textureOverrides" to buildJsonObject { putJsonObject("a") { put("density", 2f); put("lock", true) } },
+		))
+		val index = ProjectFormatV2.split(root, textured)
+		assertEquals(1, index.getValue("schema").jsonPrimitive.int, "texture fields alone need no new revision schema")
+		val nodes = index.getValue("nodes").jsonObject.mapValues { it.value.jsonPrimitive.content }
+		assertEquals(mapOf("source" to 2, "layers" to 2, "settings" to 2, "generation-source" to 2, "rig" to 1, "journal" to 1, "document" to 1),
+			nodes.mapValues { (kind, hash) -> nodeSchema(root, kind, hash) })
+		assertEquals(legacyNodes.getValue("rig"), nodes.getValue("rig"))
+		assertEquals(textured, ProjectFormatV2.join(root, index))
+	}
+
+	@Test fun payloadNodesRoundTripAndOnlyThenRaiseTheRevisionSchema() {
+		val root = Files.createDirectories(temporary.resolve("payloads"))
+		val large = buildJsonObject { put("op", "canvas_geometry"); putJsonArray("points") { repeat(64) { add(it * 0.5f) } } }
+		val snapshot = buildJsonObject {
+			put("version", 1)
+			putJsonObject("rigEdits") {
+				putJsonArray("authoringJournal") {
+					add(buildJsonObject { put("op", "structure") })
+					add(large)
+					add(buildJsonObject { put("op", GeneratedOverrides.OP); put("n", 2) })
+				}
+			}
+		}
+		val plain = ProjectFormatV2.split(root, snapshot)
+		assertEquals(1, plain.getValue("schema").jsonPrimitive.int)
+		assertNull(plain["payloads"])
+
+		val index = ProjectFormatV2.split(root, snapshot, payloadMinChars = 100)
+		assertEquals(2, index.getValue("schema").jsonPrimitive.int)
+		val payload = index.getValue("payloads").jsonArray.single().jsonPrimitive.content
+		assertEquals(large, ProjectFormatV2.readPayload(root, payload))
+		val journal = Json.parseToJsonElement(Files.readString(root.resolve("document/nodes/journal/${index.getValue("nodes").jsonObject.getValue("journal").jsonPrimitive.content}.json")))
+		assertEquals(buildJsonObject { put(ProjectFormatV2.PAYLOAD_REF, payload) }, journal.jsonObject.getValue("value").jsonObject.getValue("entries").jsonArray[1])
+		assertEquals(snapshot, ProjectFormatV2.join(root, index))
+		assertEquals(index, ProjectFormatV2.split(root, snapshot, payloadMinChars = 100), "a payload is stored once")
+		// A journal may only name payloads its revision lists.
+		assertFailsWith<IllegalArgumentException> {
+			ProjectFormatV2.join(root, JsonObject(index + ("payloads" to buildJsonArray { add("0".repeat(64)) })))
+		}
+	}
+
+	@Test fun textureFieldsSurviveAV2SaveAndKeepTheirRevision() = runBlocking<Unit> {
+		val raster = org.umamo.format.art.LayerRaster(2, 2, ByteArray(16) { 255.toByte() })
+		fun layer(rect: LayerCanvasRect?) = WorkspaceSourceLayer(org.umamo.format.art.LayerId("art"), "Artwork", "", org.umamo.format.art.SourceLayerKind.Raster, true,
+			0, org.umamo.format.art.LayerBounds(1, 1, 3, 3), 1f, false, org.umamo.format.art.LayerBlend.Normal, org.umamo.format.art.ChannelMask.ALL, raster,
+			null, null, false, rect)
+		fun document(rect: LayerCanvasRect?, overrides: Map<String, TextureOverride>, settings: JsonObject) = WorkspaceDocument(
+			WorkspaceSourceArt(8, 8, listOf(layer(rect)), emptyList()), emptyMap(), emptySet(), emptyMap(), emptyMap(),
+			io.github.psd2live.core.RigEditOverlay.Empty, settings = settings, textureOverrides = overrides)
+		val plainSettings = buildJsonObject { put("atlasSize", 2048) }
+		val plain = document(null, emptyMap(), plainSettings)
+		// Values equal to the defaults are not part of the identity.
+		assertEquals(WorkspaceRevisions.of(plain), WorkspaceRevisions.of(document(LayerCanvasRect(1f, 1f, 3f, 3f), mapOf("art" to TextureOverride()), plainSettings)))
+		val budget = io.github.psd2live.core.AtlasBudget(pageSize = 2048, maxPages = 3, padding = 4)
+		val textured = document(LayerCanvasRect(1.5f, 1.25f, 2.5f, 2.75f),
+			mapOf("art" to TextureOverride(density = 2f, lock = true, pin = TexturePin(1, 16, 32))),
+			JsonObject(plainSettings + (WorkspaceSettingsCodec.ATLAS to WorkspaceSettingsCodec.encodeAtlasBudget(budget))))
+		assertNotEquals(WorkspaceRevisions.of(plain), WorkspaceRevisions.of(textured))
+		assertEquals(budget, WorkspaceSettingsCodec.decodeAtlasBudget(textured.settings))
+		assertNull(WorkspaceSettingsCodec.decodeAtlasBudget(plain.settings))
+		assertEquals(io.github.psd2live.core.AtlasBudget(pageSize = 2048), WorkspaceSettingsCodec.atlasBudget(plain.settings), "no budget keeps the legacy page size")
+
+		val revision = WorkspaceRevisions.of(plain)
+		val tree = io.github.psd2live.history.WorkspaceHistoryTree(plain, revision, revision)
+		val next = WorkspaceRevisions.of(textured)
+		tree.commit(tree.head().node.id, textured, next, next, "Texture settings", "agent")
+		val target = temporary.resolve("textured.psd2live")
+		val repository = ProjectRepository()
+		repository.save(ProjectSaveCapture("project", tree.state(), JsonObject(emptyMap()), null, WorkspaceStore(temporary.resolve("workspace"))), target)
+		repository.open(target).use { opened ->
+			val head = opened.history.head().snapshot
+			assertEquals(next, WorkspaceRevisions.of(head))
+			assertEquals(textured.textureOverrides, head.textureOverrides)
+			assertEquals(LayerCanvasRect(1.5f, 1.25f, 2.5f, 2.75f), (head.source.layers.single() as WorkspaceSourceLayer).rect)
+			assertEquals(budget, WorkspaceSettingsCodec.decodeAtlasBudget(head.settings))
+			assertEquals(revision, WorkspaceRevisions.of(opened.history.selections().single { it.node.parentId == null }.snapshot))
+		}
 	}
 }

@@ -38,6 +38,7 @@ internal object WorkspaceStateCodec {
         generationSource = state.generationSource,
         meshSource = state.meshSource,
             placementSource = state.placementSource,
+        textureOverrides = state.textureOverrides,
     )
     /**
      * Stamped into every workspace this build writes. A file that predates the selection-bounds
@@ -365,6 +366,8 @@ internal object WorkspaceStateCodec {
         put("exportIncludeUserData", state.exportIncludeUserData)
         put("exportIncludeDisplayInfo", state.exportIncludeDisplayInfo)
         put("exportPixelsPerUnit", state.exportPixelsPerUnit?.let(::JsonPrimitive) ?: JsonNull)
+        // Written only when set, so documents without a budget keep their settings text and revision.
+        state.atlasBudget?.let { put(io.github.psd2live.project.WorkspaceSettingsCodec.ATLAS, io.github.psd2live.project.WorkspaceSettingsCodec.encodeAtlasBudget(it)) }
     }
     fun encode(state: PSD2LiveState): JsonObject = buildJsonObject {
         put("projectSourceName", state.projectSourceName)
@@ -474,6 +477,7 @@ internal object WorkspaceStateCodec {
         put("exportIncludeUserData", state.exportIncludeUserData)
         put("exportIncludeDisplayInfo", state.exportIncludeDisplayInfo)
         put("exportPixelsPerUnit", state.exportPixelsPerUnit?.let(::JsonPrimitive) ?: JsonNull)
+        state.atlasBudget?.let { put(io.github.psd2live.project.WorkspaceSettingsCodec.ATLAS, io.github.psd2live.project.WorkspaceSettingsCodec.encodeAtlasBudget(it)) }
         put("exportOptionsExpanded", state.exportOptionsExpanded)
         put("motionSubExpanded", state.motionSubExpanded)
         put("physicsSubExpanded", state.physicsSubExpanded)
@@ -600,6 +604,9 @@ internal object WorkspaceStateCodec {
         exportPixelsPerUnit = if ("exportPixelsPerUnit" in value) {
             value["exportPixelsPerUnit"]?.jsonPrimitive?.floatOrNull?.takeIf { it > 0f }
         } else base.exportPixelsPerUnit,
+        // A settings payload (it always has atlasSize) without a budget means none; other payloads keep base's.
+        atlasBudget = if (io.github.psd2live.project.WorkspaceSettingsCodec.ATLAS in value) io.github.psd2live.project.WorkspaceSettingsCodec.decodeAtlasBudget(value)
+            else if ("atlasSize" in value) null else base.atlasBudget,
         exportOptionsExpanded = value["exportOptionsExpanded"]?.jsonPrimitive?.boolean ?: base.exportOptionsExpanded,
         motionSubExpanded = value["motionSubExpanded"]?.jsonPrimitive?.boolean ?: base.motionSubExpanded,
         physicsSubExpanded = value["physicsSubExpanded"]?.jsonPrimitive?.boolean ?: base.physicsSubExpanded,

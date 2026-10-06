@@ -20,13 +20,65 @@ data class WorkspaceDocument(
 	val meshSource: SourceArt? = null,
     /** Original imported pixels used by absolute placement; excluded from rig generation. */
     val placementSource: SourceArt? = null,
-)
+	/**
+	 * Per-layer texture settings by source layer ID (density, lock, atlas pin). Absent or default entries mean
+	 * the automatic atlas budget; nothing consumes them yet beyond storage and revision identity.
+	 */
+	val textureOverrides: Map<String, TextureOverride> = emptyMap(),
+) {
+	/** [textureOverrides] without entries that change nothing, as stored and hashed. */
+	val storedTextureOverrides: Map<String, TextureOverride>
+		get() = if (textureOverrides.values.none { it.isDefault }) textureOverrides else textureOverrides.filterValues { !it.isDefault }
+}
+
+/**
+ * A layer's rectangle on the canvas in canvas units, possibly fractional. The layer's integer bounds stay the
+ * enclosing box; a layer without a rectangle covers exactly its integer bounds.
+ */
+data class LayerCanvasRect(
+	val left: Float,
+	val top: Float,
+	val width: Float,
+	val height: Float,
+) {
+	init {
+		require(left.isFinite() && top.isFinite() && width.isFinite() && height.isFinite()) { "Layer rectangle must be finite" }
+		require(width >= 0f && height >= 0f) { "Layer rectangle must not be negative" }
+	}
+
+	val right: Float get() = left + width
+	val bottom: Float get() = top + height
+
+	/** Whether this rectangle is exactly [bounds], so it need not be stored. */
+	fun matches(bounds: LayerBounds): Boolean = left == bounds.left.toFloat() && top == bounds.top.toFloat() &&
+		width == bounds.width.toFloat() && height == bounds.height.toFloat()
+
+	/** Whether [bounds] encloses this rectangle, allowing float rounding at the far edges. */
+	fun within(bounds: LayerBounds): Boolean = left >= bounds.left && top >= bounds.top &&
+		right <= bounds.left + bounds.width + EDGE_TOLERANCE && bottom <= bounds.top + bounds.height + EDGE_TOLERANCE
+
+	companion object {
+		private const val EDGE_TOLERANCE = 1e-3f
+
+		fun of(bounds: LayerBounds): LayerCanvasRect =
+			LayerCanvasRect(bounds.left.toFloat(), bounds.top.toFloat(), bounds.width.toFloat(), bounds.height.toFloat())
+	}
+}
+
+/** The layer's float canvas rectangle when it differs from its integer bounds; null means exactly the bounds. */
+internal val SourceLayer.storedCanvasRect: LayerCanvasRect?
+	get() = (this as? WorkspaceSourceMetadata)?.rect?.takeUnless { it.matches(bounds) }
+
+/** The layer's canvas rectangle: its stored float rectangle, or its integer bounds. */
+internal fun SourceLayer.canvasRect(): LayerCanvasRect = storedCanvasRect ?: LayerCanvasRect.of(bounds)
 
 /** Marker used to distinguish Agent-created source layers from layers loaded from the artist file. */
 internal interface WorkspaceSourceMetadata : SourceLayer {
 	val derived: Boolean
 	val sourceAssetId: String?
 	val sourceSpatialReferenceId: String?
+	/** Float canvas rectangle; null (or equal to [bounds]) means the integer bounds. */
+	val rect: LayerCanvasRect? get() = null
 }
 
 internal data class WorkspaceSourceArt(
@@ -52,7 +104,12 @@ internal data class WorkspaceSourceLayer(
 	override val sourceAssetId: String?,
 	override val sourceSpatialReferenceId: String?,
 	override val derived: Boolean,
+	override val rect: LayerCanvasRect? = null,
 ) : WorkspaceSourceMetadata {
+	init {
+		require(rect == null || rect.within(bounds)) { "Layer rectangle must lie within its integer bounds" }
+	}
+
 	companion object {
 		fun copyOf(layer: SourceLayer, order: Int): SourceLayer = WorkspaceSourceLayer(
 			id = layer.id,
@@ -70,6 +127,7 @@ internal data class WorkspaceSourceLayer(
 			sourceAssetId = (layer as? WorkspaceSourceMetadata)?.sourceAssetId,
 			sourceSpatialReferenceId = (layer as? WorkspaceSourceMetadata)?.sourceSpatialReferenceId,
 			derived = (layer as? WorkspaceSourceMetadata)?.derived == true,
+			rect = (layer as? WorkspaceSourceMetadata)?.rect,
 		)
 	}
 }

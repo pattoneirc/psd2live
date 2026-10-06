@@ -78,6 +78,32 @@ internal object WorkspaceSettingsCodec {
         })
     }.getOrNull()
 
+    /** Settings key of the optional atlas budget; absent keeps the legacy atlasSize/texturePadding behaviour. */
+    const val ATLAS = "atlas"
+
+    fun encodeAtlasBudget(value: io.github.psd2live.core.AtlasBudget): JsonObject = buildJsonObject {
+        put("pageSize", value.pageSize); put("maxPages", value.maxPages); put("padding", value.padding)
+    }
+
+    /** The stored budget, or null when [settings] has none. Missing fields fall back to the legacy settings. */
+    fun decodeAtlasBudget(settings: JsonObject): io.github.psd2live.core.AtlasBudget? {
+        val value = settings[ATLAS] as? JsonObject ?: return null
+        fun int(name: String) = value[name]?.let { it.jsonPrimitive.intOrNull ?: throw IllegalArgumentException("Invalid atlas $name") }
+        val legacy = legacyAtlasBudget(settings)
+        return io.github.psd2live.core.AtlasBudget(int("pageSize") ?: legacy.pageSize, int("maxPages") ?: legacy.maxPages, int("padding") ?: legacy.padding)
+    }
+
+    /** The budget the packer works within: the stored one, or the legacy page size and padding with the default page count. */
+    fun atlasBudget(settings: JsonObject): io.github.psd2live.core.AtlasBudget = decodeAtlasBudget(settings) ?: legacyAtlasBudget(settings)
+
+    private fun legacyAtlasBudget(settings: JsonObject): io.github.psd2live.core.AtlasBudget {
+        val defaults = io.github.psd2live.core.PipelineConfig()
+        return io.github.psd2live.core.AtlasBudget(
+            pageSize = settings["atlasSize"]?.jsonPrimitive?.intOrNull ?: defaults.atlasSize,
+            padding = settings["texturePadding"]?.jsonPrimitive?.intOrNull ?: defaults.texturePadding,
+        )
+    }
+
     fun encode(config: io.github.psd2live.core.PipelineConfig): JsonObject = buildJsonObject {
         put("atlasSize", config.atlasSize)
         put("textureUpscale", Json.encodeToJsonElement(config.textureUpscale))

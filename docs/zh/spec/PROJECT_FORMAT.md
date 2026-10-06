@@ -14,8 +14,9 @@
 | `source/original.psd` 或 `source/original.cmo3` | 原始导入源文件；图片创建工程生成 PSD 源文件 |
 | `history/HEAD.json` | 当前节点与节点顺序 |
 | `history/nodes/` | 不可变父链节点和元数据（与 v1 相同） |
-| `history/revisions/<key>.json` | 每个修订的索引：`{schema, nodes:{类型:哈希}, overrides?, clips?}` |
-| `document/nodes/<类型>/<sha256>.json` | 文档节点 `{schema, kind, value}`；类型为 `source`（源图层与组）、`generation-source` / `mesh-source` / `placement-source`、`layers`（可见性、软删除、分类、父级与网格覆盖）、`settings`、`rig`（参数、骨架、摆动、模拟、物理等 Rig 定义）、`journal`（作者编辑日志，不含覆盖）、`document`（其余字段） |
+| `history/revisions/<key>.json` | 每个修订的索引：`{schema, nodes:{类型:哈希}, overrides?, clips?, payloads?}` |
+| `document/nodes/<类型>/<sha256>.json` | 文档节点 `{schema, kind, value}`；类型为 `source`（源图层与组）、`generation-source` / `mesh-source` / `placement-source`、`layers`（可见性、软删除、分类、父级、网格与纹理覆盖）、`settings`、`rig`（参数、骨架、摆动、模拟、物理等 Rig 定义）、`journal`（作者编辑日志，不含覆盖）、`document`（其余字段） |
+| `document/nodes/payload/<sha256>.json` | 大型日志条目的内容寻址载荷节点，由 schema 2 修订在 `payloads` 中列出 |
 | `document/overrides/<sha256>.json` | 生成结果覆盖 `generated_override`，连同其在编辑日志中的位置 |
 | `document/clips/<sha256>.json` | 动作片段与生成动作设置 |
 | `assets/` | 去重 RGBA 栅格，以 PNG 保存 |
@@ -27,6 +28,27 @@
 | `images/<hash>.png` | 日志图片 |
 
 文档节点和覆盖、片段文件的文件名是其字节的 SHA-256，打开时逐个核对。拆分是无损的：打开时按索引拼回每个修订的完整文档，revision ID、节点 ID 与分支不变。Rig 模型（`PuppetModel`）从不保存，打开后仍由源图、设置和编辑重建。辅助目录按是否使用相关功能出现；`cache/` 预留给可删除的编译缓存，目前不写出。
+
+### 节点 schema
+
+节点和修订索引的 schema 只在用到新字段时升级，其余节点仍写 schema 1，内容逐字节不变，旧工程保存后节点哈希与修订索引与此前相同：
+
+| schema | 适用 | 新字段 |
+| --- | --- | --- |
+| 节点 1 | 不含下列字段的节点 | — |
+| 节点 2 | `source` 及三种附加源图节点中有图层带 `rect`；`layers` 含 `textureOverrides`；`settings` 含 `atlas` | 见下文纹理字段 |
+| 修订 1 | 日志不引用载荷节点 | — |
+| 修订 2 | 日志引用载荷节点，索引列出 `payloads` | `{"$payload": "<sha256>"}` 日志条目 |
+
+只读取 schema 1 的程序遇到 schema 2 的节点或修订会拒绝打开，不会丢弃新字段；当前程序读取节点 schema 1–2、修订 schema 1–2，更高 schema 仍拒绝。修订 schema 2 必须列出至少一个载荷，日志只能引用自己列出的载荷。载荷节点目前只是格式接口：保存尚未把日志条目外置，保存出的修订均为 schema 1。
+
+### 纹理字段
+
+三项字段均为可选，缺省即旧语义，不参与旧文档的 revision；当前只做保存、恢复和身份，图集打包尚未读取：
+
+- 源图层 `rect: [left, top, width, height]`：浮点画布矩形（画布单位）。缺省或等于整数边界时不写出，整数 `left/top/width/height` 仍是外包框，矩形必须位于其中。
+- 文档 `textureOverrides: {图层 ID: {density?, lock?, pin?: {page, x, y}}}`：逐层纹理密度、锁定与固定图集位置；全为默认值的项不写出。位于 `layers` 节点。
+- 设置 `atlas: {pageSize, maxPages, padding}`：图集预算。缺省时预算为旧的 `atlasSize` / `texturePadding` 加默认页数 8；缺少的子字段同样回退到这两项。
 
 ## v1 兼容与迁移
 
@@ -40,6 +62,8 @@ v1 归档仍可打开。v1 把每个修订保存为一个完整快照：
 | `workspace/<projectId>/assets/`、`views/`、`view-images/`、`workflow/`、`tasks.json` | 辅助数据 |
 
 其余条目（`manifest.json`、`source/`、`workspace.json`、`images/`）与 v2 相同。打开 v1 时直接读入这些快照，内存中的文档与 v2 一致；下一次保存写出 v2，并在替换目标文件前把原 v1 文件另存为同目录的 `<名称>.v1.psd2live`（已有同名备份时不覆盖）。迁移只改变存储布局，所有修订、分支、注释、素材、观察图与任务记录原样保留。工作目录内部仍使用快照布局，归档的打包与解包在保存、打开时完成。
+
+工作目录的快照与 v1 不同处只有共享内容：新写入的快照把非空 `rigEdits.authoringJournal` 写成 `{count, chunks:[键...]}`，条目按内容分块保存在 `history/journal/<键>.json`（块在摘要选中的条目后结束，平均约 4 条、不超过 16 条或约 64K 字符；键为块内各条目 SHA-256 的 SHA-256）；64K 字符以上的 `rigEdits.importedCmo3` 写成 `{payload: sha256}`，内容在 `history/payloads/<sha256>.txt`。追加条目只新增末尾的块，之前关闭的块在修订间共享。读取时按键核对后还原为原快照，键顺序不变；打包成 v2 前同样先还原，因此归档节点不受影响。快照改为紧凑 JSON。不支持分块的旧程序读到对象形式会报错，而不会丢掉日志。v2 解包仍写出完整快照，两种快照可以混存。
 
 内部文件名可使用逻辑 ID 的哈希，不能由显示名推断。PNG 保留透明像素下的 RGB；不同修订共享栅格资源。
 
@@ -77,7 +101,7 @@ GUI 捕获的画布像素与 MCP 栅格手势进入同一文档候选；完全�
 
 ## 校验边界
 
-打开时校验版本（1 或 2）、清单、哈希、文档节点哈希与 schema、栅格、历史引用与 HEAD。不认识的文档节点类型或更高 schema 拒绝打开，不会丢弃内容。拒绝重复条目、路径越界和不支持版本；解包限制为最多 1,000,000 条目、实际解压数据 64 GiB。不要依赖 ZIP 声明尺寸绕过限制。
+打开时校验版本（1 或 2）、清单、哈希、文档节点哈希与 schema、载荷引用、栅格、历史引用与 HEAD。不认识的文档节点类型或更高 schema 拒绝打开，不会丢弃内容。拒绝重复条目、路径越界和不支持版本；解包限制为最多 1,000,000 条目、实际解压数据 64 GiB。不要依赖 ZIP 声明尺寸绕过限制。
 
 可解压查看，但手工修改需同步全部引用与清单哈希。常规操作使用界面和历史工具。旧 `.rgba.gz` 恢复存储属于兼容读取，不是新工程的主写入格式。
 

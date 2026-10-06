@@ -14,8 +14,9 @@ Saves write v2. Each history revision is split into content-addressed document n
 | `source/original.psd` or `source/original.cmo3` | Original imported source; artwork-created projects generate a PSD source |
 | `history/HEAD.json` | Current node and node order |
 | `history/nodes/` | Immutable parent-linked nodes and metadata (as in v1) |
-| `history/revisions/<key>.json` | Per revision: `{schema, nodes:{kind:hash}, overrides?, clips?}` |
-| `document/nodes/<kind>/<sha256>.json` | Document nodes `{schema, kind, value}`; kinds are `source` (layers and groups), `generation-source` / `mesh-source` / `placement-source`, `layers` (visibility, soft deletion, classification, parent and mesh overrides), `settings`, `rig` (parameter, skeleton, swing, simulation, physics and other rig definitions), `journal` (authoring journal without overrides) and `document` (remaining fields) |
+| `history/revisions/<key>.json` | Per revision: `{schema, nodes:{kind:hash}, overrides?, clips?, payloads?}` |
+| `document/nodes/<kind>/<sha256>.json` | Document nodes `{schema, kind, value}`; kinds are `source` (layers and groups), `generation-source` / `mesh-source` / `placement-source`, `layers` (visibility, soft deletion, classification, parent, mesh and texture overrides), `settings`, `rig` (parameter, skeleton, swing, simulation, physics and other rig definitions), `journal` (authoring journal without overrides) and `document` (remaining fields) |
+| `document/nodes/payload/<sha256>.json` | Content-addressed payload nodes for large journal entries, listed under `payloads` by a schema-2 revision |
 | `document/overrides/<sha256>.json` | Generated overrides (`generated_override`) with their places in the journal |
 | `document/clips/<sha256>.json` | Motion clips and generated-motion settings |
 | `assets/` | Deduplicated RGBA rasters encoded as PNG |
@@ -27,6 +28,27 @@ Saves write v2. Each history revision is split into content-addressed document n
 | `images/<hash>.png` | Log images |
 
 Document node, override and clip files are named by the SHA-256 of their bytes, checked on open. Splitting is lossless: opening joins every revision's complete document from its index, so revision IDs, node IDs and branches are unchanged. The rig model (`PuppetModel`) is never stored; opening still rebuilds it from source, settings and edits. Auxiliary entries depend on features used; `cache/` is reserved for disposable compile caches and is not written yet.
+
+### Node schemas
+
+A node or revision index moves to a newer schema only when it uses a newer field. Every other node is still written as schema 1, byte for byte, so an older project saves to the same node hashes and revision indexes as before:
+
+| Schema | Applies to | New fields |
+| --- | --- | --- |
+| Node 1 | nodes without the fields below | — |
+| Node 2 | a `source` or extra source-art node with a layer `rect`; `layers` with `textureOverrides`; `settings` with `atlas` | see texture fields below |
+| Revision 1 | the journal names no payload node | — |
+| Revision 2 | the journal names payload nodes, listed under `payloads` | `{"$payload": "<sha256>"}` journal entries |
+
+Builds that read only schema 1 reject a schema-2 node or revision instead of dropping the new fields. This build reads node and revision schemas 1–2 and still rejects higher ones. A schema-2 revision lists at least one payload, and its journal may name only payloads it lists. Payload nodes are a format interface for now: saves do not move journal entries out yet, so every saved revision is schema 1.
+
+### Texture fields
+
+All three are optional; absent means the earlier behaviour and keeps earlier revisions. They are stored, restored and part of revision identity; the atlas packer does not read them yet.
+
+- Source layer `rect: [left, top, width, height]`: the float canvas rectangle in canvas units. It is omitted when absent or equal to the integer bounds, which stay the enclosing box and must contain it.
+- Document `textureOverrides: {layer ID: {density?, lock?, pin?: {page, x, y}}}`: per-layer texture density, lock and fixed atlas position; all-default entries are not written. Stored in the `layers` node.
+- Setting `atlas: {pageSize, maxPages, padding}`: the atlas budget. Without it the budget is the legacy `atlasSize` / `texturePadding` with the default of 8 pages; missing members fall back the same way.
 
 ## v1 compatibility and migration
 
@@ -40,6 +62,8 @@ v1 archives still open. v1 stores each revision as one complete snapshot:
 | `workspace/<projectId>/assets/`, `views/`, `view-images/`, `workflow/`, `tasks.json` | Auxiliary data |
 
 The other entries (`manifest.json`, `source/`, `workspace.json`, `images/`) are as in v2. Opening a v1 file reads those snapshots directly into the same in-memory documents as v2; the next save writes v2 and, before replacing the file, keeps the v1 original beside it as `<name>.v1.psd2live` (an existing backup is not overwritten). The migration changes only the storage layout: every revision, branch, annotation, asset, view and task record is kept. The working directory keeps the snapshot layout internally; packing and unpacking happen on save and open.
+
+Working-directory snapshots differ from v1 only in shared content. Newly written snapshots store a non-empty `rigEdits.authoringJournal` as `{count, chunks:[key...]}`, with the entries in content-defined chunks at `history/journal/<key>.json` (a chunk ends after an entry its digest selects, about 4 entries on average and at most 16 entries or about 64K characters; the key is the SHA-256 of the entries' SHA-256 digests). An `rigEdits.importedCmo3` of 64K characters or more becomes `{payload: sha256}` with the text at `history/payloads/<sha256>.txt`. Appending entries adds only the trailing chunk; closed chunks are shared between revisions. Reading checks the keys and restores the original snapshot with its key order; packing to v2 restores it first, so archive nodes are unaffected. Snapshots are written as compact JSON. Builds without chunk support fail on the object form rather than dropping the journal. v2 unpacking still writes whole snapshots, and both forms can coexist.
 
 Internal filenames may hash logical IDs rather than display names. PNG resources retain RGB under transparent alpha. Revisions share rasters.
 
@@ -75,7 +99,7 @@ Optional `assetCatalog` in `workspace.json` stores `{version:1, assets:[ID...], 
 
 ## Validation
 
-Opening validates version (1 or 2), inventory, hashes, document node hashes and schemas, rasters, history references and HEAD. Unknown document node kinds or newer schemas are rejected rather than dropped. Duplicate entries, escaping paths and unsupported versions are rejected. Extraction limits are 1,000,000 entries and 64 GiB of actual decompressed bytes, not declared ZIP sizes.
+Opening validates version (1 or 2), inventory, hashes, document node hashes and schemas, payload references, rasters, history references and HEAD. Unknown document node kinds or newer schemas are rejected rather than dropped. Duplicate entries, escaping paths and unsupported versions are rejected. Extraction limits are 1,000,000 entries and 64 GiB of actual decompressed bytes, not declared ZIP sizes.
 
 Manual edits must preserve references and update inventory hashes. Use the UI for ordinary editing and history work. Legacy `.rgba.gz` recovery resources remain a compatibility read path, not the primary write format.
 

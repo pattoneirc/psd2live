@@ -551,6 +551,10 @@ data class PSD2LiveState(
 	val generationSource: org.umamo.format.art.SourceArt? = null,
 	val meshSource: org.umamo.format.art.SourceArt? = null,
     val placementSource: org.umamo.format.art.SourceArt? = null,
+	/** Projection of the document's per-layer texture overrides; kept so GUI commits do not drop them. */
+	val textureOverrides: Map<String, io.github.psd2live.project.TextureOverride> = emptyMap(),
+	/** Projection of the optional `atlas` budget setting; null keeps the legacy atlasSize/texturePadding behaviour. */
+	val atlasBudget: io.github.psd2live.core.AtlasBudget? = null,
 	/** The simulation the preview runs live over the rig, or null; the canvas then draws in software. */
 	val simulationPreviewId: String? = null,
 	val errorMessage: String? = null,
