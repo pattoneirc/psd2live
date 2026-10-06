@@ -1,7 +1,9 @@
-// Spine 4.2 export target (MIT): skeleton JSON + atlas with deformation baked from the host's evaluator.
+// Spine 4.2 export target (MIT): skeleton JSON or binary + atlas with deformation baked from the host's evaluator.
 // Must not depend on any GPL module.
 plugins {
 	kotlin("jvm")
+	// Spine pose and binary readers, shared with the root project's fidelity test.
+	`java-test-fixtures`
 }
 
 kotlin {

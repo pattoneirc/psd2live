@@ -41,7 +41,7 @@ class SpineTargetTest {
 	@Test fun writesSkeletonAtlasAndPages() {
 		val files = export()
 		assertEquals(listOf("hero.json", "hero.atlas", "hero_0.png"), files.keys.toList())
-		assertEquals("hero_0.png\n\tsize: 64, 32\n\tfilter: Linear, Linear\npage0\n\tbounds: 0, 0, 64, 32\n", files.getValue("hero.atlas").decodeToString())
+		assertEquals("hero_0.png\n\tsize: 64, 32\n\tfilter: Linear, Linear\nhero_0\n\tbounds: 0, 0, 64, 32\n", files.getValue("hero.atlas").decodeToString())
 		@Suppress("UNCHECKED_CAST") val root = parse(files.getValue("hero.json").decodeToString()) as Map<String, Any?>
 		val slots = root["slots"] as List<Map<String, Any?>>
 		// Back to front by rest draw order: M (400) before S (500).
@@ -51,7 +51,7 @@ class SpineTargetTest {
 		val mesh = ((skins.single()["attachments"] as Map<*, *>)["M"] as Map<*, *>)["M"] as Map<*, *>
 		// Origin at the canvas' bottom center, y up.
 		assertEquals(listOf(-40.0, 70.0, -30.0, 70.0, -40.0, 60.0), (mesh["vertices"] as List<*>).map { (it as Number).toDouble() })
-		assertEquals("page0", mesh["path"])
+		assertEquals("hero_0", mesh["path"])
 	}
 
 	/** Setup vertices plus the interpolated deform at [time], as a Spine runtime applies unweighted deform keys. */
@@ -169,23 +169,4 @@ class SpineClippingTest {
 		assertEquals(listOf(mapOf("slot" to "clip/M", "offset" to 1.0), mapOf("slot" to "M", "offset" to 1.0), mapOf("slot" to "S", "offset" to -2.0)), order)
 		assertEquals(Handling.APPROXIMATED, report.losses.single { it.feature == Feature.MASK }.handling)
 	}
-}
-
-/** A minimal JSON reader for the tests: objects, arrays, strings, numbers, booleans and null. */
-private class MiniJson(private val text: String) {
-	private var i = 0
-	fun value(): Any? {
-		skip()
-		return when (val c = text[i]) {
-			'{' -> { i++; val map = LinkedHashMap<String, Any?>(); skip(); if (text[i] == '}') { i++; return map }
-				while (true) { skip(); val key = string(); skip(); i++; map[key] = value(); skip(); if (text[i++] == '}') break }; map }
-			'[' -> { i++; val list = ArrayList<Any?>(); skip(); if (text[i] == ']') { i++; return list }
-				while (true) { list += value(); skip(); if (text[i++] == ']') break }; list }
-			'"' -> string()
-			't' -> { i += 4; true }; 'f' -> { i += 5; false }; 'n' -> { i += 4; null }
-			else -> { val start = i; while (i < text.length && (text[i].isDigit() || text[i] in "-+.eE")) i++; check(i > start) { "bad json at $i: $c" }; text.substring(start, i).toDouble() }
-		}
-	}
-	private fun skip() { while (i < text.length && text[i].isWhitespace()) i++ }
-	private fun string(): String { i++; val out = StringBuilder(); while (text[i] != '"') { if (text[i] == '\\') { i++; out.append(when (text[i]) { 'n' -> '\n'; 't' -> '\t'; else -> text[i] }) } else out.append(text[i]); i++ }; i++; return out.toString() }
 }
