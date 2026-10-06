@@ -917,18 +917,27 @@ class PSD2LiveViewModel : AutoCloseable {
     }
 
     // Canvas IDs may repeat across workspaces. Transient editing state belongs to both.
+    // Guarded by itself: the UI thread and workspace commands both reach it. Two unsynchronized lookups
+    // could each create an editor for one canvas and orphan one, whose placement is then never dismissed.
     private val canvasEditors = mutableMapOf<Pair<String, String>, CanvasEditor>()
     private var editorGeneration = -1L
+    private fun editorsSnapshot(): List<CanvasEditor> = synchronized(canvasEditors) { canvasEditors.values.toList() }
     internal fun canvasEditorFor(canvasId: String): CanvasEditor {
         val current = uiState.value
-        if (editorGeneration != current.projectOpenGeneration) {
-            dismissImagePlacements()
-            canvasEditors.clear()
-            editorGeneration = current.projectOpenGeneration
+        var retired = emptyList<CanvasEditor>()
+        val editor = synchronized(canvasEditors) {
+            if (editorGeneration != current.projectOpenGeneration) {
+                retired = canvasEditors.values.toList()
+                canvasEditors.clear()
+                editorGeneration = current.projectOpenGeneration
+            }
+            canvasEditors.getOrPut(current.activeWorkspace.id to canvasId) {
+                CanvasEditor(this, current.activeWorkspace.id, canvasId)
+            }
         }
-        return canvasEditors.getOrPut(current.activeWorkspace.id to canvasId) {
-            CanvasEditor(this, current.activeWorkspace.id, canvasId)
-        }
+        // Callbacks run outside the map lock; they may take the workspace runtime's lock.
+        retired.forEach { it.dismissImagePlacement() }
+        return editor
     }
     internal val canvasEditor: CanvasEditor get() = canvasEditorFor(uiState.value.activeCanvas.id)
 
@@ -939,7 +948,7 @@ class PSD2LiveViewModel : AutoCloseable {
         }
     private fun resetCanvasPaintSessions() {
         pendingDepthSplit = null
-        canvasEditors.values.forEach { it.resetPaintSession() }
+        editorsSnapshot().forEach { it.resetPaintSession() }
     }
 
 
@@ -4212,9 +4221,9 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 		// The skeleton belongs to the project, not the canvas: an edit open on a closing canvas is kept.
 		val closingIds = closing.map { it.id }.toSet()
-		canvasEditors.keys.filter { it.first in closingIds }.forEach { key ->
-			canvasEditors[key]?.commitSkeletonDraft()
-			canvasEditors.remove(key)?.resetPaintSession()
+		synchronized(canvasEditors) { canvasEditors.filterKeys { it.first in closingIds } }.forEach { (key, editor) ->
+			editor.commitSkeletonDraft()
+			synchronized(canvasEditors) { canvasEditors.remove(key) }?.resetPaintSession()
 		}
 		val remaining = current.workspaces.filterNot { it.id in closingIds }
 		val next = if (current.activeWorkspaceId !in closingIds) remaining.first { it.id == current.activeWorkspaceId } else {
@@ -4346,7 +4355,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			updateState { it.copy(statusText = tr("status.canvasLast")) }
 			return
 		}
-		canvasEditors[workspace.id to canvasId]?.commitSkeletonDraft()
+		synchronized(canvasEditors) { canvasEditors[workspace.id to canvasId] }?.commitSkeletonDraft()
 		updateState { state ->
 			state.updateActiveWorkspace { ws ->
 				val remaining = ws.canvases.filterNot { it.id == canvasId }
@@ -4357,7 +4366,7 @@ class PSD2LiveViewModel : AutoCloseable {
 				)
 			}
 		}
-		canvasEditors.remove(workspace.id to canvasId)?.resetPaintSession()
+		synchronized(canvasEditors) { canvasEditors.remove(workspace.id to canvasId) }?.resetPaintSession()
 		markWorkspaceChanged()
 		if (!_state.value.previewLive) {
 			pointerActive = false
@@ -5048,7 +5057,7 @@ class PSD2LiveViewModel : AutoCloseable {
     }
 
     internal fun dismissImagePlacements() {
-        canvasEditors.values.toList().forEach { it.dismissImagePlacement() }
+        editorsSnapshot().forEach { it.dismissImagePlacement() }
     }
 
     fun relocateImportedLayer(
@@ -6335,7 +6344,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		sdkSession.close()
         canvasFrames.clear()
         canvasFrameUsers.clear()
-        canvasEditors.clear()
+        synchronized(canvasEditors) { canvasEditors.clear() }
 	}
 
 	internal fun setStateForTest(state: PSD2LiveState) {
