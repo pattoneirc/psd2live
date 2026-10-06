@@ -9,6 +9,7 @@ import io.github.psd2live.application.WorkspaceRasterCommands
 import io.github.psd2live.application.WorkspaceRasterEdits
 import io.github.psd2live.application.WorkspaceRuntime
 import io.github.psd2live.application.WorkspaceSourceImporter
+import io.github.psd2live.application.layerPaintImage
 import io.github.psd2live.application.sourceLayerImage
 import io.github.psd2live.core.*
 import io.github.psd2live.core.sim.RigSimEdit
@@ -177,11 +178,15 @@ internal class CommitBaseline(private val sample: Sample, private val out: File)
 				.sortedBy { it.raster.width * it.raster.height }
 			val small = candidates.first()
 			val middle = candidates[candidates.size / 2]
+			// As a paint session does: the layer's own raster space, and only its area and the stroke read back.
 			fun paint(document: WorkspaceDocument, round: Int): WorkspacePaintRaster {
-				val image = document.sourceLayerImage(small.id.raw)
+				val painting = document.layerPaintImage(small.id.raw)
 				val cx = small.bounds.left + small.bounds.width / 2; val cy = small.bounds.top + small.bounds.height / 2
-				for (y in cy - 3 until cy + 3) for (x in cx - 3 until cx + 3) image.setRGB(x, y, 0xff3366aa.toInt() + round * 0x10)
-				return WorkspacePaintRaster.capture(small.id.raw, image, rebuildMesh = false)
+				val stroke = java.awt.Rectangle(cx - 3, cy - 3, 6, 6)
+				for (y in stroke.y until stroke.y + stroke.height) for (x in stroke.x until stroke.x + stroke.width)
+					painting.image.setRGB(x, y, 0xff3366aa.toInt() + round * 0x10)
+				return WorkspacePaintRaster.capture(small.id.raw, painting.image, painting.space,
+					painting.space.layerArea().union(stroke), rebuildMesh = false)
 			}
 			report["paint_commit"] = scenario("(c) paint 6×6 px on a small layer (${small.id.raw}, ${small.raster.width}×${small.raster.height})", 5,
 				commit = { before, round -> raster.commitRaster(before.projectId, before.state, paint(before.document, round), "Paint $round", MutationAuthor.USER).commit },

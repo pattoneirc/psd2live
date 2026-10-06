@@ -40,12 +40,7 @@ internal object WorkspacePartitionEdits {
         val drawable = model.rig.puppet.drawables.firstOrNull { it.id.raw == id || model.rig.layerIdByDrawableId[it.id.raw] == id }
             ?: return null
         return drawable.mesh?.let { mesh ->
-            val canvas = Cmo3ModelImport.textureCanvas(model, drawable)
-            val local = FloatArray(canvas.size) { index ->
-                if (index % 2 == 0) (canvas[index] - source.bounds.left) * source.raster.width / source.bounds.width
-                else (canvas[index] - source.bounds.top) * source.raster.height / source.bounds.height
-            }
-            MeshComponentSplit.detect(mesh, source, local, checkpoint)
+            MeshComponentSplit.detectCanvas(mesh, source, Cmo3ModelImport.textureCanvas(model, drawable), checkpoint)
         }
     }
 

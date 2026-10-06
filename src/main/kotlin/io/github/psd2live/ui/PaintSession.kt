@@ -22,8 +22,17 @@ internal data class PaintStrokeRecord(val id: String, val name: String)
 class PaintSession(val handle: WorkspacePaintSession) {
     val layerId get() = handle.layerId
     val layerName get() = handle.layerName
+    /** The session raster, in raster pixels: the canvas for a layer at one pixel per canvas unit. */
     val docWidth get() = handle.width
     val docHeight get() = handle.height
+    /** The document canvas, in canvas units: where the pointer may paint and sample. */
+    val canvasWidth get() = handle.canvasWidth
+    val canvasHeight get() = handle.canvasHeight
+    /** Canvas units of the raster's top-left corner, and raster pixels per canvas unit. */
+    val originX get() = handle.originX
+    val originY get() = handle.originY
+    val scaleX get() = handle.scaleX
+    val scaleY get() = handle.scaleY
     /** Detached observation; writes must use the shared session gestures. */
     val workingImage: BufferedImage get() = handle.image()
     var isDirty by mutableStateOf(false)

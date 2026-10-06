@@ -86,12 +86,13 @@ internal object MeshComponentSplit {
                 if (y > box[3]) box[3] = y
             }
             require(boxes.all { it[2] >= it[0] && it[3] >= it[1] }) { "Every mesh island needs source pixels" }
-            val crop = source.bounds.width == raster.width && source.bounds.height == raster.height
+            // Each piece is cropped in the source's own raster grid, so a dense layer's pieces keep its density.
+            val space = LayerSpace.of(source)
             return boxes.mapIndexed { index, box ->
-                val left = if (crop) box[0] else 0
-                val top = if (crop) box[1] else 0
-                val width = if (crop) box[2] - left + 1 else raster.width
-                val height = if (crop) box[3] - top + 1 else raster.height
+                val left = box[0]
+                val top = box[1]
+                val width = box[2] - left + 1
+                val height = box[3] - top + 1
                 val rgba = ByteArray(width * height * 4)
                 for (y in top until top + height) for (x in left until left + width) {
                     if (x == left) checkpoint()
@@ -99,11 +100,13 @@ internal object MeshComponentSplit {
                     if (ownerByPixel[pixel] != index) continue
                     raster.rgba.copyInto(rgba, ((y - top) * width + x - left) * 4, pixel * 4, pixel * 4 + 4)
                 }
+                val placed = PaintSpace.placedOn(space, left, top, width, height, LayerRaster(width, height, rgba))
                 base.copy(
                     id = LayerId(ids?.get(index) ?: "split:${UUID.randomUUID()}"),
                     name = names[index].trim(),
-                    bounds = if (crop) LayerBounds(source.bounds.left + left, source.bounds.top + top, width, height) else source.bounds,
-                    raster = LayerRaster(width, height, rgba),
+                    bounds = placed.bounds,
+                    rect = placed.rect,
+                    raster = placed.raster,
                     sourceAssetId = null,
                     sourceSpatialReferenceId = null,
                     derived = true,
@@ -114,11 +117,21 @@ internal object MeshComponentSplit {
 
     fun detect(mesh: DrawableMesh, source: SourceLayer, placement: AtlasPlacement, pageWidth: Int, pageHeight: Int,
                checkpoint: () -> Unit = {}): Plan? {
-        val texture = LayerTexture.packed(LayerTexture.generatorSpace(0, 0, source.raster.width, source.raster.height), placement, pageWidth, pageHeight)
+        // Page uvs to raster pixels go through the placement alone; the canvas rectangle plays no part.
+        val texture = LayerTexture.packed(LayerSpace.of(source), placement, pageWidth, pageHeight)
         val local = FloatArray(mesh.uvs.size)
         for (index in 0 until mesh.uvs.size - 1 step 2) {
             val raster = texture.rasterOfUv(mesh.uvs[index], mesh.uvs[index + 1])
             local[index] = raster[0]; local[index + 1] = raster[1]
+        }
+        return detect(mesh, source, local, checkpoint)
+    }
+
+    /** [canvas] texture coordinates (canvas units) of [mesh] on [source]'s raster, through its canvas rectangle. */
+    fun detectCanvas(mesh: DrawableMesh, source: SourceLayer, canvas: FloatArray, checkpoint: () -> Unit = {}): Plan? {
+        val space = LayerSpace.of(source)
+        val local = FloatArray(canvas.size) { index ->
+            if (index % 2 == 0) space.canvasToRasterX(canvas[index]) else space.canvasToRasterY(canvas[index])
         }
         return detect(mesh, source, local, checkpoint)
     }

@@ -347,8 +347,10 @@ internal class GlCanvasRenderer(
 				MemoryUtil.memFree(pixels)
 			}
 		}
-		val w = paint.width.toFloat()
-		val h = paint.height.toFloat()
+		val l = paint.left
+		val t = paint.top
+		val r = paint.left + paint.canvasWidth
+		val b = paint.top + paint.canvasHeight
 		GL20.glUseProgram(artwork.id)
 		GL20.glUniform4fv(artwork.uniform("u_world"), worldUniform)
 		GL20.glUniform1i(artwork.uniform("u_texture"), 0)
@@ -357,7 +359,7 @@ internal class GlCanvasRenderer(
 		GL13.glActiveTexture(GL13.GL_TEXTURE0)
 		GL30.glBindVertexArray(quadVao)
 		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, quadPositions)
-		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, floatArrayOf(0f, 0f, w, 0f, 0f, -h, w, -h), GL15.GL_STREAM_DRAW)
+		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, floatArrayOf(l, -t, r, -t, l, -b, r, -b), GL15.GL_STREAM_DRAW)
 		GL11.glDrawArrays(GL11.GL_TRIANGLE_STRIP, 0, 4)
 		GL30.glBindVertexArray(0)
 	}

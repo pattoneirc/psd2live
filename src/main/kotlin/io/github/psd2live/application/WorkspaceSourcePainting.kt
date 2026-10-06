@@ -4,22 +4,26 @@ import io.github.psd2live.project.WorkspaceSourceArt
 import io.github.psd2live.project.WorkspaceSourceLayer
 import io.github.psd2live.project.WorkspaceDocument
 
+import io.github.psd2live.core.LayerSpace
+import io.github.psd2live.core.PaintSpace
 import io.github.psd2live.core.RasterPaintEngine
 import io.github.psd2live.core.RasterPaintShape
 import kotlinx.serialization.json.*
 import org.umamo.format.art.LayerBounds
 import org.umamo.format.art.LayerRaster
 import java.awt.image.BufferedImage
+import kotlin.math.floor
 
 /** Layer-local eyedropper in source canvas coordinates; sampling never creates an edit. */
 internal fun WorkspaceDocument.sampleSourceColor(layerId: String, x: Int, y: Int): List<Int> {
     require(x in 0 until source.widthPx && y in 0 until source.heightPx) { "Sample point is outside the canvas" }
     val layer = source.layers.singleOrNull { it.id.raw == layerId && layerId !in deletedLayerIds }
         ?: throw IllegalArgumentException("Source layer not found: $layerId")
-    val bounds = layer.bounds
-    if (x < bounds.left || y < bounds.top || x >= bounds.left + bounds.width || y >= bounds.top + bounds.height) return listOf(0, 0, 0, 0)
-    val localX = ((x - bounds.left).toLong() * layer.raster.width / bounds.width).toInt()
-    val localY = ((y - bounds.top).toLong() * layer.raster.height / bounds.height).toInt()
+    // The raster pixel under the canvas pixel's centre: a dense layer answers with its own pixel there.
+    val space = LayerSpace.of(layer)
+    val localX = floor(space.canvasToRasterX(x + 0.5f)).toInt()
+    val localY = floor(space.canvasToRasterY(y + 0.5f)).toInt()
+    if (localX !in 0 until layer.raster.width || localY !in 0 until layer.raster.height) return listOf(0, 0, 0, 0)
     val start = (localY * layer.raster.width + localX) * 4
     return (0..3).map { layer.raster.rgba[start + it].toInt() and 255 }
 }
@@ -61,9 +65,39 @@ internal fun WorkspaceDocument.paintSourceImage(arguments: JsonObject,
     return image
 }
 
-/** A private session and a durable single gesture use the same raster processor. */
+/**
+ * A layer's pixels ready to paint on: [image] in [space], the layer's own raster grid over the canvas (the
+ * canvas itself for a layer at one pixel per canvas unit).
+ */
+internal class LayerPaintImage(val space: PaintSpace, val image: BufferedImage)
+
+/** Seeds a paint image of layer [id] in its own raster space ([PaintSpace.of]). */
+internal fun WorkspaceDocument.layerPaintImage(id: String, checkpoint: () -> Unit = {}): LayerPaintImage {
+    checkpoint()
+    val layer = source.layers.singleOrNull { it.id.raw == id && id !in deletedLayerIds }
+        ?: throw IllegalArgumentException("Source layer not found: $id")
+    val space = PaintSpace.of(layer, source.widthPx, source.heightPx)
+    return LayerPaintImage(space, space.image(layer, checkpoint))
+}
+
+/** One gesture painted on layer `layer_id`'s pixels in its own raster space, with the area it touched. */
+internal fun WorkspaceDocument.paintLayerImage(arguments: JsonObject,
+    work: WorkspaceRasterWork = WorkspaceRasterWork.Direct): Pair<LayerPaintImage, java.awt.Rectangle?> {
+    work.progress(0f, "Preparing source pixels")
+    val painting = layerPaintImage(arguments.getValue("layer_id").jsonPrimitive.content, work::checkpoint)
+    var touched: java.awt.Rectangle? = null
+    paintRasterGesture(painting.image, arguments, work, before = { touched = touched?.union(it) ?: java.awt.Rectangle(it) },
+        space = painting.space)
+    return painting to touched
+}
+
+/**
+ * A private session and a durable single gesture use the same raster processor. Gesture coordinates, radii and
+ * widths are canvas units; [space] maps them onto [image]'s pixels, so a dense layer paints at its own density.
+ */
 internal fun paintRasterGesture(image: BufferedImage, arguments: JsonObject,
-    work: WorkspaceRasterWork = WorkspaceRasterWork.Direct, before: (java.awt.Rectangle) -> Unit = {}) {
+    work: WorkspaceRasterWork = WorkspaceRasterWork.Direct, before: (java.awt.Rectangle) -> Unit = {},
+    space: PaintSpace = PaintSpace.canvas(image.width, image.height)) {
     val width = image.width; val height = image.height
     work.progress(0.05f, "Rasterizing paint gesture")
     val mode = arguments.getValue("mode").jsonPrimitive.content
@@ -75,7 +109,7 @@ internal fun paintRasterGesture(image: BufferedImage, arguments: JsonObject,
     fun point(value: JsonElement): Pair<Float, Float> {
         val numbers = value.jsonArray.map { it.jsonPrimitive.float }
         require(numbers.size == 2 && numbers.all(Float::isFinite)) { "point must be [x,y]" }
-        return numbers[0] to numbers[1]
+        return space.canvasToImageX(numbers[0]) to space.canvasToImageY(numbers[1])
     }
     when (mode) {
         "clear" -> { before(java.awt.Rectangle(0, 0, width, height)); RasterPaintEngine.clear(image) }
@@ -86,7 +120,7 @@ internal fun paintRasterGesture(image: BufferedImage, arguments: JsonObject,
             val hardness = arguments["hardness"]?.jsonPrimitive?.float ?: 1f
             require(radius.isFinite() && radius in 0.5f..512f && hardness.isFinite() && hardness in 0f..1f)
             val stroke = RasterPaintEngine.Stroke(width, height)
-            val tip = RasterPaintEngine.Tip(radius, if (mode == "pencil") 1f else hardness, antialias = mode != "pencil")
+            val tip = RasterPaintEngine.Tip(space.imageLength(radius), if (mode == "pencil") 1f else hardness, antialias = mode != "pencil")
             if (points.size == 1) stroke.addSegment(points[0].first, points[0].second,
                 points[0].first, points[0].second, tip, work::checkpoint)
             else points.zipWithNext().forEach { (a, b) -> stroke.addSegment(a.first, a.second, b.first, b.second, tip, work::checkpoint) }
@@ -104,10 +138,11 @@ internal fun paintRasterGesture(image: BufferedImage, arguments: JsonObject,
             val shape = RasterPaintShape.valueOf(arguments.getValue("shape").jsonPrimitive.content.uppercase())
             val strokeWidth = arguments["stroke_width"]?.jsonPrimitive?.float ?: 1f
             require(strokeWidth.isFinite() && strokeWidth in 1f..512f)
-            before(RasterPaintEngine.shapeArea(x0.toInt(), y0.toInt(), x1.toInt(), y1.toInt(), strokeWidth,
+            val imageWidth = space.imageLength(strokeWidth)
+            before(RasterPaintEngine.shapeArea(x0.toInt(), y0.toInt(), x1.toInt(), y1.toInt(), imageWidth,
                 java.awt.Rectangle(0, 0, width, height)))
             RasterPaintEngine.drawShape(image, x0.toInt(), y0.toInt(), x1.toInt(), y1.toInt(),
-                shape, color, opacity, strokeWidth, arguments["filled"]?.jsonPrimitive?.boolean ?: false)
+                shape, color, opacity, imageWidth, arguments["filled"]?.jsonPrimitive?.boolean ?: false)
         }
         else -> throw IllegalArgumentException("Unknown paint mode: $mode")
     }

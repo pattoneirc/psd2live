@@ -26,7 +26,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `layer_classify` | `request` 内 `state`、`layer_id` 及分类字段 | 后台更新既有源图层的类型、部件、侧别、参数关联和切换 ID；省略的字段保持捕获时的原值 |
 | `layer_mesh_update` | `request` 内 `state`、`layer_id`、`changes` 或 `reset` | 后台逐图层覆盖或重置自适应网格参数；用 `workspace_inspect scope=layers` 读取当前值 |
 | `source_sample_color` | `layer_id`、`x`、`y` | 读取源图层在画布整数坐标的 RGBA；不改变文档或历史 |
-| `source_paint_brush / source_paint_pencil / source_paint_eraser / source_paint_bucket / source_paint_shape / source_paint_clear` | `request` | `brush/pencil/eraser/bucket/shape/clear`；画布像素坐标，一次手势一个历史节点 |
+| `source_paint_brush / source_paint_pencil / source_paint_eraser / source_paint_bucket / source_paint_shape / source_paint_clear` | `request` | `brush/pencil/eraser/bucket/shape/clear`；画布单位坐标，按图层栅格密度落笔，一次手势一个历史节点 |
 | `preview_set / preview_reset` | `request` 内 `state` | `set/reset`；修改当前预览参数值和锁定状态，不写关键形 |
 | `snapshot_create / snapshot_update / snapshot_delete / snapshot_apply` | `state`，更新/删除/应用要求 `id`；创建/更新可给 `name`、`values` | 保存、改名/覆盖、删除及应用参数快照；应用保留锁、忽略已删除参数并按当前范围钳制；不写时间线关键帧 |
 | `snapshot_get / snapshot_list` | 读取给 `id`；列表可给 `offset`、`limit` | 返回同一捕获的工程状态、快照 ID/编号；列表省略 values，详情返回 values |
@@ -109,7 +109,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `canvas_visibility / canvas_visibility_get` | 按 `workspace_id/canvas_id/mode`（edit/preview）寻址的局部图层/变形器显隐与 solo，与层级树眼睛和 solo 共用处理器；`action` 为 `layers/deformers/all_layers/invert_layers/solo/unsolo`，修改推进 `state` 但不改文档、历史、其他画布或导出，无变化不推进；查询返回每个画布会话的显隐、solo 记录与 `hidden_layer_ids`，未编辑过的画布全部可见。导出可见性仍由 `object_edit_appearance` 修改 |
 | `physics_preset_list / physics_preset_put / physics_preset_rename / physics_preset_delete / physics_apply_preset` | 稳定 ID 的全局输入/摆锤预设库，库修改使用 `library_state`，应用为可批量文档编辑 |
 | `simulation_preview / simulation_preview_step / simulation_preview_get / simulation_preview_render` | 私有实时模拟场景；启动/重启/停止和显式 dt 步进为后台会话，读取/渲染不会推进时钟 |
-| `paint_session_begin / paint_session_list / paint_session_control / paint_session_commit` | 私有多笔触草稿、撤销/重做/跳转/取色/PNG；确认前不修改工程像素，确认一次历史提交 |
+| `paint_session_begin / paint_session_list / paint_session_control / paint_session_commit` | 私有多笔触草稿、撤销/重做/跳转/取色/PNG；手势与取色使用画布单位，草稿是图层自身栅格（`width/height` 像素覆盖 `canvas_rect`）；确认前不修改工程像素，确认一次历史提交 |
 | `motion_create / motion_duplicate / motion_rename / motion_properties / motion_pose / motion_move_keys / motion_delete_keys / motion_paste_keys / motion_replace_keys / motion_preset` | 动作生命周期、姿态打键、键移动/删除/粘贴/替换及生成预设；全部可参与原子批量 |
 
 控制请求仍遵守修改去重及工作区令牌规则。会话可另外拥有自己的令牌；全局物理库使用独立库令牌。读取、渲染、播放帧和私有草稿不等同于文档提交；以 `kind/job_backed/batchable` 发现元数据区分执行方式。
@@ -472,7 +472,7 @@ View 从模型数据渲染 PNG，不依赖桌面截图。`canvas_rect` 给出画
 
 单项同样要求 `request_id/project_id/state`，任务终态的 `layers` 只包含新前层 ID。可指定唯一的 `front_layer_id/front_mesh_id/glue_id`，供同一原子批量后续成员绘画或编辑新对象；批量 `changed` 返回 `layer:<id>/mesh:<id>/glue:<id>`。GUI 保留菜单或对话框打开时的状态，辅助数据修改也会使旧确认失效。准备可取消，提交后保留精确终态；历史重放、保存重开和 CMO3 读回保留运动及 Glue 连接权重。它复制现有内容，隐藏部分仍需绘画补充。
 
-已有 PSD 使用 `project_import_psd` 从本地绝对路径打开。`source_paint_brush / source_paint_pencil / source_paint_eraser / source_paint_bucket / source_paint_shape / source_paint_clear` 六种绘画返回进程任务句柄，通过 `job_wait/job_get` 获取 `data.result` 中的提交状态、历史节点及生成句柄。能力详情标注 `job_backed:true`、`batchable:true` 并提供 `job_result_schema`。画笔、橡皮、油漆桶和形状使用 UI 的栅格算法；坐标为画布像素。默认 `rebuild_mesh:false` 保留已有网格及全部绑定，超出网格的新增像素只写入源图；需要网格覆盖新区域时传 `rebuild_mesh:true`，迁移关键形、混合形、路径、顶点组及 Glue，一次提交一个历史节点。已有关键形、Warp 或 Glue 不再阻止绘画。`clear` 或擦除全部像素保留图层与绑定，最后一层也可清空再重画；删除图层使用 `layer_soft_delete`。深度拆分前层始终保留拓扑。普通已编辑图层、深度前后层及导入 CMO3 的删除/恢复先重放编辑再过滤活动对象，保留恢复所需的 ID、关键形和绑定；删除期间修改网格设置仍保存隐藏网格的重绑结果。旧工程首次实际删除或恢复会在新候选固定身份和生成基线，避免现有编辑因图层恢复而改指其他网格；旧历史节点不被改写。`layer_mesh_update` 修改单层网格参数，重置后继承全局值。
+已有 PSD 使用 `project_import_psd` 从本地绝对路径打开。`source_paint_brush / source_paint_pencil / source_paint_eraser / source_paint_bucket / source_paint_shape / source_paint_clear` 六种绘画返回进程任务句柄，通过 `job_wait/job_get` 获取 `data.result` 中的提交状态、历史节点及生成句柄。能力详情标注 `job_backed:true`、`batchable:true` 并提供 `job_result_schema`。画笔、橡皮、油漆桶和形状使用 UI 的栅格算法；点、半径与线宽都是画布单位，落在图层自身的栅格上：栅格密度（栅格像素 / 画布单位，见[逐层尺寸](../spec/DOCUMENT_LAYER.md#逐层尺寸)）为 1 的图层与此前相同，在 32 单位矩形上保存 1024² 栅格的图层，半径 2 的笔刷在栅格上画出半径 64 像素的笔触，提交后栅格保持原分辨率，不缩回画布分辨率。画到矩形之外时矩形按同一密度扩展，裁剪到不透明像素时密度不变；完全擦空的图层按画布分辨率留一个透明像素。私有草稿同样以图层栅格为底：`paint_session_begin` 等结果的 `width/height` 是草稿栅格像素，`canvas_rect` 为它覆盖的画布矩形 `[left, top, width, height]`，取色按画布像素中心读取栅格；草稿超过 16MP 时缩小矩形周围可绘画的边距。默认 `rebuild_mesh:false` 保留已有网格及全部绑定，超出网格的新增像素只写入源图；需要网格覆盖新区域时传 `rebuild_mesh:true`，迁移关键形、混合形、路径、顶点组及 Glue，一次提交一个历史节点。已有关键形、Warp 或 Glue 不再阻止绘画。`clear` 或擦除全部像素保留图层与绑定，最后一层也可清空再重画；删除图层使用 `layer_soft_delete`。深度拆分前层始终保留拓扑。普通已编辑图层、深度前后层及导入 CMO3 的删除/恢复先重放编辑再过滤活动对象，保留恢复所需的 ID、关键形和绑定；删除期间修改网格设置仍保存隐藏网格的重绑结果。旧工程首次实际删除或恢复会在新候选固定身份和生成基线，避免现有编辑因图层恢复而改指其他网格；旧历史节点不被改写。`layer_mesh_update` 修改单层网格参数，重置后继承全局值。
 
 普通透明图层首次绘制可见像素时自动创建网格，无须先传 `rebuild_mesh:true`。嘴部首次绘画也创建派生嘴唇及其生成关键形。单项和批量任务完成结果的 `changed` 包含新对象的 `mesh:<id>` 等句柄，可继续编辑；相同请求重试取回同一任务，不重复创建或追加历史。完全擦空即使传入重建标志也保留网格及绑定。
 

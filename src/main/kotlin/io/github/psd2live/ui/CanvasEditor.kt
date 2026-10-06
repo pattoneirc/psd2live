@@ -1873,7 +1873,7 @@ internal class CanvasEditor(
         val session = paintSession ?: return null
         val cx = viewport.canvasX(pos.x).toInt()
         val cy = viewport.canvasY(pos.y).toInt()
-        if (cx !in 0 until session.docWidth || cy !in 0 until session.docHeight) return null
+        if (cx !in 0 until session.canvasWidth || cy !in 0 until session.canvasHeight) return null
         return cx to cy
     }
 

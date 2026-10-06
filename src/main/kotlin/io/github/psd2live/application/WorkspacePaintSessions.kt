@@ -12,10 +12,19 @@ import java.util.concurrent.ConcurrentHashMap
 
 data class WorkspacePaintStroke(val id: String, val name: String)
 
-/** One private raster and stroke history, shared by UI and public session controls. */
+/**
+ * One private raster and stroke history, shared by UI and public session controls.
+ *
+ * The raster is the layer's own pixel grid over the canvas ([PaintSpace]): for a layer at one pixel per canvas
+ * unit the canvas itself, for a denser one its raster extended at the same density. Everything callers pass -
+ * points, radii, widths, sample positions - is in canvas units; [space] maps it onto the raster.
+ */
 class WorkspacePaintSession internal constructor(
     val id: String, val projectId: String, val workspaceState: String,
     val layerId: String, val layerName: String, image: BufferedImage,
+    internal val space: PaintSpace = PaintSpace.canvas(image.width, image.height),
+    /** The document canvas, in canvas units. */
+    val canvasWidth: Int = image.width, val canvasHeight: Int = image.height,
     private val validateWorkspace: () -> Unit,
 ) {
     private val lock = Any()
@@ -54,9 +63,17 @@ class WorkspacePaintSession internal constructor(
             it.setRGB(0, 0, width, height, buffer.workingImage.getRGB(x, y, width, height, null, 0, width), 0, width)
         }
     }
+    /** Canvas units of the raster's left and top edges, and raster pixels per canvas unit. */
+    val originX: Float get() = space.originX
+    val originY: Float get() = space.originY
+    val scaleX: Float get() = space.scaleX
+    val scaleY: Float get() = space.scaleY
+
+    /** The colour of the raster pixel under canvas pixel ([x], [y]); transparent where the raster does not reach. */
     fun sample(x: Int, y: Int): Int = synchronized(lock) {
-        require(x in 0 until width && y in 0 until height) { "Sample point is outside the canvas" }
-        buffer.workingImage.getRGB(x, y)
+        require(x in 0 until canvasWidth && y in 0 until canvasHeight) { "Sample point is outside the canvas" }
+        val (px, py) = space.imagePixel(x, y) ?: return 0
+        buffer.workingImage.getRGB(px, py)
     }
     fun canUndo(): Boolean = synchronized(lock) { !closed && !active && buffer.canUndo() }
     fun canRedo(): Boolean = synchronized(lock) { !closed && !active && buffer.canRedo() }
@@ -78,7 +95,9 @@ class WorkspacePaintSession internal constructor(
     internal fun segment(x0: Float, y0: Float, x1: Float, y1: Float, tip: RasterPaintEngine.Tip,
         color: Int, opacity: Float, erase: Boolean) = synchronized(lock) {
         writable(allowActive = true); check(active) { "No live paint stroke" }
-        buffer.stroke().addSegment(x0, y0, x1, y1, tip)?.let {
+        val rasterTip = if (space.isCanvas) tip else RasterPaintEngine.Tip(space.imageLength(tip.radius), tip.hardness, tip.antialias)
+        buffer.stroke().addSegment(space.canvasToImageX(x0), space.canvasToImageY(y0),
+            space.canvasToImageX(x1), space.canvasToImageY(y1), rasterTip)?.let {
             buffer.landSegment(it, color, opacity, erase); changed()
         }
     }
@@ -97,7 +116,7 @@ class WorkspacePaintSession internal constructor(
             paintRasterGesture(buffer.workingImage, request, object : WorkspaceRasterWork {
                 override fun checkpoint() = checkpoint()
                 override fun progress(fraction: Float, message: String) {}
-            }, before = { checkpoint(); buffer.willWrite(it) })
+            }, before = { checkpoint(); buffer.willWrite(it) }, space = space)
             checkpoint(); buffer.recordStroke(name); changed()
         } catch (failure: Throwable) { buffer.abandonStroke(); publish(); throw failure }
     }
@@ -116,7 +135,10 @@ class WorkspacePaintSession internal constructor(
     fun dismiss() = synchronized(lock) { if (!committing) cancel() }
     internal fun freeze(expected: String, rebuildMesh: Boolean, preserve: Boolean, checkpoint: () -> Unit): WorkspacePaintRaster = synchronized(lock) {
         writable(expected); committing = true
-        try { WorkspacePaintRaster.capture(layerId, buffer.workingImage, rebuildMesh, preserve, checkpoint) }
+        // Only the layer's own area and what the session wrote can hold its pixels.
+        val area = space.layerArea()
+        val region = buffer.touched?.let { if (area.isEmpty) it else area.union(it) } ?: area
+        try { WorkspacePaintRaster.capture(layerId, buffer.workingImage, space, region, rebuildMesh, preserve, checkpoint) }
         catch (failure: Throwable) { committing = false; throw failure }
     }
     internal fun finish(result: WorkspaceMutationResult) = synchronized(lock) {
@@ -127,7 +149,9 @@ class WorkspacePaintSession internal constructor(
     fun snapshot(): JsonObject = synchronized(lock) { buildJsonObject {
         put("session_id", id); put("session_state", token()); put("project_id", projectId)
         put("workspace_state", workspaceState); put("layer_id", layerId); put("layer_name", layerName)
-        put("width", width); put("height", height); put("index", buffer.currentStrokeIndex)
+        put("width", width); put("height", height)
+        put("canvas_rect", JsonArray(listOf(space.originX, space.originY, space.canvasWidth, space.canvasHeight).map(::JsonPrimitive)))
+        put("index", buffer.currentStrokeIndex)
         put("dirty", buffer.isDirty); put("active_stroke", active); put("closed", closed)
         putJsonArray("strokes") { buffer.strokeRecords.forEach { record ->
             add(buildJsonObject { put("id", record.id); put("name", record.name) })
@@ -149,11 +173,12 @@ internal class WorkspacePaintSessions(private val runtime: WorkspaceRuntime<RigP
         if (captured.state != state) throw WorkspaceConflict(state, captured.state)
         val layer = RasterPaintCommit.sourceLayerFor(captured.model, captured.model.analysis, layerId)
             ?: throw IllegalArgumentException("Paint layer not found: $layerId")
-        val image = captured.document.sourceLayerImage(layer.id.raw)
+        val painting = captured.document.layerPaintImage(layer.id.raw)
         require(sessions.values.count { !it.finished } < 32) { "Close a paint session before opening another" }
         sessions.entries.removeIf { it.value.finished }
         val session = WorkspacePaintSession(UUID.randomUUID().toString(), captured.projectId, state,
-            layerId, layer.name, image) {
+            layerId, layer.name, painting.image, painting.space,
+            captured.document.source.widthPx, captured.document.source.heightPx) {
             val now = runtime.capture()
             if (now.projectId != captured.projectId || now.state != state) throw WorkspaceConflict(state, now.state)
         }

@@ -95,6 +95,28 @@ class MeshComponentSplitTest {
         }
     }
 
+    @Test fun piecesOfADenseLayerKeepItsDensity() {
+        val coarse = source(2)
+        val factor = 4
+        val raster = LayerRaster(coarse.raster.width * factor, coarse.raster.height * factor,
+            ByteArray(coarse.raster.rgba.size * factor * factor).also { out ->
+                for (y in 0 until coarse.raster.height * factor) for (x in 0 until coarse.raster.width * factor)
+                    System.arraycopy(coarse.raster.rgba, ((y / factor) * coarse.raster.width + x / factor) * 4, out,
+                        (y * coarse.raster.width * factor + x) * 4, 4)
+            })
+        val dense = coarse.copy(raster = raster)
+        val mesh = mesh(2)
+        val canvas = FloatArray(mesh.positions.size) { mesh.positions[it] + if (it % 2 == 0) dense.bounds.left else dense.bounds.top }
+        val plan = assertNotNull(MeshComponentSplit.detectCanvas(mesh, dense, canvas))
+        val pieces = plan.pieces(listOf("Left", "Right"))
+        for ((index, piece) in pieces.withIndex()) {
+            assertEquals(5 * factor, piece.raster.width); assertEquals(5 * factor, piece.raster.height)
+            val space = LayerSpace.of(piece)
+            assertEquals(factor.toFloat(), space.scaleX); assertEquals(factor.toFloat(), space.scaleY)
+            assertEquals(dense.bounds.left + index * 10f + 2f, space.left); assertEquals(dense.bounds.top + 2f, space.top)
+        }
+    }
+
     @Test fun connectedTrianglesDoNotOfferSplit() {
         val source = source(2)
         val joined = mesh(2).let {

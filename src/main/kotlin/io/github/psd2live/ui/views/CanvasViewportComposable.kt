@@ -1271,7 +1271,8 @@ fun CanvasViewportComposable(
 								val full = paintUploaded[0] !== session
 								paintUploaded[0] = session
 								io.github.psd2live.render.PaintScene(session, session.docWidth, session.docHeight,
-									listOfNotNull(session.takeGpuUpload(full)))
+									listOfNotNull(session.takeGpuUpload(full)), session.originX, session.originY,
+									session.docWidth / session.scaleX, session.docHeight / session.scaleY)
 							}
 							CanvasScene(w, h, viewport, model, geometry,
 								if (showTexture) ArtworkDrawList.build(model, geometry, options) else emptyList(),
@@ -1502,11 +1503,14 @@ fun CanvasViewportComposable(
 				// Apply (commitPaintSession) is what publishes them to the shared preview.
 				if (showTexture && paintSession != null && !paintSession.gpuPreview) {
 					val scale = viewport.scale
+					// Tiles are raster pixels; a dense layer's raster is stretched over its canvas rectangle.
+					val ox = paintSession.originX; val oy = paintSession.originY
+					val sx = paintSession.scaleX; val sy = paintSession.scaleY
 					for (tile in paintSession.previewTiles) {
-						val left = Math.round(viewport.offsetX + tile.x * scale)
-						val top = Math.round(viewport.offsetY + tile.y * scale)
-						val right = Math.round(viewport.offsetX + (tile.x + tile.width) * scale)
-						val bottom = Math.round(viewport.offsetY + (tile.y + tile.height) * scale)
+						val left = Math.round(viewport.offsetX + (ox + tile.x / sx) * scale)
+						val top = Math.round(viewport.offsetY + (oy + tile.y / sy) * scale)
+						val right = Math.round(viewport.offsetX + (ox + (tile.x + tile.width) / sx) * scale)
+						val bottom = Math.round(viewport.offsetY + (oy + (tile.y + tile.height) / sy) * scale)
 						drawImage(
 							image = tile.image,
 							dstOffset = androidx.compose.ui.unit.IntOffset(left.toInt(), top.toInt()),

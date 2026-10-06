@@ -1,7 +1,9 @@
 package io.github.psd2live.core
 
+import io.github.psd2live.project.LayerCanvasRect
 import io.github.psd2live.project.WorkspaceSourceArt
 import io.github.psd2live.project.WorkspaceSourceLayer
+import io.github.psd2live.project.storedCanvasRect
 import kotlinx.serialization.json.*
 import org.umamo.edit.withDrawablesDeleted
 import org.umamo.format.art.LayerBounds
@@ -26,32 +28,46 @@ private fun remapUvs(mesh: DrawableMesh, from: LayerTexture, to: LayerTexture): 
 /** Shared raster/atlas/mesh preparation. Adapters own gestures, prompts and durable submission. */
 internal object RasterPaintCommit {
     /** A painted layer's new pixels as a commit stores them, and the source holding them. */
-    class Painted(val bounds: LayerBounds, val raster: LayerRaster, val source: WorkspaceSourceArt)
+    class Painted(val bounds: LayerBounds, val rect: LayerCanvasRect?, val raster: LayerRaster, val source: WorkspaceSourceArt)
 
-    /**
-     * [image] (the whole canvas) cropped into [layerId]'s new pixels, and the source with them in place: all a
-     * repaint that keeps every mesh commits. Every other layer keeps its own raster.
-     */
+    /** [image] (the whole canvas, one pixel per canvas unit) as painted pixels, cropped to what it holds. */
+    fun canvasPixels(image: BufferedImage, checkpoint: () -> Unit = {}): PaintPixels {
+        val cropped = PaintSpace.canvas(image.width, image.height).crop(image, checkpoint = checkpoint)
+        return PaintPixels(cropped.raster, cropped.rect ?: LayerCanvasRect.of(cropped.bounds))
+    }
+
+    /** Canvas-image form of [paintedSource]. */
     fun paintedSource(currentPreview: RigPreviewModel, layerId: String, image: BufferedImage,
                       preserveSourceRaster: Boolean = false, checkpoint: () -> Unit = {}): Painted {
-        checkpoint()
-        require(image.width == currentPreview.analysis.source.widthPx && image.height == currentPreview.analysis.source.heightPx) {
+        requireCanvas(currentPreview, image)
+        return paintedSource(currentPreview, layerId, canvasPixels(image, checkpoint), preserveSourceRaster, checkpoint)
+    }
+
+    private fun requireCanvas(preview: RigPreviewModel, image: BufferedImage) =
+        require(image.width == preview.analysis.source.widthPx && image.height == preview.analysis.source.heightPx) {
             "Paint image dimensions must match the source canvas"
         }
+
+    /**
+     * [pixels] cropped into [layerId]'s new pixels at their own density, and the source with them in place: all a
+     * repaint that keeps every mesh commits. Every other layer keeps its own raster.
+     */
+    fun paintedSource(currentPreview: RigPreviewModel, layerId: String, pixels: PaintPixels,
+                      preserveSourceRaster: Boolean = false, checkpoint: () -> Unit = {}): Painted {
+        checkpoint()
         require(sourceLayerFor(currentPreview, currentPreview.analysis, layerId) != null) { "Paint layer not found: $layerId" }
         val currentAnalysis = currentPreview.analysis
-        val (newBounds, newRaster) = crop(currentPreview, layerId, image, preserveSourceRaster, checkpoint)
+        val painted = crop(currentPreview, layerId, pixels, preserveSourceRaster, checkpoint)
         val targetClassified = classifiedLayerFor(currentPreview, currentAnalysis, layerId)
         val targetSourceLayerId = targetClassified?.source?.id?.raw ?: layerId.substringBefore(':').substringBeforeLast('-')
         val updatedSrcLayers = currentAnalysis.source.layers.map { sl ->
             if (sl.id.raw == targetSourceLayerId || sl.id.raw == layerId || sl.id.raw == targetClassified?.source?.id?.raw) {
-                val base = if (sl is WorkspaceSourceLayer) sl else WorkspaceSourceLayer.copyOf(sl, sl.order) as WorkspaceSourceLayer
-                base.copy(bounds = newBounds, raster = newRaster)
+                withPixels(sl, painted)
             } else {
                 if (sl is WorkspaceSourceLayer) sl else WorkspaceSourceLayer.copyOf(sl, sl.order)
             }
         }
-        return Painted(newBounds, newRaster, WorkspaceSourceArt(
+        return Painted(painted.bounds, painted.rect, painted.raster, WorkspaceSourceArt(
             widthPx = currentAnalysis.source.widthPx,
             heightPx = currentAnalysis.source.heightPx,
             layers = updatedSrcLayers,
@@ -59,96 +75,52 @@ internal object RasterPaintCommit {
         ))
     }
 
-    private fun crop(currentPreview: RigPreviewModel, layerId: String, image: BufferedImage, preserveSourceRaster: Boolean,
-                     checkpoint: () -> Unit): Pair<LayerBounds, LayerRaster> {
-        val currentAnalysis = currentPreview.analysis
-        val img = image
-        val docW = image.width
-        val docH = image.height
-
-        val newBounds: LayerBounds
-        val newRaster: LayerRaster
-
-        // A hierarchy rebuild changes only the mesh. Keep the exact saved pixels and bounds instead
-        // of running the paint-commit crop step over an untouched raster.
-        val existingLayer = sourceLayerFor(currentPreview, currentAnalysis, layerId)
-        if (!preserveSourceRaster && DepthSplit.isFrontLayer(currentPreview, layerId) && existingLayer != null) {
-            // Erasing changes alpha only. Cropping would let vertices outside the smaller tile
-            // sample neighbouring art, and rebuilding would discard the original rig and glue.
-            newBounds = existingLayer.bounds
-            val rgba = existingLayer.raster.rgba.copyOf()
-            for (y in 0 until existingLayer.raster.height) for (x in 0 until existingLayer.raster.width) {
-                if (x == 0) checkpoint()
-                val docX = newBounds.left + x
-                val docY = newBounds.top + y
-                if (docX !in 0 until docW || docY !in 0 until docH) continue
-                val argb = img.getRGB(docX, docY)
-                val index = (y * existingLayer.raster.width + x) * 4
-                rgba[index] = (argb ushr 16).toByte()
-                rgba[index + 1] = (argb ushr 8).toByte()
-                rgba[index + 2] = argb.toByte()
-                rgba[index + 3] = (argb ushr 24).toByte()
-            }
-            newRaster = LayerRaster(existingLayer.raster.width, existingLayer.raster.height, rgba)
-        } else if (preserveSourceRaster && existingLayer != null) {
-            newBounds = existingLayer.bounds
-            newRaster = existingLayer.raster
-        } else {
-            // 1. Scan workingImage to find tight non-transparent bounding box
-            var minX = docW
-            var minY = docH
-            var maxX = -1
-            var maxY = -1
-
-            val row = IntArray(docW)
-            for (y in 0 until docH) {
-                checkpoint()
-                img.getRGB(0, y, docW, 1, row, 0, docW)
-                for (x in 0 until docW) {
-                    val alpha = (row[x] ushr 24) and 0xFF
-                    if (alpha > 0) {
-                        if (x < minX) minX = x
-                        if (x > maxX) maxX = x
-                        if (y < minY) minY = y
-                        if (y > maxY) maxY = y
-                    }
-                }
-            }
-
-            if (maxX < minX || maxY < minY) {
-                // Completely erased / transparent layer
-                newBounds = LayerBounds(0, 0, 1, 1)
-                newRaster = LayerRaster(1, 1, ByteArray(4))
-            } else {
-                val cropW = maxX - minX + 1
-                val cropH = maxY - minY + 1
-                newBounds = LayerBounds(minX, minY, cropW, cropH)
-                val croppedImg = img.getSubimage(minX, minY, cropW, cropH)
-                val pixels = IntArray(cropW * cropH)
-                croppedImg.getRGB(0, 0, cropW, cropH, pixels, 0, cropW)
-                val rgba = ByteArray(cropW * cropH * 4)
-                for (i in pixels.indices) {
-                    if (i % cropW == 0) checkpoint()
-                    val argb = pixels[i]
-                    rgba[i * 4] = ((argb ushr 16) and 0xFF).toByte()     // R
-                    rgba[i * 4 + 1] = ((argb ushr 8) and 0xFF).toByte()  // G
-                    rgba[i * 4 + 2] = (argb and 0xFF).toByte()           // B
-                    rgba[i * 4 + 3] = ((argb ushr 24) and 0xFF).toByte() // A
-                }
-                newRaster = LayerRaster(cropW, cropH, rgba)
-            }
-        }
-        return newBounds to newRaster
+    /** [layer] (its texture behind a canvas-resolution view) holding [painted]'s pixels and placement. */
+    private fun withPixels(layer: SourceLayer, painted: PaintedLayer): WorkspaceSourceLayer {
+        val texture = layer.textureLayer
+        val base = texture as? WorkspaceSourceLayer ?: WorkspaceSourceLayer.copyOf(texture, texture.order) as WorkspaceSourceLayer
+        return base.copy(bounds = painted.bounds, raster = painted.raster, rect = painted.rect)
     }
 
+    private fun crop(currentPreview: RigPreviewModel, layerId: String, pixels: PaintPixels, preserveSourceRaster: Boolean,
+                     checkpoint: () -> Unit): PaintedLayer {
+        val currentAnalysis = currentPreview.analysis
+        val docW = currentAnalysis.source.widthPx
+        val docH = currentAnalysis.source.heightPx
+        // A hierarchy rebuild changes only the mesh. Keep the exact saved pixels and bounds instead
+        // of running the paint-commit crop step over an untouched raster.
+        val existingLayer = sourceLayerFor(currentPreview, currentAnalysis, layerId)?.textureLayer
+        return if (!preserveSourceRaster && DepthSplit.isFrontLayer(currentPreview, layerId) && existingLayer != null) {
+            // Erasing changes alpha only. Cropping would let vertices outside the smaller tile
+            // sample neighbouring art, and rebuilding would discard the original rig and glue.
+            PaintedLayer(existingLayer.bounds, existingLayer.storedCanvasRect,
+                PaintSpace.resampleInto(existingLayer, pixels, docW, docH, checkpoint))
+        } else if (preserveSourceRaster && existingLayer != null) {
+            PaintedLayer(existingLayer.bounds, existingLayer.storedCanvasRect, existingLayer.raster)
+        } else {
+            PaintSpace.crop(pixels, docW, docH, checkpoint)
+        }
+    }
+
+    /** Canvas-image form of [prepare]. */
     fun prepare(pipeline: PSD2LivePipeline, currentPreview: RigPreviewModel, layerId: String,
                 image: BufferedImage, rebuildMesh: Boolean, preserveSourceRaster: Boolean = false,
                 checkpoint: () -> Unit = {}, progress: ProgressListener = ProgressListener { _, _ -> },
                 runtimeBundle: Boolean = true): RigPreviewModel {
+        requireCanvas(currentPreview, image)
+        return prepare(pipeline, currentPreview, layerId, canvasPixels(image, checkpoint), rebuildMesh, preserveSourceRaster,
+            checkpoint, progress, runtimeBundle)
+    }
+
+    fun prepare(pipeline: PSD2LivePipeline, currentPreview: RigPreviewModel, layerId: String,
+                pixels: PaintPixels, rebuildMesh: Boolean, preserveSourceRaster: Boolean = false,
+                checkpoint: () -> Unit = {}, progress: ProgressListener = ProgressListener { _, _ -> },
+                runtimeBundle: Boolean = true): RigPreviewModel {
         progress.update("Cropping painted source", 0.0)
-        val painted = paintedSource(currentPreview, layerId, image, preserveSourceRaster, checkpoint)
+        val painted = paintedSource(currentPreview, layerId, pixels, preserveSourceRaster, checkpoint)
         val newBounds = painted.bounds
         val newRaster = painted.raster
+        val newPixels = PaintedLayer(painted.bounds, painted.rect, painted.raster)
         val updatedSourceArt = painted.source
         val rebuild = rebuildMesh && !DepthSplit.isFrontLayer(currentPreview, layerId)
         val currentAnalysis = currentPreview.analysis
@@ -166,15 +138,15 @@ internal object RasterPaintCommit {
             it.id.raw == targetLid || currentPreview.rig.layerIdByDrawableId[it.id.raw] == targetLid
         }
         val targetClassified = classifiedLayerFor(currentPreview, currentAnalysis, targetLid)
-        val oldBounds = sourceLayerFor(currentPreview, currentAnalysis, targetLid)?.bounds ?: newBounds
+        val oldLayer = sourceLayerFor(currentPreview, currentAnalysis, targetLid)
 
         // 3. Update Classified Layers
 
         val updatedClassifiedLayers = currentAnalysis.layers.map { cl ->
             checkpoint()
             if (cl.source.id.raw == (targetClassified?.source?.id?.raw ?: targetLid)) {
-                val updatedSource = (cl.source as? WorkspaceSourceLayer)?.copy(bounds = newBounds, raster = newRaster)
-                    ?: (WorkspaceSourceLayer.copyOf(cl.source, cl.source.order) as WorkspaceSourceLayer).copy(bounds = newBounds, raster = newRaster)
+                // Analysis reads a dense layer at canvas resolution; the view keeps the painted raster as its texture.
+                val updatedSource = CanvasDensity.canvasLayer(withPixels(cl.source, newPixels))
                 val updatedFloatBounds = newBounds.toBounds()
                 cl.copy(
                     source = updatedSource,
@@ -214,6 +186,7 @@ internal object RasterPaintCommit {
         )
         progress.update("Preparing painted mesh", 0.55)
         val oldAtlas = currentPreview.atlas
+        val newLayer = sourceLayerFor(currentPreview, effectiveAnalysis, targetLid)
 
         fun findPlacement(atlas: PackedAtlas, drawableId: String, layerId: String?): io.github.psd2live.core.AtlasPlacement? {
             if (layerId != null && atlas.placementByLayerId.containsKey(layerId)) {
@@ -233,18 +206,19 @@ internal object RasterPaintCommit {
             return null
         }
 
-        /** One layer's slice of [atlas], or null when it holds none. An unknown [bounds] reads as the
-         *  canvas origin, which leaves the texture coordinates translated but unscaled. */
-        fun sliceOf(atlas: PackedAtlas, drawableId: String, layerId: String, bounds: LayerBounds?): LayerTexture? {
+        /** One layer's slice of [atlas], or null when it holds none: its raster over its canvas rectangle. An
+         *  unknown [layer] reads as the canvas origin, which leaves the texture coordinates translated but unscaled. */
+        fun sliceOf(atlas: PackedAtlas, drawableId: String, layerId: String, layer: SourceLayer?): LayerTexture? {
             val placement = findPlacement(atlas, drawableId, layerId) ?: return null
             val page = atlas.pages.getOrNull(placement.page)
-            return LayerTexture.packed(bounds, placement, page?.image?.width ?: placement.width, page?.image?.height ?: placement.height)
+            val space = layer?.textureLayer?.let(LayerSpace::of) ?: LayerSpace(0f, 0f, 0f, 0f, 0, 0)
+            return LayerTexture.packed(space, placement, page?.image?.width ?: placement.width, page?.image?.height ?: placement.height)
         }
 
         /** The mesh a rebuild replaces, described so the frame its parent deformer expects can be
          *  recovered from the geometry itself - the only source left for an imported or hand-made rig. */
-        fun replacedMesh(mesh: DrawableMesh, atlas: PackedAtlas, drawableId: String, layerId: String, bounds: LayerBounds): RigBuilder.ReplacedMesh {
-            return RigBuilder.ReplacedMesh(mesh = mesh, texture = sliceOf(atlas, drawableId, layerId, bounds))
+        fun replacedMesh(mesh: DrawableMesh, atlas: PackedAtlas, drawableId: String, layerId: String, layer: SourceLayer?): RigBuilder.ReplacedMesh {
+            return RigBuilder.ReplacedMesh(mesh = mesh, texture = sliceOf(atlas, drawableId, layerId, layer))
         }
 
         val targetPlacement = findPlacement(newAtlas, targetDrawable?.id?.raw ?: targetLid, targetClassified?.source?.id?.raw ?: targetLid)
@@ -305,7 +279,7 @@ internal object RasterPaintCommit {
                         owner = drawable,
                         atlas = newAtlas,
                         generatedLips = regeneratedLips,
-                        previous = drawable.mesh?.let { replacedMesh(it, oldAtlas, drawable.id.raw, layerId, oldBounds) },
+                        previous = drawable.mesh?.let { replacedMesh(it, oldAtlas, drawable.id.raw, layerId, oldLayer ?: newLayer) },
                     )
                     for (lip in rebuilt.mouthLips) rebuiltLips[lip.drawable.id.raw] = lip
 
@@ -316,8 +290,8 @@ internal object RasterPaintCommit {
                     )
                 } else {
                     val oldMesh = requireNotNull(drawable.mesh)
-                    val oldSlice = sliceOf(oldAtlas, drawable.id.raw, layerId, oldBounds)
-                    val newSlice = sliceOf(newAtlas, drawable.id.raw, layerId, newBounds)
+                    val oldSlice = sliceOf(oldAtlas, drawable.id.raw, layerId, oldLayer ?: newLayer)
+                    val newSlice = sliceOf(newAtlas, drawable.id.raw, layerId, newLayer)
                     if (oldSlice != null && newSlice != null) {
                         drawable.copy(
                             mesh = DrawableMesh(oldMesh.positions, remapUvs(oldMesh, oldSlice, newSlice), oldMesh.indices),
@@ -328,8 +302,8 @@ internal object RasterPaintCommit {
                     }
                 }
             } else {
-                val oldSlice = sliceOf(oldAtlas, drawable.id.raw, layerId, sourceLayerFor(currentPreview, currentAnalysis, layerId)?.bounds)
-                val newSlice = sliceOf(newAtlas, drawable.id.raw, layerId, sourceLayerFor(currentPreview, effectiveAnalysis, layerId)?.bounds)
+                val oldSlice = sliceOf(oldAtlas, drawable.id.raw, layerId, sourceLayerFor(currentPreview, currentAnalysis, layerId))
+                val newSlice = sliceOf(newAtlas, drawable.id.raw, layerId, sourceLayerFor(currentPreview, effectiveAnalysis, layerId))
                 val oldMesh = drawable.mesh
                 when {
                     // The repack has no slice for this drawable any more. That is what a generated layer

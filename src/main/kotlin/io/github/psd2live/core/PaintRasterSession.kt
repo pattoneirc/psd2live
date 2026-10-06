@@ -121,9 +121,9 @@ internal data class RasterPaintStrokeRecord(
 )
 
 /**
- * Isolated painting pipeline session in PSD Document Canvas space.
+ * Isolated painting pipeline session in the painted layer's raster space ([PaintSpace]).
  *
- * Keeps all drawing strokes, eraser, flood fill, and shapes on a document-canvas-sized in-memory raster
+ * Keeps all drawing strokes, eraser, flood fill, and shapes on an in-memory raster of the layer's own pixel grid
  * without polluting the main project history or restricting the user to a pre-existing mesh boundary.
  *
  * Every write to [workingImage] goes through [edit] (or is announced with [willWrite] first): the
@@ -134,7 +134,7 @@ internal class PaintRasterSession(
     val layerId: String,
     val layerName: String,
     /**
-     * The document raster every stroke lands on, canvas-sized and independent of the atlas.
+     * The raster every stroke lands on: the layer's pixel grid over the canvas, independent of the atlas.
      *
      * Writes have to go through [edit], or be announced with [willWrite] first: the session can only
      * undo, redo or give back an edit whose pixels it watched being replaced.
@@ -154,6 +154,17 @@ internal class PaintRasterSession(
     val strokeCount: Int get() = strokeRecords.size - 1
 
     var onChanged: (List<Rectangle>) -> Unit = {}
+
+    /**
+     * Every area an edit of this session has written to, ever: with the layer's own area, all a commit has to
+     * read for the layer's new pixels. Undoing never shrinks it.
+     */
+    var touched: Rectangle? = null
+        private set
+    private fun touch(rect: Rectangle?) {
+        val area = rect?.intersection(Rectangle(0, 0, docWidth, docHeight))?.takeUnless { it.isEmpty } ?: return
+        touched = touched?.union(area) ?: Rectangle(area)
+    }
     private var liveStroke: RasterPaintEngine.Stroke? = null
     private var pending = PaintPixelPatch()
     init {
@@ -179,6 +190,7 @@ internal class PaintRasterSession(
      * what makes a stroke that crosses itself land once, and land the same however the drag was cut up.
      */
     internal fun landSegment(claimed: Rectangle, color: Int, opacity: Float, erase: Boolean) {
+        touch(claimed)
         pending.capture(workingImage, claimed)
         pending.restore(workingImage, claimed)
         stroke().land(workingImage, color, opacity, erase, claimed)
@@ -187,6 +199,7 @@ internal class PaintRasterSession(
 
     /** Remembers the pixels [rect] is about to lose. See [edit] for the usual way in. */
     internal fun willWrite(rect: Rectangle?) {
+        touch(rect)
         pending.capture(workingImage, rect)
         markDirty(rect)
     }

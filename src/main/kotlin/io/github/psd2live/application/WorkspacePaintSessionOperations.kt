@@ -33,7 +33,7 @@ internal object WorkspacePaintSessionSchemas {
         control("render", mapOf("max_edge" to s.integer(128, 2048)), emptySet())))
     val snapshot = s.obj(mapOf("session_id" to s.handle(), "session_state" to s.handle(), "project_id" to s.handle(),
         "workspace_state" to s.handle(), "layer_id" to s.handle(), "layer_name" to s.string(),
-        "width" to s.integer(1), "height" to s.integer(1), "index" to s.integer(0), "dirty" to s.boolean(),
+        "width" to s.integer(1), "height" to s.integer(1), "canvas_rect" to s.vector(4), "index" to s.integer(0), "dirty" to s.boolean(),
         "active_stroke" to s.boolean(), "closed" to s.boolean(),
         "strokes" to s.array(s.obj(mapOf("id" to s.handle(), "name" to s.string())), 1, Int.MAX_VALUE)))
     val result = s.union(listOf(s.obj(mapOf("kind" to s.constant("state"), "session" to snapshot)),
@@ -97,7 +97,7 @@ internal fun registerPaintSessionOperations(registry: WorkspaceOperationRegistry
         WorkspaceOperationOutput(buildJsonObject { put("sessions", JsonArray(port.listPaintSessions())) })
     }
     registry.register(WorkspaceOperationDefinition("paint_session_begin",
-        "Begin an isolated multi-stroke paint candidate from a committed layer, capturing its workspace state. Canvas X points right and Y down; edits, sampling and undo never alter project history until commit.",
+        "Begin an isolated multi-stroke paint candidate from a committed layer, capturing its workspace state. Canvas X points right and Y down; gesture points, radii, widths and sample positions are canvas units. The candidate raster is the layer's own pixel grid (width x height pixels covering canvas_rect [left, top, width, height]), so strokes on a dense layer paint at its raster density. Edits, sampling and undo never alter project history until commit.",
         s.obj(mapOf("state" to s.handle(), "layer_id" to s.handle())), WorkspaceOperationKind.SESSION,
         resultSchema = WorkspacePaintSessionSchemas.result)) { request, _ ->
         WorkspaceOperationOutput(buildJsonObject { put("kind", "state"); put("session",
