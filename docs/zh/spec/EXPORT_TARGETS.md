@@ -51,7 +51,7 @@ MIT 模块不依赖任何 GPL 模块，由 Gradle 依赖关系在编译期保证
 | `apng` | 光栅 | 动态 PNG（ffmpeg） | — |
 | `webp` | 光栅 | 动态 WebP（ffmpeg） | 有损压缩 |
 
-光栅类和 `psd-pose` 通过宿主提供的 `FrameRenderer` 渲染。编辑器的实现（`IrFrameRenderer`）使用引擎的 CPU 求值器和编辑器的软件绘制，并在帧之间推进摆锤物理；混合模式按普通绘制，乘算/屏幕色不生效，遮罩按几何裁剪。
+光栅类和 `psd-pose` 通过宿主提供的 `FrameRenderer` 渲染。编辑器的实现（`IrFrameRenderer`）用引擎的 CPU 求值器得到几何，用 `IrColors` 按通道与混合形求出乘算/屏幕色，再由 `:format-compile` 的 `SoftwareRasterizer`（MIT）逐像素绘制：预乘浮点缓冲、双线性采样、按纹理 alpha 的遮罩（含反相）、Cubism 的叠加/乘算（保持目标 alpha）以及 W3C 合成规范的全部可分离与非可分离混合模式；帧之间推进摆锤物理。部件的分组合成与 over 以外的 alpha 合成尚按普通绘制。
 
 ### 设置
 
