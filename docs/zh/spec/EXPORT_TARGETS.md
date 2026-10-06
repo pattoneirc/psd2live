@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `:format-model` | 中立绑定 IR（`RigIR`）：参数、部件、Warp / 旋转变形器、网格、关键形网格、通道、混合形、Glue、绘制树、贴图页与图块、物理组、动作片段、编辑器附带数据 | MIT |
 | `:format-compile` | 导出框架：`ExportTarget`、`CapabilityProfile`、`LossEntry`、`ExportReport`、`Compiler`；降级步骤：能力扫描、按参数烘焙与交叉项误差测量（`ParameterBake`）、关键帧精简（`KeyReduction`）、动作片段采样；宿主接口 `FrameRenderer`、`GeometryEvaluator` | MIT |
-| `:targets:raster` | `png-sequence`、`sprite-sheet`、`gif` | MIT |
+| `:targets:raster` | `png-sequence`、`sprite-sheet`、`gif`，以及经 ffmpeg 编码的 `mp4`、`webm`、`mov`、`apng`、`webp` | MIT |
 | `:targets:spine` | `spine`：Spine 4.2 骨骼 JSON + 图集，由宿主提供的几何求值器烘焙变形 | MIT |
 | `:targets:cubism` | `PuppetModel` 与 IR 的双向转换器（`PuppetIr`）、`moc3`、`cmo3`、motion3 / physics3 写出 | GPL-3 |
 | `:targets:psd` | `psd-pose`：指定姿势的分层 PSD | GPL-3 |
@@ -35,6 +35,11 @@ MIT 模块不依赖任何 GPL 模块，由 Gradle 依赖关系在编译期保证
 | `png-sequence` | 光栅 | 编号 PNG 帧 | 结构全部烘焙为像素 |
 | `sprite-sheet` | 光栅 | 网格排列的精灵表 PNG + TexturePacker（hash）JSON | 同上 |
 | `gif` | 光栅 | 动态 GIF | 256 色、1 位透明 |
+| `mp4` | 光栅 | H.264 视频（ffmpeg） | 无透明，合成到背景色（默认白色） |
+| `webm` | 光栅 | VP9 视频，带透明（ffmpeg） | 透明保存在 VP9 侧通道，需要 libvpx 解码 |
+| `mov` | 光栅 | ProRes 4444，带透明（ffmpeg） | — |
+| `apng` | 光栅 | 动态 PNG（ffmpeg） | — |
+| `webp` | 光栅 | 动态 WebP（ffmpeg） | 有损压缩 |
 
 光栅类和 `psd-pose` 通过宿主提供的 `FrameRenderer` 渲染。编辑器的实现（`IrFrameRenderer`）使用引擎的 CPU 求值器和编辑器的软件绘制，并在帧之间推进摆锤物理；混合模式按普通绘制，乘算/屏幕色不生效，遮罩按几何裁剪。
 
@@ -46,6 +51,7 @@ MIT 模块不依赖任何 GPL 模块，由 Gradle 依赖关系在编译期保证
 | `cmo3` | `timestamp`（毫秒，默认 0） |
 | `spine` | `clip_fps`（动作采样帧率，默认 15）、`clips`（是否写出动作，默认 true）、`key_tolerance`（关键帧精简容差，像素，默认 0.25）、`sample_pairs` |
 | `psd-pose` | `clip` 与 `time`（秒）按动作片段摆姿势，或 `pose`（`ParamAngleX=20,ParamEyeLOpen=0`，覆盖片段）；`scale`（0.25–2，默认 1） |
+| 视频类 | 同光栅类，另有 `ffmpeg`（ffmpeg 路径；缺省依次取环境变量 `PSD2LIVE_FFMPEG` 与 PATH） |
 | 光栅类 | `clip`（默认第一个片段，无片段时为静止姿势）、`fps`（默认片段帧率）、`size`（长边像素，默认 1024）、`background`（ARGB 十六进制，默认透明）、`physics`（默认 true） |
 
 ## Spine

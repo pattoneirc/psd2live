@@ -86,4 +86,48 @@ class RasterTargetsTest {
 		assertEquals(listOf("still_0000.png"), files.keys.toList())
 		assertEquals(emptyMap(), renderer.calls.single().first)
 	}
+
+	private fun ffmpegAvailable() = runCatching { ProcessBuilder("ffmpeg", "-version").start().waitFor() == 0 }.getOrDefault(false)
+
+	/** [file] decoded by ffmpeg into raw RGBA frames. */
+	private fun decode(file: java.io.File, width: Int, height: Int): List<IntArray> {
+		// VP9 keeps alpha in a side channel only libvpx decodes.
+		val decoder = if (file.name.endsWith(".webm")) listOf("-c:v", "libvpx-vp9") else emptyList()
+		val process = ProcessBuilder(listOf("ffmpeg", "-hide_banner", "-loglevel", "error") + decoder + listOf("-i", file.path, "-f", "rawvideo", "-pix_fmt", "rgba", "-")).start()
+		val bytes = process.inputStream.readBytes(); check(process.waitFor() == 0)
+		val size = width * height * 4
+		return (0 until bytes.size / size).map { f -> IntArray(width * height) { i ->
+			val o = f * size + i * 4
+			((bytes[o + 3].toInt() and 255) shl 24) or ((bytes[o].toInt() and 255) shl 16) or ((bytes[o + 1].toInt() and 255) shl 8) or (bytes[o + 2].toInt() and 255)
+		} }
+	}
+
+	@Test fun videosEncodeEveryFrameAndKeepAlphaWhereTheFormatHasIt() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(ffmpegAvailable(), "ffmpeg is not installed")
+		val targets = RasterTargets(FakeRenderer())
+		for (format in RasterTargets.Video.entries) {
+			val target = targets.all.single { it.id == format.id }
+			val (files, report) = export(target, "size" to "64", "physics" to "false")
+			val file = kotlin.io.path.createTempFile(suffix = "." + format.extension).toFile()
+			try {
+				file.writeBytes(files.getValue("anim.${format.extension}"))
+				if (format == RasterTargets.Video.WEBP) {
+					// ffmpeg encodes animated WebP but cannot decode it: check the RIFF chunks instead.
+					val bytes = file.readBytes()
+					assertEquals("RIFF", String(bytes, 0, 4)); assertEquals("WEBP", String(bytes, 8, 4))
+					assertEquals(4, Regex("ANMF").findAll(String(bytes, Charsets.ISO_8859_1)).count())
+					assertTrue("ANIM" in String(bytes, Charsets.ISO_8859_1))
+					continue
+				}
+				val frames = decode(file, 64, 32)
+				assertEquals(4, frames.size, "${format.id} frames")
+				// The red square of the third frame sits at x = 6; lossy codecs land near red.
+				val red = frames[2][1 * 64 + 7]
+				assertTrue(((red shr 16) and 255) > 200 && ((red shr 8) and 255) < 60, "${format.id} square: ${Integer.toHexString(red)}")
+				val corner = frames[0][31 * 64 + 63]
+				if (format.alpha) assertTrue((corner ushr 24) < 16, "${format.id} keeps transparency")
+				else { assertEquals(255, corner ushr 24); assertTrue(report.losses.any { it.note.contains("no alpha") }) }
+			} finally { file.delete() }
+		}
+	}
 }

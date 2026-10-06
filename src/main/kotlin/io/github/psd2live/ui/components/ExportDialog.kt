@@ -375,8 +375,8 @@ internal fun ExportActionSection(
 }
 
 /** The neutral export targets beyond Cubism: Spine, a pose as layered PSD, image sequences, sprite sheets and GIF. */
-private val otherFormatTargets = listOf("spine", "psd-pose", "png-sequence", "sprite-sheet", "gif")
-private val rasterTargets = setOf("png-sequence", "sprite-sheet", "gif")
+private val otherFormatTargets = listOf("spine", "psd-pose", "png-sequence", "sprite-sheet", "gif", "mp4", "webm", "mov", "apng", "webp")
+private val rasterTargets = setOf("png-sequence", "sprite-sheet", "gif", "mp4", "webm", "mov", "apng", "webp")
 
 @Composable
 private fun OtherFormatsSection(state: PSD2LiveState, viewModel: PSD2LiveViewModel) {

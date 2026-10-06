@@ -21,7 +21,63 @@ import javax.imageio.metadata.IIOMetadataNode
  * - `physics`: whether physics moves between frames, true by default.
  */
 public class RasterTargets(private val renderer: FrameRenderer) {
-	public val all: List<ExportTarget> get() = listOf(sequence, sheet, gif)
+	public val all: List<ExportTarget> get() = listOf(sequence, sheet, gif) + Video.entries.map(::video)
+
+	/**
+	 * Video and animated image formats encoded by ffmpeg. [alpha] formats keep transparency; the others are
+	 * composited over `background` (white by default).
+	 */
+	public enum class Video(public val id: String, public val extension: String, public val alpha: Boolean, public val label: String,
+	                        internal val arguments: List<String>) {
+		MP4("mp4", "mp4", false, "MP4 video (H.264)", listOf("-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
+			"-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-movflags", "+faststart")),
+		WEBM("webm", "webm", true, "WebM video (VP9 with alpha)", listOf("-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "30", "-auto-alt-ref", "0")),
+		MOV("mov", "mov", true, "QuickTime (ProRes 4444 with alpha)", listOf("-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le")),
+		APNG("apng", "png", true, "Animated PNG", listOf("-c:v", "apng", "-f", "apng", "-plays", "0")),
+		WEBP("webp", "webp", true, "Animated WebP", listOf("-c:v", "libwebp_anim", "-lossless", "0", "-quality", "90", "-loop", "0")),
+	}
+
+	/** The ffmpeg to encode with: the `ffmpeg` setting, then PSD2LIVE_FFMPEG, then ffmpeg on the PATH. */
+	private fun ffmpeg(options: ExportOptions): String =
+		options.setting("ffmpeg") ?: System.getenv("PSD2LIVE_FFMPEG")?.takeIf { it.isNotBlank() } ?: "ffmpeg"
+
+	private fun video(format: Video): ExportTarget = target(format.id, format.label, extraLoss = if (format.alpha) null else
+		LossEntry("*", Feature.TEXTURE_SIZE, Handling.APPROXIMATED, note = "${format.id} has no alpha; frames are composited over the background"),
+		opaqueBackground = !format.alpha) { frames, options, clip, fps ->
+		val bytes = encode(ffmpeg(options), format, frames, fps)
+		val write: (OutputSink) -> Unit = { sink -> sink.write("${options.baseName}.${format.extension}", bytes) }
+		write
+	}
+
+	/** Streams raw RGBA frames into ffmpeg and returns the encoded file. Bit-exact flags keep the output reproducible. */
+	private fun encode(ffmpeg: String, format: Video, frames: List<RasterImage>, fps: Float): ByteArray {
+		val output = java.nio.file.Files.createTempFile("psd2live-video-", ".${format.extension}")
+		try {
+			val width = frames.first().width; val height = frames.first().height
+			val command = listOf(ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba",
+				"-s", "${width}x$height", "-r", fps.toString(), "-i", "-") + format.arguments +
+				listOf("-fflags", "+bitexact", "-flags:v", "+bitexact", "-map_metadata", "-1", output.toString())
+			val process = try { ProcessBuilder(command).redirectErrorStream(true).start() }
+				catch (failure: java.io.IOException) { throw IllegalStateException("ffmpeg is not available ($ffmpeg); set the ffmpeg setting or PSD2LIVE_FFMPEG", failure) }
+			val log = StringBuilder()
+			val reader = Thread { process.inputStream.bufferedReader().forEachLine { log.appendLine(it) } }.apply { start() }
+			process.outputStream.buffered().use { input ->
+				val row = ByteArray(width * height * 4)
+				for (frame in frames) {
+					for (i in frame.argb.indices) {
+						val argb = frame.argb[i]
+						row[i * 4] = (argb shr 16).toByte(); row[i * 4 + 1] = (argb shr 8).toByte(); row[i * 4 + 2] = argb.toByte(); row[i * 4 + 3] = (argb ushr 24).toByte()
+					}
+					input.write(row)
+				}
+			}
+			val status = process.waitFor(); reader.join()
+			check(status == 0) { "ffmpeg failed ($status): ${log.toString().trim().take(500)}" }
+			return java.nio.file.Files.readAllBytes(output)
+		} finally {
+			java.nio.file.Files.deleteIfExists(output)
+		}
+	}
 
 	/** Numbered PNG frames. */
 	public val sequence: ExportTarget = target("png-sequence", "PNG image sequence") { frames, options, clip, fps ->
@@ -69,7 +125,7 @@ public class RasterTargets(private val renderer: FrameRenderer) {
 	}
 
 	private fun target(
-		id: String, description: String, extraLoss: LossEntry? = null,
+		id: String, description: String, extraLoss: LossEntry? = null, opaqueBackground: Boolean = false,
 		writer: (List<RasterImage>, ExportOptions, Clip?, Float) -> (OutputSink) -> Unit,
 	): ExportTarget = object : ExportTarget {
 		override val id: String = id
@@ -83,7 +139,8 @@ public class RasterTargets(private val renderer: FrameRenderer) {
 			require(fps.isFinite() && fps in 1f..120f) { "FPS must be within 1..120" }
 			val size = options.int("size", 1024)
 			require(size in 16..8192) { "Size must be within 16..8192" }
-			val background = options.setting("background")?.let { java.lang.Long.parseUnsignedLong(it.removePrefix("#"), 16).toInt() } ?: 0
+			val background = options.setting("background")?.let { java.lang.Long.parseUnsignedLong(it.removePrefix("#"), 16).toInt() }
+				?: if (opaqueBackground) 0xffffffff.toInt() else 0
 			val physics = options.flag("physics", true) && ir.physics.groups.isNotEmpty()
 			val spec = FrameSpec.canvas(ir, size, background)
 			val times = clip?.let { ClipSampler.frameTimes(it, fps) } ?: listOf(0f)
