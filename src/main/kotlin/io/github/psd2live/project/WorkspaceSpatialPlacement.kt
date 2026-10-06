@@ -3,7 +3,12 @@ package io.github.psd2live.project
 import io.github.psd2live.core.Bounds
 import kotlin.math.abs
 
-/** Canvas placement retained independently of however many pixels an Agent-generated PNG contains. */
+/**
+ * Canvas placement retained independently of however many pixels an Agent-generated PNG contains.
+ *
+ * [canvasUnitsPerPixelX] / [canvasUnitsPerPixelY] are the real ratio of [canvasRect] to the image pixels: a
+ * layer made from the placement keeps every pixel and covers [canvasRect], so its density is their inverse.
+ */
 data class WorkspaceCanvasPlacement(
 	val coordinateSpace: String,
 	val canvasRect: Bounds,

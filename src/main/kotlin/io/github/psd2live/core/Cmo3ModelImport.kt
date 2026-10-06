@@ -9,6 +9,8 @@ import org.umamo.format.png.PngCodec
 import org.umamo.interop.cmo3.Cmo3Import
 import org.umamo.interop.cmo3.Cmo3Conversion
 import org.umamo.interop.cmo3.cmo3AtlasPages
+import org.umamo.interop.cmo3.Cmo3AtlasIngest
+import org.umamo.interop.cmo3.cmo3AtlasIngest
 import org.umamo.runtime.model.*
 import org.umamo.render.restMeshesToCanvasSpace
 import java.util.Base64
@@ -23,8 +25,13 @@ enum class Cmo3ImportMode { REPLACE, NEW }
 
 /** The embedded baseline is shared by history, project persistence, preview rebuilds and export. */
 internal object Cmo3ModelImport {
+    /**
+     * A read model. [densityByDrawableId] is the page texels per canvas unit (x, y) each drawable's art holds,
+     * from its model-image affine and its packing; drawables without one, or at most one texel per unit, are absent.
+     */
     data class Document(val puppet: PuppetModel, val atlas: PackedAtlas, val pages: Map<String, Int>,
-                        val physics: List<RigPhysicsEdit>, val fps: Int?)
+                        val physics: List<RigPhysicsEdit>, val fps: Int?,
+                        val densityByDrawableId: Map<String, Pair<Float, Float>> = emptyMap())
     private var cached: Pair<String, Document>? = null
 
     @Synchronized
@@ -63,8 +70,29 @@ internal object Cmo3ModelImport {
                     s.normalizedAngleValueMin, s.normalizedAngleDefaultValue, s.normalizedAngleValueMax),
             )
         }
-        return Document(puppet, PackedAtlas(pages, emptyMap()), textures.atlasIndexByDrawableId, physics, set?.settingFPS)
+        return Document(puppet, PackedAtlas(pages, emptyMap()), textures.atlasIndexByDrawableId, physics, set?.settingFPS,
+            textureDensities(cmo3AtlasIngest(root)))
     }
+
+    /**
+     * Page texels per canvas unit of each drawable's art: the packing scale (page texels per art pixel) over the
+     * model-image scale (canvas units per art pixel). Art authored at canvas resolution and packed at 1 - every
+     * file written before layers kept their resolution - is 1 and left out, as is art packed below it, so such
+     * files import exactly as before; only denser art is listed.
+     */
+    private fun textureDensities(ingest: Cmo3AtlasIngest): Map<String, Pair<Float, Float>> {
+        val tiles = ingest.atlas.tiles.associateBy { it.id }
+        return ingest.tileIdByDrawableId.mapNotNull { (drawableId, tileId) ->
+            val units = ingest.canvasUnitsPerTilePixel(tileId) ?: return@mapNotNull null
+            val placement = tiles[tileId]?.placement
+            if (placement != null && placement.rotationDegrees != 0f) return@mapNotNull null
+            val x = (placement?.scaleX ?: 1f) / units.first; val y = (placement?.scaleY ?: 1f) / units.second
+            if (!x.isFinite() || !y.isFinite() || (x <= 1f + DENSITY_EPSILON && y <= 1f + DENSITY_EPSILON)) return@mapNotNull null
+            drawableId to (x.coerceAtLeast(1f) to y.coerceAtLeast(1f))
+        }.toMap()
+    }
+
+    private const val DENSITY_EPSILON = 1e-3f
 
     fun prepare(bytes: ByteArray, mode: Cmo3ImportMode, current: RigPreviewModel?, config: PipelineConfig): Pair<SourceArt, PipelineConfig> {
         val incoming = read(bytes)
@@ -263,12 +291,12 @@ internal object Cmo3ModelImport {
             for ((drawableId, layerId) in ids) atlas.placementByLayerId[layerId]?.let { pages[drawableId] = it.page + offset }
             val drawables = puppet.drawables.map { drawable ->
                 val id = ids[drawable.id.raw] ?: return@map drawable
-                val layer = packedLayers[id]?.source ?: return@map drawable
+                val layer = packedLayers[id] ?: return@map drawable
                 val placement = atlas.placementByLayerId.getValue(id)
                 val mesh = drawable.mesh ?: return@map drawable.copy(texturePage = placement.page + offset,
                     atlasTileId = PuppetSourceAtlas.tileIdFor(id, PAINT_SOURCE_ID))
                 val page = atlas.pages[placement.page].image
-                val uvs = LayerTexture.packed(layer.bounds, placement, page.width, page.height).toUvs(mesh.positions)
+                val uvs = LayerTexture.packed(layer, placement, page.width, page.height).toUvs(mesh.positions)
                 pages[drawable.id.raw] = placement.page + offset
                 drawable.copy(mesh = org.umamo.runtime.model.DrawableMesh(mesh.positions, uvs, mesh.indices),
                     texturePage = placement.page + offset, atlasTileId = PuppetSourceAtlas.tileIdFor(id, PAINT_SOURCE_ID))
@@ -300,14 +328,18 @@ internal object Cmo3ModelImport {
         val b = canvas?.let(::bounds) ?: Bounds(0f, 0f, 1f, 1f)
         val left = floor(b.left).toInt()
         val top = floor(b.top).toInt()
-        val width = (ceil(b.right).toInt() - left).coerceAtLeast(1)
-        val height = (ceil(b.bottom).toInt() - top).coerceAtLeast(1)
+        val boundsWidth = (ceil(b.right).toInt() - left).coerceAtLeast(1)
+        val boundsHeight = (ceil(b.bottom).toInt() - top).coerceAtLeast(1)
+        // Art denser than the canvas keeps its texels: the layer covers the same bounds with a denser raster.
+        val (width, height) = rasterSize(boundsWidth, boundsHeight, doc.densityByDrawableId[d.id.raw])
         val raster = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
         val page = doc.pages[d.id.raw]?.let { doc.atlas.pages[it].image }
         val mesh = d.mesh
         if (page != null && mesh != null) {
             val g = raster.createGraphics()
             try {
+                if (width != boundsWidth || height != boundsHeight)
+                    g.scale(width / boundsWidth.toDouble(), height / boundsHeight.toDouble())
                 // Reconstruct the rest artwork through the mesh, including rotated atlas materials.
                 // Cropping the UV bounding box would also bring neighboring packed art into the layer.
                 for (t in mesh.indices.indices step 3) {
@@ -339,11 +371,28 @@ internal object Cmo3ModelImport {
             override val groupPath = ""
             override val order = index
             override val visible = d.isVisible
-            override val bounds = LayerBounds(left, top, width, height)
+            override val bounds = LayerBounds(left, top, boundsWidth, boundsHeight)
             override val opacity = d.opacity
             override val clipped = false
             override val blend = LayerBlend.Normal
             override val raster = LayerRaster(width, height, rgba)
         }
+    }
+
+    /**
+     * The raster of a layer over [width] x [height] canvas units at [density] texels per unit, reduced
+     * uniformly to stay within the layer size budget ([LayerSizeBudget]); the bounds themselves without one.
+     */
+    internal fun rasterSize(width: Int, height: Int, density: Pair<Float, Float>?): Pair<Int, Int> {
+        if (density == null) return width to height
+        var x = minOf(density.first, LayerSizeBudget.MAX_DENSITY); var y = minOf(density.second, LayerSizeBudget.MAX_DENSITY)
+        val pixels = width.toDouble() * x * height * y
+        if (pixels > LayerSizeBudget.MAX_PIXELS) {
+            val shrink = kotlin.math.sqrt(LayerSizeBudget.MAX_PIXELS / pixels).toFloat()
+            x = (x * shrink).coerceAtLeast(1f); y = (y * shrink).coerceAtLeast(1f)
+        }
+        val w = maxOf(width, kotlin.math.floor(width * x.toDouble() + 0.5).toInt())
+        val h = maxOf(height, kotlin.math.floor(height * y.toDouble() + 0.5).toInt())
+        return if (w.toLong() * h > LayerSizeBudget.MAX_PIXELS) width to height else w to h
     }
 }

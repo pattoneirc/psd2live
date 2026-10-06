@@ -147,7 +147,15 @@
 
 - `LayerImageReplace.replace(document, layerId, raster, fit)` 返回候选文档：画布矩形与整数边界不变，只替换栅格（`STRETCH` 直接拉伸，`CONTAIN` 保持比例居中并补透明），首次替换时把此前的源图冻结为生成输入（与保留网格的绘画相同）。网格、关键形与绑定不变，重建后只有绑定的 UV 与页面不同。调用方照常重建并提交。
 
-尚未完成：在栅格空间绘画（绘画仍按画布分辨率工作）、导入保留分辨率、纹理应用命令与 MCP、纹理工作区。分数矩形写入 umamo 的源图层清单（整数）时取整数边界；按清单解析纹理的网格迁移（`LayerTexture.of`）对分数矩形只是近似（整数矩形精确：图块宽高为栅格尺寸、清单为画布尺寸，比值即密度）。生成输入的补边（`RigGenerationSource.padded`，保留网格、新建网格与 `art_primitive` 部件的纹理覆盖）对高密度图层按原密度补透明，不降采样；`art_primitive`、`canvas_mesh_create` / `canvas_mesh_rebuild` 的 `canvas_uvs` 为画布单位，经 `LayerTexture.of` 映射到高分辨率图块。
+导入（`core/LayerImport.kt`、素材工作流、CMO3 导入）：
+
+- 图片文件导入（`layer_import_images`）裁剪透明边缘后保留原栅格；超过画布时只把画布矩形等比缩小到画布内，栅格不变，因此密度大于 1。能放下的图片仍为一像素一画布单位的整数边界，与此前相同。
+- 文件导入图层定位（`layer_set_bounds`）只改变画布矩形（浮点，整数边界取外包框），不重采样像素；重复缩放像素逐字节不变，绘画过的像素同样保留。旧版本按边界最近邻缩放过、且未再编辑的图层，再次定位时恢复为 `placementSource` 中的原像素。
+- 素材图层（`layer_add_from_asset` / `layer_set_placement`）以素材像素为栅格、放置的画布矩形为图层矩形；`WorkspaceCanvasPlacement.canvasUnitsPerPixelX/Y` 为实际比值。平移/缩放/显式镜像的配准不插值（镜像只翻转行列），只有带旋转的配准按素材自身密度栅格化到外包框。
+- CMO3 导入按每个图块的模型图像变换（`_materialLocalToCanvasTransform`，umamo `Cmo3AtlasIngest.canvasTransformByTile`）与打包缩放求页面纹素/画布单位：大于 1 时图层在同一整数边界上以该密度重建栅格（例如高密度图层只存于纹理集页、或图层本身按模型图像缩放到画布两种写法），否则与此前逐字节相同。umamo 源图层清单仍按文件记录分层图像上的矩形，不换算到画布。
+- 尺寸限制（`LayerSizeBudget`）：栅格与画布分辨率视图（外包框）各不超过 16MP，原生密度每轴不超过 256 像素/画布单位，矩形每轴至少 0.5 单位；超限明确拒绝，CMO3 导入超限时整体降低密度。
+
+尚未完成：在栅格空间绘画（绘画仍按画布分辨率工作）、纹理应用命令与 MCP、纹理工作区。分数矩形写入 umamo 的源图层清单（整数）时取整数边界；按清单解析纹理的网格迁移（`LayerTexture.of`）对分数矩形只是近似（整数矩形精确：图块宽高为栅格尺寸、清单为画布尺寸，比值即密度）。生成输入的补边（`RigGenerationSource.padded`，保留网格、新建网格与 `art_primitive` 部件的纹理覆盖）对高密度图层按原密度补透明，不降采样；`art_primitive`、`canvas_mesh_create` / `canvas_mesh_rebuild` 的 `canvas_uvs` 为画布单位，经 `LayerTexture.of` 映射到高分辨率图块。
 
 ## 性能基线
 

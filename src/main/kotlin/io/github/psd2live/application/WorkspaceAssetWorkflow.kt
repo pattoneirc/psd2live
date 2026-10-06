@@ -199,7 +199,12 @@ internal class WorkspaceAssetWorkflow(
                     PreviewRenderer.drawLayer(g,layer)
                 } else {
                     val item=placed.getValue(key);g.composite=AlphaComposite.SrcOver
-                    g.drawImage(PreviewRenderer.rasterImage(item.public.pixelWidth,item.public.pixelHeight,item.rgba),item.public.placement.canvasRect.left.toInt(),item.public.placement.canvasRect.top.toInt(),null)
+                    // The placed raster keeps its resolution; draw it over its canvas rectangle.
+                    val r=item.public.placement.canvasRect
+                    g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+                    g.drawImage(PreviewRenderer.rasterImage(item.public.pixelWidth,item.public.pixelHeight,item.rgba),
+                        java.awt.geom.AffineTransform(r.width/item.public.pixelWidth.toDouble(),0.0,0.0,r.height/item.public.pixelHeight.toDouble(),
+                            r.left.toDouble(),r.top.toDouble()),null)
                 }
             }
         } finally { g.dispose() }
@@ -214,23 +219,52 @@ internal class WorkspaceAssetWorkflow(
 
 internal fun png(image: BufferedImage): ByteArray = ByteArrayOutputStream().also { ImageIO.write(image,"png",it) }.toByteArray()
 
-/** Render absolute placement from the unmodified processed pixels; never from a previous placed raster. */
+/**
+ * Absolute placement of the unmodified processed pixels; never from a previous placed raster.
+ *
+ * The result keeps the asset's resolution: its placement is the registration's canvas rectangle and its
+ * canvas units per pixel are the registration scale. A scale and translation (with explicit reflection)
+ * moves no pixel through a filter - reflection reverses rows or columns. Only a rotated registration is
+ * rasterized, into its canvas bounding box at the asset's own pixel density.
+ */
 internal fun placedAsset(asset: WorkspacePngAsset, registration: JsonObject): WorkspacePngAsset {
     require(registration.text("asset_id")==asset.public.id)
     val transform=WorkspacePlacementTransform.parse(registration.getValue("transform").jsonObject)
-    val b=transform.bounds(asset.public.pixelWidth,asset.public.pixelHeight)
-    val left=floor(b.left).toInt();val top=floor(b.top).toInt()
-    val width=ceil(b.right).toInt()-left;val height=ceil(b.bottom).toInt()-top
-    require(width>0 && height>0 && width.toLong()*height<=16_777_216) { "Invalid/oversized placement" }
-    val image=BufferedImage(width,height,BufferedImage.TYPE_INT_ARGB_PRE)
-    image.createGraphics().let { g -> try {
-        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,RenderingHints.VALUE_INTERPOLATION_BICUBIC)
-        g.translate(-left.toDouble(),-top.toDouble());g.transform(transform.affine())
-        g.drawImage(PreviewRenderer.rasterImage(asset.public.pixelWidth,asset.public.pixelHeight,asset.rgba),0,0,null)
-    } finally { g.dispose() } }
-    val rgba=ByteArray(width*height*4)
-    val pixels=image.getRGB(0,0,width,height,null,0,width)
-    pixels.forEachIndexed { i,p -> rgba[i*4]=(p ushr 16).toByte();rgba[i*4+1]=(p ushr 8).toByte();rgba[i*4+2]=p.toByte();rgba[i*4+3]=(p ushr 24).toByte() }
+    val sourceWidth=asset.public.pixelWidth; val sourceHeight=asset.public.pixelHeight
+    val b=transform.bounds(sourceWidth,sourceHeight)
+    // The canvas-resolution view of the layer covers the whole-unit bounds enclosing the placement.
+    require(listOf(b.left,b.top,b.right,b.bottom).all { it.isFinite() } && b.width>0 && b.height>0 &&
+        (ceil(b.right.toDouble())-floor(b.left.toDouble()))*(ceil(b.bottom.toDouble())-floor(b.top.toDouble()))<=LayerSizeBudget.MAX_PIXELS) { "Invalid/oversized placement" }
+    val turns=((transform.rotationDegrees%360.0)+360.0)%360.0
+    val (width,height,rgba)=if (turns<1e-9 || 360.0-turns<1e-9) {
+        Triple(sourceWidth,sourceHeight,reflected(asset.rgba,sourceWidth,sourceHeight,transform.mirrorX,transform.mirrorY))
+    } else {
+        val width=max(1,ceil(b.width/transform.scaleX).toInt()); val height=max(1,ceil(b.height/transform.scaleY).toInt())
+        require(width.toLong()*height<=LayerSizeBudget.MAX_PIXELS) { "Invalid/oversized placement" }
+        val image=BufferedImage(width,height,BufferedImage.TYPE_INT_ARGB_PRE)
+        image.createGraphics().let { g -> try {
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,RenderingHints.VALUE_INTERPOLATION_BICUBIC)
+            g.scale(width/b.width.toDouble(),height/b.height.toDouble()); g.translate(-b.left.toDouble(),-b.top.toDouble())
+            g.transform(transform.affine())
+            g.drawImage(PreviewRenderer.rasterImage(sourceWidth,sourceHeight,asset.rgba),0,0,null)
+        } finally { g.dispose() } }
+        val rgba=ByteArray(width*height*4)
+        val pixels=image.getRGB(0,0,width,height,null,0,width)
+        pixels.forEachIndexed { i,p -> rgba[i*4]=(p ushr 16).toByte();rgba[i*4+1]=(p ushr 8).toByte();rgba[i*4+2]=p.toByte();rgba[i*4+3]=(p ushr 24).toByte() }
+        Triple(width,height,rgba)
+    }
     return WorkspacePngAsset(asset.public.copy(pixelWidth=width,pixelHeight=height,placement=WorkspaceCanvasPlacement("canvas_top_left_y_down",
-        Bounds(left.toFloat(),top.toFloat(),(left+width).toFloat(),(top+height).toFloat()),width,height,1f,1f,asset.public.placement.sourceViewId)),rgba,asset.originalPng)
+        b,width,height,b.width/width,b.height/height,asset.public.placement.sourceViewId)),rgba,asset.originalPng)
+}
+
+/** [rgba] with its columns reversed when [mirrorX] and its rows when [mirrorY]; the same array when neither. */
+private fun reflected(rgba: ByteArray, width: Int, height: Int, mirrorX: Boolean, mirrorY: Boolean): ByteArray {
+    if (!mirrorX && !mirrorY) return rgba
+    val out=ByteArray(rgba.size)
+    for (y in 0 until height) {
+        val from=if (mirrorY) height-1-y else y
+        if (!mirrorX) { System.arraycopy(rgba,from*width*4,out,y*width*4,width*4); continue }
+        for (x in 0 until width) System.arraycopy(rgba,(from*width+width-1-x)*4,out,(y*width+x)*4,4)
+    }
+    return out
 }

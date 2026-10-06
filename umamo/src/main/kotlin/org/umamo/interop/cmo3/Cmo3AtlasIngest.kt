@@ -24,6 +24,7 @@ import org.umamo.format.cmo3.model.gen.GTransform2
 import org.umamo.format.cmo3.model.gen.LayeredImageWrapper
 import org.umamo.format.cmo3.model.gen.ModelImageEntry
 import org.umamo.format.cmo3.model.identity.Id
+import org.umamo.format.cmo3.model.type.CAffine
 import org.umamo.format.cmo3.model.type.CRect
 import org.umamo.format.cmo3.model.type.FileRef
 import org.umamo.format.cmo3.model.type.GVector2
@@ -48,13 +49,29 @@ import org.umamo.runtime.model.SourceLayerRef
  * @property List        sources             The layered images the editor imported, as the model's
  *   source list: identity, name, the advisory PSD path, and the layer inventory walked from the
  *   editor's decomposed layer tree ([walkLayeredImage]) - the same walk that mints each tile's binding.
+ *   Its rows keep the layer rectangles as the file records them, on the decomposed image's own document,
+ *   which is the canvas only when the model image maps the layer at one canvas unit per pixel.
+ * @property Map         canvasTransformByTile Each tile's model-image affine (`m00, m01, m02, m10, m11,
+ *   m12`): tile pixel to canvas units.  Its scale is the canvas size of one tile pixel, 1 for art authored
+ *   at canvas resolution and below 1 for art denser than the canvas; absent when the file records none.
  */
 public class Cmo3AtlasIngest(
 	public val atlas: PuppetAtlas,
 	public val tileIdByDrawableId: Map<String, AtlasTileId>,
 	public val imageResourceByTile: Map<AtlasTileId, CImageResource>,
 	public val sources: List<ArtSource> = emptyList(),
+	public val canvasTransformByTile: Map<AtlasTileId, FloatArray> = emptyMap(),
 ) {
+	/**
+	 * Canvas units per tile pixel on each axis for [tileId], from its model-image affine; null when the tile
+	 * has no affine or the affine rotates or shears (no per-axis scale).
+	 */
+	public fun canvasUnitsPerTilePixel(tileId: AtlasTileId): Pair<Float, Float>? {
+		val m = canvasTransformByTile[tileId] ?: return null
+		if (m[1] != 0f || m[3] != 0f || !(m[0] > 0f) || !(m[4] > 0f) || !m[0].isFinite() || !m[4].isFinite()) return null
+		return m[0] to m[4]
+	}
+
 	public companion object {
 		/** What a document with no texture manager, or no model images, ingests to. */
 		public val EMPTY: Cmo3AtlasIngest = Cmo3AtlasIngest(PuppetAtlas.Empty, emptyMap(), emptyMap())
@@ -157,6 +174,7 @@ public fun cmo3AtlasIngest(modelSource: CModelSource): Cmo3AtlasIngest {
 			.flatMap { group -> Cmo3Import.elementsOf(group._modelImages).filterIsInstance<CModelImage>() }
 	val tiles = ArrayList<AtlasTile>(modelImages.size)
 	val imageResourceByTile = HashMap<AtlasTileId, CImageResource>()
+	val canvasTransformByTile = HashMap<AtlasTileId, FloatArray>()
 	val knownTileIds = HashSet<String>()
 	for (modelImage in modelImages) {
 		// CMO3: CModelImage field guid - the key every binding and placement references.
@@ -168,6 +186,12 @@ public fun cmo3AtlasIngest(modelSource: CModelSource): Cmo3AtlasIngest {
 		val tileId = AtlasTileId(key)
 		knownTileIds.add(key)
 		imageResourceByTile[tileId] = resource
+		// CMO3: CModelImage field _materialLocalToCanvasTransform - a CAffine from the image's own pixels to
+		// the canvas.  Its scale, not the layer rect on the decomposed document, says how many canvas units
+		// one pixel covers.
+		(modelImage._materialLocalToCanvasTransform as? CAffine)?.let { affine ->
+			canvasTransformByTile[tileId] = floatArrayOf(affine.m00, affine.m01, affine.m02, affine.m10, affine.m11, affine.m12)
+		}
 		tiles.add(
 			AtlasTile(
 				id = tileId,
@@ -214,6 +238,7 @@ public fun cmo3AtlasIngest(modelSource: CModelSource): Cmo3AtlasIngest {
 		tileIdByDrawableId,
 		imageResourceByTile,
 		sources,
+		canvasTransformByTile,
 	)
 }
 

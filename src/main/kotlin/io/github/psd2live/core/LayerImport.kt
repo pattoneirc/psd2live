@@ -1,5 +1,6 @@
 package io.github.psd2live.core
 
+import io.github.psd2live.project.LayerCanvasRect
 import io.github.psd2live.project.WorkspaceSourceLayer
 import org.umamo.format.FileKind
 import org.umamo.format.FormatRegistry
@@ -17,9 +18,11 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.umamo.format.tiff.parseFirstDirectory
 import org.umamo.format.webp.parseVp8lHeader
+import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 
 /**
  * Helpers for importing flat transparent rasters (PNG / WebP / …) as source layers.
@@ -86,11 +89,15 @@ internal object LayerImport {
 	}
 
 	private const val MAX_BYTES = 67_108_864
-	private const val MAX_PIXELS = 16_777_216L
+	private const val MAX_PIXELS = LayerSizeBudget.MAX_PIXELS
 
 	/**
-	 * Trims fully-transparent margins and places the content on the document canvas,
-	 * centred, scaled down only when larger than the canvas.
+	 * Trims fully-transparent margins and places the content on the document canvas, centred.
+	 *
+	 * The raster keeps every source pixel. An image larger than the canvas is placed fitted: its canvas
+	 * rectangle shrinks while the raster stays at its native resolution, so the layer's density
+	 * ([LayerSpace]) exceeds one pixel per canvas unit. An image that fits keeps one pixel per canvas unit
+	 * on whole-unit bounds, exactly as before.
 	 */
 	fun placedLayer(
 		image: RasterImage,
@@ -103,7 +110,10 @@ internal object LayerImport {
 	): WorkspaceSourceLayer {
 		val trimmed = trimTransparent(image, checkCancelled)
 			?: error("Image is fully transparent: $name")
-		val (bounds, raster) = fitToCanvas(trimmed, canvasWidth, canvasHeight, checkCancelled)
+		val raster = LayerRaster(trimmed.width, trimmed.height, trimmed.rgba)
+		val rect = fittedRect(trimmed.width, trimmed.height, canvasWidth, canvasHeight)
+		LayerSizeBudget.require(raster.width, raster.height, rect)
+		val (bounds, stored) = LayerSizeBudget.enclosing(rect)
 		return WorkspaceSourceLayer(
 			id = LayerId(layerId),
 			name = name,
@@ -120,6 +130,7 @@ internal object LayerImport {
 			sourceAssetId = null,
 			sourceSpatialReferenceId = null,
 			derived = true,
+			rect = stored,
 		)
 	}
 
@@ -158,28 +169,23 @@ internal object LayerImport {
 		return RasterImage(width, height, cropped)
 	}
 
-	private fun fitToCanvas(
-		image: RasterImage,
-		canvasWidth: Int,
-		canvasHeight: Int,
-		checkCancelled: () -> Unit,
-	): Pair<LayerBounds, LayerRaster> {
+	/**
+	 * The canvas rectangle of a [width] x [height] raster centred on the canvas: one canvas unit per pixel on
+	 * whole-unit bounds when it fits, else scaled down uniformly to fit (never up).
+	 */
+	internal fun fittedRect(width: Int, height: Int, canvasWidth: Int, canvasHeight: Int): LayerCanvasRect {
 		val maxW = canvasWidth.coerceAtLeast(1)
 		val maxH = canvasHeight.coerceAtLeast(1)
-		val scale = min(1f, min(maxW.toFloat() / image.width, maxH.toFloat() / image.height))
-		val width = max(1, (image.width * scale).roundToInt())
-		val height = max(1, (image.height * scale).roundToInt())
-		val left = ((maxW - width) / 2).coerceAtLeast(0)
-		val top = ((maxH - height) / 2).coerceAtLeast(0)
-		val raster = if (width == image.width && height == image.height) {
-			LayerRaster(width, height, image.rgba)
-		} else {
-			LayerRaster(width, height, scaleRgba(image, width, height, checkCancelled))
+		if (width <= maxW && height <= maxH) {
+			return LayerCanvasRect(((maxW - width) / 2).toFloat(), ((maxH - height) / 2).toFloat(), width.toFloat(), height.toFloat())
 		}
-		return LayerBounds(left, top, width, height) to raster
+		val scale = min(maxW.toDouble() / width, maxH.toDouble() / height)
+		val w = (width * scale).coerceIn(1.0, maxW.toDouble())
+		val h = (height * scale).coerceIn(1.0, maxH.toDouble())
+		return LayerSizeBudget.snapped(LayerCanvasRect(((maxW - w) / 2).toFloat(), ((maxH - h) / 2).toFloat(), w.toFloat(), h.toFloat()))
 	}
 
-	/** Nearest-neighbour scale — fine for UI placement before the artist confirms size. */
+	/** Nearest-neighbour scale of [image]; only the check for legacy placements, whose rasters were scaled to their bounds, uses it. */
 	fun scaleRgba(image: RasterImage, width: Int, height: Int, checkCancelled: () -> Unit): ByteArray {
 		val out = ByteArray(width * height * 4)
 		for (y in 0 until height) {
@@ -196,6 +202,69 @@ internal object LayerImport {
 			}
 		}
 		return out
+	}
+}
+
+/**
+ * Size limits and canvas placement of a layer whose raster is independent of its canvas rectangle.
+ *
+ * A layer costs memory twice: its raster at native resolution, and the canvas-resolution view analysis and
+ * meshing read ([CanvasDensity]), which covers the integer bounds one pixel per canvas unit. Both are held to
+ * [MAX_PIXELS]. The native density (raster pixels per canvas unit) is held to [MAX_DENSITY] on each axis, so a
+ * large raster cannot be squeezed onto a speck of canvas, and a rectangle must span at least [MIN_EXTENT].
+ */
+internal object LayerSizeBudget {
+	/** Pixels of one layer raster, and of its canvas-resolution view. */
+	const val MAX_PIXELS: Long = 16L * 1024 * 1024
+	/** Raster pixels per canvas unit on either axis. */
+	const val MAX_DENSITY: Float = 256f
+	/** Smallest canvas extent of a rectangle on either axis, in canvas units. */
+	const val MIN_EXTENT: Float = 0.5f
+	private const val SNAP = 1e-3
+	private const val MAX_COORDINATE = 1e8f
+
+	/** Rejects a [rasterWidth] x [rasterHeight] raster on [rect] that exceeds a limit, naming the limit. */
+	fun require(rasterWidth: Int, rasterHeight: Int, rect: LayerCanvasRect) {
+		require(rasterWidth > 0 && rasterHeight > 0) { "Layer raster is empty" }
+		require(rasterWidth.toLong() * rasterHeight <= MAX_PIXELS) {
+			"Layer raster ${rasterWidth}x$rasterHeight exceeds ${MAX_PIXELS / (1024 * 1024)} megapixels"
+		}
+		require(listOf(rect.left, rect.top, rect.right, rect.bottom).all { abs(it) <= MAX_COORDINATE }) {
+			"Layer rectangle is outside the canvas coordinate range"
+		}
+		require(rect.width >= MIN_EXTENT && rect.height >= MIN_EXTENT) {
+			"Layer rectangle ${rect.width}x${rect.height} is smaller than $MIN_EXTENT canvas units"
+		}
+		val (bounds, _) = enclosing(rect)
+		require(bounds.width.toLong() * bounds.height <= MAX_PIXELS) {
+			"Layer rectangle ${bounds.width}x${bounds.height} exceeds ${MAX_PIXELS / (1024 * 1024)} megapixels at canvas resolution"
+		}
+		val density = max(rasterWidth / rect.width, rasterHeight / rect.height)
+		require(density <= MAX_DENSITY) {
+			"Layer density ${"%.1f".format(density)} pixels per canvas unit exceeds ${MAX_DENSITY.toInt()}; enlarge the rectangle or downscale the image"
+		}
+	}
+
+	/** [rect] with every edge within 1/1000 of a canvas unit of a whole unit snapped to it. */
+	fun snapped(rect: LayerCanvasRect): LayerCanvasRect {
+		fun snap(value: Double): Double = kotlin.math.round(value).let { if (abs(value - it) <= SNAP) it else value }
+		val left = snap(rect.left.toDouble()); val top = snap(rect.top.toDouble())
+		val right = snap(rect.left.toDouble() + rect.width); val bottom = snap(rect.top.toDouble() + rect.height)
+		return LayerCanvasRect(left.toFloat(), top.toFloat(), (right - left).toFloat(), (bottom - top).toFloat())
+	}
+
+	/**
+	 * The whole-unit bounds enclosing [rect] (snapped first) and the rectangle to store on the layer: null
+	 * when it is exactly those bounds.
+	 */
+	fun enclosing(rect: LayerCanvasRect): Pair<LayerBounds, LayerCanvasRect?> {
+		val snapped = snapped(rect)
+		val left = floor(snapped.left.toDouble()).toInt()
+		val top = floor(snapped.top.toDouble()).toInt()
+		val right = max(left + 1, ceil(snapped.left.toDouble() + snapped.width).toInt())
+		val bottom = max(top + 1, ceil(snapped.top.toDouble() + snapped.height).toInt())
+		val bounds = LayerBounds(left, top, right - left, bottom - top)
+		return bounds to snapped.takeUnless { it.matches(bounds) }
 	}
 }
 

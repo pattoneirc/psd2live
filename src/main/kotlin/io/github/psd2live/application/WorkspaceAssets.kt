@@ -10,12 +10,14 @@ import io.github.psd2live.project.WorkspaceSourceArt
 import io.github.psd2live.project.WorkspaceSourceLayer
 import io.github.psd2live.project.WorkspaceViewSpatialMetadata
 import io.github.psd2live.project.WorkspaceDocument
+import io.github.psd2live.project.LayerCanvasRect
 import io.github.psd2live.project.placementForGeneratedPng
 
 import io.github.psd2live.core.Bounds
 import io.github.psd2live.core.LayerClassificationOverride
 import io.github.psd2live.core.LayerType
 import io.github.psd2live.core.RigEditOverlay
+import io.github.psd2live.core.LayerSizeBudget
 import io.github.psd2live.core.SemanticTag
 import io.github.psd2live.core.Side
 import org.umamo.format.art.ChannelMask
@@ -27,7 +29,6 @@ import org.umamo.format.art.SourceArt
 import org.umamo.format.art.SourceGroup
 import org.umamo.format.art.SourceLayer
 import org.umamo.format.art.SourceLayerKind
-import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.security.MessageDigest
 import java.util.Base64
@@ -146,6 +147,7 @@ internal fun WorkspaceDocument.addLayer(
 		sourceAssetId = asset.public.id,
 		sourceSpatialReferenceId = asset.public.placement.sourceViewId,
 		derived = true,
+		rect = normalized.rect,
 	)
 	val painterOrder = source.layers.toMutableList()
 	val insertionIndex = when (val insertion = request.insertion) {
@@ -185,61 +187,63 @@ internal fun WorkspaceDocument.replacePlacedLayer(layerId: String, asset: Worksp
     val normalized = normalizeAssetRaster(asset, true, checkCancelled)
     val next = source.layers.map { layer ->
         if (layer.id.raw != layerId) layer else (WorkspaceSourceLayer.copyOf(layer, layer.order) as WorkspaceSourceLayer).copy(
-            bounds = normalized.bounds, raster = normalized.raster)
+            bounds = normalized.bounds, raster = normalized.raster, rect = normalized.rect)
     }
     return copy(source = WorkspaceSourceArt(source.widthPx, source.heightPx, next, source.groups))
 }
 
-private data class NormalizedRaster(val bounds: LayerBounds, val raster: LayerRaster)
+private data class NormalizedRaster(val bounds: LayerBounds, val raster: LayerRaster, val rect: LayerCanvasRect?)
 
-/** Converts arbitrary generated resolution back to canonical canvas units before source ingestion. */
+/**
+ * The asset's processed pixels at their own resolution, on the canvas rectangle its placement names.
+ *
+ * Nothing is resampled: the layer raster is the asset's pixels (cropped to their visible area when
+ * [trimTransparent]), and the placement's canvas units per pixel become the layer's canvas rectangle, so a
+ * 1024-pixel asset placed over 32 canvas units is a 32-unit layer holding 1024 pixels ([LayerSpace]).
+ */
 private fun normalizeAssetRaster(asset: WorkspacePngAsset, trimTransparent: Boolean, checkCancelled: () -> Unit): NormalizedRaster {
     checkCancelled()
 	val rect = asset.public.placement.canvasRect
-    require(listOf(rect.left, rect.top, rect.right, rect.bottom).all { it.isFinite() &&
-        it.toDouble() >= Int.MIN_VALUE.toDouble() && it.toDouble() <= Int.MAX_VALUE.toDouble() }) { "Asset placement is outside the canvas coordinate range" }
-	val left = kotlin.math.round(rect.left).toInt()
-	val top = kotlin.math.round(rect.top).toInt()
-    val widthLong = (kotlin.math.round(rect.right).toLong() - left).coerceAtLeast(1)
-    val heightLong = (kotlin.math.round(rect.bottom).toLong() - top).coerceAtLeast(1)
-    require(widthLong in 1..16_777_216 && heightLong in 1..16_777_216 && widthLong * heightLong <= 16_777_216) { "Asset placement exceeds 16 megapixels" }
-    val width = widthLong.toInt(); val height = heightLong.toInt()
-	val sourceImage = rgbaImage(asset.public.pixelWidth, asset.public.pixelHeight, asset.rgba, checkCancelled)
-	// Premultiplied interpolation prevents dark/coloured fringes around transparent painted edges.
-	val normalized = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB_PRE)
-	normalized.createGraphics().use { graphics ->
-		graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
-		graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
-		graphics.drawImage(sourceImage, 0, 0, width, height, null)
-	}
-    checkCancelled()
-	val alphaBounds = (if (trimTransparent) normalized.alphaBounds(checkCancelled) else Bounds(0f, 0f, width.toFloat(), height.toFloat()))
+    require(listOf(rect.left, rect.top, rect.right, rect.bottom).all { it.isFinite() }) { "Asset placement is outside the canvas coordinate range" }
+	val width = asset.public.pixelWidth; val height = asset.public.pixelHeight
+	require(width > 0 && height > 0 && asset.rgba.size == width * height * 4) { "Invalid RGBA buffer length" }
+	val crop = (if (trimTransparent) alphaBounds(width, height, asset.rgba, checkCancelled) else intArrayOf(0, 0, width, height))
 		?: throw IllegalArgumentException("Generated PNG is fully transparent")
-	val cropLeft = alphaBounds.left.toInt()
-	val cropTop = alphaBounds.top.toInt()
-	val cropWidth = alphaBounds.width.toInt()
-	val cropHeight = alphaBounds.height.toInt()
-	val cropped = normalized.getSubimage(cropLeft, cropTop, cropWidth, cropHeight)
-	return NormalizedRaster(
-		bounds = LayerBounds(left + cropLeft, top + cropTop, cropWidth, cropHeight),
-		raster = LayerRaster(cropWidth, cropHeight, cropped.toRgba(checkCancelled)),
-	)
+	val (cropLeft, cropTop, cropRight, cropBottom) = crop.toList()
+	val unitsX = rect.width / width; val unitsY = rect.height / height
+	val canvas = LayerCanvasRect(rect.left + cropLeft * unitsX, rect.top + cropTop * unitsY,
+		(cropRight - cropLeft) * unitsX, (cropBottom - cropTop) * unitsY)
+	LayerSizeBudget.require(cropRight - cropLeft, cropBottom - cropTop, canvas)
+	val (bounds, stored) = LayerSizeBudget.enclosing(canvas)
+	val rgba = if (cropLeft == 0 && cropTop == 0 && cropRight == width && cropBottom == height) asset.rgba.copyOf() else {
+		val rowBytes = (cropRight - cropLeft) * 4
+		ByteArray(rowBytes * (cropBottom - cropTop)).also { out ->
+			for (y in cropTop until cropBottom) {
+				if ((y - cropTop) % 256 == 0) checkCancelled()
+				System.arraycopy(asset.rgba, (y * width + cropLeft) * 4, out, (y - cropTop) * rowBytes, rowBytes)
+			}
+		}
+	}
+	return NormalizedRaster(bounds, LayerRaster(cropRight - cropLeft, cropBottom - cropTop, rgba), stored)
 }
 
-private fun BufferedImage.alphaBounds(checkCancelled: () -> Unit): Bounds? {
+/** The edges (left, top, right, bottom) of the pixels with non-zero alpha, or null when there are none. */
+private fun alphaBounds(width: Int, height: Int, rgba: ByteArray, checkCancelled: () -> Unit): IntArray? {
 	var minX = width
 	var minY = height
 	var maxX = -1
 	var maxY = -1
-	for (y in 0 until height) for (x in 0 until width) {
-        if (x == 0) checkCancelled()
-		if ((getRGB(x, y) ushr 24) == 0) continue
-		minX = minOf(minX, x)
-		minY = minOf(minY, y)
-		maxX = maxOf(maxX, x)
-		maxY = maxOf(maxY, y)
+	for (y in 0 until height) {
+        checkCancelled()
+		for (x in 0 until width) {
+			if (rgba[(y * width + x) * 4 + 3].toInt() == 0) continue
+			minX = minOf(minX, x)
+			minY = minOf(minY, y)
+			maxX = maxOf(maxX, x)
+			maxY = maxOf(maxY, y)
+		}
 	}
-	return if (maxX < minX || maxY < minY) null else Bounds(minX.toFloat(), minY.toFloat(), (maxX + 1).toFloat(), (maxY + 1).toFloat())
+	return if (maxX < minX || maxY < minY) null else intArrayOf(minX, minY, maxX + 1, maxY + 1)
 }
 
 private fun BufferedImage.toRgba(checkCancelled: () -> Unit = {}): ByteArray {
@@ -256,29 +260,9 @@ private fun BufferedImage.toRgba(checkCancelled: () -> Unit = {}): ByteArray {
 	return rgba
 }
 
-private fun rgbaImage(width: Int, height: Int, rgba: ByteArray, checkCancelled: () -> Unit): BufferedImage {
-	require(rgba.size == width * height * 4) { "Invalid RGBA buffer length" }
-	val image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB_PRE)
-	val argb = IntArray(width * height)
-	for (index in argb.indices) {
-        if (index % width == 0) checkCancelled()
-		val offset = index * 4
-		argb[index] = ((rgba[offset + 3].toInt() and 0xff) shl 24) or
-			((rgba[offset].toInt() and 0xff) shl 16) or
-			((rgba[offset + 1].toInt() and 0xff) shl 8) or
-			(rgba[offset + 2].toInt() and 0xff)
-	}
-	image.setRGB(0, 0, width, height, argb, 0, width)
-	return image
-}
-
 private inline fun <reified T : Enum<T>> enumValue(raw: String, field: String): T =
 	runCatching { enumValueOf<T>(raw.trim().uppercase()) }
 		.getOrElse { throw IllegalArgumentException("Unknown $field: $raw") }
-
-private fun <T : java.awt.Graphics> T.use(block: (T) -> Unit) {
-	try { block(this) } finally { dispose() }
-}
 
 internal fun decodePngBase64(raw: String): ByteArray {
 	val payload = raw.substringAfter("base64,", raw).filterNot(Char::isWhitespace)

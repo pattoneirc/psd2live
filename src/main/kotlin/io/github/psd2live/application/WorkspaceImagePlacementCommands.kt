@@ -31,20 +31,19 @@ internal object WorkspaceImagePlacementEdits {
         checkCancelled()
         val layer = imported(document, request.layerId)
         val values = listOf(request.left, request.top, request.width, request.height)
-        require(values.all { it.isFinite() && it.toDouble() >= Int.MIN_VALUE.toDouble() && it.toDouble() <= Int.MAX_VALUE.toDouble() }) { "Placement coordinates must be finite canvas pixels" }
-        val width = request.width.roundToInt(); val height = request.height.roundToInt()
-        val left = request.left.roundToInt(); val top = request.top.roundToInt()
-        require(width > 0 && height > 0 && width.toLong() * height <= 16_777_216) { "Placement requires positive dimensions of at most 16 megapixels" }
-        require(left.toLong() + width <= Int.MAX_VALUE && top.toLong() + height <= Int.MAX_VALUE) { "Placement exceeds canvas coordinate range" }
+        require(values.all { it.isFinite() }) { "Placement coordinates must be finite canvas units" }
+        require(request.width > 0f && request.height > 0f) { "Placement requires positive dimensions" }
         val name = request.name?.trim()?.also { require(it.isNotEmpty()) { "Layer name must not be blank" } } ?: layer.name
-        val bounds = LayerBounds(left, top, width, height)
-        if (bounds == layer.bounds && name == layer.name) return document
-        WorkspaceLayerPlacementGuard.check(document, model, request.layerId)
         val original = document.placementSource?.layers?.singleOrNull { it.id == layer.id } ?: layer
-        fun scaled(w: Int, h: Int): LayerRaster = if (w == original.raster.width && h == original.raster.height) original.raster else
-            LayerRaster(w, h, LayerImport.scaleRgba(RasterImage(original.raster.width, original.raster.height, original.raster.rgba), w, h, checkCancelled))
-        require(layer.raster.rgba.contentEquals(scaled(layer.bounds.width, layer.bounds.height).rgba)) { "Imported pixels were edited; finish placement before painting" }
-        val moved = (WorkspaceSourceLayer.copyOf(layer, layer.order) as WorkspaceSourceLayer).copy(name = name, bounds = bounds, raster = scaled(width, height))
+        val raster = placedRaster(layer, original, checkCancelled)
+        val rect = LayerSizeBudget.snapped(LayerCanvasRect(request.left, request.top, request.width, request.height))
+        LayerSizeBudget.require(raster.width, raster.height, rect)
+        val (bounds, stored) = LayerSizeBudget.enclosing(rect)
+        if (bounds == layer.bounds && stored == layer.storedCanvasRect && raster === layer.raster && name == layer.name) return document
+        checkCancelled()
+        // Moving a layer changes its geometry, so authored bindings still refuse it; its pixels are never touched.
+        WorkspaceLayerPlacementGuard.check(document, model, request.layerId)
+        val moved = (WorkspaceSourceLayer.copyOf(layer, layer.order) as WorkspaceSourceLayer).copy(name = name, bounds = bounds, raster = raster, rect = stored)
         val source = WorkspaceSourceArt(document.source.widthPx, document.source.heightPx, document.source.layers.map { if (it.id == layer.id) moved else it }, document.source.groups)
         val originals = document.placementSource ?: WorkspaceSourceArt(source.widthPx, source.heightPx, emptyList(), emptyList())
         val frozen = WorkspaceLayerInsertionEdits.freeze(document, model).copy(source = source,
@@ -54,6 +53,21 @@ internal object WorkspaceImagePlacementEdits {
                 mesh.layers.filterNot { it.id == layer.id } + moved, mesh.groups) })
         val parent = model.rig.puppet.drawables.filter { model.rig.layerIdByDrawableId[it.id.raw] == request.layerId }.map { it.parentDeformerId?.raw }.distinct().single()
         return WorkspaceLayerInsertionEdits.materialize(WorkspaceLayerInsertionEdits.identities(frozen, model), model, setOf(request.layerId), parent, checkCancelled)
+    }
+
+    /**
+     * The pixels a placed layer shows: its own raster, which a rectangle change never resamples, so painted
+     * pixels survive a move or resize. A layer placed before rasters kept their resolution holds its original
+     * nearest-neighbour scaled to its bounds; while it still does, it returns to the original pixels kept in
+     * the placement source.
+     */
+    private fun placedRaster(layer: SourceLayer, original: SourceLayer, checkCancelled: () -> Unit): LayerRaster {
+        val current = layer.raster; val native = original.raster
+        if (original === layer || current === native) return current
+        if (current.width == native.width && current.height == native.height) return current
+        if (current.width != layer.bounds.width || current.height != layer.bounds.height || layer.storedCanvasRect != null) return current
+        val legacy = LayerImport.scaleRgba(RasterImage(native.width, native.height, native.rgba), current.width, current.height, checkCancelled)
+        return if (legacy.contentEquals(current.rgba)) native else current
     }
 
     private fun cancel(document: WorkspaceDocument, model: RigPreviewModel, ids: List<String>): WorkspaceDocument {
