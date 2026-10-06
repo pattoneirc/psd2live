@@ -46,6 +46,13 @@ internal object RigCanvasSupport {
 	fun evaluate(model: RigPreviewModel, parameters: Map<ParameterId, Float> = emptyMap()): DeformedGeometry =
 		NativePreview.evaluate(model, parameters) ?: evaluator.evaluate(model.rig.puppet, parameters)
 
+	/**
+	 * The engine's evaluation alone. Rendered observations use it so the same model and pose give the same
+	 * image whether or not the runtime has finished compiling that model instance in the background.
+	 */
+	fun evaluateExact(model: RigPreviewModel, parameters: Map<ParameterId, Float> = emptyMap()): DeformedGeometry =
+		evaluator.evaluate(model.rig.puppet, parameters)
+
 	fun paintTexturedRig(
 		g: Graphics2D,
 		model: RigPreviewModel,

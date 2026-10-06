@@ -67,7 +67,7 @@ object WorkspaceViewRenderer {
 				null
 			}
 		}
-		val evaluated = RigCanvasSupport.evaluate(model, typedParameters)
+		val evaluated = RigCanvasSupport.evaluateExact(model, typedParameters)
 		worldPositions.forEach { (id, vertices) ->
 			val drawable = requireNotNull(model.rig.puppet.drawables.firstOrNull { it.id == id }) { "Unknown simulation mesh: ${id.raw}" }
 			require(vertices.size == requireNotNull(drawable.mesh).positions.size && vertices.all(Float::isFinite)) { "Invalid simulated mesh coordinates: ${id.raw}" }
