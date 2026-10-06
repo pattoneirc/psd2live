@@ -68,7 +68,9 @@ uint32_t p2l_mesh_vertex_count(const P2lRig *rig, uint32_t index);
 const float *p2l_mesh_uvs(const P2lRig *rig, uint32_t index);
 const uint32_t *p2l_mesh_indices(const P2lRig *rig, uint32_t index, uint32_t *count);
 int32_t p2l_mesh_texture(const P2lRig *rig, uint32_t index);
-/* 0 normal, 1 add, 2 multiply, then the extended blend modes. */
+/* 0 normal, 1 add, 2 multiply as Cubism draws them, then the extended modes: 3 add, 4 add glow,
+ * 5 darken, 6 multiply, 7 color burn, 8 linear burn, 9 lighten, 10 screen, 11 color dodge, 12 overlay,
+ * 13 soft light, 14 hard light, 15 linear light, 16 hue, 17 color. */
 int32_t p2l_mesh_blend(const P2lRig *rig, uint32_t index, bool *culling);
 uint32_t p2l_mesh_masks(const P2lRig *rig, uint32_t index, uint32_t *out, uint32_t capacity, bool *inverted);
 const float *p2l_mesh_vertices(const P2lRig *rig, uint32_t index);
@@ -76,6 +78,10 @@ float p2l_mesh_opacity(const P2lRig *rig, uint32_t index);
 float p2l_mesh_draw_order(const P2lRig *rig, uint32_t index);
 void p2l_mesh_colors(const P2lRig *rig, uint32_t index, float *multiply, float *screen);
 uint32_t p2l_render_order(const P2lRig *rig, uint32_t *out, uint32_t capacity);
+
+/* Memory for passing a rig in from a WebAssembly host. */
+uint8_t *p2l_alloc(size_t len);
+void p2l_dealloc(uint8_t *pointer, size_t len);
 
 /* Textures: PNG bytes per page. */
 uint32_t p2l_texture_count(const P2lRig *rig);

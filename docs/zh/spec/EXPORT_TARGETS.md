@@ -12,6 +12,7 @@
 | `:targets:spine` | `spine`：Spine 4.2 骨骼 JSON + 图集，由宿主提供的几何求值器烘焙变形 | MIT |
 | `:targets:runtime` | `p2lrt`：PSD2Live 运行时模型，见[运行时](RUNTIME.md) | MIT |
 | `:format-eval` | Rust 运行时的 JVM 绑定（JNA），可作为几何求值器 | MIT |
+| `:targets:web` | `web`：网页播放器（运行时的 WebAssembly 构建、WebGL 播放脚本、页面与模型） | MIT |
 | `:targets:cubism` | `PuppetModel` 与 IR 的双向转换器（`PuppetIr`）、`moc3`、`cmo3`、motion3 / physics3 写出 | GPL-3 |
 | `:targets:psd` | `psd-pose`：指定姿势的分层 PSD | GPL-3 |
 | 根项目 | `RigIrCompiler`（预览模型 → IR）、`IrFrameRenderer`（宿主提供的渲染器）、`ExportService`、CLI 与界面 | GPL-3 |
@@ -34,6 +35,7 @@ MIT 模块不依赖任何 GPL 模块，由 Gradle 依赖关系在编译期保证
 | `cmo3` | 结构化绑定 | Cubism Editor 工程 | 生成器意图不保留；动作片段不写入 |
 | `spine` | 结构化绑定 | 骨骼 JSON、`.atlas`、贴图页 | 每个参数成为一段 1 秒动画（时间即参数归一化值），交叉项近似并报告误差；动作片段按帧采样后精简关键帧；无 Warp、混合形、Glue（已烘焙）；物理、遮罩、屏幕色未写入 |
 | `p2lrt` | 结构化绑定 | `.p2lrt`（PSD2Live 运行时） | 编辑器附带数据（来源图层、图块、编辑路径）不写入；渲染（遮罩、混合模式）由宿主完成 |
+| `web` | 结构化绑定 | `index.html`、`p2l.js`、`p2l_runtime.wasm`、`.p2lrt` | 叠加、乘算以外的混合模式按普通绘制；需通过 http 访问 |
 | `psd-pose` | 合成/时间轴 | 每个可见网格一层，按静止绘制顺序 | 变形器和参数不保留；按参数变化的绘制顺序取静止值 |
 | `png-sequence` | 光栅 | 编号 PNG 帧 | 结构全部烘焙为像素 |
 | `sprite-sheet` | 光栅 | 网格排列的精灵表 PNG + TexturePacker（hash）JSON | 同上 |

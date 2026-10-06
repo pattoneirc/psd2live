@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #f4f4f4; font: 14px system-ui, sans-serif; color: #222; }
+  main { display: flex; flex-direction: column; height: 100%; }
+  canvas { flex: 1; width: 100%; min-height: 0; touch-action: none; }
+  nav { display: flex; gap: 12px; align-items: center; padding: 8px 12px; flex-wrap: wrap; }
+  #error { color: #b00020; }
+</style>
+</head>
+<body>
+<main>
+  <canvas id="stage"></canvas>
+  <nav>
+    <label>Clip <select id="clip"><option value="">(none)</option></select></label>
+    <label>Mouth <input id="mouth" type="range" min="0" max="1" step="0.01" value="0"></label>
+    <span id="error"></span>
+  </nav>
+</main>
+<script type="module">
+import { P2LPlayer } from "./p2l.js";
+
+const canvas = document.getElementById("stage");
+try {
+  const player = await P2LPlayer.create(canvas, "p2l_runtime.wasm", "{{RIG}}");
+  const select = document.getElementById("clip");
+  for (const id of player.clips) select.add(new Option(id, id));
+  select.onchange = () => player.play(select.value || null);
+  document.getElementById("mouth").oninput = (e) => player.lipSync(Number(e.target.value));
+  // Gaze follows the pointer over the canvas.
+  canvas.onpointermove = (e) => {
+    const r = canvas.getBoundingClientRect();
+    player.lookAt(((e.clientX - r.left) / r.width) * 2 - 1, 1 - ((e.clientY - r.top) / r.height) * 2);
+  };
+  canvas.onpointerleave = () => player.lookAt(0, 0);
+} catch (e) {
+  document.getElementById("error").textContent = String(e) + (location.protocol === "file:" ? " (serve this folder over http)" : "");
+}
+</script>
+</body>
+</html>

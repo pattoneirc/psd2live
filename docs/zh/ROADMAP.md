@@ -31,9 +31,10 @@ PSD 自动建模、桌面四种编辑模式、绘画会话、工程与分支历�
 - [x] Spine 4.2（JSON + 图集）：参数成为叠加轨道动画，动作片段采样并精简关键帧。
 - [ ] Spine：二进制 `.skel`、旋转变形器链写成骨骼、物理约束、遮罩转裁剪多边形；在官方运行时中验收。
 - [x] 视频与动图：MP4、WebM（带透明）、ProRes 4444、APNG、动态 WebP，经系统或指定的 ffmpeg 编码。
-- [ ] DragonBones、glTF 等目标。
+- [ ] DragonBones、glTF、VTube Studio 等目标。
 - [x] `.p2lrt` 与 Rust 运行时（MIT）：变形、物理、动作片段与 C ABI，规则由黑盒探测编辑器得到，与编辑器求值器逐姿势一致；JVM 绑定 `:format-eval`（见[运行时](spec/RUNTIME.md)）。
 - [x] 运行时程序化行为（眨眼、呼吸、视线、口型）与 Godot 4 节点 `P2LCharacter`（GDExtension）。
+- [x] 网页播放器（`web`）：运行时的 WebAssembly 构建与 WebGL 播放器，支持遮罩、叠加/乘算与动作、视线、口型。
 - [ ] 运行时：编辑器预览与导出烘焙改用运行时；绘制组的按参数绘制顺序；Godot 中的反相遮罩、屏幕色与扩展混合模式。
 - [ ] 软件绘制的光栅导出补齐混合模式、乘算 / 屏幕色与按纹理 alpha 的遮罩；保真度对比工具。
 

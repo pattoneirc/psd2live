@@ -308,7 +308,8 @@ pub unsafe extern "C" fn p2l_mesh_texture(handle: *const Handle, index: u32) -> 
     with!(handle, -1, |h| h.rig.meshes.get(index as usize).map_or(-1, |m| m.page))
 }
 
-/// Blend mode (0 normal, 1 add, 2 multiply, then the extended modes in the IR's order) and
+/// Blend mode (0 normal, 1 add, 2 multiply as Cubism draws them, then the extended modes in the IR's
+/// order: 3 add, 4 add glow, 5 darken, 6 multiply, ...) and
 /// whether the mesh culls back faces.
 #[no_mangle]
 pub unsafe extern "C" fn p2l_mesh_blend(handle: *const Handle, index: u32, culling: *mut bool) -> i32 {
@@ -404,6 +405,22 @@ pub unsafe extern "C" fn p2l_texture_png(handle: *const Handle, index: u32, len:
         }
         None => ptr::null(),
     })
+}
+
+/// [len] bytes for the host to fill, as WebAssembly hosts need to pass a rig in; free with p2l_dealloc.
+#[no_mangle]
+pub extern "C" fn p2l_alloc(len: usize) -> *mut u8 {
+    let mut bytes = Vec::<u8>::with_capacity(len);
+    let pointer = bytes.as_mut_ptr();
+    std::mem::forget(bytes);
+    pointer
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn p2l_dealloc(pointer: *mut u8, len: usize) {
+    if !pointer.is_null() {
+        drop(Vec::from_raw_parts(pointer, 0, len));
+    }
 }
 
 /// The runtime's version, `major.minor.patch`.

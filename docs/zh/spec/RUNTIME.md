@@ -10,6 +10,7 @@
 | 读取、求值、物理、动作片段、C ABI | `runtime/`（crate `p2l-runtime`，cdylib + staticlib） | MIT |
 | C 头文件 | `runtime/include/p2l_runtime.h` | MIT |
 | JVM 绑定 | `:format-eval`（`P2lRuntime`、`NativeGeometryEvaluator`） | MIT |
+| 网页播放器 | `:targets:web`（导出目标 `web`：页面、`p2l.js`、运行时的 WebAssembly 构建） | MIT |
 | Godot 4 节点 `P2LCharacter` | `runtime/godot/`（GDExtension，godot-rust，Godot 4.3+），演示工程 `runtime/godot/demo/` | MIT |
 
 构建：在 `runtime/` 运行 `cargo build --release`，库位于 `runtime/target/release/`（Windows 为 `p2l_runtime.dll`）。`P2lRuntime.locate()` 依次查找系统属性 `psd2live.runtime.library`、环境变量 `PSD2LIVE_RUNTIME`（文件或目录）、系统属性 `psd2live.runtime.dir` 和 `java.library.path`。
@@ -58,6 +59,10 @@
 - 网格渲染（遮罩、混合模式）由宿主完成，运行时只提供几何与属性。
 - Godot 节点中反相遮罩、屏幕色和扩展混合模式按普通绘制。
 - 编辑器内的运行时预览与导出烘焙改用运行时在后续阶段加入，见 [ROADMAP](../ROADMAP.md)。
+
+## 网页播放器
+
+导出目标 `web` 写出可直接部署的文件夹：`index.html`、`p2l.js`（ES 模块 `P2LPlayer`）、`p2l_runtime.wasm` 与模型。播放器用 WebGL 绘制：遮罩经模板缓冲（按纹理 alpha 0.5 裁剪，支持反相），叠加与乘算用混合函数，乘算/屏幕色在着色器中计算；页面提供动作选择、口型滑块，视线跟随指针。WebAssembly 构建作为资源随仓库提交，修改运行时后用 `./gradlew :targets:web:updateWasm` 刷新（需要 `rustup target add wasm32-unknown-unknown`）；单元测试核对播放器调用的每个函数都由该构建导出。tml 样例在 Edge（无界面）中显示正确。
 
 ## Godot
 

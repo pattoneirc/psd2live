@@ -115,9 +115,10 @@ impl P2LCharacter {
             ImageTexture::create_from_image(&image).unwrap_or_else(ImageTexture::new_gd)
         }).collect();
         self.materials = rig.meshes.iter().map(|m| {
+            // The IR's blend order: normal, Cubism's add and multiply, then the extended modes.
             let mode = match m.blend {
-                1 => BlendMode::ADD,
-                2 => BlendMode::MUL,
+                1 | 3 | 4 => BlendMode::ADD,
+                2 | 6 => BlendMode::MUL,
                 _ => return None,
             };
             let mut material = CanvasItemMaterial::new_gd();
