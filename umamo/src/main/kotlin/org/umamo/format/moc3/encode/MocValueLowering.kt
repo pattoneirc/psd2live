@@ -23,7 +23,13 @@ internal fun valueTableSections(context: MocLoweringContext): Map<Int, ByteArray
 
 	// POS_VALUES: warp control-point keyform blocks first, then art-mesh vertex keyform blocks,
 	// each padded to a 16-float (64-byte) boundary. Index tables record each block's float offset.
-	val positionValues = LittleEndianWriter(64 * 1024)
+	val blendLayout = context.blendLayout.takeIf { context.hasBlendShapes }
+	// Sized exactly up front: the table runs to megabytes on a keyed rig, and growing it by doubling copies it
+	// several times over.
+	val positionValues = LittleEndianWriter(4 * positionValueFloats(warps.flatMap { it.keyforms.map { k -> k.controlPoints.size } } +
+		doc.artMeshes.flatMap { it.keyforms.map { k -> k.vertexPositions.size } } +
+		blendLayout?.warpRecords.orEmpty().flatMap { r -> r.keyforms.mapNotNull { (it as? BlendShapeKeyform.Warp)?.form?.controlPoints?.size } } +
+		blendLayout?.meshRecords.orEmpty().flatMap { r -> r.keyforms.mapNotNull { (it as? BlendShapeKeyform.Mesh)?.form?.vertexPositions?.size } }))
 	val warpPositionIndex = ArrayList<Int>()
 	val warpKeyformBase = IntArray(warps.size)
 	val warpOpacity = ArrayList<Float>()
@@ -31,7 +37,7 @@ internal fun valueTableSections(context: MocLoweringContext): Map<Int, ByteArray
 		warpKeyformBase[warpIndex] = warpPositionIndex.size
 		for (keyform in warp.keyforms) {
 			warpPositionIndex.add(positionValues.position / 4)
-			keyform.controlPoints.forEach(positionValues::writeFloat32)
+			positionValues.writeFloats(keyform.controlPoints)
 			padTo16Floats(positionValues, keyform.controlPoints.size)
 			warpOpacity.add(keyform.opacity)
 		}
@@ -44,7 +50,7 @@ internal fun valueTableSections(context: MocLoweringContext): Map<Int, ByteArray
 		meshKeyformBase[meshIndex] = meshPositionIndex.size
 		for (keyform in mesh.keyforms) {
 			meshPositionIndex.add(positionValues.position / 4)
-			keyform.vertexPositions.forEach(positionValues::writeFloat32)
+			positionValues.writeFloats(keyform.vertexPositions)
 			padTo16Floats(positionValues, keyform.vertexPositions.size)
 			meshOpacity.add(keyform.opacity.coerceIn(0f, 1f))
 			meshDrawOrder.add(keyform.drawOrder.coerceIn(0f, 1000f))
@@ -55,13 +61,12 @@ internal fun valueTableSections(context: MocLoweringContext): Map<Int, ByteArray
 	// POS_VALUES gains warp-record then mesh-record delta blocks (16-float padded like the base
 	// blocks), the per-kind index/scalar tables gain one row per (record, key) in global record
 	// order, so the per-object bases above stay pure base-prefix indices.
-	val blendLayout = context.blendLayout.takeIf { context.hasBlendShapes }
 	if (blendLayout != null) {
 		for (record in blendLayout.warpRecords) {
 			for (keyform in record.keyforms) {
 				val warpDelta = (keyform as? BlendShapeKeyform.Warp)?.form ?: continue
 				warpPositionIndex.add(positionValues.position / 4)
-				warpDelta.controlPoints.forEach(positionValues::writeFloat32)
+				positionValues.writeFloats(warpDelta.controlPoints)
 				padTo16Floats(positionValues, warpDelta.controlPoints.size)
 				warpOpacity.add(warpDelta.opacity)
 			}
@@ -70,7 +75,7 @@ internal fun valueTableSections(context: MocLoweringContext): Map<Int, ByteArray
 			for (keyform in record.keyforms) {
 				val meshDelta = (keyform as? BlendShapeKeyform.Mesh)?.form ?: continue
 				meshPositionIndex.add(positionValues.position / 4)
-				meshDelta.vertexPositions.forEach(positionValues::writeFloat32)
+				positionValues.writeFloats(meshDelta.vertexPositions)
 				padTo16Floats(positionValues, meshDelta.vertexPositions.size)
 				meshOpacity.add(meshDelta.opacity)
 				meshDrawOrder.add(meshDelta.drawOrder)
@@ -164,5 +169,8 @@ internal fun valueTableSections(context: MocLoweringContext): Map<Int, ByteArray
  */
 private fun padTo16Floats(writer: LittleEndianWriter, count: Int) {
 	val padCount = ((count + 15) / 16 * 16) - count
-	repeat(padCount) { writer.writeFloat32(0f) }
+	writer.zeroPad(padCount * 4)
 }
+
+/** The float count of `POS_VALUES` holding blocks of [blocks] floats, each padded to 16. */
+private fun positionValueFloats(blocks: List<Int>): Int = blocks.sumOf { (it + 15) / 16 * 16 }

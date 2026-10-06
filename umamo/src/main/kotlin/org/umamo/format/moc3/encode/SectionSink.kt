@@ -76,7 +76,7 @@ internal class SectionSink(private val version: MocVersion) {
 	fun putInts(section: Section, values: IntArray) {
 		requireElement(section, ElementType.I32, ElementType.U32)
 		val writer = LittleEndianWriter(values.size * 4)
-		values.forEach(writer::writeInt32)
+		writer.writeInts(values)
 		putBytes(section, writer.toByteArray())
 	}
 
@@ -145,7 +145,7 @@ internal class SectionSink(private val version: MocVersion) {
 		requireElement(section, ElementType.F32)
 		val writer = LittleEndianWriter(items.sumOf { select(it).size } * 4)
 		for (item in items) {
-			select(item).forEach(writer::writeFloat32)
+			writer.writeFloats(select(item))
 		}
 		putBytes(section, writer.toByteArray())
 	}

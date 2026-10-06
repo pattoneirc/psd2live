@@ -54,6 +54,29 @@ internal object RigIrCompiler {
 	 */
 	private fun clips(rig: BuiltRig, config: PipelineConfig, physicsGroups: List<RigPhysicsEdit>, parameterIds: Set<String>): List<Clip> {
 		if (!config.exportMotions || config.meshOnly) return emptyList()
+		val physicsDriven = if (config.exportIncludePhysics) physicsGroups.flatMapTo(HashSet()) { it.outputParameters } else emptySet()
+		val key = ClipsKey(config.rigEdits.motionClips, rig.puppet.parameters, config.rigEdits.skeleton, config.rigEdits.motionPresets,
+			listOf(config.motionBasic, config.motionIdle, config.motionBlink, config.motionNod, config.motionShake, config.motionSkeleton), physicsDriven)
+		synchronized(clipCache) { clipCache[key] }?.let { return it }
+		return compileClips(rig, config, physicsDriven, parameterIds).also { synchronized(clipCache) { clipCache[key] = it } }
+	}
+
+	/** Everything [compileClips] reads besides the export switches checked before it. */
+	private data class ClipsKey(
+		val clips: List<MotionClip>, val parameters: List<org.umamo.runtime.model.Parameter>, val skeleton: SkeletonSpec?,
+		val presets: Map<String, MotionPresetSettings>, val switches: List<Boolean>, val physicsDriven: Set<String>,
+	)
+
+	/**
+	 * The last few compiled clip lists by their inputs. Every rebuild compiles them, and hashing the skeleton for
+	 * each preset's generated-track lookup costs more than the rest of the IR; a geometry edit changes none of
+	 * the inputs, and the clips are a pure function of the key.
+	 */
+	private val clipCache = object : LinkedHashMap<ClipsKey, List<Clip>>(8, 0.75f, true) {
+		override fun removeEldestEntry(eldest: MutableMap.MutableEntry<ClipsKey, List<Clip>>?) = size > 4
+	}
+
+	private fun compileClips(rig: BuiltRig, config: PipelineConfig, physicsDriven: Set<String>, parameterIds: Set<String>): List<Clip> {
 		val clips = MotionClips.reconcileParameters(config.rigEdits.motionClips, rig.puppet.parameters)
 		val skeleton = config.rigEdits.skeleton
 		val result = ArrayList<Clip>()
@@ -74,11 +97,8 @@ internal object RigIrCompiler {
 				curves = tracks.map(MotionGenerator::curve)))
 		}
 		if (config.motionBasic) {
-			if (config.motionIdle) {
-				// Parameters the exported physics drives stay out of the idle.
-				val physicsDriven = if (config.exportIncludePhysics) physicsGroups.flatMapTo(HashSet()) { it.outputParameters } else emptySet()
-				builtin("Idle", "Idle", physicsDriven)
-			}
+			// Parameters the exported physics drives stay out of the idle.
+			if (config.motionIdle) builtin("Idle", "Idle", physicsDriven)
 			if (config.motionBlink) builtin("Blink", "Blink")
 			if (config.motionNod) builtin("Nod", "Nod")
 			if (config.motionShake) builtin("Shake", "Shake")

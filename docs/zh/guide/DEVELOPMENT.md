@@ -108,6 +108,8 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `SwingCostTool` | tml 上两个摆动的生成耗时、朴素哈希其输入的耗时与全部编辑重放耗时，用于判断生成器是否值得接入生成缓存 | `swing-cost/report.txt` |
 | `GeneratorCostTool` | 各生成器（Rig 生成有无骨架、骨架烘焙缓存前后、物理组目录、生成动作缓存前后、Rig IR 编译、模拟烘焙与写回）的耗时，及对其输入做内容哈希的耗时；`PSD2LIVE_SAMPLE` 指定样例 | `generator-cost/report.txt` |
 | `ExportGoldenTool` | `tml`、`ds` 的无骨架、自动骨架和自定义动作三种变体的全部导出文件摘要（cmo3 取读回后降级为 moc3 的摘要），用于逐字节对比重构前后的导出；`PSD2LIVE_GOLDEN_LABEL` 指定输出名 | `export-golden/<名称>.txt` |
+| `SafetyGoldenTool` | 自动骨架 Rig 上 24 组带种子的随机几何编辑的完整几何安全报告（不含 `coverage`），用于逐字节对比检查器改动前后的分类；`PSD2LIVE_GOLDEN_LABEL` 指定输出名 | `safety-golden/<名称>.txt` |
+| `BundleProfileTool` | moc3 预览包的分项耗时（IR 编译、IR 转回、静止网格换到画布空间、physics3/motion3、moc 降级与写出、cdi3）及几何安全检查耗时；`PSD2LIVE_SAMPLER=1` 另打印栈采样的热点 | 仅标准输出 |
 | `ExportDialogTool` | “文件”菜单展开“导入”与“导出为”子菜单，以及每个目标的“导出为”对话框（中英文、深色主题），用于检查菜单分组、标签与控件布局 | `export-dialog/<语言>-<目标或菜单>.png` |
 | `CommitPerfTool.profile` / `.desktop` | 单次作者提交的耗时：`profile` 走应用层命令边界并按阶段拆分（修订号、配置解码、重建、几何检查）；`desktop` 走桌面视图模型与适配器，连续提交网格顶点编辑和画笔笔触，报告提交耗时与界面线程最长停顿。可配合 `JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` 采样 | `commit-perf/report.txt`、`desktop.txt` |
 | `CommitPerfTool.baseline` | 提交路径的逐阶段基线：在带自动骨架、两个摆动和一个已烘焙模拟的工程上，分别测量完整重建的各阶段（分析、纹理集打包与 PNG 编码、基础 Rig、骨架缓存命中/未命中、日志重放、摆动/模拟写回、覆盖、IR、moc3 打包、`validateBundle`、修订号哈希、运行时文件写出），以及几何提交、小图层绘画、换图（同形/重建网格）、无关拓扑编辑后的骨架缓存命中和日志追加到 50/200 条时的提交耗时与增长；每次提交后写入历史存储。不测原生预览重载（需要 GL 上下文） | `commit-perf/baseline.json`、`baseline.md` |

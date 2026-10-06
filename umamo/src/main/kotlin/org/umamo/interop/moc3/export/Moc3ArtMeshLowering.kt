@@ -123,9 +123,10 @@ internal fun lowerArtMeshes(
 					val deltas =
 						(bundle?.cells?.getOrNull(cellIndex)?.geometry as? MeshDeltaForm)
 							?.positionDeltas
+					// Unboxed; a missing delta still adds 0f, which turns a -0 base into +0 as it always has.
 					val absolute =
 						FloatArray(basePositions.size) { coordinate ->
-							basePositions[coordinate] + (deltas?.getOrNull(coordinate) ?: 0f)
+							basePositions[coordinate] + (if (deltas != null && coordinate < deltas.size) deltas[coordinate] else 0f)
 						}
 					ArtMeshKeyform(
 						vertexPositions = convertPointsToMoc(space, absolute, context.canvas),

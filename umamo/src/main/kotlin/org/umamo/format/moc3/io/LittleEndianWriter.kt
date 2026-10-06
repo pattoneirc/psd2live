@@ -12,6 +12,9 @@ package org.umamo.format.moc3.io
 public class LittleEndianWriter(initialCapacity: Int = 64 * 1024) {
 	private var buffer = ByteArray(initialCapacity)
 
+	/** True once [toByteArray] handed [buffer] itself out; the next mutation copies it first. */
+	private var handedOut = false
+
 	/** Number of bytes written so far (also the current write cursor). */
 	public var position: Int = 0
 		private set
@@ -32,11 +35,23 @@ public class LittleEndianWriter(initialCapacity: Int = 64 * 1024) {
 				newSize = needed
 			}
 			buffer = buffer.copyOf(newSize)
+			handedOut = false
+		} else if (handedOut) {
+			buffer = buffer.copyOf()
+			handedOut = false
 		}
 	}
 
-	/** Returns a copy of the written bytes (length == [position]). */
-	public fun toByteArray(): ByteArray = buffer.copyOf(position)
+	/**
+	 * Returns the written bytes (length == [position]): the buffer itself when the writer was sized exactly,
+	 * which callers that presize (most of them) rely on to skip a copy, else a copy. Either way later writes
+	 * never change the returned array.
+	 */
+	public fun toByteArray(): ByteArray {
+		if (position != buffer.size) return buffer.copyOf(position)
+		handedOut = true
+		return buffer
+	}
 
 	/**
 	 * Writes [count] zero bytes.
@@ -109,6 +124,36 @@ public class LittleEndianWriter(initialCapacity: Int = 64 * 1024) {
 	public fun writeFloat32(value: Float): Unit = writeInt32(value.toRawBits())
 
 	/**
+	 * Writes every float of [values] as [writeFloat32] would, in one growth check.
+	 *
+	 * @param FloatArray values Values to write.
+	 */
+	public fun writeFloats(values: FloatArray) {
+		ensure(values.size * 4)
+		var at = position
+		for (value in values) {
+			INT_LE.set(buffer, at, value.toRawBits())
+			at += 4
+		}
+		position = at
+	}
+
+	/**
+	 * Writes every int of [values] as [writeInt32] would, in one growth check.
+	 *
+	 * @param IntArray values Values to write.
+	 */
+	public fun writeInts(values: IntArray) {
+		ensure(values.size * 4)
+		var at = position
+		for (value in values) {
+			INT_LE.set(buffer, at, value)
+			at += 4
+		}
+		position = at
+	}
+
+	/**
 	 * Writes raw bytes verbatim.
 	 *
 	 * @param ByteArray bytes Bytes to write.
@@ -144,9 +189,17 @@ public class LittleEndianWriter(initialCapacity: Int = 64 * 1024) {
 	 * @param Int value  Value to store.
 	 */
 	public fun patchInt32(offset: Int, value: Int) {
+		if (handedOut) {
+			buffer = buffer.copyOf()
+			handedOut = false
+		}
 		buffer[offset] = value.toByte()
 		buffer[offset + 1] = (value ushr 8).toByte()
 		buffer[offset + 2] = (value ushr 16).toByte()
 		buffer[offset + 3] = (value ushr 24).toByte()
 	}
 }
+
+/** Little-endian int view of a byte array, for the bulk writes. */
+private val INT_LE: java.lang.invoke.VarHandle =
+	java.lang.invoke.MethodHandles.byteArrayViewVarHandle(IntArray::class.java, java.nio.ByteOrder.LITTLE_ENDIAN)

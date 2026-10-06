@@ -1,7 +1,9 @@
 package io.github.psd2live.targets.cubism
 
 import io.github.psd2live.format.compile.*
+import io.github.psd2live.format.model.Clip
 import io.github.psd2live.format.model.ColorBlend
+import io.github.psd2live.format.model.Physics
 import io.github.psd2live.format.model.RigIR
 import org.umamo.format.moc3.Moc3
 import org.umamo.format.moc3.json.FileReferences
@@ -58,14 +60,10 @@ public object Moc3Target : ExportTarget {
 			require(page.png.size > 0) { "Texture page $index has no pixels" }
 			Moc3Sidecars.AtlasPage("$textureFolder/texture_${index.toString().padStart(2, '0')}.png", page.png.shared())
 		}
-		val physics = Cubism3Json.physics3(ir.physics.groups, ir.physics.fps?.toInt() ?: 0)?.let(Cubism3Json::normalize)
-		val motions = ir.clips.mapNotNull { clip ->
-			val json = Cubism3Json.motion3(clip, parameterIds) ?: return@mapNotNull null
-			Triple(clip.group, "$baseName.${clip.file}.motion3.json", Cubism3Json.normalize(json))
-		}
+		val texts = sidecarTexts(SidecarKey(ir.physics, ir.clips, parameterIds, baseName))
+		val motions = texts.motions
 		val sidecars = buildList {
-			if (moc3Options.includePhysics) physics?.let {
-				Moc3.readPhysics3(it)
+			if (moc3Options.includePhysics) texts.physics?.let {
 				add(Moc3Sidecars.PassThroughSidecar(Moc3Sidecars.SidecarKind.Physics, "$baseName.physics3.json", it))
 			}
 			for ((_, file, json) in motions) add(Moc3Sidecars.PassThroughSidecar(Moc3Sidecars.SidecarKind.Motion, file, json))
@@ -81,6 +79,34 @@ public object Moc3Target : ExportTarget {
 		)
 		return Moc3Sidecars.bundle(exportPuppet, baseName, pages = pages, sidecars = sidecars, source = manifest,
 			canvasToParentSpace = canvasToParentSpaceFor(exportPuppet), options = moc3Options)
+	}
+
+	/** What the physics3 and motion3 texts of a bundle depend on. */
+	private data class SidecarKey(val physics: Physics, val clips: List<Clip>, val parameterIds: Set<String>, val baseName: String)
+
+	/** The normalized physics3 text (checked by reading it back) and each motion's group, file and normalized text. */
+	private class SidecarTexts(physicsText: String?, val motions: List<Triple<String, String, String>>) {
+		/** Read back once, when a bundle first carries it. */
+		val physics: String? by lazy { physicsText?.also { Moc3.readPhysics3(it) } }
+	}
+
+	/**
+	 * The last few sidecar texts by their inputs. An editor rebuilds the preview bundle on every geometry edit
+	 * while physics and motions stay the same, and writing and normalizing them costs more than lowering the moc;
+	 * the texts are pure functions of the key, so a hit is byte-identical.
+	 */
+	private val sidecarCache = object : LinkedHashMap<SidecarKey, SidecarTexts>(8, 0.75f, true) {
+		override fun removeEldestEntry(eldest: MutableMap.MutableEntry<SidecarKey, SidecarTexts>?) = size > 4
+	}
+
+	private fun sidecarTexts(key: SidecarKey): SidecarTexts {
+		synchronized(sidecarCache) { sidecarCache[key] }?.let { return it }
+		val physics = Cubism3Json.physics3(key.physics.groups, key.physics.fps?.toInt() ?: 0)?.let(Cubism3Json::normalize)
+		val motions = key.clips.mapNotNull { clip ->
+			val json = Cubism3Json.motion3(clip, key.parameterIds) ?: return@mapNotNull null
+			Triple(clip.group, "${key.baseName}.${clip.file}.motion3.json", Cubism3Json.normalize(json))
+		}
+		return SidecarTexts(physics, motions).also { synchronized(sidecarCache) { sidecarCache[key] = it } }
 	}
 
 	override fun plan(ir: RigIR, options: ExportOptions): LoweredExport {
