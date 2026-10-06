@@ -46,6 +46,10 @@ dependencies {
 	implementation(platform("io.ktor:ktor-bom:3.5.1"))
 	// Engine ported from Umamo (format, runtime, interop, render, edit); it brings its own libraries.
 	implementation(project(":umamo"))
+	// Neutral rig IR, export framework and targets (see docs/zh/spec/EXPORT_TARGETS.md).
+	implementation(project(":targets:cubism"))
+	implementation(project(":targets:raster"))
+	implementation(project(":targets:psd"))
 
 	// LWJGL (OpenGL rendering pipeline)
 	val lwjglNatives = "natives-$hostOs" + if (hostArm) "-arm64" else ""

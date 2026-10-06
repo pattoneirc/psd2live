@@ -7,6 +7,7 @@ import org.umamo.render.eval.DeformedGeometry
 import org.umamo.runtime.model.Deformer
 import org.umamo.runtime.model.ParameterId
 import org.umamo.runtime.model.PuppetModel
+import org.umamo.runtime.model.visibleDrawableIds
 import java.awt.AlphaComposite
 import java.awt.BasicStroke
 import java.awt.Color
@@ -83,6 +84,43 @@ internal object RigCanvasSupport {
 				.takeIf { it.isNotEmpty() && !drawable.invertMask }
 				?.let { maskIds -> buildMaskArea(maskIds, drawableById, geometry, viewport) }
 			g.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, opacity)
+			paintTriangles(g, mesh, positions, atlas, viewport, originalClip, maskClip)
+		}
+		g.clip = originalClip
+		g.composite = originalComposite
+	}
+
+	/**
+	 * Paints [puppet] as a runtime shows it, with no editor state: visible drawables only, in their evaluated
+	 * draw order, each sampling its own texture page from [pages].
+	 */
+	fun paintPuppet(g: Graphics2D, puppet: PuppetModel, pages: List<java.awt.image.BufferedImage>, geometry: DeformedGeometry, viewport: CanvasViewport,
+	                only: Set<String>? = null, pageOf: (org.umamo.runtime.model.Drawable) -> Int = { it.texturePage }) {
+		g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+		g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+		val drawableById = puppet.drawables.associateBy { it.id }
+		val visible = puppet.visibleDrawableIds()
+		val shown = puppet.drawables.filter { it.id in visible && it.mesh != null && geometry.worldPositions.containsKey(it.id) && (only == null || it.id.raw in only) }
+			.sortedBy { geometry.drawOrder[it.id] ?: it.drawOrder }
+		val originalClip = g.clip
+		val originalComposite = g.composite
+		for (drawable in shown) {
+			val mesh = drawable.mesh ?: continue
+			val positions = geometry.worldPositions[drawable.id] ?: continue
+			val atlas = pages.getOrNull(pageOf(drawable)) ?: continue
+			val opacity = (geometry.opacity[drawable.id] ?: drawable.opacity).coerceIn(0f, 1f)
+			if (opacity <= 0.001f) continue
+			val maskClip = drawable.maskedBy.takeIf { it.isNotEmpty() && !drawable.invertMask }
+				?.let { buildMaskArea(it, drawableById, geometry, viewport) }
+			g.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, opacity)
+			paintTriangles(g, mesh, positions, atlas, viewport, originalClip, maskClip)
+		}
+		g.clip = originalClip
+		g.composite = originalComposite
+	}
+
+	private fun paintTriangles(g: Graphics2D, mesh: org.umamo.runtime.model.DrawableMesh, positions: FloatArray,
+	                           atlas: java.awt.image.BufferedImage, viewport: CanvasViewport, originalClip: java.awt.Shape?, maskClip: Area?) {
 			for (offset in mesh.indices.indices step 3) {
 				val ia = mesh.indices[offset]
 				val ib = mesh.indices[offset + 1]
@@ -109,9 +147,6 @@ internal object RigCanvasSupport {
 				g.clip(triangle)
 				g.drawImage(atlas, transform, null)
 			}
-		}
-		g.clip = originalClip
-		g.composite = originalComposite
 	}
 
 	private fun buildMaskArea(

@@ -111,6 +111,13 @@ class WorkspaceDocumentBatchIntegrationTest {
                 .single { it.toString().endsWith(".cmo3") }
             val readBack = Cmo3Import.fromModelSource(Cmo3.read(Files.readAllBytes(cmo3)).root as CModelSource)
             assertTrue(readBack.parameters.any { it.id.raw == "BatchAxis" })
+            // The neutral targets export the same committed state, with their loss report beside the files.
+            val frames = temporary.resolve("frames")
+            val sequence = workspace.exportTarget(workspace.snapshot().state, "png-sequence", frames.toString(), mapOf("size" to "64"))
+            assertEquals(workspace.snapshot().revisionId, sequence.getValue("revision").jsonPrimitive.content)
+            assertTrue(Files.isRegularFile(frames.resolve(sequence.getValue("files").jsonArray.first().jsonPrimitive.content)))
+            assertTrue(sequence.getValue("losses").jsonArray.any { it.jsonObject.getValue("feature").jsonPrimitive.content == "structure" })
+            assertFailsWith<IllegalArgumentException> { workspace.exportTarget(workspace.snapshot().state, "missing", frames.toString(), emptyMap()) }
             workspace.checkoutHistory(before.historyHeadNodeId!!, MutationAuthor.USER)
             assertFalse(workspace.currentPuppet()!!.parameters.any { it.id.raw == "BatchAxis" })
             workspace.checkoutHistory(after.historyHeadNodeId!!, MutationAuthor.USER)
@@ -294,6 +301,7 @@ class WorkspaceDocumentBatchIntegrationTest {
                 assertFailsWith<WorkspaceConflict> { workspace.editMotion(state, buildJsonObject { put("mode", "seed_builtin") }) }
                 assertFailsWith<WorkspaceConflict> { workspace.setPreviewSession(buildJsonObject { put("state", state); put("mode", "reset") }) }
                 assertFailsWith<WorkspaceConflict> { workspace.exportModel(state, temporary.resolve("stale-export").toString()) }
+                assertFailsWith<WorkspaceConflict> { workspace.exportTarget(state, "gif", temporary.resolve("stale-gif").toString(), emptyMap()) }
                 assertFailsWith<WorkspaceConflict> { workspace.deletePhysics("Missing", state) }
             }
             reject(before.historyHeadNodeId!!)

@@ -21,6 +21,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -111,6 +118,7 @@ fun ExportDialog(
 					onGenerate = { viewModel.generateRig() },
 					onChooseOutput = onChooseOutput,
 				)
+				OtherFormatsSection(state, viewModel)
 			}
 
 		}
@@ -363,6 +371,76 @@ internal fun ExportActionSection(
 			height = 28.dp,
 			modifier = Modifier.fillMaxWidth(),
 		)
+	}
+}
+
+/** The neutral export targets beyond Cubism: a pose as layered PSD, image sequences, sprite sheets and GIF. */
+private val otherFormatTargets = listOf("psd-pose", "png-sequence", "sprite-sheet", "gif")
+
+@Composable
+private fun OtherFormatsSection(state: PSD2LiveState, viewModel: PSD2LiveViewModel) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val isBusy = state.isAnalyzing || state.isGenerating
+	var targetId by remember { mutableStateOf(otherFormatTargets.first()) }
+	val clips = remember(state.previewModel) { listOf<Pair<String, String>?>(null) + viewModel.exportClipChoices() }
+	var clip by remember(clips) { mutableStateOf(clips.getOrNull(1)) }
+	var size by remember { mutableStateOf(1024.0) }
+	var fps by remember { mutableStateOf(30.0) }
+	val result by viewModel.otherExportResult.collectAsState()
+	val animated = targetId != "psd-pose"
+
+	Column(
+		modifier = Modifier.fillMaxWidth()
+			.background(colors.panelElevated, RoundedCornerShape(3.dp))
+			.border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(3.dp))
+			.padding(horizontal = 8.dp, vertical = 6.dp),
+		verticalArrangement = Arrangement.spacedBy(6.dp),
+	) {
+		Text(tr("export.other.title"), style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold), color = colors.textMuted)
+		ExportLabeledRow(label = tr("export.other.target")) {
+			CompactDropdown(items = otherFormatTargets, selectedItem = targetId, onItemSelected = { targetId = it },
+				itemLabel = { tr("export.target.$it") }, modifier = Modifier.weight(1f), enabled = !isBusy, height = 22.dp)
+		}
+		ExportLabeledRow(label = tr("export.other.clip")) {
+			CompactDropdown(items = clips, selectedItem = clip, onItemSelected = { clip = it },
+				itemLabel = { it?.second ?: tr("export.other.restPose") }, modifier = Modifier.weight(1f), enabled = !isBusy, height = 22.dp)
+		}
+		if (animated) ExportLabeledRow(label = tr("export.other.size")) {
+			CompactNumberSpinner(value = size, onValueChange = { size = it }, min = 16.0, max = 8192.0, step = 64.0, decimals = 0,
+				enabled = !isBusy, modifier = Modifier.width(88.dp), height = 22.dp)
+			Spacer(Modifier.width(12.dp))
+			Text(tr("export.other.fps"), style = typography.body.copy(fontSize = 11.sp), color = colors.textPrimary)
+			Spacer(Modifier.width(6.dp))
+			CompactNumberSpinner(value = fps, onValueChange = { fps = it }, min = 1.0, max = 120.0, step = 1.0, decimals = 0,
+				enabled = !isBusy, modifier = Modifier.width(64.dp), height = 22.dp)
+		}
+		CompactButton(
+			text = if (isBusy) tr("export.other.running") else tr("export.other.export"),
+			onClick = {
+				viewModel.exportOtherFormat(targetId, buildMap {
+					clip?.let { put("clip", it.first) }
+					if (animated) { put("size", size.toInt().toString()); put("fps", fps.toInt().toString()) }
+				})
+			},
+			enabled = !isBusy && state.previewModel != null && state.outputPath.isNotBlank(),
+			height = 24.dp,
+			modifier = Modifier.fillMaxWidth(),
+		)
+		result?.let { report ->
+			val losses = report["losses"]?.jsonArray.orEmpty().map { it.jsonObject }
+			Text(tr("export.other.done", report["files"]?.jsonArray?.size ?: 0, report["directory"]?.jsonPrimitive?.content ?: ""),
+				style = typography.caption.copy(fontSize = 10.sp), color = colors.textPrimary)
+			if (losses.isEmpty()) Text(tr("export.other.noLosses"), style = typography.caption.copy(fontSize = 10.sp), color = colors.textMuted)
+			else {
+				Text(tr("export.other.losses", losses.size), style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+					color = colors.warning)
+				for (loss in losses.distinctBy { it["note"]?.jsonPrimitive?.content }.take(8)) Text(
+					"· ${loss["handling"]?.jsonPrimitive?.content}: ${loss["note"]?.jsonPrimitive?.content}",
+					style = typography.caption.copy(fontSize = 10.sp), color = colors.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis,
+				)
+			}
+		}
 	}
 }
 

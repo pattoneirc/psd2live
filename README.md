@@ -81,7 +81,7 @@ Linux 原生预览不支持无 XWayland 的纯 Wayland、aarch64 和 musl（如 
 | `.model3.json` + `.moc3` + 纹理、物理、动作等 | 运行时模型文件族，需一起交付，从 `.model3.json` 加载 |
 | `.psd2live.json` | 导出诊断报告，不能代替工程 |
 
-导出目标可选 Cubism 3.0 – 5.0（默认 5.0），不支持的功能会按目标版本降级并在报告中提示。导出成功不等于在所有运行时中效果一致，正式交付前请在目标编辑器和运行环境中检查；支持范围见[运行时与导出边界](docs/zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)。
+导出目标可选 Cubism 3.0 – 5.0（默认 5.0），不支持的功能会按目标版本降级并在报告中提示。导出成功不等于在所有运行时中效果一致，正式交付前请在目标编辑器和运行环境中检查；支持范围见[运行时与导出边界](docs/zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)。此外可经中立绑定 IR 导出分层 PSD 姿势、PNG 序列帧、精灵表和 GIF，每次导出附带损失报告，见[导出目标](docs/zh/spec/EXPORT_TARGETS.md)。
 
 内置渲染无需任何官方 SDK；[Cubism Native 预览](docs/zh/guide/CUBISM_SDK_SETUP.md)是可选项，用于对照官方运行时的渲染与物理。
 
@@ -111,7 +111,7 @@ Linux 原生预览不支持无 XWayland 的纯 Wayland、aarch64 和 musl（如 
 | 使用 | 参考 |
 | --- | --- |
 | [操作速查](docs/zh/guide/USER_GUIDE.md) · [画布编辑](docs/zh/guide/CANVAS_EDITOR.md) | [PSD 素材与命名](docs/zh/spec/PSD_LAYER_SPEC.md) · [变形器与参数](docs/zh/spec/DEFORMER_AND_PARAMETER_SPEC.md) |
-| [骨骼与姿态](docs/zh/guide/SKELETON.md) · [摇摆生成](docs/zh/guide/SWING.md) · [物理](docs/zh/guide/PHYSICS.md) | [工程格式](docs/zh/spec/PROJECT_FORMAT.md) · [运行时与导出边界](docs/zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md) |
+| [骨骼与姿态](docs/zh/guide/SKELETON.md) · [摇摆生成](docs/zh/guide/SWING.md) · [物理](docs/zh/guide/PHYSICS.md) | [工程格式](docs/zh/spec/PROJECT_FORMAT.md) · [运行时与导出边界](docs/zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md) · [导出目标](docs/zh/spec/EXPORT_TARGETS.md) |
 | [纹理高清化](docs/zh/guide/TEXTURE_UPSCALE.md) · [变形路径](docs/zh/guide/DEFORM_PATHS.md) | [MCP 使用与接口](docs/zh/agent/MCP_AUTHORING.md) · [开发与命令行](docs/zh/guide/DEVELOPMENT.md) |
 
 全部文档见[文档目录](docs/README.md)，示例 PSD 与输出见 [examples](examples/readme.md)。

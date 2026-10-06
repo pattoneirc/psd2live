@@ -54,6 +54,20 @@ Windows ではリポジトリ直下の `run-gui.bat` でも GUI を起動でき�
 - ニューラルアルファは既定で有効です。`--upscale-neural-alpha` は旧コマンドとの互換用です。
 - 高解像度化の準備は[テクスチャ高解像度化](../../zh/guide/TEXTURE_UPSCALE.md)（中国語）を参照してください。
 
+## 他の形式への書き出し
+
+`export` コマンドは `.psd2live` プロジェクト（現在の履歴状態）または PSD（既定の設定で生成）を中立 IR 経由で任意のターゲットに書き出し、損失レポートを書き出します：
+
+```bash
+./gradlew run --args="targets"                                            # 書き出しターゲットの一覧
+./gradlew run --args="export model.psd2live --target gif --set clip=Nod --set size=512"
+./gradlew run --args="export model.psd2live --target psd-pose --set pose=ParamAngleX=20 --output out/pose"
+```
+
+- ファイルは `--output`（既定は入力の隣の `<名前>-<ターゲット>`）に書き出され、損失レポートは `<名前>.<ターゲット>.report.json` です。`--name` で基本名を指定します。
+- `--set key=value` は繰り返し指定できます。各ターゲットの設定キーは[中立リグ IR と書き出しターゲット（中文）](../../zh/spec/EXPORT_TARGETS.md)を参照してください。
+- 終了コード：0 は成功、1 は書き出しの失敗、2 は引数の誤り。
+
 ## テストとパッケージ作成
 
 ```bash
@@ -85,6 +99,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `MotionSheetTool.idle` | 待機 12 秒のフレーム画像 | `motion-frames/<サンプル>-idle/` |
 | `ModelProfileTool.cmo3` | `.cmo3` のパラメータ、デフォーマツリー（グリッド軸と範囲）、メッシュ、帯ごとの動きのプロファイル、体パラメータでの各メッシュの移動、体 X × 体 Y のシルエット、物理グループ | `model-profile/<名前>.txt`、`.png`、`-physics.txt` |
 | `ModelProfileTool.sample` | 生成モデル（スケルトンなしと自動スケルトン）の帯ごとの動きのプロファイル、体レイヤーと自動ボーン | `model-profile/<サンプル>.txt` |
+| `ExportGoldenTool` | `tml` と `ds` の、スケルトンなし・自動スケルトン・作成したモーションの 3 種での全書き出しファイルのダイジェスト（cmo3 は読み戻して moc3 に下げたもの）。リファクタリング前後の書き出しをバイト単位で比較する。`PSD2LIVE_GOLDEN_LABEL` で出力名を指定 | `export-golden/<名前>.txt` |
 | `SimBakeBenchmark` | `tml` の後ろ髪をいくつかの設定で焼き込み、フィットに使わなかった動きでシミュレーションと書き出し結果を比較 | 標準出力 |
 | `CommitPerfTool.profile` / `.desktop` | 1 回の編集コミットにかかる時間。`profile` はアプリケーション層のコマンド境界を通し、段階別（リビジョン、設定のデコード、再構築、ジオメトリ検査）に分けて計測。`desktop` はデスクトップのビューモデルとアダプタを通してメッシュ頂点編集とブラシのストロークを続けてコミットし、コミット時間と UI スレッドの最長停止を報告。`JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` と併用してサンプリング可能 | `commit-perf/report.txt`、`desktop.txt` |
 

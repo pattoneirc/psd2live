@@ -392,6 +392,17 @@ class DesktopWorkspace(
         }
         return session.model(Path.of(outputDirectory))
     }
+    override suspend fun exportTarget(state: String, targetId: String, outputDirectory: String,
+                                      settings: Map<String, String>): kotlinx.serialization.json.JsonObject {
+        val session = editMutex.withLock {
+            val captured = captureForMutation()
+            requireExpected(state, captured)
+            val current = viewModel.state.value
+            if (current.isAnalyzing || current.isGenerating && mutationAuthor(MutationAuthor.AGENT) != MutationAuthor.USER) throw WorkspaceBusy()
+            WorkspaceExportSession(captured, current.projectSourceName ?: "model.psd")
+        }
+        return session.target(targetId, Path.of(outputDirectory), settings)
+    }
     override fun projectSettings(): kotlinx.serialization.json.JsonObject = captureQueries().projectSettings()
 
     override fun skeletonSpec(): io.github.psd2live.core.SkeletonSpec? = captureQueries().skeletonSpec()

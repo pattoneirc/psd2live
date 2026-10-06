@@ -1,5 +1,10 @@
 package io.github.psd2live.core
 
+import io.github.psd2live.format.model.Clip
+import io.github.psd2live.format.model.CurveSegment
+import io.github.psd2live.targets.cubism.Cubism3Json
+import io.github.psd2live.format.model.Curve as IrCurve
+
 /** Demonstration motions that exercise the generated rig without audio assets. */
 object MotionGenerator {
 	fun idle(): String = idle(ALL_PARAMETERS)!!
@@ -34,7 +39,7 @@ object MotionGenerator {
 	}
 
 	/** The idle's blinks: uneven gaps, one of them a double blink, as eyes left to themselves blink. */
-	private fun idleBlink(): List<Curve> = idleBlinkTracks.map(::curve)
+	private fun idleBlink(): List<IrCurve> = idleBlinkTracks.map(::curve)
 
 	val idleBlinkTracks: List<MotionTrack> = listOf("ParamEyeLOpen", "ParamEyeROpen").map { id ->
 		val points = mutableListOf(0f to 1f)
@@ -149,43 +154,15 @@ object MotionGenerator {
 	private fun buildMotionJson(
 		duration: Float,
 		loop: Boolean,
-		curves: List<Curve>,
+		curves: List<IrCurve>,
 		availableParameterIds: Set<String>,
 		fps: Float = 30f,
 		fadeIn: Float? = null,
 		fadeOut: Float? = null,
-	): String? {
-		val retainedCurves = curves.filter { it.parameter in availableParameterIds }
-		if (retainedCurves.isEmpty()) return null
-		val segmentCount = retainedCurves.sumOf { it.segmentCount }
-		val pointCount = retainedCurves.sumOf { it.pointCount }
-		// Same line as Fps: trimIndent runs after interpolation.
-		val fades = buildString {
-			fadeIn?.let { append(" \"FadeInTime\": $it,") }
-			fadeOut?.let { append(" \"FadeOutTime\": $it,") }
-		}
-		return """
-		{
-		  "Version": 3,
-		  "Meta": {
-		    "Duration": $duration,
-		    "Fps": ${fps.toDouble()},$fades
-		    "Loop": $loop,
-		    "AreBeziersRestricted": true,
-		    "CurveCount": ${retainedCurves.size},
-		    "TotalSegmentCount": $segmentCount,
-		    "TotalPointCount": $pointCount,
-		    "UserDataCount": 0,
-		    "TotalUserDataSize": 0
-		  },
-		  "Curves": [${retainedCurves.joinToString(",") { it.json }}]
-		}
-		""".trimIndent()
-	}
+	): String? = Cubism3Json.motion3(Clip("", "", "", "", duration, fps, loop, fadeIn, fadeOut, curves), availableParameterIds)
 
-	private data class Curve(val parameter: String, val json: String, val pointCount: Int, val segmentCount: Int)
-
-	private fun curve(source: MotionCurve): Curve {
+	/** A generated or authored track as a compiled IR curve, its keys' interpolations as segment types. */
+	fun curve(source: MotionCurve): IrCurve {
 		val first = source.keys.first()
 		// A curve needs a segment; a lone key, or one after zero, holds from zero.
 		val keys = buildList {
@@ -193,26 +170,22 @@ object MotionGenerator {
 			addAll(source.keys)
 			if (size == 1) add(first.copy(time = maxOf(first.time, MotionClips.TIME_EPSILON)))
 		}
-		var points = 1
-		val segments = buildList<Number> {
-			add(keys.first().time)
-			add(keys.first().value)
-			for ((a, b) in keys.zipWithNext()) {
-				add(a.interpolation.ordinal)
-				if (a.interpolation == MotionInterpolation.BEZIER) {
+		return IrCurve(source.parameterId, keys.first().time, keys.first().value, keys.zipWithNext { a, b ->
+			when (a.interpolation) {
+				MotionInterpolation.LINEAR -> CurveSegment.Linear(b.time, b.value)
+				MotionInterpolation.BEZIER -> {
 					val (c1, c2) = MotionClips.controlPoints(a, b)
-					add(c1.first); add(c1.second); add(c2.first); add(c2.second)
-					points += 2
+					CurveSegment.Bezier(c1.first, c1.second, c2.first, c2.second, b.time, b.value)
 				}
-				add(b.time)
-				add(b.value)
-				points += 1
+				MotionInterpolation.STEPPED -> CurveSegment.Stepped(b.time, b.value)
+				MotionInterpolation.INVERSE_STEPPED -> CurveSegment.InverseStepped(b.time, b.value)
 			}
-		}.joinToString(",") { number ->
-			if (number is Int) number.toString() else number.toFloat().toString()
-		}
-		return Curve(source.parameterId, """{"Target":"Parameter","Id":"${source.parameterId}","Segments":[$segments]}""", points, keys.size - 1)
+		})
 	}
+
+	/** The IR clip of generated [tracks], or null when there are none. */
+	fun tracksClip(tracks: List<MotionTrack>, loop: Boolean, duration: Float): List<IrCurve>? =
+		tracks.takeIf { it.isNotEmpty() }?.map(::curve)
 
 	private val ALL_PARAMETERS = setOf(
 		"ParamBreath",

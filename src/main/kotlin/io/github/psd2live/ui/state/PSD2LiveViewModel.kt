@@ -5710,6 +5710,31 @@ class PSD2LiveViewModel : AutoCloseable {
 		updateState { it.copy(showExportPsdDialog = false) }
 	}
 
+	/** The last export through a neutral target, shown with its loss report in the export dialog. */
+	private val _otherExportResult = MutableStateFlow<kotlinx.serialization.json.JsonObject?>(null)
+	internal val otherExportResult: StateFlow<kotlinx.serialization.json.JsonObject?> = _otherExportResult.asStateFlow()
+
+	/** Motion clips an export can render, by id and name, compiled from the current rig. */
+	internal fun exportClipChoices(): List<Pair<String, String>> {
+		val preview = _state.value.previewModel ?: return emptyList()
+		return runCatching { io.github.psd2live.core.RigIrCompiler.compile(preview).clips.map { it.id to it.name } }.getOrDefault(emptyList())
+	}
+
+	/** Exports the committed rig through [targetId] into a folder named after the target under the output path. */
+	internal fun exportOtherFormat(targetId: String, settings: Map<String, String>) {
+		val root = _state.value.outputPath.takeIf { it.isNotBlank() }
+			?: run { updateState { it.copy(errorMessage = tr("export.other.noOutput")) }; return }
+		val name = (_state.value.projectSourceName ?: "model").substringBeforeLast('.')
+		val target = Path.of(root).toAbsolutePath().normalize().resolve("$name-$targetId")
+		_otherExportResult.value = null
+		launchWorkspaceExport(false, { port, state -> port.exportTarget(state, targetId, target.toString(), settings) }) { result ->
+			_otherExportResult.value = result
+			val count = result.getValue("files").jsonArray.size
+			addLog(tr("export.other.done", count, target.toString()), level = LogLevel.SUCCESS, tag = "Export")
+			updateState { it.copy(progress = 1f, statusText = tr("export.other.done", count, target.fileName.toString())) }
+		}
+	}
+
 	fun exportPsd(targetPath: Path, scale: Int = 1, includeGeneratedLayers: Boolean = true) {
 		if (_state.value.analysis == null) {
 			updateState { it.copy(errorMessage = tr("error.noPsdLoaded")) }; return

@@ -37,6 +37,9 @@ fun main(arguments: Array<String>) {
 		runGui()
 		return
 	}
+	if (arguments.first() == "export" || arguments.first() == "targets") {
+		exitProcess(ExportCli.run(arguments.toList()))
+	}
 	if (arguments.any { it == "--help" || it == "-h" }) {
 		printUsage()
 		return

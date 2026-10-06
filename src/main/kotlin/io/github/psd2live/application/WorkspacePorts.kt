@@ -304,6 +304,8 @@ interface WorkspaceOutputPort {
     suspend fun saveProject(): WorkspaceMutationResult
     suspend fun exportPsd(state: String, path: String, scale: Int, includeGeneratedLayers: Boolean): JsonObject
     suspend fun exportModel(state: String, outputDirectory: String): JsonObject
+    /** Exports the committed state through one neutral export target, with its loss report. */
+    suspend fun exportTarget(state: String, targetId: String, outputDirectory: String, settings: Map<String, String>): JsonObject
 }
 
 interface WorkspaceHistoryPort {

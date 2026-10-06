@@ -83,7 +83,7 @@ See [PSD preparation and naming](spec/PSD_LAYER_SPEC.md) for the full name table
 | `.model3.json` + `.moc3` + textures, physics, motions | Runtime bundle; deliver together and load from `.model3.json` |
 | `.psd2live.json` | Export diagnostics, not a project |
 
-Export targets Cubism 3.0 – 5.0 (default 5.0); features the target cannot express are downgraded and reported. A successful export does not guarantee identical results in every runtime, so check the model in the target editor and runtime before delivery. Support boundaries are described in the [runtime and export reference](../zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md) (Chinese).
+Export targets Cubism 3.0 – 5.0 (default 5.0); features the target cannot express are downgraded and reported. A successful export does not guarantee identical results in every runtime, so check the model in the target editor and runtime before delivery. Support boundaries are described in the [runtime and export reference](../zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md) (Chinese). Through the neutral rig IR the model also exports to a layered PSD at a pose, PNG sequences, sprite sheets and GIF, each with a loss report; see [export targets](../zh/spec/EXPORT_TARGETS.md) (Chinese).
 
 The built-in renderer needs no official SDK. [Cubism native preview](guide/CUBISM_SDK_SETUP.md) is optional and lets you compare against the official runtime's rendering and physics.
 

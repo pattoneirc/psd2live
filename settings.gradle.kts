@@ -17,3 +17,8 @@ dependencyResolutionManagement {
 rootProject.name = "psd2live"
 
 include(":umamo")
+include(":format-model")
+include(":format-compile")
+include(":targets:cubism")
+include(":targets:raster")
+include(":targets:psd")

@@ -14,6 +14,9 @@ native/**/CMakeCache.txt
 # The project does NOT distribute official proprietary Live2D SDK files.
 src/main/resources/cubism/
 cubism/
+# The Cubism export module is our own code, not the SDK.
+!/targets/cubism/
+!/targets/cubism/src/**/
 *CubismSdk*
 CubismSdk*/
 *.dll

@@ -54,6 +54,20 @@ Windows 也可以直接运行根目录的 `run-gui.bat`。不带参数启动 GUI
 - 神经 Alpha 默认开启；`--upscale-neural-alpha` 仅为兼容旧命令保留。
 - 高清化的准备与示例见[纹理高清化](TEXTURE_UPSCALE.md)。
 
+## 导出到其他格式
+
+`export` 命令从 `.psd2live` 工程（当前历史状态）或 PSD（默认设置生成）经中立 IR 导出到任意目标，并写出损失报告：
+
+```bash
+./gradlew run --args="targets"                                            # 列出导出目标
+./gradlew run --args="export model.psd2live --target gif --set clip=Nod --set size=512"
+./gradlew run --args="export model.psd2live --target psd-pose --set pose=ParamAngleX=20 --output out/pose"
+```
+
+- 文件写入 `--output`（默认输入旁的 `<名称>-<目标>`），损失报告为 `<名称>.<目标>.report.json`；`--name` 指定基础名称。
+- `--set key=value` 可重复，各目标的设置键见[中立绑定 IR 与导出目标](../spec/EXPORT_TARGETS.md)。
+- 退出码：0 成功，1 导出失败，2 参数错误。
+
 ## 测试与打包
 
 ```bash
@@ -87,6 +101,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `ModelProfileTool.sample` | 生成模型（无骨架和自动骨架）的分段运动剖面、身体图层与自动骨骼 | `model-profile/<示例>.txt` |
 | `SimBakeBenchmark` | 在 `tml` 后发上按几组设置烘焙模拟，在未参与拟合的动作上对比模拟与导出结果，见[模拟与烘焙](SIMULATION.md) | 标准输出 |
 | `CanvasPerfTool` | 在 Xvfb 下打开真实窗口，对编辑画布依次做静止、悬停、滚轮缩放、中键平移、变形模式拖动脸部全部点，GPU 渲染与软件渲染各一轮，报告帧间隔、界面线程延迟与界面线程热点；需 `xvfb-run -a -s "-screen 0 1920x1080x24"` | `canvas-perf/report.txt`、各阶段截图与 `.jfr` |
+| `ExportGoldenTool` | `tml`、`ds` 的无骨架、自动骨架和自定义动作三种变体的全部导出文件摘要（cmo3 取读回后降级为 moc3 的摘要），用于逐字节对比重构前后的导出；`PSD2LIVE_GOLDEN_LABEL` 指定输出名 | `export-golden/<名称>.txt` |
 | `CommitPerfTool.profile` / `.desktop` | 单次作者提交的耗时：`profile` 走应用层命令边界并按阶段拆分（修订号、配置解码、重建、几何检查）；`desktop` 走桌面视图模型与适配器，连续提交网格顶点编辑和画笔笔触，报告提交耗时与界面线程最长停顿。可配合 `JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` 采样 | `commit-perf/report.txt`、`desktop.txt` |
 
 | 环境变量 | 作用 |
@@ -103,7 +118,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 
 ## 代码结构
 
-源码分为两个 Gradle 模块：从 Umamo 移植的引擎 `org.umamo.*` 在 `:umamo`（`umamo/src/main/kotlin/`，不依赖产品代码，依赖方向由编译期保证），产品层 `io.github.psd2live.*` 在根项目（`src/main/kotlin/`）：
+源码分为多个 Gradle 模块，依赖只能向下，由编译期保证：从 Umamo 移植的引擎 `org.umamo.*` 在 `:umamo`（`umamo/src/main/kotlin/`，不依赖产品代码）；中立绑定 IR `:format-model`、导出框架 `:format-compile` 与光栅导出 `:targets:raster` 为 MIT，不依赖任何 GPL 模块；`:targets:cubism`（IR 转换器、moc3、cmo3）与 `:targets:psd` 使用引擎；产品层 `io.github.psd2live.*` 在根项目（`src/main/kotlin/`）。导出模块见[中立绑定 IR 与导出目标](../spec/EXPORT_TARGETS.md)。引擎包如下：
 
 | 包 | 职责 |
 | --- | --- |

@@ -1,5 +1,13 @@
 package io.github.psd2live.core
 
+import io.github.psd2live.format.model.PhysicsSource
+import io.github.psd2live.targets.cubism.Cubism3Json
+import io.github.psd2live.format.model.PhysicsGroup as IrPhysicsGroup
+import io.github.psd2live.format.model.PhysicsInput as IrPhysicsInput
+import io.github.psd2live.format.model.PhysicsNormalization as IrPhysicsNormalization
+import io.github.psd2live.format.model.PhysicsOutput as IrPhysicsOutput
+import io.github.psd2live.format.model.PhysicsSegment as IrPhysicsSegment
+
 import kotlinx.serialization.json.JsonPrimitive
 
 /** physics3.json, written the way Cubism Editor exports it and read the way the Cubism runtime does. */
@@ -8,25 +16,16 @@ object Physics3Json {
 	data class Physics3(val settings: List<RigPhysicsEdit>, val fps: Float?)
 
 	/** physics3.json for [settings] stepping at [fps] (no `Fps` when unlimited), or null when there are none. */
-	fun write(settings: List<RigPhysicsEdit>, fps: Int): String? {
-		if (settings.isEmpty()) return null
-		val dictionary = settings.map { rule -> "{ \"Id\": ${JsonPrimitive(rule.id)}, \"Name\": ${JsonPrimitive(rule.name)} }" }
-		return """
-		{
-		  "Version": 3,
-		  "Meta": {
-		    "PhysicsSettingCount": ${settings.size},
-		    "TotalInputCount": ${settings.sumOf { it.inputs.size }},
-		    "TotalOutputCount": ${settings.sumOf { it.outputs.size }},
-		    "VertexCount": ${settings.sumOf { it.segments.size + 1 }},
-		    ${if (fps > 0) "\"Fps\": $fps," else ""}
-		    "EffectiveForces": { "Gravity": { "X": 0, "Y": -1 }, "Wind": { "X": 0, "Y": 0 } },
-		    "PhysicsDictionary": [${dictionary.joinToString(",")}]
-		  },
-		  "PhysicsSettings": [${settings.joinToString(",", transform = ::settingJson)}]
-		}
-		""".trimIndent()
-	}
+	fun write(settings: List<RigPhysicsEdit>, fps: Int): String? = Cubism3Json.physics3(settings.map(::group), fps)
+
+	/** A pendulum setting as its neutral IR group. */
+	fun group(setting: RigPhysicsEdit): IrPhysicsGroup = IrPhysicsGroup(setting.id, setting.name,
+		setting.inputs.map { IrPhysicsInput(it.parameter, it.weight, source(it.type), it.reflect) },
+		setting.outputs.map { IrPhysicsOutput(it.parameter, it.vertex, it.scale, it.weight, source(it.type), it.reflect) },
+		setting.segments.map { IrPhysicsSegment(it.length, it.mobility, it.delay, it.acceleration) },
+		setting.normalization.let { IrPhysicsNormalization(it.positionMin, it.positionDefault, it.positionMax, it.angleMin, it.angleDefault, it.angleMax) })
+
+	private fun source(type: PhysicsSourceType) = if (type == PhysicsSourceType.ANGLE) PhysicsSource.ANGLE else PhysicsSource.X
 
 	/** Reads vertex radii as segment lengths, as Cubism does; positions are ignored. */
 	fun read(text: String): Physics3 {
@@ -50,38 +49,5 @@ object Physics3Json {
 	}
 
 	/** Particle positions down the strand, root first; Cubism reads only the radii, but writes both. */
-	internal fun vertexY(setting: RigPhysicsEdit): List<Float> =
-		setting.segments.runningFold(0f) { y, s -> y + s.length }
-
-	private fun settingJson(rule: RigPhysicsEdit): String {
-		val inputs = rule.inputs.joinToString(",\n") { input ->
-			"""    { "Source": { "Target": "Parameter", "Id": ${JsonPrimitive(input.parameter)} }, "Weight": ${input.weight}, "Type": "${input.type.jsonName}", "Reflect": ${input.reflect} }"""
-		}
-		val ys = vertexY(rule)
-		val vertices = (listOf(null) + rule.segments).mapIndexed { i, s ->
-			"""    { "Position": { "X": 0, "Y": ${ys[i]} }, "Mobility": ${s?.mobility ?: 1f}, "Delay": ${s?.delay ?: 1f}, "Acceleration": ${s?.acceleration ?: 1f}, "Radius": ${s?.length ?: 0f} }"""
-		}.joinToString(",\n")
-		val outputs = rule.outputs.joinToString(",\n") { output ->
-			"""    { "Destination": { "Target": "Parameter", "Id": ${JsonPrimitive(output.parameter)} }, "VertexIndex": ${output.vertex}, "Scale": ${output.scale}, "Weight": ${output.weight}, "Type": "${output.type.jsonName}", "Reflect": ${output.reflect} }"""
-		}
-		val n = rule.normalization
-		return """
-		{
-		  "Id": ${JsonPrimitive(rule.id)},
-		  "Input": [
-		$inputs
-		  ],
-		  "Output": [
-		$outputs
-		  ],
-		  "Vertices": [
-		$vertices
-		  ],
-		  "Normalization": {
-		    "Position": { "Minimum": ${n.positionMin}, "Default": ${n.positionDefault}, "Maximum": ${n.positionMax} },
-		    "Angle": { "Minimum": ${n.angleMin}, "Default": ${n.angleDefault}, "Maximum": ${n.angleMax} }
-		  }
-		}
-		""".trimIndent()
-	}
+	internal fun vertexY(setting: RigPhysicsEdit): List<Float> = Cubism3Json.vertexY(group(setting))
 }

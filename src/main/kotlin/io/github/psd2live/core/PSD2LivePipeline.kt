@@ -479,22 +479,9 @@ class PSD2LivePipeline {
 		progress.update(tr("progress.exportMoc3"), 0.77)
 
 		if (config.exportCmo3) {
-			val pages = atlas.pages.map { page ->
-				Cmo3Conversion.AtlasPage(page.png, page.image.width, page.image.height)
-			}
-			val tileRasters = PuppetSourceAtlas.rastersByTile(analysis)
-			val converted = Cmo3Conversion.freshCmo3(
-				puppet = exportPuppet,
-				pages = pages,
-				pageIndexByDrawableId = rig.pageByDrawableId,
-				modelName = baseName,
-				nowMillis = Instant.now().toEpochMilli(),
-				obfuscateKey = 0x42,
-				tileRasters = { tileId -> tileRasters[tileId] },
-			)
-			val physics = PhysicsCatalog.active(analysis, config, rig.puppet.parameters.mapTo(HashSet()) { it.id.raw })
-			if (physics.isNotEmpty()) Cmo3PhysicsInjector.inject(converted.model.root as CModelSource, physics, config.rigEdits.physicsFps)
-			BezierWarp.configureEditor(converted.model.root as CModelSource, config.rigEdits)
+			val ir = RigIrCompiler.compile(analysis, atlas, rig, config, tileArt = true)
+			val converted = io.github.psd2live.targets.cubism.Cmo3Target { BezierWarp.configureEditor(it, config.rigEdits) }.convert(ir,
+				io.github.psd2live.format.compile.ExportOptions(baseName, settings = mapOf("timestamp" to Instant.now().toEpochMilli().toString())))
 			val bytes = Cmo3.write(converted.model)
 			files += writeContained(outputRoot, "$baseName.cmo3", bytes)
 			warnings += converted.report.notices.map { noticeText("CMO3", it) }
@@ -525,105 +512,22 @@ class PSD2LivePipeline {
 		rig: BuiltRig,
 		config: PipelineConfig,
 	): Pair<CubismRuntimeBundle, org.umamo.interop.ExportReport> {
-		val exportPuppet = restMeshesToCanvasSpace(rig.puppet, if (config.rigEdits.importedCmo3 != null) emptyMap() else mapOf(StandardParameters.MOUTH_OPEN to 1.0f))
-		val parameterIds = rig.puppet.parameters.mapTo(linkedSetOf()) { it.id.raw }
-		val textureFolder = "$baseName.${atlas.pages.firstOrNull()?.image?.width ?: config.atlasSize}"
-		val pages = atlas.pages.mapIndexed { index, page ->
-			Moc3Sidecars.AtlasPage("$textureFolder/texture_${index.toString().padStart(2, '0')}.png", page.png)
-		}
-		val physicsGroups = PhysicsCatalog.active(analysis, config, parameterIds)
-		val physics = Physics3Json.write(physicsGroups, config.rigEdits.physicsFps)?.let(CubismJson::normalize)
-
-		val motions = buildList<Pair<String, Pair<String, String>>> {
-			if (config.exportMotions && !config.meshOnly) {
-				val clips = MotionClips.reconcileParameters(config.rigEdits.motionClips, rig.puppet.parameters)
-				fun add(group: String, file: String, motion: String?) {
-					motion ?: return
-					val json = CubismJson.normalize(motion).also { Json.parseToJsonElement(it) }
-					add(group to ("$baseName.$file.motion3.json" to json))
-				}
-				// An edited generated motion exports its clip in place of the generated one; a deleted one is left out.
-				val skeleton = config.rigEdits.skeleton
-				fun builtin(group: String, name: String, exclude: Set<String> = emptySet()) {
-					val settings = config.rigEdits.motionPresets[name] ?: MotionPresetSettings()
-					if (settings.deleted) return
-					val override = MotionClips.overrideOf(clips, name)
-					add(group, name.replaceFirstChar(Char::lowercase), if (override != null) MotionGenerator.clip(override, parameterIds) else {
-						val tracks = MotionPresets.tracks(name, skeleton, settings, exclude)
-						MotionGenerator.tracks(tracks, parameterIds, MotionPresets.loops(name), MotionPresets.duration(name, tracks, settings))
-					})
-				}
-				// The model presets switch the basic motions and the skeleton presets each as one group.
-				if (config.motionBasic) {
-					if (config.motionIdle) {
-						val physicsDriven = if (config.exportIncludePhysics) {
-							physicsGroups.flatMapTo(HashSet()) { it.outputParameters }
-						} else emptySet()
-						builtin("Idle", "Idle", physicsDriven)
-					}
-					if (config.motionBlink) builtin("Blink", "Blink")
-					if (config.motionNod) builtin("Nod", "Nod")
-					if (config.motionShake) builtin("Shake", "Shake")
-				}
-				if (config.motionSkeleton) {
-					for (preset in SkeletonMotions.presets) {
-						if (config.rigEdits.motionPresets[preset.name]?.disabled == true) continue
-						// A looping preset is another idle, played from the idle group beside the plain one.
-						builtin(if (preset.loop) "Idle" else preset.name, preset.name)
-					}
-				}
-				// The user's own motions: a loop joins the idles, a one-shot is its own group under its name.
-				val stems = MotionClips.exportStems(clips)
-				for (clip in clips.filter { it.builtin == null && it.enabled }) {
-					add(if (clip.loop) "Idle" else clip.name, stems.getValue(clip.id), MotionGenerator.clip(clip, parameterIds))
-				}
-			}
-		}
-		val motionMap = if (motions.isNotEmpty()) {
-			motions.groupBy({ it.first }, { Model3Motion(file = it.second.first) })
-		} else null
-
-		val sidecars = buildList {
-			if (config.exportIncludePhysics) {
-				physics?.let {
-					Moc3.readPhysics3(it)
-					add(Moc3Sidecars.PassThroughSidecar(Moc3Sidecars.SidecarKind.Physics, "$baseName.physics3.json", it))
-				}
-			}
-			for ((_, motionPair) in motions) {
-				add(Moc3Sidecars.PassThroughSidecar(Moc3Sidecars.SidecarKind.Motion, motionPair.first, motionPair.second))
-			}
-		}
-		val manifestTemplate = Model3Json(
-			version = 3,
-			fileReferences = FileReferences(
-				moc = "",
-				textures = emptyList(),
-				motions = motionMap,
-			),
-			groups = buildList {
-				if (config.motionBasic && config.motionBlink && !config.meshOnly) {
-					listOf("ParamEyeLOpen", "ParamEyeROpen").filter(parameterIds::contains).takeIf(List<String>::isNotEmpty)?.let {
-						add(Model3Group("Parameter", "EyeBlink", it))
-					}
-				}
-				listOf("ParamMouthOpenY").filter(parameterIds::contains).takeIf(List<String>::isNotEmpty)?.let {
-					add(Model3Group("Parameter", "LipSync", it))
-				}
-			},
-		)
-		val bundle = Moc3Sidecars.bundle(
-			exportPuppet,
-			baseName,
-			pages = pages,
-			sidecars = sidecars,
-			source = manifestTemplate,
-			canvasToParentSpace = canvasToParentSpaceFor(exportPuppet),
-			options = config.moc3ExportOptions(),
-		)
+		val ir = RigIrCompiler.compile(analysis, atlas, rig, config)
+		val bundle = io.github.psd2live.targets.cubism.Moc3Target.bundle(ir, moc3ExportOptions(baseName, config))
 		validateBundle(bundle)
 		val manifest = bundle.files.single { it.name.endsWith(".model3.json") }.name
 		return CubismRuntimeBundle(manifest, bundle.files.map { CubismRuntimeAsset(it.name, it.bytes) }) to bundle.report
+	}
+
+	/** The export settings of [config] as the moc3 target's options. */
+	internal fun moc3ExportOptions(baseName: String, config: PipelineConfig): io.github.psd2live.format.compile.ExportOptions {
+		val options = config.moc3ExportOptions()
+		return io.github.psd2live.format.compile.ExportOptions(baseName, settings = buildMap {
+			put("hidden_parts", options.exportHiddenParts.toString()); put("hidden_meshes", options.exportHiddenDrawables.toString())
+			put("guide_parts", options.exportGuideImageParts.toString()); put("physics", options.includePhysics.toString())
+			put("user_data", options.includeUserData.toString()); put("display_info", options.includeDisplayInfo.toString())
+			options.pixelsPerUnitOverride?.let { put("pixels_per_unit", it.toString()) }
+		})
 	}
 
 	private fun validateBundle(bundle: Moc3Sidecars.Bundle) {
