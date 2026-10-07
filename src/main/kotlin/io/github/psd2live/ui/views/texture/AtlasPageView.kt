@@ -60,7 +60,6 @@ import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactMenuDivider
 import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactMenuSection
-import io.github.psd2live.ui.components.IconCheck
 import io.github.psd2live.ui.components.IconMeshWireframe
 import io.github.psd2live.ui.components.IconTextureView
 import io.github.psd2live.ui.components.IconLock
@@ -553,24 +552,25 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 					tooltip = tr("texture.atlas.arrangeHint"),
 					menuTooltip = tr("texture.atlas.arrangeMenu"),
 				)
-				FloatingMenu(arrangeMenu, { arrangeMenu = false }, width = 260.dp) {
-					FloatingMenuSection(tr("texture.atlas.arrangeOptions"))
-					FloatingMenuRow(tr("texture.atlas.arrangeByMesh"), { vm.setTextureArrangeOptions(true, texture.arrangeSelectionOnly) },
-						selected = texture.arrangeByMesh, hint = tr("texture.atlas.arrangeMeshHint"), icon = { IconArrangeMesh(it) })
-					FloatingMenuRow(tr("texture.atlas.arrangeByRect"), { vm.setTextureArrangeOptions(false, texture.arrangeSelectionOnly) },
-						selected = !texture.arrangeByMesh, hint = tr("texture.atlas.arrangeRectHint"), icon = { IconArrangeRect(it) })
+				// The menu holds only how the next Arrange works - a choice of method and a scope switch; the button runs it.
+				FloatingMenu(arrangeMenu, { arrangeMenu = false }, width = 270.dp) {
+					FloatingMenuSection(tr("texture.atlas.arrangeMethod"))
+					FloatingMenuRadio(tr("texture.atlas.arrangeByMesh"), texture.arrangeByMesh,
+						{ vm.setTextureArrangeOptions(true, texture.arrangeSelectionOnly) }, hint = tr("texture.atlas.arrangeMeshHint"),
+						icon = { IconArrangeMesh(it) })
+					FloatingMenuRadio(tr("texture.atlas.arrangeByRect"), !texture.arrangeByMesh,
+						{ vm.setTextureArrangeOptions(false, texture.arrangeSelectionOnly) }, hint = tr("texture.atlas.arrangeRectHint"),
+						icon = { IconArrangeRect(it) })
 					FloatingMenuDivider()
+					FloatingMenuSection(tr("texture.atlas.arrangeScope"))
 					FloatingMenuSwitch(tr("texture.atlas.arrangeSelection"), texture.arrangeSelectionOnly,
 						{ vm.setTextureArrangeOptions(texture.arrangeByMesh, !texture.arrangeSelectionOnly) }, hint = tr("texture.atlas.arrangeSelectionHint"))
-					FloatingMenuDivider()
-					FloatingMenuRow(tr("texture.atlas.arrange"), { arrangeMenu = false; vm.arrangeAtlas(snapshot, selection) }, enabled = !busy,
-						icon = { IconArrange(it) })
 				}
 			}
 			BarDivider()
-			// The automatic arrangement is a mode; Arrange is one action that keeps its result.
-			BarChip(tr("texture.atlas.auto"), atlas.auto, { vm.setAtlasAuto(snapshot, !atlas.auto) }, enabled = !busy,
-				tooltip = tr("texture.atlas.autoHint"), icon = { IconAutoArrange(it) })
+			// The automatic arrangement is a mode, so a switch; Arrange is one action that keeps its result.
+			BarSwitch(tr("texture.atlas.auto"), atlas.auto, { vm.setAtlasAuto(snapshot, !atlas.auto) }, enabled = !busy,
+				tooltip = tr("texture.atlas.autoHint"))
 			if (atlas.pages.size > 1) {
 				BarDivider()
 				for (info in atlas.pages) {
@@ -724,8 +724,6 @@ private fun AtlasContextMenu(
 		} else {
 			CompactMenuSection(tr("texture.menu.page"))
 			CompactMenuItem(tr("texture.atlas.arrange"), onClick = { run { vm.arrangeAtlas(snapshot, onlySelection = false) } }, enabled = !busy)
-			CompactMenuItem(tr("texture.atlas.auto"), onClick = { run { vm.setAtlasAuto(snapshot, !snapshot.atlas.auto) } }, enabled = !busy,
-				active = snapshot.atlas.auto, icon = { if (snapshot.atlas.auto) IconCheck(tint = colors.accent) })
 			CompactMenuDivider()
 			CompactMenuItem(tr("texture.menu.selectAll"), onClick = { run { vm.selectLayers(snapshot.tiles(state.textureWorkspace.selectedPage
 				.coerceIn(0, snapshot.atlas.pages.lastIndex)).map { it.layerId }) } }, trailingText = state.keymap.labelFor(ShortcutAction.SELECT_ALL))

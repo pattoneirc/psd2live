@@ -328,8 +328,8 @@ internal fun FloatingMenuDivider() {
 }
 
 /**
- * A row of a [FloatingMenu], like the mode menu's: a bar at its edge while [selected], an icon, a label and an
- * optional hint under it, a trailing note.
+ * A row of a [FloatingMenu], like the mode menu's: a bar at its edge while [selected] (unless [bar] is off, for
+ * rows whose [control] shows the state), an icon, a label and an optional hint under it, a trailing note or control.
  */
 @Composable
 internal fun FloatingMenuRow(
@@ -339,7 +339,9 @@ internal fun FloatingMenuRow(
 	enabled: Boolean = true,
 	hint: String? = null,
 	trailing: String? = null,
+	bar: Boolean = true,
 	icon: (@Composable (Color) -> Unit)? = null,
+	control: (@Composable () -> Unit)? = null,
 ) {
 	val colors = LocalToolColors.current
 	val interactionSource = remember { MutableInteractionSource() }
@@ -351,7 +353,7 @@ internal fun FloatingMenuRow(
 		else -> colors.textMuted
 	}, tween(80))
 	val background by animateColorAsState(if (hovered && enabled) colors.controlHover.copy(alpha = 0.75f) else Color.Transparent, tween(80))
-	val bar by animateFloatAsState(if (selected) 1f else 0f, tween(80, easing = FastOutSlowInEasing))
+	val edge by animateFloatAsState(if (selected && bar) 1f else 0f, tween(80, easing = FastOutSlowInEasing))
 	Row(
 		Modifier
 			.fillMaxWidth()
@@ -364,10 +366,12 @@ internal fun FloatingMenuRow(
 			.padding(horizontal = 6.dp, vertical = 3.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
-		Box(Modifier.width(2.dp).height(14.dp * bar).clip(CircleShape).background(colors.accent.copy(alpha = bar)))
+		Box(Modifier.width(2.dp).height(14.dp * edge).clip(CircleShape).background(colors.accent.copy(alpha = edge)))
 		Spacer(Modifier.width(5.dp))
-		Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { icon?.invoke(tint) }
-		Spacer(Modifier.width(7.dp))
+		if (icon != null) {
+			Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { icon(tint) }
+			Spacer(Modifier.width(7.dp))
+		} else Spacer(Modifier.width(2.dp))
 		Column(Modifier.weight(1f)) {
 			Text(label, color = if (enabled && (selected || hovered)) colors.textPrimary else tint, fontSize = 11.5.sp,
 				fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -375,25 +379,82 @@ internal fun FloatingMenuRow(
 		}
 		if (trailing != null) Text(trailing, color = colors.textMuted.copy(alpha = 0.7f), fontSize = 9.5.sp, maxLines = 1,
 			modifier = Modifier.padding(start = 6.dp))
+		if (control != null) Box(Modifier.padding(start = 8.dp, end = 2.dp)) { control() }
 	}
 }
 
-/** A switch row of a [FloatingMenu]: the label and hint, and a small track that slides on while [checked]. */
+/** One choice of a group in a [FloatingMenu]: a radio mark at the end, filled while [selected]. */
 @Composable
-internal fun FloatingMenuSwitch(label: String, checked: Boolean, onToggle: () -> Unit, enabled: Boolean = true, hint: String? = null) {
-	FloatingMenuRow(label, onToggle, enabled = enabled, hint = hint, icon = { SwitchTrack(checked, enabled) })
+internal fun FloatingMenuRadio(label: String, selected: Boolean, onSelect: () -> Unit, enabled: Boolean = true, hint: String? = null,
+                               icon: (@Composable (Color) -> Unit)? = null) {
+	FloatingMenuRow(label, onSelect, selected = selected, enabled = enabled, hint = hint, bar = false, icon = icon,
+		control = { RadioMark(selected, enabled) })
 }
 
-/** A small on/off track, accent while on. */
+/** An on/off setting in a [FloatingMenu]: the label and hint, and a switch at the end that slides on while [checked]. */
+@Composable
+internal fun FloatingMenuSwitch(label: String, checked: Boolean, onToggle: () -> Unit, enabled: Boolean = true, hint: String? = null) {
+	FloatingMenuRow(label, onToggle, enabled = enabled, hint = hint, bar = false, control = { SwitchTrack(checked, enabled) })
+}
+
+/** A radio mark: a ring, with an accent dot while [selected]. */
+@Composable
+internal fun RadioMark(selected: Boolean, enabled: Boolean = true) {
+	val colors = LocalToolColors.current
+	val dot by animateFloatAsState(if (selected) 1f else 0f, tween(120, easing = FastOutSlowInEasing))
+	val ring = if (selected) colors.accent else colors.textMuted.copy(alpha = 0.8f)
+	Canvas(Modifier.size(12.dp).alpha(if (enabled) 1f else 0.5f)) {
+		val r = size.minDimension / 2f
+		drawCircle(ring, r - 0.75f, style = Stroke(1.3f))
+		if (dot > 0f) drawCircle(colors.accent, (r - 3f) * dot)
+	}
+}
+
+/** An on/off switch: a track whose knob slides to the end, and which fills with the accent, while [checked]. */
 @Composable
 internal fun SwitchTrack(checked: Boolean, enabled: Boolean = true) {
 	val colors = LocalToolColors.current
 	val knob by animateFloatAsState(if (checked) 1f else 0f, tween(140, easing = FastOutSlowInEasing))
-	val track by animateColorAsState(if (checked) colors.accent.copy(alpha = if (enabled) 0.85f else 0.4f) else colors.border.copy(alpha = 0.9f), tween(140))
-	Canvas(Modifier.width(18.dp).height(10.dp).alpha(if (enabled) 1f else 0.6f)) {
+	val track by animateColorAsState(if (checked) colors.accent.copy(alpha = if (enabled) 0.9f else 0.4f) else colors.border.copy(alpha = 0.9f), tween(140))
+	Canvas(Modifier.width(24.dp).height(13.dp).alpha(if (enabled) 1f else 0.6f)) {
 		val r = size.height / 2f
 		drawRoundRect(track, cornerRadius = CornerRadius(r))
-		drawCircle(Color.White.copy(alpha = 0.95f), r - 1.5f, Offset(r + (size.width - r * 2) * knob, r))
+		drawCircle(Color.White.copy(alpha = 0.95f), r - 2f, Offset(r + (size.width - r * 2) * knob, r))
+	}
+}
+
+/**
+ * A switch of a [FloatingBar] for a mode: the track and its label, the label in the accent while [checked]. Unlike a
+ * [BarChip] it reads as a setting that stays on, not a button that runs something.
+ */
+@Composable
+internal fun BarSwitch(label: String, checked: Boolean, onToggle: () -> Unit, enabled: Boolean = true, tooltip: String? = null) {
+	val colors = LocalToolColors.current
+	val interactionSource = remember { MutableInteractionSource() }
+	val hovered by interactionSource.collectIsHoveredAsState()
+	val background by animateColorAsState(if (hovered && enabled) colors.controlHover.copy(alpha = 0.7f) else Color.Transparent, tween(80))
+	val tint by animateColorAsState(when {
+		!enabled -> colors.textMuted.copy(alpha = 0.5f)
+		checked -> colors.accent
+		hovered -> colors.textPrimary
+		else -> colors.textMuted
+	}, tween(80))
+	BarTooltip(tooltip) {
+		Row(
+			Modifier
+				.height(24.dp)
+				.clip(RoundedCornerShape(4.dp))
+				.background(background)
+				.hoverable(interactionSource)
+				.clickable(interactionSource = interactionSource, indication = null, enabled = enabled, onClick = onToggle)
+				.semantics { contentDescription = label }
+				.padding(horizontal = 6.dp),
+			verticalAlignment = Alignment.CenterVertically,
+		) {
+			SwitchTrack(checked, enabled)
+			Spacer(Modifier.width(6.dp))
+			Text(label, color = tint, fontSize = 11.sp, maxLines = 1, fontWeight = if (checked) FontWeight.SemiBold else FontWeight.Medium)
+		}
 	}
 }
 
@@ -429,18 +490,6 @@ internal fun NoticeBanner(messages: List<Pair<String, Color>>, onClose: (() -> U
 	}
 }
 
-/** Arrange: three tiles packed into a page. */
-@Composable
-internal fun IconArrange(tint: Color, modifier: Modifier = Modifier) {
-	Canvas(modifier.size(14.dp)) {
-		val s = size.width
-		drawRect(tint, Offset(0.5f, 0.5f), Size(s - 1f, s - 1f), style = Stroke(1f))
-		drawRect(tint, Offset(s * 0.16f, s * 0.16f), Size(s * 0.4f, s * 0.68f))
-		drawRect(tint.copy(alpha = 0.7f), Offset(s * 0.62f, s * 0.16f), Size(s * 0.22f, s * 0.3f))
-		drawRect(tint.copy(alpha = 0.45f), Offset(s * 0.62f, s * 0.54f), Size(s * 0.22f, s * 0.3f))
-	}
-}
-
 /** Arranged by mesh shape: two triangles nested in one square. */
 @Composable
 internal fun IconArrangeMesh(tint: Color, modifier: Modifier = Modifier) {
@@ -470,22 +519,6 @@ internal fun IconArrangeSelection(tint: Color, modifier: Modifier = Modifier) {
 		drawRect(tint, Offset(1f, 1f), Size(s - 2f, s - 2f),
 			style = Stroke(1f, pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(2f, 2f))))
 		drawRect(tint, Offset(s * 0.3f, s * 0.3f), Size(s * 0.4f, s * 0.4f))
-	}
-}
-
-/** Automatic: a page with a circling arrow. */
-@Composable
-internal fun IconAutoArrange(tint: Color, modifier: Modifier = Modifier) {
-	Canvas(modifier.size(14.dp)) {
-		val s = size.width
-		val r = s * 0.36f
-		val c = Offset(s / 2f, s / 2f)
-		drawArc(tint, -60f, 290f, false, Offset(c.x - r, c.y - r), Size(r * 2, r * 2), style = Stroke(1.3f, cap = StrokeCap.Round))
-		// The arrow head at the arc's end.
-		val end = Offset(c.x + r * kotlin.math.cos(Math.toRadians(230.0)).toFloat(), c.y + r * kotlin.math.sin(Math.toRadians(230.0)).toFloat())
-		drawLine(tint, end, end + Offset(3f, -0.5f), 1.3f, StrokeCap.Round)
-		drawLine(tint, end, end + Offset(0.5f, 3f), 1.3f, StrokeCap.Round)
-		drawRect(tint, Offset(c.x - 1.6f, c.y - 1.6f), Size(3.2f, 3.2f))
 	}
 }
 

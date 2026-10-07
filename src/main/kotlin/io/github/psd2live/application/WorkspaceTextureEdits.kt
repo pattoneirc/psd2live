@@ -271,7 +271,12 @@ internal object WorkspaceTextureEdits {
             val a = AtlasArrangementCodec.decode(before.settings)?.tiles.orEmpty(); val b = AtlasArrangementCodec.decode(after.settings)?.tiles.orEmpty()
             val ids = (before.textureOverrides.keys + after.textureOverrides.keys).filter { before.textureOverrides[it] != after.textureOverrides[it] } +
                 (a.keys + b.keys).filter { a[it] != b[it] }
-            if (edit is WorkspaceTextureEdit.SetTile) listOf(edit.layerId).filter { it in ids } else ids.distinct().sorted()
+            // Tiles a move or density edit only settles where they already show are not changes.
+            when (edit) {
+                is WorkspaceTextureEdit.SetTile -> listOf(edit.layerId).filter { it in ids }
+                is WorkspaceTextureEdit.SetPixelDensity -> ids.distinct().filter { it in edit.layerIds }.sorted()
+                else -> ids.distinct().sorted()
+            }
         }
     }
 
@@ -346,7 +351,24 @@ internal object WorkspaceTextureEdits {
             val current = overrides[id] ?: TextureOverride()
             put(overrides, id, current.copy(density = density, lock = edit.lock ?: current.lock))
         }
-        return withOverrides(document, overrides)
+        val changed = withOverrides(document, overrides)
+        if (changed === document) return document
+        return AtlasArrangementCodec.decode(document.settings)?.let { withArrangement(changed, settled(it, model)) } ?: changed
+    }
+
+    /**
+     * [stored] with every tile of [model] at the spot it shows now. A tile without a stored spot that holds - a new
+     * layer, a split part, one a resize displaced - is otherwise placed into free space again on every build, so it
+     * would jump into the room a moved or shrunk tile leaves. Recording its spot keeps it there.
+     */
+    private fun settled(stored: AtlasArrangement, model: RigPreviewModel): AtlasArrangement {
+        if (!model.atlas.arranged) return stored
+        val tiles = stored.tiles.toMutableMap()
+        for ((id, at) in model.atlas.placementByLayerId) {
+            val kept = tiles[id]
+            if (kept == null || kept.page != at.page || kept.x != at.x || kept.y != at.y) tiles[id] = ArrangedTile(at.page, at.x, at.y, model.atlas.footprints[id])
+        }
+        return stored.copy(tiles = tiles)
     }
 
     /**
@@ -368,7 +390,7 @@ internal object WorkspaceTextureEdits {
         overrides[edit.layerId]?.let { put(overrides, edit.layerId, it.copy(pin = null)) }
         val cleared = withOverrides(document, overrides)
         if (stored == null && edit.pin == null) return cleared
-        val arrangement = stored ?: AtlasLayout.frozen(model.atlas)
+        val arrangement = stored?.let { settled(it, model) } ?: AtlasLayout.frozen(model.atlas)
         val tiles = arrangement.tiles.toMutableMap()
         val pin = edit.pin
         if (pin == null) tiles.remove(edit.layerId)
