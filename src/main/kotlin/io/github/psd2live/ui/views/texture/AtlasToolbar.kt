@@ -261,6 +261,34 @@ internal fun AccentSplitButton(
 	}
 }
 
+/** The bar's one-click primary action, accent-filled like [AccentSplitButton]'s body. */
+@Composable
+internal fun AccentButton(label: String, onClick: () -> Unit, enabled: Boolean = true, tooltip: String? = null) {
+	val colors = LocalToolColors.current
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
+	val tint = if (enabled) colors.accent else colors.textMuted.copy(alpha = 0.6f)
+	val fill by animateColorAsState(when {
+		!enabled -> colors.accent.copy(alpha = 0.08f)
+		hovered -> colors.accent.copy(alpha = 0.3f)
+		else -> colors.accent.copy(alpha = 0.2f)
+	}, tween(80))
+	BarTooltip(tooltip) {
+		Box(
+			Modifier
+				.height(24.dp)
+				.clip(RoundedCornerShape(4.dp))
+				.background(fill)
+				.border(0.5.dp, colors.accent.copy(alpha = if (enabled) 0.55f else 0.2f), RoundedCornerShape(4.dp))
+				.hoverable(interaction)
+				.clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick)
+				.semantics { contentDescription = label }
+				.padding(horizontal = 10.dp),
+			contentAlignment = Alignment.Center,
+		) { Text(label, color = tint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1) }
+	}
+}
+
 /**
  * A menu dropping from a bar control, in the mode menu's style: frosted, scaling in from its anchor's corner.
  * Put it in the anchor's Box; [alignment] TopStart drops it under the anchor's left edge, TopEnd under its right.

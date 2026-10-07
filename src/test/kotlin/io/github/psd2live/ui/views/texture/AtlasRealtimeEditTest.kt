@@ -16,6 +16,7 @@ import io.github.psd2live.ui.state.AppSettings
 import io.github.psd2live.ui.state.DesktopWorkspace
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.state.TextureDensity
+import io.github.psd2live.ui.state.shownTiles
 import io.github.psd2live.ui.theme.CompactToolTheme
 import io.github.psd2live.ui.theme.ToolColors
 import kotlinx.serialization.json.JsonPrimitive
@@ -31,13 +32,13 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The atlas page edits in real time: a gesture shows while the pointer moves, also after earlier commits; its result
- * shows the moment it is released, before its version lands; and an edit made while another is committing queues
- * behind it instead of being refused.
+ * The atlas page edits in real time: a gesture shows while the pointer moves, also after earlier commits; released, it
+ * goes to the edit session, which shows it at once and commits nothing until it is applied - then as one history node,
+ * landing as the session showed it.
  */
 class AtlasRealtimeEditTest {
 	@OptIn(ExperimentalComposeUiApi::class)
-	@Test fun gesturesShowLiveAndTheirResultsBeforeTheyCommit() = kotlinx.coroutines.runBlocking<Unit> {
+	@Test fun gesturesShowLiveAndApplyAsOneStep() = kotlinx.coroutines.runBlocking<Unit> {
 		val saved = AppSettings.softwareCanvas
 		AppSettings.softwareCanvas = true
 		val temp = Files.createTempDirectory("atlas-realtime")
@@ -89,10 +90,12 @@ class AtlasRealtimeEditTest {
 					}
 					settle()
 
-					// A first edit commits, so the gestures below run on a later version than the view was first composed with.
+					// A first applied session, so the gestures below run on a later version than the view was first composed with.
 					vm.setTextureDensity(first, listOf(red.layerId), 0.5f)
+					vm.applyTextureSession()
 					vm.awaitTextureEdits()
 					settle()
+					val nodes = vm.state.value.historySnapshot?.nodes?.size
 					val tile = requireNotNull(vm.textureSnapshot()).tilesByLayer.getValue(red.layerId)
 					val pageSize = requireNotNull(vm.textureSnapshot()).atlas.pages[tile.page].width
 					val target = pageSize - tile.width * 3f to pageSize - tile.height * 3f
@@ -106,38 +109,57 @@ class AtlasRealtimeEditTest {
 					assertTrue(!isRed(render(), from), "and no longer where it was")
 
 					scene.sendPointerEvent(PointerEventType.Release, to, button = PointerButton.Primary)
-					// Before the move's version lands: the tile already shows where it was dropped.
-					assertTrue(vm.state.value.textureWorkspace.pending.containsKey(red.layerId), "the move is queued")
+					// Released into the session: shown where it was dropped, nothing committed.
+					assertTrue(vm.state.value.textureWorkspace.session.containsKey(red.layerId), "the move is in the session")
 					assertTrue(isRed(render(), to), "the dropped tile shows at once")
-					// A second edit while the first commits is queued, not refused.
-					// Back to full size where it was dropped, in free space.
+					assertFalse(vm.state.value.textureWorkspace.busy, "nothing commits while the session is open")
+					assertEquals(nodes, vm.state.value.historySnapshot?.nodes?.size)
+					// Back to full size where it was dropped, in free space, still in the session; a step back and forth.
 					vm.scaleTextureDensity(requireNotNull(vm.textureSnapshot()), listOf(red.layerId), 2f)
 					assertNull(vm.state.value.textureWorkspace.error)
-					vm.awaitTextureEdits()
-					settle()
-					val landed = requireNotNull(vm.textureSnapshot())
-					val moved = landed.tilesByLayer.getValue(red.layerId)
-					assertTrue(kotlin.math.abs(moved.x - target.first) <= 8 && kotlin.math.abs(moved.y - target.second) <= 8, "the move landed: $moved")
-					assertEquals(1f, landed.layer(red.layerId)?.override?.density ?: 1f, "both density edits landed in order")
-					assertTrue(vm.state.value.textureWorkspace.pending.isEmpty())
-					assertNull(vm.state.value.textureWorkspace.error)
+					vm.undoTextureSession()
+					assertEquals(0.5f, vm.state.value.textureWorkspace.session.getValue(red.layerId).density, "the undo steps back to the move")
+					vm.redoTextureSession()
+					assertEquals(1f, vm.state.value.textureWorkspace.session.getValue(red.layerId).density)
 
-					// A corner drag after those commits: the tile grows under the pointer from its opposite corner.
-					val grip = view((moved.x + moved.width).toFloat(), (moved.y + moved.height).toFloat())
-					val anchor = view(moved.x.toFloat(), moved.y.toFloat())
+					// A corner drag on the session's tile: it shrinks under the pointer from its opposite corner.
+					val shown = requireNotNull(vm.textureSnapshot()).let { s -> s.shownTiles(tile.page, vm.state.value.textureWorkspace.shown).single { it.layerId == red.layerId } }
+					settle()
+					val grip = view((shown.x + shown.width).toFloat(), (shown.y + shown.height).toFloat())
+					val anchor = view(shown.x.toFloat(), shown.y.toFloat())
 					val outward = anchor + (grip - anchor) * 0.6f
 					scene.sendPointerEvent(PointerEventType.Move, grip)
 					scene.sendPointerEvent(PointerEventType.Press, grip, buttons = primary, button = PointerButton.Primary)
 					AtlasPageProbe.liftedDraws.set(0)
 					for (i in 1..10) { scene.sendPointerEvent(PointerEventType.Move, grip + (outward - grip) * (i / 10f), buttons = primary); render() }
 					assertTrue(AtlasPageProbe.liftedDraws.get() > 0, "the corner drag draws its tiles at their new size")
-					// Shrunk to a quarter-power step near 0.6: the corner it left shows no tile any more.
 					val leftBehind = anchor + (grip - anchor) * 0.8f
 					assertTrue(!isRed(render(), leftBehind), "the shrinking tile shows at its new size while the corner moves")
 					assertTrue(isRed(render(), anchor + (grip - anchor) * 0.3f))
 					scene.sendPointerEvent(PointerEventType.Release, outward, button = PointerButton.Primary)
+
+					// Half a quarter turn: the turned square leaves its upright corners empty.
+					assertTrue(vm.rotateTextureTile(requireNotNull(vm.textureSnapshot()), red.layerId, 45f))
+					settle()
+					val turned = requireNotNull(vm.textureSnapshot()).let { s -> s.shownTiles(tile.page, vm.state.value.textureWorkspace.shown).single { it.layerId == red.layerId } }
+					val centre = Offset(turned.x + turned.width / 2f, turned.y + turned.height / 2f)
+					val corner = view(centre.x - turned.width * 0.42f, centre.y + turned.height * 0.42f)
+					assertTrue(isRed(render(), view(centre.x, centre.y)), "the turned tile shows")
+					assertFalse(isRed(render(), corner), "turned: its upright bottom left corner is empty")
+
+					// Applied: one step, everything as the session showed it.
+					vm.applyTextureSession()
+					assertTrue(vm.state.value.textureWorkspace.session.isEmpty())
+					assertTrue(vm.state.value.textureWorkspace.pending.containsKey(red.layerId), "shown as applied until its version lands")
 					vm.awaitTextureEdits()
-					assertTrue((requireNotNull(vm.textureSnapshot()).layer(red.layerId)?.override?.density ?: 1f) < 1f, "the corner drag committed")
+					settle()
+					assertNull(vm.state.value.textureWorkspace.error)
+					assertEquals(nodes?.plus(1), vm.state.value.historySnapshot?.nodes?.size, "one history node for the whole session")
+					val landed = requireNotNull(vm.textureSnapshot()).tilesByLayer.getValue(red.layerId)
+					assertEquals(Triple(turned.x, turned.y, 45f), Triple(landed.x, landed.y, landed.rotation), "landed as the session showed it")
+					assertEquals(turned.width, landed.width)
+					assertTrue(vm.state.value.textureWorkspace.pending.isEmpty())
+					assertFalse(isRed(render(), corner), "and the committed page shows it turned")
 					scene.close()
 				}
 			}
@@ -184,6 +206,7 @@ class AtlasRealtimeEditTest {
 					val onTop = assertNotNull(vm.draggedTextureTile(snapshot, upper.layerId, lower.x.toFloat(), lower.y.toFloat()))
 					assertFalse(onTop.collides, "rectangles overlap but meshes do not")
 					assertTrue(vm.moveTextureTile(snapshot, onTop))
+					vm.applyTextureSession()
 					vm.awaitTextureEdits()
 					assertNull(vm.state.value.textureWorkspace.error)
 					val landed = tile("upper")
@@ -207,7 +230,10 @@ class AtlasRealtimeEditTest {
 					var clock = 0L
 					fun render() { clock += 16_000_000L; scene.render(clock).close() }
 					// Out of the other's way first, so a grown tile has room.
+					// Turned half round on the other's rectangle, the upper triangle would lie on the lower one: refused.
+					assertFalse(vm.rotateTextureTile(after, upper.layerId, 180f), "turned meshes overlap")
 					vm.moveTextureTile(after, assertNotNull(vm.draggedTextureTile(after, upper.layerId, 300f, 300f)))
+					vm.applyTextureSession()
 					vm.awaitTextureEdits()
 					vm.selectLayer(shown.layerId)
 					repeat(10) { render(); Thread.sleep(20) }
@@ -220,6 +246,7 @@ class AtlasRealtimeEditTest {
 					scene.sendPointerEvent(PointerEventType.Press, grip, buttons = primary, button = PointerButton.Primary)
 					for (i in 1..10) { scene.sendPointerEvent(PointerEventType.Move, grip + (target - grip) * (i / 10f), buttons = primary); render() }
 					scene.sendPointerEvent(PointerEventType.Release, target, button = PointerButton.Primary)
+					vm.applyTextureSession()
 					vm.awaitTextureEdits()
 					assertNull(vm.state.value.textureWorkspace.error)
 					val scaled = tile("lower")

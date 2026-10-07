@@ -34,7 +34,8 @@ internal object AtlasArrange {
 		val area: Int get() = footprint?.area ?: (ceilDiv(width, CELL) * ceilDiv(height, CELL))
 	}
 
-	data class Spot(val page: Int, val x: Int, val y: Int)
+	/** A tile's spot: its upright rectangle's top left on [page], turned [rotation] degrees about its centre. */
+	data class Spot(val page: Int, val x: Int, val y: Int, val rotation: Float = 0f)
 
 	/**
 	 * Cells of a placed tile on the page grid: a [width] x [height] cell box at ([column], [row]) and, per box
@@ -47,8 +48,14 @@ internal object AtlasArrange {
 
 	private fun ceilDiv(a: Int, b: Int) = (a + b - 1) / b
 
-	/** The cells a tile of [width] x [height] at texture pixel ([x], [y]) occupies; all of its rectangle without a footprint. */
-	fun shape(x: Int, y: Int, width: Int, height: Int, rasterWidth: Int, rasterHeight: Int, footprint: TextureFootprint?): Shape {
+	/**
+	 * The cells a tile of [width] x [height] at texture pixel ([x], [y]) occupies; all of its rectangle without a
+	 * footprint. Turned by [rotation] about its centre, it occupies every cell its turned footprint cells (or its turned
+	 * rectangle) reach.
+	 */
+	fun shape(x: Int, y: Int, width: Int, height: Int, rasterWidth: Int, rasterHeight: Int, footprint: TextureFootprint?,
+	          rotation: Float = 0f): Shape {
+		if (rotation != 0f) return turnedShape(x, y, width, height, rasterWidth, rasterHeight, footprint, rotation)
 		val column = x / CELL; val row = y / CELL
 		val columns = ceilDiv(x + width, CELL) - column; val rows = ceilDiv(y + height, CELL) - row
 		if (footprint == null) return Shape(column, row, columns, rows, Array(rows) { intArrayOf(0, columns) })
@@ -65,6 +72,58 @@ internal object AtlasArrange {
 			for (r in r0 until r1) bits.set(r * columns + c0, r * columns + c1)
 		}
 		return Shape(column, row, columns, rows, Array(rows) { r -> runs(bits, r * columns, columns) })
+	}
+
+	private fun turnedShape(x: Int, y: Int, width: Int, height: Int, rasterWidth: Int, rasterHeight: Int, footprint: TextureFootprint?,
+	                        rotation: Float): Shape {
+		val box = io.github.psd2live.core.TileTurn.bounds(x.toFloat(), y.toFloat(), width.toFloat(), height.toFloat(), rotation)
+		// A thousandth of a pixel absorbs the trigonometry's rounding, so a quarter turn's box stays on its cells.
+		val column = floor((box[0] + 1e-3f) / CELL).toInt(); val row = floor((box[1] + 1e-3f) / CELL).toInt()
+		val columns = (ceil((box[2] - 1e-3f) / CELL).toInt() - column).coerceAtLeast(1); val rows = (ceil((box[3] - 1e-3f) / CELL).toInt() - row).coerceAtLeast(1)
+		val bits = java.util.BitSet(columns * rows)
+		fun quad(tx0: Float, ty0: Float, tx1: Float, ty1: Float) {
+			val q = FloatArray(8)
+			for ((k, corner) in listOf(tx0 to ty0, tx1 to ty0, tx1 to ty1, tx0 to ty1).withIndex()) {
+				val p = io.github.psd2live.core.TileTurn.toPage(x.toFloat(), y.toFloat(), width.toFloat(), height.toFloat(), rotation, corner.first, corner.second)
+				q[k * 2] = p[0]; q[k * 2 + 1] = p[1]
+			}
+			markQuad(bits, column, row, columns, rows, q)
+		}
+		if (footprint == null) quad(0f, 0f, width.toFloat(), height.toFloat())
+		else {
+			val sx = width.toFloat() / rasterWidth; val sy = height.toFloat() / rasterHeight
+			for (j in 0 until footprint.rows) for (i in 0 until footprint.columns) {
+				if (!footprint[i, j]) continue
+				quad(i * footprint.cell * sx, j * footprint.cell * sy, minOf((i + 1) * footprint.cell, rasterWidth) * sx, minOf((j + 1) * footprint.cell, rasterHeight) * sy)
+			}
+		}
+		return Shape(column, row, columns, rows, Array(rows) { r -> runs(bits, r * columns, columns) })
+	}
+
+	/** Sets every cell of the box at ([column], [row]) that the convex quad [q] (four page points) overlaps. */
+	private fun markQuad(bits: java.util.BitSet, column: Int, row: Int, columns: Int, rows: Int, q: FloatArray) {
+		val minX = minOf(q[0], q[2], q[4], q[6]); val maxX = maxOf(q[0], q[2], q[4], q[6])
+		val minY = minOf(q[1], q[3], q[5], q[7]); val maxY = maxOf(q[1], q[3], q[5], q[7])
+		val c0 = (floor(minX / CELL).toInt() - column).coerceIn(0, columns - 1); val c1 = (ceil(maxX / CELL).toInt() - column).coerceIn(c0 + 1, columns)
+		val r0 = (floor(minY / CELL).toInt() - row).coerceIn(0, rows - 1); val r1 = (ceil(maxY / CELL).toInt() - row).coerceIn(r0 + 1, rows)
+		// The quad's two edge normals; with the cell's own axes they separate any cell the quad misses.
+		val n = floatArrayOf(-(q[3] - q[1]), q[2] - q[0], -(q[5] - q[3]), q[4] - q[2])
+		for (r in r0 until r1) for (c in c0 until c1) {
+			val left = (column + c) * CELL.toFloat(); val top = (row + r) * CELL.toFloat()
+			var separated = false
+			for (axis in 0..1) {
+				val ax = n[axis * 2]; val ay = n[axis * 2 + 1]
+				var qMin = Float.MAX_VALUE; var qMax = -Float.MAX_VALUE
+				for (k in 0..3) { val d = q[k * 2] * ax + q[k * 2 + 1] * ay; qMin = minOf(qMin, d); qMax = maxOf(qMax, d) }
+				var cMin = Float.MAX_VALUE; var cMax = -Float.MAX_VALUE
+				for ((px, py) in listOf(left to top, left + CELL to top, left + CELL to top + CELL, left to top + CELL)) {
+					val d = px * ax + py * ay; cMin = minOf(cMin, d); cMax = maxOf(cMax, d)
+				}
+				// Touching along an edge is no overlap, as for upright cells.
+				if (cMax <= qMin + 1e-3f || qMax <= cMin + 1e-3f) { separated = true; break }
+			}
+			if (!separated) bits.set(r * columns + c)
+		}
 	}
 
 	private fun runs(bits: java.util.BitSet, start: Int, length: Int): IntArray {
@@ -209,18 +268,19 @@ internal object AtlasArrange {
 		for (request in requests) {
 			val stored = request.stored
 			if (stored == null) { pending += request; continue }
-			val fits = stored.page < maxPages && stored.x + request.width <= pageSize && stored.y + request.height <= pageSize
-			val shape = shape(stored.x, stored.y, request.width, request.height, request.rasterWidth, request.rasterHeight, request.footprint)
+			val box = io.github.psd2live.core.TileTurn.bounds(stored.x.toFloat(), stored.y.toFloat(), request.width.toFloat(), request.height.toFloat(), stored.rotation)
+			val fits = stored.page < maxPages && box[0] >= -1e-3f && box[1] >= -1e-3f && box[2] <= pageSize + 1e-3f && box[3] <= pageSize + 1e-3f
+			val shape = shape(stored.x, stored.y, request.width, request.height, request.rasterWidth, request.rasterHeight, request.footprint, stored.rotation)
 			val clear = fits && placed[stored.page].orEmpty().none { (other, otherShape) ->
 				val a = spots.getValue(other.id)
 				// Rectangle packs leave at least `padding` between tiles; a frozen automatic layout always holds.
-				if (other.footprint == null && request.footprint == null)
+				if (other.footprint == null && request.footprint == null && stored.rotation == 0f && a.rotation == 0f)
 					stored.x < a.x + other.width + padding && a.x < stored.x + request.width + padding &&
 						stored.y < a.y + other.height + padding && a.y < stored.y + request.height + padding
 				else overlaps(dilate(shape, grow), otherShape)
 			}
 			if (!clear) { pending += request; continue }
-			spots[request.id] = Spot(stored.page, stored.x, stored.y)
+			spots[request.id] = Spot(stored.page, stored.x, stored.y, stored.rotation)
 			shapes[request.id] = shape
 			placed.getOrPut(stored.page) { ArrayList() } += request to shape
 		}

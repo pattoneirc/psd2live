@@ -40,8 +40,10 @@ internal fun HierarchyMeshPreview(
     val drawable = model.rig.puppet.drawables.firstOrNull { it.id.raw == drawableId } ?: return
     val mesh = drawable.mesh ?: return
     val layerId = model.rig.layerIdByDrawableId[drawable.id.raw]
-    val placement = model.atlas.placementByLayerId[layerId]
-    val pageIndex = placement?.page ?: model.rig.pageByDrawableId[drawable.id.raw] ?: drawable.texturePage
+    val packed = model.atlas.placementByLayerId[layerId]
+    // A turned tile's upright rectangle is not what it covers; its texture coordinates' box is.
+    val placement = packed?.takeIf { it.rotation == 0f }
+    val pageIndex = packed?.page ?: model.rig.pageByDrawableId[drawable.id.raw] ?: drawable.texturePage
     val page = model.atlas.pages.getOrNull(pageIndex) ?: return
     // Imported models may have UVs but no source-layer atlas placement.
     val source = remember(page, placement, mesh) {

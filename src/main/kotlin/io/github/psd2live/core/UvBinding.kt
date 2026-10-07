@@ -123,15 +123,21 @@ internal class LayerTexture(
 			return LayerSpace.of(texture)
 		}
 
-		/** Umamo's form of a packed placement: axis aligned, positioned at whole page pixels. */
-		fun tilePlacement(placement: AtlasPlacement): TilePlacement = TilePlacement(
-			pageIndex = placement.page,
-			positionX = placement.x.toFloat(),
-			positionY = placement.y.toFloat(),
-			scaleX = placement.scaleX,
-			scaleY = placement.scaleY,
-			rotationDegrees = 0f,
-		)
+		/**
+		 * Umamo's form of a packed placement: positioned at whole page pixels, and turned about the tile's centre
+		 * when the placement turns, so Umamo's position is where the raster's origin lands.
+		 */
+		fun tilePlacement(placement: AtlasPlacement): TilePlacement {
+			val origin = placement.toPage(0f, 0f)
+			return TilePlacement(
+				pageIndex = placement.page,
+				positionX = origin[0],
+				positionY = origin[1],
+				scaleX = placement.scaleX,
+				scaleY = placement.scaleY,
+				rotationDegrees = placement.rotation,
+			)
+		}
 
 		/** [layer]'s texture on [atlas] under the generator's layer space. */
 		fun packed(layer: ClassifiedLayer, placement: AtlasPlacement, atlas: PackedAtlas): LayerTexture =

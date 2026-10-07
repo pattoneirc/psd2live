@@ -42,6 +42,14 @@ data class TextureWorkspaceState(
 	 * moment it is made until that edit's version arrives, so no gesture waits for a rebuild.
 	 */
 	val pending: Map<String, PendingTile> = emptyMap(),
+	/**
+	 * The atlas edit session: tiles as moves, scales and turns left them since the last apply, by layer. Nothing of it
+	 * is committed until it is applied; until then only the atlas view and the inspector show it.
+	 */
+	val session: Map<String, PendingTile> = emptyMap(),
+	/** Earlier sessions to step back to, oldest first, and the steps undone since. */
+	val sessionUndo: List<Map<String, PendingTile>> = emptyList(),
+	val sessionRedo: List<Map<String, PendingTile>> = emptyList(),
 	/** Texture commands are queued or running; gestures go on and queue theirs behind them. */
 	val busy: Boolean = false,
 	/** Why the last texture command was refused, shown in the panel until the next command. */
@@ -50,7 +58,10 @@ data class TextureWorkspaceState(
 	val notices: List<String> = emptyList(),
 	/** Bumped after each texture commit so views capture again even when nothing else they read changed. */
 	val revision: Int = 0,
-)
+) {
+	/** The tiles as the atlas shows them over the committed ones: queued commits, then the session over them. */
+	val shown: Map<String, PendingTile> get() = if (session.isEmpty()) pending else pending + session
+}
 
 /** A tile dragged to ([x], [y]) on [page], in texture pixels. [collides] when it overlaps another tile. */
 @Immutable
@@ -67,15 +78,17 @@ data class TileDragDraft(
  * [density] when the edit sets one. [token] names the queued edit; a later edit of the same layer replaces it.
  */
 @Immutable
-data class PendingTile(val page: Int, val x: Int, val y: Int, val width: Int, val height: Int, val density: Float?, val token: Long)
+data class PendingTile(val page: Int, val x: Int, val y: Int, val width: Int, val height: Int, val density: Float?, val token: Long,
+                       val rotation: Float = 0f)
 
 /** [tile] where [pending] puts it, or as it is. */
 internal fun WorkspaceAtlasTile.shownAs(pending: Map<String, PendingTile>): WorkspaceAtlasTile {
 	val p = pending[layerId] ?: return this
-	if (p.page == page && p.x == x && p.y == y && p.width == width && p.height == height) return this
+	if (p.page == page && p.x == x && p.y == y && p.width == width && p.height == height && p.rotation == rotation &&
+		(p.density == null || p.density == density)) return this
 	val sx = p.width.toFloat() / width; val sy = p.height.toFloat() / height
 	return copy(page = p.page, x = p.x, y = p.y, width = p.width, height = p.height, scaleX = scaleX * sx, scaleY = scaleY * sy,
-		density = p.density ?: density)
+		density = p.density ?: density, rotation = p.rotation)
 }
 
 /** The tiles on [page] as the atlas shows them: committed, with queued edits applied. */
@@ -112,19 +125,19 @@ class TextureSnapshot(private val view: WorkspaceTextureView) {
 	 */
 	internal fun collisionShape(tile: WorkspaceAtlasTile, x: Int, y: Int): io.github.psd2live.core.AtlasArrange.Shape {
 		// A drag asks for the standing tiles' shapes on every pointer move; they are the same each time.
-		val key = CollisionKey(tile.layerId, x, y, tile.width, tile.height)
+		val key = CollisionKey(tile.layerId, x, y, tile.width, tile.height, tile.rotation)
 		collisionShapes[key]?.let { return it }
 		if (collisionShapes.size > 4096) collisionShapes.clear()
 		return shapeOf(tile, x, y, view.meshFootprint(tile.layerId)).also { collisionShapes[key] = it }
 	}
 
-	private data class CollisionKey(val layerId: String, val x: Int, val y: Int, val width: Int, val height: Int)
+	private data class CollisionKey(val layerId: String, val x: Int, val y: Int, val width: Int, val height: Int, val rotation: Float)
 	private val collisionShapes = ConcurrentHashMap<CollisionKey, io.github.psd2live.core.AtlasArrange.Shape>()
 
 	private fun shapeOf(tile: WorkspaceAtlasTile, x: Int, y: Int, footprint: io.github.psd2live.project.TextureFootprint?): io.github.psd2live.core.AtlasArrange.Shape {
 		val layer = layer(tile.layerId)
 		val rasterWidth = layer?.rasterWidth ?: tile.width; val rasterHeight = layer?.rasterHeight ?: tile.height
-		return io.github.psd2live.core.AtlasArrange.shape(x, y, tile.width, tile.height, rasterWidth, rasterHeight, footprint)
+		return io.github.psd2live.core.AtlasArrange.shape(x, y, tile.width, tile.height, rasterWidth, rasterHeight, footprint, tile.rotation)
 	}
 
 	/** Whether [tile], standing at ([x], [y]) at its size, would share a cell (with the padding) with any of [others]. */

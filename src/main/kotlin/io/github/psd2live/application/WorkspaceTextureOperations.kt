@@ -21,7 +21,8 @@ internal object WorkspaceTextureSchemas {
         if (positive) mapOf("width" to JsonObject(s.number() + ("exclusiveMinimum" to JsonPrimitive(0))),
             "height" to JsonObject(s.number() + ("exclusiveMinimum" to JsonPrimitive(0))))
         else mapOf("width" to s.number(0), "height" to s.number(0)))
-    private val pin = s.obj(mapOf("page" to s.integer(0, 63), "x" to s.integer(0, 16383), "y" to s.integer(0, 16383)))
+    private val pin = s.obj(mapOf("page" to s.integer(0, 63), "x" to s.integer(0, 16383), "y" to s.integer(0, 16383),
+        "rotation" to s.number(-360, 360)), setOf("page", "x", "y"))
     private fun nullable(value: JsonObject) = JsonObject(value + ("type" to JsonArray(listOf(value.getValue("type"), JsonPrimitive("null")))))
 
     fun request(id: String): JsonObject {
@@ -63,7 +64,7 @@ internal object WorkspaceTextureSchemas {
 
     private val tileFields = linkedMapOf("page" to s.integer(0), "x" to s.integer(0), "y" to s.integer(0),
         "width" to s.integer(1), "height" to s.integer(1), "scale_x" to s.number(0), "scale_y" to s.number(0),
-        "density" to s.number(0), "locked" to s.boolean(), "pinned" to s.boolean(), "shaped" to s.boolean())
+        "density" to s.number(0), "locked" to s.boolean(), "pinned" to s.boolean(), "shaped" to s.boolean(), "rotation" to s.number(-180, 180))
     private val tile = s.obj(tileFields)
     private val listedTile = s.obj(linkedMapOf("layer_id" to s.handle()) + tileFields)
     private val read = linkedMapOf("project_id" to s.handle(), "state" to s.handle(), "revision" to s.handle())
@@ -95,7 +96,7 @@ internal fun WorkspaceAtlasTile.toJson(listed: Boolean = false) = buildJsonObjec
     if (listed) put("layer_id", layerId)
     put("page", page); put("x", x); put("y", y); put("width", width); put("height", height)
     put("scale_x", scaleX); put("scale_y", scaleY); put("density", density); put("locked", locked); put("pinned", pinned)
-    put("shaped", shaped)
+    put("shaped", shaped); put("rotation", rotation)
 }
 
 internal fun WorkspaceTextureView.layerJson(layerId: String): JsonObject {

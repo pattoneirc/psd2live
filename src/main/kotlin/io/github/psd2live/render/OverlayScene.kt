@@ -68,6 +68,8 @@ class ImageTexture(val image: java.awt.image.BufferedImage) : QuadTexture
  * @property alpha   Opacity the texels are drawn with.
  * @property nearest Magnify texel by texel instead of smoothly, for a close look at single pixels.
  * @property clip    World rectangles (x0, y0, x1, y1 each) outside which nothing is drawn; null draws all of it.
+ * @property corners The four world corners for a turned quad - those of (u0, v0), (u1, v0), (u1, v1), (u0, v1), x and y
+ *   each - instead of the upright rectangle from ([x0], [y0]) to ([x1], [y1]).
  */
 class TextureQuad(
 	val texture: QuadTexture,
@@ -76,4 +78,5 @@ class TextureQuad(
 	val alpha: Float = 1f,
 	val nearest: Boolean = false,
 	val clip: FloatArray? = null,
+	val corners: FloatArray? = null,
 ) : OverlayItem

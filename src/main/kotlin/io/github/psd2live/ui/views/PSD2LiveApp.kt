@@ -439,7 +439,10 @@ fun FrameWindowScope.PSD2LiveApp(
 						}
 						ShortcutAction.UNDO -> {
 							val ed = viewModel.canvasEditor
-							if (ed.hierarchyMode == EditHierarchyMode.PAINT && ed.canUndoPaint()) {
+							// An open atlas edit session steps back first, as a paint session does.
+							if (state.textureWorkspace.sessionUndo.isNotEmpty()) {
+								viewModel.undoTextureSession()
+							} else if (ed.hierarchyMode == EditHierarchyMode.PAINT && ed.canUndoPaint()) {
 								ed.undoPaint()
 							} else {
 								viewModel.undoHistory()
@@ -448,7 +451,9 @@ fun FrameWindowScope.PSD2LiveApp(
 						}
 						ShortcutAction.REDO -> {
 							val ed = viewModel.canvasEditor
-							if (ed.hierarchyMode == EditHierarchyMode.PAINT && ed.canRedoPaint()) {
+							if (state.textureWorkspace.sessionRedo.isNotEmpty()) {
+								viewModel.redoTextureSession()
+							} else if (ed.hierarchyMode == EditHierarchyMode.PAINT && ed.canRedoPaint()) {
 								ed.redoPaint()
 							} else {
 								viewModel.redoHistory()

@@ -83,11 +83,13 @@ fun TextureInspectorPanel(state: PSD2LiveState, vm: PSD2LiveViewModel, modifier:
 			style = typography.body.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
 			color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis,
 		)
-		if (layers.size == 1) SizeChain(snapshot, primary, texture.densityPreview[primary.layerId], texture.pending)
-		DensitySection(vm, snapshot, layers, busy)
+		if (layers.size == 1) SizeChain(snapshot, primary, texture.densityPreview[primary.layerId], texture.shown)
+		// Density goes to the edit session; commands that commit at once wait for the session to be applied or discarded.
+		val sessionOpen = texture.session.isNotEmpty()
+		DensitySection(vm, snapshot, layers, busy, locking = !busy && !sessionOpen)
 		if (layers.size == 1) {
-			PixelsSection(state, vm, snapshot, primary, busy)
-			PreciseSection(vm, snapshot, primary, busy)
+			PixelsSection(state, vm, snapshot, primary, busy || sessionOpen)
+			PreciseSection(vm, snapshot, primary, busy || sessionOpen)
 		}
 	}
 }
@@ -141,7 +143,7 @@ private fun SizeCard(label: String, value: String, unit: String, modifier: Modif
 
 /** The density multiplier as the page's corner handles set it, the lock and the pin. */
 @Composable
-private fun DensitySection(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, layers: List<WorkspaceLayerTexture>, busy: Boolean) {
+private fun DensitySection(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, layers: List<WorkspaceLayerTexture>, busy: Boolean, locking: Boolean) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	CompactSectionHeader(tr("texture.inspector.density"))
@@ -179,7 +181,7 @@ private fun DensitySection(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, lay
 		CompactButton(tr("texture.inspector.resetDensity"), onClick = { vm.setTextureDensity(snapshot, ids, null) },
 			enabled = !busy && layers.any { it.override.density != null }, height = 22.dp)
 		val locked = layers.all { it.override.lock }
-		CompactToggleChip(tr("texture.inspector.lock"), locked, { vm.setTextureLock(snapshot, ids, !locked) }, enabled = !busy,
+		CompactToggleChip(tr("texture.inspector.lock"), locked, { vm.setTextureLock(snapshot, ids, !locked) }, enabled = locking,
 			leadingIcon = { IconLock(locked = locked, tint = if (locked) colors.accent else colors.textMuted) }, showCheckWhenSelected = false,
 			tooltip = tr("texture.inspector.lockHint"))
 	}

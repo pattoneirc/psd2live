@@ -3,15 +3,18 @@ package io.github.psd2live.project
 import kotlinx.serialization.json.*
 
 /**
- * A fixed atlas position for one layer's tile: texture pixel ([x], [y]) on page [page].
+ * A fixed atlas position for one layer's tile: its upright rectangle's top left at texture pixel ([x], [y]) on
+ * page [page], turned [rotation] degrees about its centre.
  */
 data class TexturePin(
 	val page: Int,
 	val x: Int,
 	val y: Int,
+	val rotation: Float = 0f,
 ) {
 	init {
 		require(page >= 0 && x >= 0 && y >= 0) { "Texture pin must not be negative" }
+		require(rotation.isFinite()) { "Texture pin rotation must be finite" }
 	}
 }
 
@@ -46,7 +49,7 @@ internal object TextureOverrideCodec {
 	fun encode(value: TextureOverride): JsonObject = buildJsonObject {
 		value.density?.let { put("density", it) }
 		if (value.lock) put("lock", true)
-		value.pin?.let { pin -> putJsonObject("pin") { put("page", pin.page); put("x", pin.x); put("y", pin.y) } }
+		value.pin?.let { pin -> putJsonObject("pin") { put("page", pin.page); put("x", pin.x); put("y", pin.y); if (pin.rotation != 0f) put("rotation", pin.rotation) } }
 	}
 
 	fun decode(value: JsonObject): TextureOverride = TextureOverride(
@@ -54,7 +57,7 @@ internal object TextureOverrideCodec {
 		lock = value["lock"]?.let { it.jsonPrimitive.booleanOrNull ?: throw IllegalArgumentException("Invalid texture lock") } ?: false,
 		pin = value["pin"]?.jsonObject?.let { pin ->
 			fun int(name: String) = pin[name]?.jsonPrimitive?.intOrNull ?: throw IllegalArgumentException("Invalid texture pin $name")
-			TexturePin(int("page"), int("x"), int("y"))
+			TexturePin(int("page"), int("x"), int("y"), normalizedRotation(pin["rotation"]?.jsonPrimitive?.floatOrNull ?: 0f))
 		},
 	)
 
@@ -68,6 +71,6 @@ internal object TextureOverrideCodec {
 	/** Canonical text for revision identity. */
 	fun canonical(value: TextureOverride): String = buildString {
 		append(value.density ?: "-").append(',').append(value.lock).append(',')
-		value.pin?.let { append(it.page).append('/').append(it.x).append('/').append(it.y) } ?: append('-')
+		value.pin?.let { append(it.page).append('/').append(it.x).append('/').append(it.y); if (it.rotation != 0f) append('/').append(it.rotation) } ?: append('-')
 	}
 }

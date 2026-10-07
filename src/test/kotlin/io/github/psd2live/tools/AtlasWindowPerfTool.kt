@@ -160,14 +160,14 @@ class AtlasWindowPerfTool {
 				if (t == 0.0 || t < 0.01) SwingUtilities.invokeAndWait {
 					val s = requireNotNull(vm.textureSnapshot())
 					val at = s.tilesByLayer.getValue(tile.layerId)
-					vm.draggedTextureTile(s, tile.layerId, at.x + 0f, at.y + 600f)?.let { vm.moveTextureTile(s, it) }
+					vm.draggedTextureTile(s, tile.layerId, at.x + 0f, at.y + 600f)?.let { vm.moveTextureTile(s, it) }; vm.applyTextureSession()
 				}
 			}
 			Thread.sleep(1000)
 			phase("commit-density", 0.05) { t ->
 				if (t < 0.01) SwingUtilities.invokeAndWait {
 					val s = requireNotNull(vm.textureSnapshot())
-					vm.setTextureDensity(s, listOf(tile.layerId), 0.5f)
+					vm.setTextureDensity(s, listOf(tile.layerId), 0.5f); vm.applyTextureSession()
 				}
 			}
 			Thread.sleep(1500)
@@ -202,7 +202,7 @@ class AtlasWindowPerfTool {
 				if (round >= 6) return@phase
 				val inRound = t - round * 0.25
 				val shown = requireNotNull(vm.textureSnapshot()).tilesByLayer.getValue(tile.layerId)
-					.let { committed -> vm.state.value.textureWorkspace.pending[tile.layerId]?.let { committed.copy(x = it.x, y = it.y, width = it.width, height = it.height) } ?: committed }
+					.let { committed -> vm.state.value.textureWorkspace.shown[tile.layerId]?.let { committed.copy(x = it.x, y = it.y, width = it.width, height = it.height) } ?: committed }
 				if (buttons == 0 && inRound < 0.15) {
 					val start = onWindow(shown.x + shown.width / 2f, shown.y + shown.height / 2f)
 					lastTarget = java.awt.Point(start.x + if (round % 2 == 0) 30 else -30, start.y + 12)
@@ -216,7 +216,7 @@ class AtlasWindowPerfTool {
 			}
 			if (buttons != 0) mouse(MouseEvent.MOUSE_RELEASED, lastTarget!!, MouseEvent.BUTTON1)
 			kotlinx.coroutines.runBlocking { vm.awaitTextureEdits() }
-			report.appendLine("rapid drags: errors $errors; pending left ${vm.state.value.textureWorkspace.pending.keys}; " +
+			report.appendLine("rapid drags: errors $errors; pending left ${vm.state.value.textureWorkspace.shown.keys}; " +
 				"history head ${vm.state.value.historySnapshot?.headNodeId}")
 		} finally {
 			File(out, "report.txt").writeText(report.toString())

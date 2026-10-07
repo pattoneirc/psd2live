@@ -120,6 +120,10 @@ class AtlasFramePerfTool {
 				scene.sendPointerEvent(PointerEventType.Move, corner + Offset(60f, 60f), buttons = primary)
 				shot("corner-drag")
 				scene.sendPointerEvent(PointerEventType.Release, corner, button = PointerButton.Primary)
+				// The released drag sits in the edit session; a turn joins it, then the session bar shows both.
+				requireNotNull(vm.textureSnapshot()).let { s -> vm.draggedTextureTile(s, tile.layerId, 1500f, 1500f)?.let { vm.moveTextureTile(s, it) } }
+				vm.rotateTextureTile(requireNotNull(vm.textureSnapshot()), tile.layerId, 20f)
+				shot("session")
 				phase("wheel zoom", 30) { scene.sendPointerEvent(PointerEventType.Scroll, centre, scrollDelta = Offset(0f, if (it < 15) -1f else 1f)) }
 				phase("tile drag", 60) {
 					when (it) {

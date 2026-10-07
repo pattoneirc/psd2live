@@ -165,7 +165,8 @@ internal object AtlasLayout {
             item.texture.raster.width, item.texture.raster.height, stored, footprint)
 
     private fun placement(item: Item, request: AtlasArrange.Request, spot: AtlasArrange.Spot) = AtlasPlacement(spot.page, spot.x, spot.y,
-        request.width, request.height, request.width.toFloat() / item.texture.raster.width, request.height.toFloat() / item.texture.raster.height)
+        request.width, request.height, request.width.toFloat() / item.texture.raster.width, request.height.toFloat() / item.texture.raster.height,
+        spot.rotation)
 
     /**
      * A stored arrangement's layout: its fit for every unlocked tile, its spots for the tiles that still hold
@@ -214,13 +215,13 @@ internal object AtlasLayout {
             val fit = step.toDouble() / AtlasArrangement.FIT_STEPS
             val fixed = fixedItems.map { item ->
                 val at = current!!.placementByLayerId.getValue(item.id)
-                Triple(item, AtlasArrange.Spot(at.page, at.x, at.y),
-                    AtlasArrange.shape(at.x, at.y, at.width, at.height, item.texture.raster.width, item.texture.raster.height, current.footprints[item.id]))
+                Triple(item, AtlasArrange.Spot(at.page, at.x, at.y, at.rotation),
+                    AtlasArrange.shape(at.x, at.y, at.width, at.height, item.texture.raster.width, item.texture.raster.height, current.footprints[item.id], at.rotation))
             }
             val requests = moving.map { request(it, fit, null, footprints[it.id]) }
             val spots = AtlasArrange.arrange(requests, fixed.map { it.second to it.third }, pageSize, padding, budget.maxPages) ?: return null
             val tiles = HashMap<String, ArrangedTile>()
-            for ((item, spot, _) in fixed) tiles[item.id] = ArrangedTile(spot.page, spot.x, spot.y, current!!.footprints[item.id])
+            for ((item, spot, _) in fixed) tiles[item.id] = ArrangedTile(spot.page, spot.x, spot.y, current!!.footprints[item.id], spot.rotation)
             for (request in requests) spots.getValue(request.id).let { tiles[request.id] = ArrangedTile(it.page, it.x, it.y, request.footprint) }
             return AtlasArrangement(step, tiles)
         }
@@ -268,7 +269,7 @@ internal object AtlasLayout {
     /** [atlas]'s layout as a stored arrangement, to keep it exactly as it is. */
     fun frozen(atlas: PackedAtlas): AtlasArrangement {
         val step = Math.round(atlas.fit * AtlasArrangement.FIT_STEPS).coerceIn(1, AtlasArrangement.FIT_STEPS)
-        return AtlasArrangement(step, atlas.placementByLayerId.mapValues { (id, at) -> ArrangedTile(at.page, at.x, at.y, atlas.footprints[id]) })
+        return AtlasArrangement(step, atlas.placementByLayerId.mapValues { (id, at) -> ArrangedTile(at.page, at.x, at.y, atlas.footprints[id], at.rotation) })
     }
 
     private fun items(layers: List<ClassifiedLayer>, scale: Int, overrides: Map<String, TextureOverride>): List<Item> =
@@ -408,7 +409,12 @@ internal object AtlasLayout {
     )
 
     /** One tile of a 1:1 page: its rectangle, the digest of the raster drawn there and the cells it may write ("" for all). */
-    internal data class TileKey(val x: Int, val y: Int, val width: Int, val height: Int, val digest: String, val mask: String = "")
+    internal data class TileKey(val x: Int, val y: Int, val width: Int, val height: Int, val digest: String, val mask: String = "",
+                                val rotation: Float = 0f) {
+        /** The page rows the tile writes: its rectangle's, or its turned box's. */
+        val rows: IntRange get() = if (rotation == 0f) y until y + height else
+            TileTurn.bounds(x.toFloat(), y.toFloat(), width.toFloat(), height.toFloat(), rotation).let { b -> kotlin.math.floor(b[1]).toInt() until kotlin.math.ceil(b[3]).toInt() }
+    }
 
     /** All a 1:1 page's pixels depend on: its side and its tiles, top to bottom. */
     internal data class Recipe(val size: Int, val tiles: List<TileKey>)
@@ -433,13 +439,13 @@ internal object AtlasLayout {
      */
     private fun page(size: Int, tiles: List<Tile>, base: AtlasPage?): AtlasPage {
         val recipe = Recipe(size, tiles.map { tile ->
-            TileKey(tile.at.x, tile.at.y, tile.at.width, tile.at.height, digest(tile.texture.raster.rgba), tile.mask?.key ?: "")
+            TileKey(tile.at.x, tile.at.y, tile.at.width, tile.at.height, digest(tile.texture.raster.rgba), tile.mask?.key ?: "", tile.at.rotation)
         }.sortedWith(compareBy<TileKey> { it.y }.thenBy { it.x }))
         if (base?.recipe == recipe) return base
         synchronized(pageCache) { pageCache[recipe]?.get()?.let { return it } }
         val dirtyRows = base?.recipe?.takeIf { it.size == size }?.let { old ->
             val kept = old.tiles.toHashSet().apply { retainAll(recipe.tiles.toSet()) }
-            java.util.BitSet().apply { for (tile in old.tiles + recipe.tiles) if (tile !in kept) set(tile.y, tile.y + tile.height) }
+            java.util.BitSet().apply { for (tile in old.tiles + recipe.tiles) if (tile !in kept) tile.rows.let { set(maxOf(0, it.first), maxOf(0, it.last + 1)) } }
         }
         val image = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
         for (tile in tiles) {
@@ -449,7 +455,8 @@ internal object AtlasLayout {
             // Direct pixel copy retains RGB even when alpha is zero (Graphics may discard it).
             val pixels = argb(rgba, at.width * at.height)
             val mask = tile.mask
-            if (mask == null) image.setRGB(at.x, at.y, at.width, at.height, pixels, 0, at.width)
+            if (at.rotation != 0f) writeTurned(image, at, pixels, mask)
+            else if (mask == null) image.setRGB(at.x, at.y, at.width, at.height, pixels, 0, at.width)
             else writeMasked(image, at, mask) { x, y, length, offset -> image.setRGB(x, y, length, 1, pixels, offset, at.width) }
         }
         val page = AtlasPage.composed(image, recipe, base, dirtyRows)
@@ -471,6 +478,47 @@ internal object AtlasLayout {
                 val to = minOf(at.x + at.width, (mask.column + run[k + 1]) * AtlasArrange.CELL, image.width)
                 if (to > from) write(from, y, to - from, (y - at.y) * at.width + (from - at.x))
             }
+        }
+    }
+
+    /**
+     * A turned tile: every page pixel of its turned box that its cells ([mask]) own and its rectangle covers takes the
+     * tile's pixel there, [pixels] (ARGB, the tile's size) sampled bilinearly through the turn, colours weighted by
+     * alpha so transparent texels lend no colour.
+     */
+    private fun writeTurned(image: BufferedImage, at: AtlasPlacement, pixels: IntArray, mask: AtlasArrange.Shape?) {
+        val box = TileTurn.bounds(at.x.toFloat(), at.y.toFloat(), at.width.toFloat(), at.height.toFloat(), at.rotation)
+        val x0 = maxOf(0, kotlin.math.floor(box[0]).toInt()); val x1 = minOf(image.width, kotlin.math.ceil(box[2]).toInt())
+        val y0 = maxOf(0, kotlin.math.floor(box[1]).toInt()); val y1 = minOf(image.height, kotlin.math.ceil(box[3]).toInt())
+        val w = at.width; val h = at.height
+        fun owned(px: Int, py: Int): Boolean {
+            if (mask == null) return true
+            val r = py / AtlasArrange.CELL - mask.row
+            if (r !in 0 until mask.height) return false
+            val c = px / AtlasArrange.CELL - mask.column
+            val run = mask.runs[r]
+            for (k in run.indices step 2) if (c >= run[k] && c < run[k + 1]) return true
+            return false
+        }
+        for (py in y0 until y1) for (px in x0 until x1) {
+            if (!owned(px, py)) continue
+            val local = TileTurn.toTile(at.x.toFloat(), at.y.toFloat(), w.toFloat(), h.toFloat(), at.rotation, px + 0.5f, py + 0.5f)
+            val lx = local[0]; val ly = local[1]
+            if (lx < 0f || ly < 0f || lx >= w || ly >= h) continue
+            val fx = lx - 0.5f; val fy = ly - 0.5f
+            val ix = kotlin.math.floor(fx).toInt(); val iy = kotlin.math.floor(fy).toInt()
+            val tx = fx - ix; val ty = fy - iy
+            var a = 0f; var r = 0f; var g = 0f; var b = 0f
+            fun add(dx: Int, dy: Int, weight: Float) {
+                if (weight == 0f) return
+                val c = pixels[(iy + dy).coerceIn(0, h - 1) * w + (ix + dx).coerceIn(0, w - 1)]
+                val alpha = (c ushr 24) / 255f * weight
+                a += alpha; r += (c ushr 16 and 0xff) * alpha; g += (c ushr 8 and 0xff) * alpha; b += (c and 0xff) * alpha
+            }
+            add(0, 0, (1 - tx) * (1 - ty)); add(1, 0, tx * (1 - ty)); add(0, 1, (1 - tx) * ty); add(1, 1, tx * ty)
+            if (a <= 0f) { image.setRGB(px, py, 0); continue }
+            image.setRGB(px, py, (Math.round(a * 255f).coerceIn(0, 255) shl 24) or (Math.round(r / a).coerceIn(0, 255) shl 16) or
+                (Math.round(g / a).coerceIn(0, 255) shl 8) or Math.round(b / a).coerceIn(0, 255))
         }
     }
 
@@ -506,6 +554,11 @@ internal object AtlasLayout {
             require(image.colorModel.hasAlpha()) { "Upscaled RGBA texture size mismatch" }
             val pixels = image.getRGB(0, 0, width, height, null, 0, width)
             val mask = masks[item.id]
+            if (placement.rotation != 0f) {
+                // A turned tile writes through its turn; its edge is not extruded.
+                writeTurned(page, placement, pixels, mask)
+                continue
+            }
             if (mask != null) {
                 // A mesh-arranged tile writes only its own cells; its edge is not extruded over a neighbour.
                 writeMasked(page, placement, mask) { x, y, length, offset -> page.setRGB(x, y, length, 1, pixels, offset, width) }

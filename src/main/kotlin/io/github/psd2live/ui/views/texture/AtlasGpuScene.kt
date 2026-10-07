@@ -5,6 +5,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.toArgb
 import io.github.psd2live.application.WorkspaceAtlasTile
 import io.github.psd2live.core.AtlasArrange
+import io.github.psd2live.core.TileTurn
+import androidx.compose.ui.geometry.Offset
 import io.github.psd2live.core.CanvasViewport
 import io.github.psd2live.render.AtlasScene
 import io.github.psd2live.render.CanvasRenderService
@@ -33,17 +35,21 @@ import java.awt.image.BufferedImage
  */
 internal class AtlasMeshes(val paths: Map<String, Path>, val segments: Map<String, FloatArray>)
 
-/** The cells [shape] covers, in page pixels (left, top, right, bottom per rectangle), inside [tile]'s rectangle. */
+/**
+ * The cells [shape] covers, in page pixels (left, top, right, bottom per rectangle): inside [tile]'s rectangle for an
+ * upright tile, the turned shape's own cells for a turned one.
+ */
 internal fun maskRects(shape: AtlasArrange.Shape, tile: WorkspaceAtlasTile): FloatArray {
 	val cell = AtlasArrange.CELL.toFloat()
 	val out = ArrayList<Float>()
-	val right = (tile.x + tile.width).toFloat(); val bottom = (tile.y + tile.height).toFloat()
+	val box = TileTurn.bounds(tile.x.toFloat(), tile.y.toFloat(), tile.width.toFloat(), tile.height.toFloat(), tile.rotation)
+	val right = maxOf(box[2], (tile.x + tile.width).toFloat()); val bottom = maxOf(box[3], (tile.y + tile.height).toFloat())
 	for (r in 0 until shape.height) {
 		val run = shape.runs[r]
-		val top = maxOf((shape.row + r) * cell, tile.y.toFloat()); val end = minOf((shape.row + r + 1) * cell, bottom)
+		val top = maxOf((shape.row + r) * cell, minOf(box[1], tile.y.toFloat())); val end = minOf((shape.row + r + 1) * cell, bottom)
 		if (end <= top) continue
 		for (k in run.indices step 2) {
-			val left = maxOf((shape.column + run[k]) * cell, tile.x.toFloat()); val stop = minOf((shape.column + run[k + 1]) * cell, right)
+			val left = maxOf((shape.column + run[k]) * cell, minOf(box[0], tile.x.toFloat())); val stop = minOf((shape.column + run[k + 1]) * cell, right)
 			if (stop > left) { out += left; out += top; out += stop; out += end }
 		}
 	}
@@ -69,51 +75,64 @@ internal class AtlasSceneInput(
 )
 
 /**
- * The scene of [input] with [moved] giving where a gesture puts a tile (page pixels; null where it stands): the
- * tiles in place, the heatmap over them, their wireframes, then the lifted tiles and theirs over everything.
+ * Where a tile shows: its upright rectangle in page pixels - fractional while a gesture runs - turned [rotation]
+ * degrees about its centre ([TileTurn]). Committed, queued, session and gesture tiles are all one of these.
  */
-internal fun atlasScene(input: AtlasSceneInput, moved: (WorkspaceAtlasTile) -> Rect?): AtlasScene {
+internal data class TileFrame(val x: Float, val y: Float, val width: Float, val height: Float, val rotation: Float) {
+	fun toPage(tx: Float, ty: Float): FloatArray = TileTurn.toPage(x, y, width, height, rotation, tx, ty)
+	fun toTile(px: Float, py: Float): FloatArray = TileTurn.toTile(x, y, width, height, rotation, px, py)
+	/** Top left, top right, bottom right, bottom left, page pixels. */
+	fun corners(): FloatArray = TileTurn.corners(x, y, width, height, rotation)
+	fun contains(px: Float, py: Float): Boolean = toTile(px, py).let { it[0] >= 0f && it[1] >= 0f && it[0] < width && it[1] < height }
+	val centre: Offset get() = Offset(x + width / 2f, y + height / 2f)
+
+	/** The page point [from] shows at ([px], [py]), where this frame shows the same point of the tile. */
+	fun retarget(from: TileFrame, px: Float, py: Float): FloatArray {
+		val local = from.toTile(px, py)
+		return toPage(local[0] * width / from.width, local[1] * height / from.height)
+	}
+
+	companion object {
+		fun of(tile: WorkspaceAtlasTile) = TileFrame(tile.x.toFloat(), tile.y.toFloat(), tile.width.toFloat(), tile.height.toFloat(), tile.rotation)
+	}
+}
+
+/**
+ * The scene of [input] with [moved] giving where a gesture puts a tile (null where it stands): the tiles in place,
+ * the heatmap over them, their wireframes, then the lifted tiles and theirs over everything.
+ */
+internal fun atlasScene(input: AtlasSceneInput, moved: (WorkspaceAtlasTile) -> TileFrame?): AtlasScene {
 	val items = ArrayList<OverlayItem>()
 	val snapshot = input.snapshot
 	val nearest = input.viewport.scale >= 2.0
 	val art = if (input.heatmap) 0.45f else 1f
 	val page = input.pageImage
-	fun rect(tile: WorkspaceAtlasTile) = Rect(tile.x.toFloat(), tile.y.toFloat(), (tile.x + tile.width).toFloat(), (tile.y + tile.height).toFloat())
-	/** [tile]'s pixels into [at] (page pixels), inside its cells when it was arranged by its meshes. */
-	fun pixels(tile: WorkspaceAtlasTile, at: Rect, alpha: Float) {
-		val sx = at.width / tile.width; val sy = at.height / tile.height
-		val clip = input.masks[tile.layerId]?.let { cells ->
-			FloatArray(cells.size) { i ->
-				when (i % 4) {
-					0, 2 -> at.left + (cells[i] - tile.x) * sx
-					else -> -(at.top + (cells[i] - tile.y) * sy)
-				}
-			}
-		}
+	/** World corners (page y flipped) of [frame], top left, top right, bottom right, bottom left. */
+	fun world(frame: TileFrame) = frame.corners().also { c -> for (i in 1 until 8 step 2) c[i] = -c[i] }
+	/** [tile]'s pixels into [frame]; a tile standing at its own frame keeps to its cells when it has a footprint. */
+	fun pixels(tile: WorkspaceAtlasTile, frame: TileFrame, alpha: Float, own: Boolean) {
+		val clip = if (!own) null else input.masks[tile.layerId]?.let { cells -> FloatArray(cells.size) { i -> if (i % 2 == 0) cells[i] else -cells[i] } }
+		val corners = world(frame)
 		// An upscaled page holds the tile where it was committed.
 		val source = snapshot.tilesByLayer[tile.layerId] ?: tile
-		val quad = if (page != null) TextureQuad(ImageTexture(page), at.left, -at.top, at.right, -at.bottom,
+		val quad = if (page != null) TextureQuad(ImageTexture(page), corners[0], corners[1], corners[4], corners[5],
 			source.x.toFloat() / page.width, source.y.toFloat() / page.height,
-			(source.x + source.width).toFloat() / page.width, (source.y + source.height).toFloat() / page.height, alpha, nearest, clip)
+			(source.x + source.width).toFloat() / page.width, (source.y + source.height).toFloat() / page.height, alpha, nearest, clip, corners)
 		else {
 			val raster = snapshot.tileRaster(tile.layerId) ?: return
-			TextureQuad(RasterTexture(raster.width, raster.height, raster.rgba), at.left, -at.top, at.right, -at.bottom,
-				alpha = alpha, nearest = nearest, clip = clip)
+			TextureQuad(RasterTexture(raster.width, raster.height, raster.rgba), corners[0], corners[1], corners[4], corners[5],
+				alpha = alpha, nearest = nearest, clip = clip, corners = corners)
 		}
 		items += quad
 	}
-	/**
-	 * [tile]'s wireframe. It lies where the committed tile is; a queued edit's tile, or one a gesture lifts to [at],
-	 * takes it along.
-	 */
-	fun wires(tile: WorkspaceAtlasTile, at: Rect?, argb: Int) {
+	/** [tile]'s wireframe: it lies where the committed tile is, and goes along to [frame] when the tile shows elsewhere. */
+	fun wires(tile: WorkspaceAtlasTile, frame: TileFrame, argb: Int) {
 		val segments = input.meshes?.segments?.get(tile.layerId) ?: return
-		val committed = snapshot.tilesByLayer[tile.layerId] ?: tile
-		val target = at ?: rect(tile)
-		val drawn = if (committed == tile && at == null) segments else {
-			val sx = target.width / committed.width; val sy = target.height / committed.height
-			FloatArray(segments.size) { i ->
-				if (i % 2 == 0) target.left + (segments[i] - committed.x) * sx else -(target.top + (-segments[i] - committed.y) * sy)
+		val committed = TileFrame.of(snapshot.tilesByLayer[tile.layerId] ?: tile)
+		val drawn = if (committed == frame) segments else FloatArray(segments.size).also { out ->
+			for (i in segments.indices step 2) {
+				val p = frame.retarget(committed, segments[i], -segments[i + 1])
+				out[i] = p[0]; out[i + 1] = -p[1]
 			}
 		}
 		items += LineBatch(argb, 1f, drawn)
@@ -121,19 +140,18 @@ internal fun atlasScene(input: AtlasSceneInput, moved: (WorkspaceAtlasTile) -> R
 	val lifted = input.tiles.mapNotNull { tile -> moved(tile)?.let { tile to it } }
 	val liftedIds = lifted.mapTo(HashSet()) { it.first.layerId }
 	val standing = input.tiles.filter { it.layerId !in liftedIds }
-	if (input.showPage) for (tile in standing) pixels(tile, rect(tile), art)
+	if (input.showPage) for (tile in standing) pixels(tile, TileFrame.of(tile), art, own = true)
 	if (input.heatmap) for (tile in standing) {
 		val argb = heatColor(TextureDensity.heat(snapshot.texelsPerCanvasUnit(tile))).copy(alpha = 0.55f).toArgb()
-		val r = rect(tile)
-		items += FillBatch(argb, listOf(floatArrayOf(r.left, -r.top, r.right, -r.top, r.right, -r.bottom, r.left, -r.bottom)))
+		items += FillBatch(argb, listOf(world(TileFrame.of(tile))))
 	}
 	if (input.meshes != null) {
-		for (tile in standing) if (tile.layerId !in input.selected) wires(tile, null, input.wireColor)
-		for (tile in standing) if (tile.layerId in input.selected) wires(tile, null, input.accentColor)
+		for (tile in standing) if (tile.layerId !in input.selected) wires(tile, TileFrame.of(tile), input.wireColor)
+		for (tile in standing) if (tile.layerId in input.selected) wires(tile, TileFrame.of(tile), input.accentColor)
 	}
-	for ((tile, at) in lifted) {
-		if (input.showPage) pixels(tile, at, 1f)
-		if (input.meshes != null) wires(tile, at, input.accentColor)
+	for ((tile, frame) in lifted) {
+		if (input.showPage) pixels(tile, frame, 1f, own = false)
+		if (input.meshes != null) wires(tile, frame, input.accentColor)
 	}
 	return AtlasScene(input.width, input.height, input.viewport, OverlayScene(items))
 }

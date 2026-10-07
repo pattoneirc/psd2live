@@ -99,6 +99,8 @@ data class WorkspaceAtlasTile(
     val pinned: Boolean,
     /** The stored arrangement placed the tile by its meshes' footprint, which may reach into other tiles' rectangles. */
     val shaped: Boolean = false,
+    /** Degrees the tile turns about its centre; [x]..[x] + [width] is its upright rectangle. */
+    val rotation: Float = 0f,
 )
 
 data class WorkspaceAtlasPage(val index: Int, val width: Int, val height: Int, val tileCount: Int, val occupancy: Float)
@@ -146,7 +148,8 @@ class WorkspaceTextureView internal constructor(private val capture: WorkspaceCa
         val placement = model.atlas.placementByLayerId[id] ?: return null
         val override = document.textureOverrides[id] ?: TextureOverride()
         return WorkspaceAtlasTile(id, placement.page, placement.x, placement.y, placement.width, placement.height,
-            placement.scaleX, placement.scaleY, override.density ?: 1f, override.lock, override.pin != null, id in model.atlas.footprints)
+            placement.scaleX, placement.scaleY, override.density ?: 1f, override.lock, override.pin != null, id in model.atlas.footprints,
+            placement.rotation)
     }
 
     fun layer(layerId: String): WorkspaceLayerTexture {
@@ -249,7 +252,8 @@ internal object WorkspaceTextureEdits {
                 request["lock"]?.jsonPrimitive?.boolean)
             "atlas_set_tile" -> WorkspaceTextureEdit.SetTile(text("layer_id"), request.getValue("pin").let { pin ->
                 if (pin is JsonNull) null else pin.jsonObject.let {
-                    TexturePin(it.getValue("page").jsonPrimitive.int, it.getValue("x").jsonPrimitive.int, it.getValue("y").jsonPrimitive.int)
+                    TexturePin(it.getValue("page").jsonPrimitive.int, it.getValue("x").jsonPrimitive.int, it.getValue("y").jsonPrimitive.int,
+                        normalizedRotation(it["rotation"]?.jsonPrimitive?.float ?: 0f))
                 }
             })
             "atlas_set_budget" -> WorkspaceTextureEdit.SetBudget(int("page_size"), int("max_pages"), int("padding"), request["auto"]?.jsonPrimitive?.boolean)
@@ -374,7 +378,8 @@ internal object WorkspaceTextureEdits {
         val tiles = stored.tiles.toMutableMap()
         for ((id, at) in model.atlas.placementByLayerId) {
             val kept = tiles[id]
-            if (kept == null || kept.page != at.page || kept.x != at.x || kept.y != at.y) tiles[id] = ArrangedTile(at.page, at.x, at.y, model.atlas.footprints[id])
+            if (kept == null || kept.page != at.page || kept.x != at.x || kept.y != at.y || kept.rotation != at.rotation)
+                tiles[id] = ArrangedTile(at.page, at.x, at.y, model.atlas.footprints[id], at.rotation)
         }
         return meshed(stored.copy(tiles = tiles), model)
     }
@@ -415,7 +420,8 @@ internal object WorkspaceTextureEdits {
         val tiles = arrangement.tiles.toMutableMap()
         val pin = edit.pin
         if (pin == null) tiles.remove(edit.layerId)
-        else tiles[edit.layerId] = ArrangedTile(pin.page, pin.x, pin.y, tiles[edit.layerId]?.footprint ?: model.atlas.footprints[edit.layerId])
+        else tiles[edit.layerId] = ArrangedTile(pin.page, pin.x, pin.y, tiles[edit.layerId]?.footprint ?: model.atlas.footprints[edit.layerId],
+            normalizedRotation(pin.rotation))
         return withArrangement(cleared, arrangement.copy(tiles = tiles))
     }
 
@@ -556,7 +562,8 @@ internal object WorkspaceAtlasFootprints {
             val uv = mesh.uvs; val indices = mesh.indices
             for (t in 0 until indices.size - 2 step 3) covered.triangles += FloatArray(6) { k ->
                 val vertex = indices[t + k / 2]
-                if (k % 2 == 0) (uv[vertex * 2] * page.width - at.x) / at.scaleX else (uv[vertex * 2 + 1] * page.height - at.y) / at.scaleY
+                // Through the tile's turn: the raster point each texture coordinate samples.
+                at.toRaster(uv[vertex * 2] * page.width, uv[vertex * 2 + 1] * page.height)[k % 2]
             }
         }
         return out

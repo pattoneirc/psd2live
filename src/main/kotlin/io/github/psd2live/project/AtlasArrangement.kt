@@ -24,9 +24,24 @@ class TextureFootprint(val cell: Int, val columns: Int, val rows: Int, val bits:
 	override fun hashCode(): Int = ((cell * 31 + columns) * 31 + rows) * 31 + bits.hashCode()
 }
 
-/** One tile's stored spot: texture pixel ([x], [y]) on [page], and the cells of it its meshes use. */
-data class ArrangedTile(val page: Int, val x: Int, val y: Int, val footprint: TextureFootprint? = null) {
-	init { require(page >= 0 && x >= 0 && y >= 0) { "Arranged tile must not be negative" } }
+/**
+ * One tile's stored spot: its upright rectangle's top left, texture pixel ([x], [y]) on [page], the cells of
+ * it its meshes use, and the degrees it turns about its centre ([io.github.psd2live.core.TileTurn]).
+ */
+data class ArrangedTile(val page: Int, val x: Int, val y: Int, val footprint: TextureFootprint? = null, val rotation: Float = 0f) {
+	init {
+		require(page >= 0 && x >= 0 && y >= 0) { "Arranged tile must not be negative" }
+		require(rotation.isFinite()) { "Arranged tile rotation must be finite" }
+	}
+}
+
+/** [degrees] in -180 (excluded) .. 180, the one form a turn is stored and compared in. */
+fun normalizedRotation(degrees: Float): Float {
+	if (!degrees.isFinite()) return 0f
+	var d = degrees % 360f
+	if (d <= -180f) d += 360f
+	if (d > 180f) d -= 360f
+	return if (kotlin.math.abs(d) < 1e-4f) 0f else d
 }
 
 /**
@@ -55,6 +70,7 @@ object AtlasArrangementCodec {
 		putJsonObject("tiles") {
 			for ((id, tile) in value.tiles.toSortedMap()) putJsonObject(id) {
 				put("page", tile.page); put("x", tile.x); put("y", tile.y)
+				if (tile.rotation != 0f) put("rotation", tile.rotation)
 				tile.footprint?.let { footprint -> putJsonObject("footprint") {
 					put("cell", footprint.cell); put("columns", footprint.columns); put("rows", footprint.rows)
 					put("bits", java.util.Base64.getEncoder().encodeToString(footprint.bits.toByteArray()))
@@ -72,7 +88,8 @@ object AtlasArrangementCodec {
 				TextureFootprint(it.int("cell"), it.int("columns"), it.int("rows"),
 					BitSet.valueOf(java.util.Base64.getDecoder().decode(it["bits"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("Invalid footprint bits"))))
 			}
-			ArrangedTile(tile.int("page"), tile.int("x"), tile.int("y"), footprint)
+			ArrangedTile(tile.int("page"), tile.int("x"), tile.int("y"), footprint,
+				normalizedRotation(tile["rotation"]?.let { it.jsonPrimitive.floatOrNull ?: throw IllegalArgumentException("Invalid atlas arrangement rotation") } ?: 0f))
 		}
 		return AtlasArrangement(value.int("fitStep"), tiles)
 	}

@@ -66,7 +66,7 @@ internal class SkiaRigPainter(private val atlas: PackedAtlas) : AutoCloseable {
                     val mesh = drawable.mesh ?: continue
                     val world = geometry.worldPositions[drawable.id] ?: continue
                     val image = images.getOrNull(draw.page) ?: continue
-                    // Source pixels: page texel (u * W, v * H) lies at raster pixel ((u * W - x) / scaleX, ...) of the tile's layer.
+                    // Source pixels: page texel (u * W, v * H) lies at the raster pixel the tile's placement maps it to, through any turn.
                     val source = sources?.forDrawable(drawable.id.raw, draw.page)
                     val positions = FloatArray(mesh.indices.size * 2)
                     val uvs = FloatArray(positions.size)
@@ -80,8 +80,9 @@ internal class SkiaRigPainter(private val atlas: PackedAtlas) : AutoCloseable {
                             uvs[index * 2] = u
                             uvs[index * 2 + 1] = v
                         } else {
-                            uvs[index * 2] = (u - source.placement.x) / source.placement.scaleX
-                            uvs[index * 2 + 1] = (v - source.placement.y) / source.placement.scaleY
+                            val raster = source.placement.toRaster(u, v)
+                            uvs[index * 2] = raster[0]
+                            uvs[index * 2 + 1] = raster[1]
                         }
                     }
                     val mask = if (draw.maskIds.isNotEmpty()) {

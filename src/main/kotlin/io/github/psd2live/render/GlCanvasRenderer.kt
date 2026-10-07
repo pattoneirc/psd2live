@@ -474,7 +474,10 @@ internal class GlCanvasRenderer(
 		GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, if (quad.nearest) GL11.GL_NEAREST else GL11.GL_LINEAR)
 		GL30.glBindVertexArray(tileVao)
 		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, tilePositions)
-		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, floatArrayOf(quad.x0, quad.y0, quad.x1, quad.y0, quad.x0, quad.y1, quad.x1, quad.y1), GL15.GL_STREAM_DRAW)
+		// A strip of top left, top right, bottom left, bottom right; a turned quad gives its own corners.
+		val c = quad.corners
+		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, if (c != null) floatArrayOf(c[0], c[1], c[2], c[3], c[6], c[7], c[4], c[5])
+			else floatArrayOf(quad.x0, quad.y0, quad.x1, quad.y0, quad.x0, quad.y1, quad.x1, quad.y1), GL15.GL_STREAM_DRAW)
 		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, tileUvs)
 		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, floatArrayOf(quad.u0, quad.v0, quad.u1, quad.v0, quad.u0, quad.v1, quad.u1, quad.v1), GL15.GL_STREAM_DRAW)
 		GL11.glDrawArrays(GL11.GL_TRIANGLE_STRIP, 0, 4)

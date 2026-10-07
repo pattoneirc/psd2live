@@ -297,8 +297,10 @@ data class LayerClassificationOverride(
 
 /**
  * Where one layer's raster sits on an atlas page. [x], [y], [width] and [height] are texture pixels
- * on page [page]; [scaleX] and [scaleY] are texture pixels per raster pixel of the layer, so a tile
- * maps raster point `(rx, ry)` to page pixel `(x + rx * scaleX, y + ry * scaleY)`.
+ * on page [page]; [scaleX] and [scaleY] are texture pixels per raster pixel of the layer, so an upright
+ * tile maps raster point `(rx, ry)` to page pixel `(x + rx * scaleX, y + ry * scaleY)`. A tile turned by
+ * [rotation] turns that rectangle about its centre ([toPage]); [x]..[x] + [width] is then the upright
+ * rectangle, not the cells it covers.
  *
  * Placements live only in memory: the atlas is repacked from the source art on every rebuild, and
  * exports convert them to the engine's own placement.
@@ -313,7 +315,58 @@ data class AtlasPlacement(
 	val scaleX: Float = 1f,
 	/** Texture pixels per layer raster pixel, vertically. */
 	val scaleY: Float = 1f,
-)
+	/** Degrees the tile turns about its centre, counter-clockwise as Umamo's placements count them (y down). */
+	val rotation: Float = 0f,
+) {
+	/** Page pixel of raster point ([rx], [ry]). */
+	fun toPage(rx: Float, ry: Float): FloatArray = TileTurn.toPage(x.toFloat(), y.toFloat(), width.toFloat(), height.toFloat(), rotation,
+		rx * scaleX, ry * scaleY)
+
+	/** Raster point of page pixel ([px], [py]). */
+	fun toRaster(px: Float, py: Float): FloatArray = TileTurn.toTile(x.toFloat(), y.toFloat(), width.toFloat(), height.toFloat(), rotation, px, py)
+		.also { it[0] /= scaleX; it[1] /= scaleY }
+}
+
+/**
+ * The turn of a tile about its centre, shared by placements, the atlas view and the page compositor: a tile
+ * whose upright rectangle is ([x], [y], [width], [height]) shows tile point (tx, ty) - texture pixels from its
+ * upright top left - at page pixel `centre + R(rotation) * ((tx, ty) - size / 2)`, with R as Umamo turns
+ * (`x' = cos x - sin y`, `y' = sin x + cos y`, y down).
+ */
+object TileTurn {
+	fun toPage(x: Float, y: Float, width: Float, height: Float, rotation: Float, tx: Float, ty: Float): FloatArray {
+		val cx = x + width / 2f; val cy = y + height / 2f
+		if (rotation == 0f) return floatArrayOf(x + tx, y + ty)
+		val r = Math.toRadians(rotation.toDouble()); val c = kotlin.math.cos(r).toFloat(); val s = kotlin.math.sin(r).toFloat()
+		val dx = tx - width / 2f; val dy = ty - height / 2f
+		return floatArrayOf(cx + c * dx - s * dy, cy + s * dx + c * dy)
+	}
+
+	fun toTile(x: Float, y: Float, width: Float, height: Float, rotation: Float, px: Float, py: Float): FloatArray {
+		if (rotation == 0f) return floatArrayOf(px - x, py - y)
+		val cx = x + width / 2f; val cy = y + height / 2f
+		val r = Math.toRadians(rotation.toDouble()); val c = kotlin.math.cos(r).toFloat(); val s = kotlin.math.sin(r).toFloat()
+		val dx = px - cx; val dy = py - cy
+		return floatArrayOf(c * dx + s * dy + width / 2f, -s * dx + c * dy + height / 2f)
+	}
+
+	/** The four page corners of the turned rectangle, top left, top right, bottom right, bottom left (x, y each). */
+	fun corners(x: Float, y: Float, width: Float, height: Float, rotation: Float): FloatArray {
+		val out = FloatArray(8)
+		for ((k, corner) in listOf(0f to 0f, width to 0f, width to height, 0f to height).withIndex()) {
+			val p = toPage(x, y, width, height, rotation, corner.first, corner.second)
+			out[k * 2] = p[0]; out[k * 2 + 1] = p[1]
+		}
+		return out
+	}
+
+	/** The page box (left, top, right, bottom) the turned rectangle covers. */
+	fun bounds(x: Float, y: Float, width: Float, height: Float, rotation: Float): FloatArray {
+		if (rotation == 0f) return floatArrayOf(x, y, x + width, y + height)
+		val c = corners(x, y, width, height, rotation)
+		return floatArrayOf(minOf(c[0], c[2], c[4], c[6]), minOf(c[1], c[3], c[5], c[7]), maxOf(c[0], c[2], c[4], c[6]), maxOf(c[1], c[3], c[5], c[7]))
+	}
+}
 
 /**
  * One atlas page: its pixels and two lazily made PNG encodings of them. [png] is the canonical encoding

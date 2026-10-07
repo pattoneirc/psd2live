@@ -221,6 +221,52 @@ class WorkspaceTextureCommandsTest {
         }
     }
 
+    /**
+     * A tile turned on its page: its pixels are written turned, its meshes' texture coordinates follow the turn so
+     * each vertex samples the raster point it did upright, the stored arrangement keeps the angle, and atlas_get reports it.
+     */
+    @Test fun aTurnedTileKeepsItsMeshesOnTheirPixels() = runBlocking<Unit> {
+        val runtime = fixture(); val before = runtime.capture()
+        WorkspaceOperations(Host(runtime)).use { operations ->
+            operations.completed("atlas_set_tile", input(runtime, "turn", buildJsonObject {
+                put("layer_id", "pupil"); putJsonObject("pin") { put("page", 0); put("x", 300); put("y", 400); put("rotation", 90) }
+            }))
+            val after = runtime.capture()
+            val placed = after.model.atlas.placementByLayerId.getValue("pupil")
+            assertEquals(Triple(300, 400, 90f), Triple(placed.x, placed.y, placed.rotation))
+            assertEquals(90f, AtlasArrangementCodec.decode(after.document.settings)!!.tiles.getValue("pupil").rotation)
+            val tile = operations.call("atlas_get", JsonObject(emptyMap())).data.getValue("tiles").jsonArray
+                .map { it.jsonObject }.single { it.getValue("layer_id").jsonPrimitive.content == "pupil" }
+            assertEquals(90f, tile.getValue("rotation").jsonPrimitive.float)
+
+            // Every vertex samples the same raster point as before the turn.
+            val was = before.model.atlas.placementByLayerId.getValue("pupil")
+            val pageBefore = before.model.atlas.pages[was.page].image; val pageAfter = after.model.atlas.pages[placed.page].image
+            val uvBefore = pupil(before.model).mesh!!.uvs; val uvAfter = pupil(after.model).mesh!!.uvs
+            assertEquals(uvBefore.size, uvAfter.size)
+            for (v in 0 until uvBefore.size / 2) {
+                val a = was.toRaster(uvBefore[v * 2] * pageBefore.width, uvBefore[v * 2 + 1] * pageBefore.height)
+                val b = placed.toRaster(uvAfter[v * 2] * pageAfter.width, uvAfter[v * 2 + 1] * pageAfter.height)
+                assertTrue(abs(a[0] - b[0]) < 0.01f && abs(a[1] - b[1]) < 0.01f, "vertex $v: ${a.toList()} vs ${b.toList()}")
+            }
+            // And the turned page holds the raster's pixels there: the disc's colour by position survives the turn.
+            val raster = disc(32)
+            for ((rx, ry) in listOf(16 to 16, 10 to 14, 20 to 9, 13 to 22)) {
+                val p = placed.toPage(rx + 0.5f, ry + 0.5f)
+                val c = pageAfter.getRGB(p[0].toInt(), p[1].toInt())
+                val o = (ry * 32 + rx) * 4
+                val expected = listOf(raster.rgba[o].toInt() and 255, raster.rgba[o + 1].toInt() and 255, raster.rgba[o + 2].toInt() and 255)
+                val actual = listOf(c ushr 16 and 255, c ushr 8 and 255, c and 255)
+                assertTrue(expected.zip(actual).all { (e, a) -> abs(e - a) <= 12 }, "raster ($rx, $ry): $expected vs $actual")
+            }
+            // Turned back upright, the tile is axis aligned again.
+            operations.completed("atlas_set_tile", input(runtime, "upright", buildJsonObject {
+                put("layer_id", "pupil"); putJsonObject("pin") { put("page", 0); put("x", 300); put("y", 400) }
+            }))
+            assertEquals(0f, runtime.capture().model.atlas.placementByLayerId.getValue("pupil").rotation)
+        }
+    }
+
     @Test fun movingAGeneratedLayerMovesItsMeshAndAuthoredLayersAreRejected() = runBlocking<Unit> {
         val runtime = fixture(); val before = runtime.capture()
         WorkspaceOperations(Host(runtime)).use { operations ->
