@@ -61,7 +61,7 @@ class AgentToolProfileTest {
             assertTrue(published.none { "outputSchema" in it })
             // The whole core listing stays far below one full-profile batch schema.
             val listed = published.sumOf { it.getValue("inputSchema").toString().length } + catalog.tools.values.sumOf { it.description.length }
-            assertTrue(listed < 60_000, "core listing is $listed characters")
+            assertTrue(listed < 75_000, "core listing is $listed characters")
             val batch = catalog.tools.getValue("workspace_apply_edits").inputSchema.toString()
             assertTrue(batch.length < 6_000, "batch schema is ${batch.length} characters")
             assertTrue("\"rig_deform\"" in batch)

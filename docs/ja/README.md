@@ -110,7 +110,7 @@ Linux のネイティブプレビューは、XWayland のない Wayland、aarch6
 
 1. PSD2Live を起動したまま **ツール → MCP…** を開きます。ポート、アクセストークン、公開するツールセット（既定はコンパクト）もここで設定します。
 2. 使用するホストに合ったコマンドまたは設定（Claude Code、Codex、汎用 JSON）をコピーします。Stdio のみのホストはリポジトリ直下の [`mcp_proxy.py`](../../mcp_proxy.py) を使います。
-3. Agent にはまず `workspace_inspect` でプロジェクトを読ませてください。ツールとして公開されていない操作は `workspace_list_operations` で探し、`workspace_call` で呼び出します。すべての書き込みは画面操作と同じ履歴に入り、アプリ側で元に戻せます。
+3. Agent にはまず `workspace_overview` でプロジェクトの概要を、`workspace_inspect` で個々のオブジェクトを読ませてください。ツールとして公開されていない操作は `workspace_list_operations` で探し、`workspace_call` で呼び出します。すべての書き込みは画面操作と同じ履歴に入り、アプリ側で元に戻せます。
 
 `workspace_apply_edits` は複数の編集をアトミックに（すべて成功するか、何も変えないか）確定し、`workspace_preview_edits` はプロジェクトを変えずに試行実行して形状の問題を確認します。リクエストと例は [MCP リファレンス](../zh/agent/MCP_AUTHORING.md)（中国語）にあります。MCP サーバーは画像を生成しないため、新しい素材にはホスト側の画像生成機能が必要です。ツールが呼べても複雑なモデリングが安定するとは限りません。[実測記録](../zh/STATUS.md)には成功例と失敗例の両方を残しています。
 

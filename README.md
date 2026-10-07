@@ -108,7 +108,7 @@ Linux 原生预览不支持无 XWayland 的纯 Wayland、aarch64 和 musl（如 
 
 1. 保持 PSD2Live 运行，打开 **工具 → MCP…**。这里可以设置端口、访问令牌和发布的工具集（默认精简）。
 2. 复制与你的宿主对应的命令或配置（Claude Code、Codex、通用 JSON）。只支持 Stdio 的宿主使用仓库根目录的 [`mcp_proxy.py`](mcp_proxy.py)。
-3. 让 Agent 先用 `workspace_inspect` 读取工程；未列为工具的操作用 `workspace_list_operations` 查找、经 `workspace_call` 调用。所有写操作与界面编辑进入同一份历史，可在界面中撤销。
+3. 让 Agent 先用 `workspace_overview` 读取工程概况、`workspace_inspect` 查看单个对象；未列为工具的操作用 `workspace_list_operations` 查找、经 `workspace_call` 调用。所有写操作与界面编辑进入同一份历史，可在界面中撤销。
 
 多项编辑可用 `workspace_apply_edits` 原子提交（全部成功或全部不生效），也可先用 `workspace_preview_edits` 试运行，检查几何问题而不改动工程。接口说明与调用示例见 [MCP 使用与接口](docs/zh/agent/MCP_AUTHORING.md)。MCP 本身不生成图片，新增素材需要宿主具备图像生成能力。工具可调用不代表复杂建模任务已经可靠，[能力实测](docs/zh/STATUS.md)记录了真实任务的成功与失败样本。
 

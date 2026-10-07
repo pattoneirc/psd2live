@@ -29,6 +29,7 @@ internal object WorkspaceJobResultSchemas {
         "project_export_model" to modelExport, "project_export_psd" to psdExport, "workspace_apply_edits" to batch,
         "workspace_preview_edits" to WorkspaceGeometrySafetySchemas.preview,
     ).apply {
+        for (id in WorkspaceIntentOperations.batches) put(id, batch)
         put("preview_pose", requireNotNull(WorkspaceAuthoringResultSchemas.forOperation("preview_pose")))
         put("paint_session_commit", WorkspacePaintSessionSchemas.commit)
         put("swing_preview", WorkspaceSwingSessionSchemas.result)

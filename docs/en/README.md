@@ -110,7 +110,7 @@ A successful export does not guarantee identical results in every runtime, so ch
 
 1. Keep PSD2Live running and open **Tools → MCP…**. It also sets the port, the access token and which tools are published (compact by default).
 2. Copy the command or configuration for your host (Claude Code, Codex, generic JSON). Stdio-only hosts use [`mcp_proxy.py`](../../mcp_proxy.py) in the repository root.
-3. Have the agent read the project with `workspace_inspect`; operations that are not listed as tools are found with `workspace_list_operations` and called through `workspace_call`. Every write goes into the same history as UI edits and can be undone in the app.
+3. Have the agent read the project with `workspace_overview` and single objects with `workspace_inspect`; operations that are not listed as tools are found with `workspace_list_operations` and called through `workspace_call`. Every write goes into the same history as UI edits and can be undone in the app.
 
 `workspace_apply_edits` commits several edits atomically (all or nothing), and `workspace_preview_edits` dry-runs them to check geometry without changing the project. The [MCP reference](../zh/agent/MCP_AUTHORING.md) (Chinese) lists requests and examples. The MCP server does not generate images; new artwork requires image generation in the host. A callable tool does not make a complex modeling task reliable; [recorded evaluations](../zh/STATUS.md) keep both successes and failures.
 

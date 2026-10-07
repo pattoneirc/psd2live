@@ -10,16 +10,36 @@ import io.github.psd2live.project.WorkspaceMutationResult
 internal class WorkspaceBatchEditException(val index: Int, val editOperation: String, cause: Exception) :
     IllegalArgumentException("Edit $index ($editOperation) failed: ${cause.message}", cause)
 
+/** Each batchable operation's business request: its published schema without the shared request context. */
+internal fun batchMemberSchemas(registry: WorkspaceOperationRegistry): Map<String, JsonObject> =
+    WorkspaceDocumentEdits.supported.sorted().associateWith { id ->
+        val published = registry.definition(id).requestSchema
+        val contextFields = setOf("state", "project_id", "request_id")
+        JsonObject(published + mapOf(
+            "properties" to JsonObject(published.getValue("properties").jsonObject - contextFields),
+            "required" to JsonArray(published["required"]?.jsonArray.orEmpty().filter { it.jsonPrimitive.content !in contextFields })))
+    }
+
+/**
+ * Starts one atomic document batch as the job [operation]. workspace_apply_edits and the intent operations that compile
+ * to member edits share it, so every one of them prepares, rebuilds, checks and commits exactly the same way.
+ */
+internal suspend fun startDocumentBatch(port: WorkspaceDocumentPort, statePort: WorkspaceStatePort, jobs: WorkspaceJobs,
+                                        operation: String, state: String, summary: String,
+                                        edits: List<WorkspaceDocumentOperation>, author: io.github.psd2live.project.MutationAuthor) =
+    startWorkspaceOperationJob(statePort, jobs, operation) {
+        val coroutine = currentCoroutineContext()
+        val execution = WorkspaceBatchJobExecution(edits, requireNotNull(coroutine[WorkspaceJobCompletion]), coroutine[WorkspaceJobContext])
+        withContext(execution) {
+            WorkspaceOperationOutput(port.applyDocumentEdits(state, summary, edits, author).batchResult(edits.size))
+        }
+    }
+
 internal fun registerDocumentBatch(registry: WorkspaceOperationRegistry, port: WorkspaceDocumentPort,
                                    statePort: WorkspaceStatePort, jobs: WorkspaceJobs) {
     val supported = WorkspaceDocumentEdits.supported
     registry.markBatchable(supported)
-    val variants = supported.sorted().map { id ->
-        val published = registry.definition(id).requestSchema
-        val contextFields = setOf("state", "project_id", "request_id")
-        val business = JsonObject(published + mapOf(
-            "properties" to JsonObject(published.getValue("properties").jsonObject - contextFields),
-            "required" to JsonArray(published["required"]?.jsonArray.orEmpty().filter { it.jsonPrimitive.content !in contextFields })))
+    val variants = batchMemberSchemas(registry).map { (id, business) ->
         buildJsonObject {
             put("type", "object"); put("additionalProperties", false)
             putJsonObject("properties") {
@@ -51,15 +71,8 @@ internal fun registerDocumentBatch(registry: WorkspaceOperationRegistry, port: W
             val edit = raw.jsonObject
             WorkspaceDocumentOperation(edit.getValue("operation").jsonPrimitive.content, edit.getValue("request").jsonObject)
         }
-        startWorkspaceOperationJob(statePort, jobs, "workspace_apply_edits") {
-            val coroutine = currentCoroutineContext()
-            val execution = WorkspaceBatchJobExecution(edits, requireNotNull(coroutine[WorkspaceJobCompletion]), coroutine[WorkspaceJobContext])
-            withContext(execution) {
-                val result = port.applyDocumentEdits(request.getValue("state").jsonPrimitive.content,
-                    request["summary"]?.jsonPrimitive?.content ?: "Applied ${edits.size} document edits", edits, context.author)
-                WorkspaceOperationOutput(result.batchResult(edits.size))
-            }
-        }
+        startDocumentBatch(port, statePort, jobs, "workspace_apply_edits", request.getValue("state").jsonPrimitive.content,
+            request["summary"]?.jsonPrimitive?.content ?: "Applied ${edits.size} document edits", edits, context.author)
     }
     registry.register(WorkspaceOperationDefinition("workspace_preview_edits",
         "Dry-run 1..128 geometry authoring operations using the same ordered candidate preparation, rebuild and geometry gate as commit. No state, pose, history, dirty flag or resources are published. Returns a read-only job; diagnostics describe the captured input state. New IDs for canvas creation must be explicit so a later commit with the same state and edits reproduces the candidate revision. The geometry scope is parent-local sampled keys, not visual quality or composed animation.",

@@ -26,6 +26,7 @@ internal class WorkspaceOperations(private val workspace: WorkspaceBackend,
         registerSimulationPreviewOperations(registry, workspace, workspace, jobs)
         registerPhysicsAuditionOperations(registry, workspace)
         registerDocumentBatch(registry, workspace, workspace, jobs)
+        registerIntentOperations(registry, workspace, workspace, jobs)
         registerAuxiliaryOperations(registry, workspace, workspace)
         registerCanvasVisibilityOperations(registry, workspace)
         registerPhysicsPresetLibraryOperations(registry, presetLibrary)
