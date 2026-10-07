@@ -1267,6 +1267,7 @@ class DesktopWorkspace(
     override fun listSwings() = captureQueries().listSwings()
 
     override fun generatedOverrideIssues() = captureQueries().generatedOverrideIssues()
+    override fun supersededEntryNotes() = captureQueries().supersededEntryNotes()
 
     override fun listSimulations() = captureQueries().listSimulations()
 

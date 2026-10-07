@@ -151,7 +151,7 @@ internal object WorkspacePartitionEdits {
             val classification = document.layerOverrides[id] ?: model.analysis.layers.firstOrNull { it.source.id.raw == id }?.semantic?.let {
                 LayerClassificationOverride(it.type, it.tag, it.side, it.parameter, it.switchId)
             } ?: LayerClassificationOverride()
-            WorkspaceArtPrimitives.SplitCapture("split", PuppetSourceAtlas.SOURCE_ID_RAW, drawable.id, id, captured, model.baseRig.puppet,
+            WorkspaceArtPrimitives.SplitCapture("split", PuppetSourceAtlas.SOURCE_ID_RAW, drawable.id, id, captured, WorkspaceArtPrimitives.generated(model.baseRig, drawable.id),
                 split.model, split.ids, layers, geometry.pieces.map { it.sources },
                 split.ids.mapIndexed { index, part -> ArtPrimitiveJournal.coverage(pieces[index].bounds, requireNotNull(split.model.drawables.single { it.id == part }.mesh).uvs) },
                 split.ids.map { part -> ArtPrimitiveJournal.canvasBounds(requireNotNull(split.model.drawables.single { it.id == part }.mesh).uvs) },
@@ -163,7 +163,7 @@ internal object WorkspacePartitionEdits {
             WorkspaceArtPrimitives.replaceLayer(frozen, model, id, pieces, sides, explicitParentOnly = true).copy(rigEdits = moved.copy(
                 authoringJournal = moved.authoringJournal + v2Record + overrides,
                 splitDrawableIds = moved.splitDrawableIds + pieces.map { it.id.raw }.zip(pieceIds)))
-        }, checkpoint = work::checkpoint)
+        }, work = work)
     }
 
     private fun install(document: WorkspaceDocument, model: RigPreviewModel, id: String,

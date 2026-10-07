@@ -14,10 +14,18 @@ internal object WorkspaceQualitySchemas {
         "points" to s.integer(0), "total" to s.integer(0),
         "reason" to s.choices(*GeneratedOverrideOrphanReason.entries.map { it.wire }.toTypedArray()),
     ), setOf("kind", "generator", "key", "points", "total"))
-    private val finding = s.obj(mapOf(
-        "code" to s.choices(*GeneratedOverrideRule.entries.map { it.name }.toTypedArray()),
+    private val skipped = s.obj(mapOf(
+        "kind" to s.constant(GeneratedOverrideQuality.SUPERSEDED_KIND), "index" to s.integer(0), "op" to s.string(),
+        "targets" to s.array(s.handle()), "detail" to s.string(),
+    ))
+    private fun finding(codes: List<GeneratedOverrideRule>, evidence: kotlinx.serialization.json.JsonObject) = s.obj(mapOf(
+        "code" to s.choices(*codes.map { it.name }.toTypedArray()),
         "severity" to s.choices("info", "warning", "error"), "category" to s.choices("quality", "validity", "coverage"),
         "domain" to s.constant(GeneratedOverrideQuality.DOMAIN), "target" to s.handle(), "evidence" to evidence,
+    ))
+    private val finding = s.union(listOf(
+        finding(GeneratedOverrideRule.entries - GeneratedOverrideRule.SUPERSEDED_ENTRY_SKIPPED, evidence),
+        finding(listOf(GeneratedOverrideRule.SUPERSEDED_ENTRY_SKIPPED), skipped),
     ))
     private val check = s.obj(mapOf("id" to s.handle(), "scope" to s.string(), "complete" to s.boolean()))
 
@@ -26,6 +34,6 @@ internal object WorkspaceQualitySchemas {
         "version" to s.integer(GeneratedOverrideQuality.VERSION, GeneratedOverrideQuality.VERSION),
         "domain" to s.constant(GeneratedOverrideQuality.DOMAIN), "fence" to s.constant("observation"),
         "decision" to s.choices("accept", "accept_with_diagnostics"), "can_proceed" to s.constant(true),
-        "complete" to s.boolean(), "scope" to s.string(), "checks" to s.array(check, 1, 1), "findings" to s.array(finding),
+        "complete" to s.boolean(), "scope" to s.string(), "checks" to s.array(check, 2, 2), "findings" to s.array(finding),
     ))
 }

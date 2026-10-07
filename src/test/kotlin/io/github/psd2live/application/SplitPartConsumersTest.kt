@@ -86,7 +86,12 @@ class SplitPartConsumersTest {
 
 	/** Without version 2 records a migration build is the plain generation, whatever the journal holds. */
 	@Test fun migrationBuildsIgnoreVersionOneRecords() {
-		val split = splitLegs()
+		// Version 1 records, also when the suite runs with version 2 enabled.
+		val previous = System.getProperty(ArtPrimitiveV2.FLAG_PROPERTY)
+		System.setProperty(ArtPrimitiveV2.FLAG_PROPERTY, "false")
+		val split = try { splitLegs() } finally {
+			if (previous == null) System.clearProperty(ArtPrimitiveV2.FLAG_PROPERTY) else System.setProperty(ArtPrimitiveV2.FLAG_PROPERTY, previous)
+		}
 		val model = split.capture.model
 		assertTrue(ArtPrimitiveV2.resolve(model.config.rigEdits).isEmpty())
 		val pipeline = PSD2LivePipeline()
@@ -105,7 +110,6 @@ class SplitPartConsumersTest {
 	 * With version 2 records the migration builds see the resolved layer set: parts on their recorded meshes, no
 	 * superseded original, so a face or body change reaches the parts like any other mesh.
 	 */
-	@org.junit.jupiter.api.Disabled("Needs the resolved base generation (workstream A) and the v2 record writer (workstream B)")
 	@Test fun migrationBuildsResolveVersionTwoRecords() {
 		val previous = System.getProperty(ArtPrimitiveV2.FLAG_PROPERTY)
 		System.setProperty(ArtPrimitiveV2.FLAG_PROPERTY, "true")

@@ -51,7 +51,7 @@ internal object WorkspaceDepthSplitEdits {
                 val count = requireNotNull(authored.drawables.single { it.id == source }.mesh).vertexCount
                 val identity = List(count) { org.umamo.edit.VertexSource.FromOld(it) }
                 WorkspaceArtPrimitives.SplitCapture("depth", PuppetSourceAtlas.SOURCE_ID_RAW, source, slices.sourceLayerId, authored,
-                    model.baseRig.puppet, staged, slices.sliceIds, layers, listOf(identity, identity),
+                    WorkspaceArtPrimitives.generated(model.baseRig, source), staged, slices.sliceIds, layers, listOf(identity, identity),
                     listOf(requireNotNull(slices.coverage), slices.coverage), listOf(requireNotNull(slices.neutral), slices.neutral),
                     listOf(slices.classification, slices.classification), mapOf(source to slices.sliceIds), mapOf(source to listOf(slices.sliceIds.first())),
                     slices.replacedGlues, listOfNotNull(slices.weld), JsonObject(mapOf("depth" to slices.record.getValue("depth"))))
@@ -62,7 +62,7 @@ internal object WorkspaceDepthSplitEdits {
                     listOf(Side.NONE, Side.NONE), explicitParentOnly = true)
                 val moved = SourcePartitionJournal.migrateBones(overlay, requireNotNull(slices.source).raw, slices.sliceIds.take(1).map { it.raw })
                 documentWith(v2Placed, moved.copy(authoringJournal = moved.authoringJournal + record + overrides), explicit)
-            }, checkpoint = work::checkpoint)
+            }, work = work)
         }
         val prepared = DepthSplit.prepare(model, config, sourceId, middleIds, frontId, frontMeshId, glueId, names, work::checkpoint)
         work.progress(0.75f, "Preserving depth slice bindings")

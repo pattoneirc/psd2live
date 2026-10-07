@@ -113,6 +113,8 @@ data class BuiltRig(
 	val unbound: PuppetModel? = null,
 	/** What the document's generated overrides could not apply as recorded, from the last replay. */
 	val overrideIssues: List<GeneratedOverrideIssue> = emptyList(),
+	/** Journal entries before a version 2 split that the last replay skipped because they address only what it supersedes. */
+	val supersededEntryNotes: List<SupersededEntryNote> = emptyList(),
 	/** Split parts the skeleton skinned with this base rig, which their journal records place (see [PrimitiveSkins]). */
 	val primitiveSkins: PrimitiveSkins = PrimitiveSkins.None,
 ) {
@@ -330,8 +332,12 @@ object RigBuilder {
 	 */
 	internal fun rigContext(inputAnalysis: PipelineAnalysis, config: PipelineConfig, meshCache: PreviewMeshCache? = null): RigContext {
 		val splitBaselineIds = config.rigEdits.splitBaselineLayerIds
+		// Version 2 records: the aggregates read the resolved set - no superseded layer, parts on their pinned meshes.
+		val resolution = PrimitiveResolution.of(config.rigEdits)
 		if (splitBaselineIds.isNotEmpty()) {
-			val neededIds = splitBaselineIds + config.rigEdits.calibrationLayerIds
+			// The baseline's frames come from the layers it had when it was frozen; version 2 parts are generated layers
+			// of the resolved set like those, and the layers they supersede drop out in the baseline's own context.
+			val neededIds = splitBaselineIds + config.rigEdits.calibrationLayerIds + resolution.partByLayer.keys
 			val originalLayers = inputAnalysis.source.layers.filter { it.id.raw in neededIds }
 			if (originalLayers.isNotEmpty()) {
 				val baselineSource = object : org.umamo.format.art.SourceArt {
@@ -345,15 +351,15 @@ object RigBuilder {
 					rigEdits = config.rigEdits.copy(splitBaselineLayerIds = emptySet()),
 				)
 				val baselineAnalysis = RigBuildProfile.stage("context: split baseline analyze") { CharacterAnalyzer.analyze(baselineSource, baselineConfig) }
-				return rigContext(baselineAnalysis, baselineConfig, meshCache).withArtwork(
-					meshFramedAnalysis(inputAnalysis.copy(
-						layers = inputAnalysis.layers.filter { it.source !is MouthLipLayer },
-					), config, meshCache),
-				)
+					// Parts as the resolved geometry analysis has them: classified, and never empty (a part a later record
+					// superseded is a transparent stand-in whose pinned mesh still frames it).
+					.let { analyzed -> if (!resolution.active) analyzed else analyzed.copy(layers = analyzed.layers.map { layer ->
+						if (!resolution.isPartLayer(layer.source.id.raw)) layer
+						else resolution.classify(layer, baselineConfig).let { it.copy(opaquePixels = it.opaquePixels.coerceAtLeast(1)) }
+					}) }
+				return rigContext(baselineAnalysis, baselineConfig, meshCache).withArtwork(resolvedArtwork(inputAnalysis, config, meshCache))
 			}
 		}
-		// Version 2 records: the aggregates read the resolved set - no superseded layer, parts on their pinned meshes.
-		val resolution = PrimitiveResolution.of(config.rigEdits)
 		val analysis = RigBuildProfile.stage("context: mesh footprints + anchors") { meshFramedAnalysis(inputAnalysis.copy(
 			layers = resolution.aggregates(inputAnalysis.layers.filter { it.source !is MouthLipLayer }),
 		), config, meshCache, resolution) }
@@ -856,10 +862,20 @@ object RigBuilder {
 		stableDrawableIds: Map<String, DrawableId>,
 	): BuiltRig = buildWithContext(
 		inputAnalysis, atlas, config, meshCache,
-		rigContext(previousAnalysis, previousConfig, meshCache).withArtwork(meshFramedAnalysis(inputAnalysis.copy(
-			layers = inputAnalysis.layers.filter { it.source !is MouthLipLayer },
-		), config, meshCache)), stableDrawableIds,
+		rigContext(previousAnalysis, previousConfig, meshCache).withArtwork(resolvedArtwork(inputAnalysis, config, meshCache)), stableDrawableIds,
 	)
+
+	/**
+	 * [inputAnalysis] as the artwork of a kept context: without the generated mouth lips and - with version 2
+	 * records - without the layers they supersede (the drawable loop builds those as passengers), parts framed by
+	 * their pinned meshes. Without version 2 records, the mesh-framed layers as they always were.
+	 */
+	private fun resolvedArtwork(inputAnalysis: PipelineAnalysis, config: PipelineConfig, meshCache: PreviewMeshCache?): PipelineAnalysis {
+		val resolution = PrimitiveResolution.of(config.rigEdits)
+		return meshFramedAnalysis(inputAnalysis.copy(
+			layers = resolution.aggregates(inputAnalysis.layers.filter { it.source !is MouthLipLayer }),
+		), config, meshCache, resolution)
+	}
 
 	/** Allocate final semantic names before any split mesh can be referenced by an edit. */
 	internal fun assignSplitDrawableIds(analysis: PipelineAnalysis, existing: Map<String, DrawableId>): Map<String, DrawableId> {

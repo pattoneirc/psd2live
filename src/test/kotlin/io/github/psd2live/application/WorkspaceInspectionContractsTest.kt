@@ -53,7 +53,7 @@ class WorkspaceInspectionContractsTest {
         val clean = WorkspaceReadSession(runtime.read()).inspect(buildJsonObject { put("scope", "project") })
         validateOperationSchema(clean, schema)
         val cleanReport = clean.getValue("quality").jsonObject.getValue("overrides").jsonObject
-        assertEquals(2, cleanReport.getValue("version").jsonPrimitive.int)
+        assertEquals(3, cleanReport.getValue("version").jsonPrimitive.int)
         assertEquals("overrides", cleanReport.getValue("domain").jsonPrimitive.content)
         assertTrue(cleanReport.getValue("findings").jsonArray.isEmpty())
 

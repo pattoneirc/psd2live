@@ -240,6 +240,17 @@ object ArtPrimitiveV2 {
  * did. Replay then treats it as a no-op and notes it ([GeneratedOverrides.Outcome.notes]); any entry that touches
  * a non-stub, or fails anywhere else, still fails the replay.
  */
+/**
+ * A journal entry before a version 2 split that failed only on drawables the split supersedes, so replay skipped it
+ * ([StubTolerance]): its [index] in the journal, its [op], the superseded [targets] it names and the failure [detail].
+ */
+data class SupersededEntryNote(val index: Int, val op: String, val targets: List<String>, val detail: String) {
+	fun describe(): String = "Skipped $op: it addresses only ${targets.joinToString()}, superseded by a later split ($detail)"
+}
+
+/** The state a journal replay checkpoints: the model and the entries skipped so far. */
+internal class ReplayState(val model: org.umamo.runtime.model.PuppetModel, val notes: List<SupersededEntryNote>)
+
 internal object StubTolerance {
 	/** Per entry (by identity) before at least one v2 record: every drawable those later records supersede. */
 	fun of(journal: List<JsonObject>): java.util.IdentityHashMap<JsonObject, Set<String>> {

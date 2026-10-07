@@ -244,7 +244,7 @@
 
 此前的拆分（`canvas_source_partition`、`canvas_depth_split`）把原图层留在源图中并软删除，重放时先逐位重新生成原网格（核对几何指纹与父级），再在记录位置把它的绑定复制到部件。这有三个问题：生成规则一变，旧记录就无法重放；纹理集仍打包原图层，CMO3 导出带着它的像素；“恢复全部”会把原图层带回来。现在拆分把原图层**物化**为部件：部件是唯一的绘制对象，原图层不再存在，只能撤销回拆分前。
 
-**记录**（日志条目，版本 1）：
+**记录**（日志条目，版本 1；版本 2 见[下文](#版本-2-记录开发中默认关闭)）：
 
 | 字段 | 内容 |
 | --- | --- |
@@ -279,6 +279,43 @@
 **兼容**：旧的 `canvas_source_partition`、`canvas_depth_split` 按原规则重放，打开时不升级；`LegacySplitReplayTest` 用旧版本保存的工程核对各历史节点重放后的 IR 哈希与旧版本一致，旧工程中的软删除原图层仍可恢复，旧工程上的新拆分按物化规则进行。导入 CMO3 模型的拆分仍使用旧规则（原图层软删除）。记录目前内联在日志中，没有使用 v2 的载荷节点。
 
 **测试**：`WorkspaceMaterializedSplitTest` 覆盖拆分后的保存/重开 IR 一致、纹理集与 CMO3 中没有原图层、恢复不能带回、撤销可以、拆分前的关键形/混合形/路径/顶点组/Glue 保留在部件上、部件再拆分、部件网格设置重建，以及前后分层。
+
+### 版本 2 记录（开发中，默认关闭）
+
+版本 1 把原图层拆分时刻的作者态整体快照进部件：基础生成仍只看见原图层（乘客），看不见部件，生成器写进网格的关键形（眼睛开合、骨架蒙皮等）也冻结在记录里，之后的脸部设置、站姿或骨架变化到不了部件。版本 2 让部件参与基础生成，记录只保存生成之外的作者数据。写入由 JVM 系统属性 `psd2live.artPrimitiveV2=true` 打开（测试：`-Ppsd2live.artPrimitiveV2=true`），默认关闭；它只决定新拆分写哪个版本，读取与重放不看开关。
+
+**已解析图层集**（`core/PrimitiveResolution`）：生成图层去掉被 v2 记录取代的图层，加上 v2 部件图层。锚点、脸部 Rig、头部空间、框架、站姿与腿、身体框架、变形器（含成对 Warp、手臂下垂 Warp）、眼白、作为遮罩来源的网格、嘴唇的脸部 Rig 与骨架绑定都只读这个集合；预览分析与之一致。部件像素取当前像素按 `source_bounds` 补透明，网格仍取记录值；分类取 `layerOverrides`（拆分时继承），没有时取记录的 `classification`。带拆分基线（`splitBaselineLayerIds`）的上下文同样计入部件、排除被取代图层；保留变形器的构建（`buildPreservingDeformers`，绘画提交用）也一样。
+
+**乘客**：被取代的图层仍在原位置生成（标签计数决定的 ID 与默认绘制顺序不变），只用自身冻结像素与逐层关键形，读取但不反哺上述聚合阶段，不绑定骨骼；它只为记录之前的日志条目寻址而存在，记录重放时删除。
+
+**停放**：部件在基础 Rig 中按记录的静止画布网格生成（不重新网格化，纹理坐标为画布单位），得到生成关键形、通道、遮罩、部件树位置与骨架蒙皮；UV 绑定后整体移入 `BuiltRig.primitiveSkins`（连同焊接 Glue、生成路径、指向部件的生成遮罩、部件槽、拥有关系、延迟父级与中性边界）。基础 Rig 中指向部件的引用改写为其乘客，因此记录之前看到的是“拆分前”的 Rig。`BuiltRig.resolvedPuppet()` 去掉乘客并放入部件，生成迁移（`RigGenerationMigration.generatedRig`）的 previous / desired 用它比较，脸部设置、分类等变化因而同样到达部件。
+
+**记录字段**（`v: 2`，其余顶层字段同版本 1）：每个部件有 `id`、`layer_id`、`source_id`、`source_bounds`、`neutral_bounds`、`name`、`classification`、`mesh{canvas_positions, triangles, canvas_uvs}`（静止画布网格）；`parent`、`part` 为空表示取生成结果，只在日志编辑改过原图层时写入；材质字段只在与生成值不同时写；`masks` 为空表示取生成遮罩；`parameters` 只含用户轴；`geometry_residual`、`channels_residual`；`blends`、`paths`、`vertex_groups` 只含用户数据（不含骨架姿态混合形与生成路径）；`fixed_topology`（部件带逐顶点用户数据时为真，骨架不得插入关节行）；`frozen_axes`。`glues` 只含用户 Glue（不含 `GlueSkel__` 焊接）。
+
+**残差**：捕获时 A 为原图层作者态，G 为基础生成输出（含骨架），残差 A − G 经分区的顶点来源移到部件顶点上。键中有生成器轴不在默认值的单元写成紧随记录的 `generated_override`（`base` 为候选基础部件的单元，`points` 为 `base` 加残差，`generator` 为拥有该轴的节点），其余写入 `geometry_residual` / `channels_residual`。重放时部件网格 = 停放的生成网格 ⊕ 残差，覆盖照常在全部生成器之后三方合并。
+
+**重放**：删除乘客，放置停放的部件（画布纹理坐标经当前纹理集换算，延迟父级换到其父级空间），恢复生成遮罩与部件槽，两端都在时加入焊接，写入生成路径，再加残差与作者层。停放拓扑与记录不同（骨架加入关节行、之后的网格重建）时，逐顶点数据按画布纹理坐标迁移到新网格。
+
+**两遍捕获与守卫**（`application/WorkspaceArtPrimitives.decide`）：第一遍写基础字段；随后由 `PrimitiveBaseProvider` 构建候选基础（应用默认 `PipelineBaseProvider`：候选文档只保留 v2 记录构建，GUI、MCP 单项拆分与原子批量都经此入口；测试可替换）；第二遍对照候选基础写残差与覆盖。候选基础在拆分的后台候选内构建（`Dispatchers.Default`），进度落在拆分任务的 0.8–0.92，原协程取消即中止且不会被当作回退。只有候选基础仍生成既有日志引用的每个变形器、参数与网格（原图层除外），且整条日志能在其上重放时才写 v2；否则写版本 1，并在记录上加 `v2_fallback {reason, detail}`。原因码：`base_unavailable`（无候选基础）、`original_not_generated`（原网格不是生成网格）、`parts_not_generated`、`reference_missing`、`replay_failed`、`capture_failed`。
+
+**乘客容错**：记录之前的条目若只因其引用的网格全是后续 v2 记录的乘客而失败，按空操作重放并记一条说明（`SupersededEntryNote`：日志序号、`op`、目标、原因）；其他失败照常报错。说明随重放检查点保存，从检查点续放也完整，并经 `BuiltRig.supersededEntryNotes` 进入 `workspace_inspect` 的 `quality.overrides`（`SUPERSEDED_ENTRY_SKIPPED`，info，不阻断）。
+
+**再拆分**：v2 部件可再拆分；捕获时原件的生成形式取自停放区（`WorkspaceArtPrimitives.generated`）。原件网格已被重建（网格设置、`rebuild_mesh` 绘画）时回退版本 1；版本 1 记录取代 v2 部件时，该部件以透明占位和固定网格留在已解析集合中，基础框架不变。
+
+**部件之后的编辑**：绘画只换像素，部件网格保持记录值；`rebuild_mesh` 绘画或逐层网格设置修改在记录之后追加 `canvas_mesh_rebuild`，迁移关键形与绑定。
+
+**拥有关系与缓存**：`DocumentGenerators` 的文档输入 `document:primitives`（v2 记录的固定输入）被足迹、框架、网格与骨架读取；部件的 `keyform:mesh:<部件>@<参数>` 按停放的拥有关系归 `mesh:<图层>` / `rig.meshes`（特征轴）或 `skeleton`（骨骼轴），`GeneratedOverrides.capture` 据此把之后对这些单元的编辑写成覆盖。阶段缓存与绑定缓存的键包含 v2 记录的固定输入摘要。
+
+**兼容**：版本 1 记录照旧重放（含骨架蒙皮与自行解码），读取时不改写；没有 v2 记录的文档走原代码路径（`ExportGoldenTool` 逐字节一致）；v1 与 v2 记录可以混用，v2 记录取代 v1 部件时将其删除。
+
+**已知限制**：
+
+- 被拆分嘴部的生成嘴唇仍取自被取代的嘴部（乘客的冻结像素），而不是部件当前像素的合成。拆分时二者一致；之后在部件上绘画，嘴唇纹理不跟随（普通嘴部的嘴唇纹理同样取自网格输入，重建网格前也不跟随），重建部件网格也不会重新生成嘴唇。
+- `frozen_axes`：写入端总是写空，原图层的网格拓扑被手工编辑过（生成单元无法映射到部件）时直接回退版本 1；读取端遇到非空 `frozen_axes` 会把该部件的整张生成网格归零、只保留作者数据，因此当前不会出现。
+- 部件网格重建后，针对其生成单元的 `generated_override` 不迁移，形状不符时按孤立报告。
+- 已有版本 1 记录升级为版本 2 的显式命令尚未实现（设计为新的可撤销历史节点，打开时不自动升级）。
+
+**测试**：`PrimitiveResolutionTest`（手写 v2 记录的基础生成）、`ArtPrimitiveRecordV2Test`（编码、残差、重放、乘客容错与检查点续放的说明）、`WorkspaceSplitRecordV2Test`（开关、回退原因、与版本 1 的重放一致、绘画与网格设置重建、进度与取消）、`SplitPartConsumersTest`（生成迁移解析 v2 记录）。
 
 ## 后续
 

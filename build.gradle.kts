@@ -158,6 +158,8 @@ tasks.withType<Test>().configureEach {
 	systemProperty("java.util.prefs.PreferencesFactory", "io.github.psd2live.testing.MemoryPreferencesFactory")
 	// The Rust runtime, when built with `cargo build --release` in runtime/; tests that need it skip without it.
 	systemProperty("psd2live.runtime.dir", file("runtime/target/release").absolutePath)
+	// -Ppsd2live.artPrimitiveV2=true runs the suite with new splits writing version 2 art primitive records.
+	providers.gradleProperty("psd2live.artPrimitiveV2").orNull?.let { systemProperty("psd2live.artPrimitiveV2", it) }
 	// CI keeps no test reports, so a failure's message and stack must reach the log.
 	testLogging {
 		events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)

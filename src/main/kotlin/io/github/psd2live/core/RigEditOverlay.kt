@@ -281,10 +281,10 @@ data class RigEditOverlay(
 		for (command in authoringJournal) if (command["op"]?.jsonPrimitive?.contentOrNull == "structure")
 			deferredJournalEdits += command.getValue("edits").jsonArray.map { it.jsonObject }.filter(::generatedPanelEdit)
 		// Everything the legacy stage reads, and what decides how the journal's structure edits split.
-		val notes = ArrayList<String>()
 		val legacy = ReplayCheckpoints.Legacy(listOf(deletedParameterIds, parameterEdits, warpEdits, structureEdits,
 			keyformSetEdits, keyformCopyEdits, keyformDeleteEdits, generatedIds, io.github.psd2live.i18n.I18n.currentLanguage.tag, skins))
-		var model = ReplayCheckpoints.replay(base, legacy, authoringJournal, start = {
+		// The notes ride in the checkpointed state, so a replay resumed from a checkpoint still reports every entry.
+		val replayed = ReplayCheckpoints.replay(base, legacy, authoringJournal, start = {
 			var model = base
 			// 1. Delete removed parameters
 			for (id in deletedParameterIds.sorted()) model = model.withParameterDeleted(ParameterId(id))
@@ -313,21 +313,27 @@ data class RigEditOverlay(
 			for (delete in keyformDeleteEdits) {
 				model = applyKeyformDelete(model, delete)
 			}
-			model
-		}) { model, command ->
+			ReplayState(model, emptyList())
+		}) { state, command ->
+			val model = state.model
 			try {
-				when (command["op"]?.jsonPrimitive?.contentOrNull) {
+				ReplayState(when (command["op"]?.jsonPrimitive?.contentOrNull) {
 					"structure" -> RigStructureEdits.replay(model, command.getValue("edits").jsonArray.map { it.jsonObject }.filterNot(::generatedPanelEdit))
 					GeneratedOverrides.OP -> model
 					else -> RigAuthoringJournal.replay(model, command, skins)
-				}
+				}, state.notes)
+			} catch (failure: java.util.concurrent.CancellationException) {
+				throw failure
 			} catch (failure: RuntimeException) {
 				val stubs = stubTolerance[command] ?: throw failure
 				if (!StubTolerance.onlyStubs(model, command, stubs)) throw failure
-				notes += "Skipped ${command["op"]?.jsonPrimitive?.contentOrNull}: it addresses only ${StubTolerance.targets(model, command, stubs).sorted().joinToString()}, superseded by a later split (${failure.message})"
-				model
+				ReplayState(model, state.notes + SupersededEntryNote(authoringJournal.indexOfFirst { it === command },
+					command["op"]?.jsonPrimitive?.contentOrNull.orEmpty(), StubTolerance.targets(model, command, stubs).sorted(),
+					failure.message ?: failure.javaClass.simpleName))
 			}
 		}
+		var model = replayed.model
+		val notes = replayed.notes
 		if (authoredOnly) return GeneratedOverrides.Outcome(model, emptyList(), notes)
 		// Swings and simulations write their keyforms onto the replayed rig, in the document graph's order.
 		model = DocumentGenerators.generate(model, this)
@@ -452,7 +458,7 @@ internal fun BuiltRig.withRigEdits(overlay: RigEditOverlay, layerVisibility: Map
 	}
 	model = ArtPrimitiveJournal.pruneAtlas(model, overlay)
 	return copy(puppet = model, sourceBoundsByDrawableId = bounds, layerIdByDrawableId = layers, pageByDrawableId = pages,
-		overrideIssues = replayed.issues)
+		overrideIssues = replayed.issues, supersededEntryNotes = replayed.notes)
         .withDrawOrderOverrides(drawOrderOverrides)
 }
 

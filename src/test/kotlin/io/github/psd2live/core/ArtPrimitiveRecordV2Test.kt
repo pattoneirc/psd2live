@@ -195,8 +195,28 @@ class ArtPrimitiveRecordV2Test {
 		fun rebuild(id: String) = buildJsonObject {
 			put("op", RasterMeshJournal.OP); put("id", id); put("before_mesh", "stale"); put("parent", JsonNull)
 		}
-		val tolerated = RigEditOverlay(authoringJournal = listOf(rebuild("Ghost"), record)).applyToReporting(split.generated, skins)
-		assertEquals(1, tolerated.notes.size)
+		val tolerant = RigEditOverlay(authoringJournal = listOf(rebuild("Ghost"), record))
+		val tolerated = tolerant.applyToReporting(split.generated, skins)
+		val note = tolerated.notes.single()
+		assertEquals(0, note.index); assertEquals(RasterMeshJournal.OP, note.op); assertEquals(listOf("Ghost"), note.targets)
+		// A replay resumed from a checkpoint still reports the entries before it, and the built rig carries them.
+		val previous = ReplayCheckpoints.enabled
+		ReplayCheckpoints.enabled = true
+		try {
+			ReplayCheckpoints.clear()
+			tolerant.applyToReporting(split.generated, skins)
+			val again = tolerant.applyToReporting(split.generated, skins)
+			assertEquals(2, ReplayCheckpoints.lastReplayed()?.from)
+			assertEquals(listOf(note), again.notes)
+		} finally { ReplayCheckpoints.enabled = previous }
+		val rig = BuiltRig(split.generated, emptyMap(), emptyMap(), emptyMap(), 0f, 0f, 1f, 1f, emptyList(), primitiveSkins = skins)
+		assertEquals(listOf(note), rig.withRigEdits(tolerant).supersededEntryNotes)
+		// The overrides quality report lists it as an info finding by its code.
+		val finding = io.github.psd2live.core.quality.GeneratedOverrideQuality.report(emptyList(), listOf(note))
+			.getValue("findings").jsonArray.single().jsonObject
+		assertEquals("SUPERSEDED_ENTRY_SKIPPED", finding.getValue("code").jsonPrimitive.content)
+		assertEquals("info", finding.getValue("severity").jsonPrimitive.content)
+		assertEquals("journal:0", finding.getValue("target").jsonPrimitive.content)
 		assertTrue(tolerated.model.drawables.any { it.id == parts[0] })
 		assertFailsWith<IllegalArgumentException> {
 			RigEditOverlay(authoringJournal = listOf(rebuild("Other"), record)).applyToReporting(split.generated, skins)

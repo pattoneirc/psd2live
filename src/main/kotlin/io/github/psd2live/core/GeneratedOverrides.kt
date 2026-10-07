@@ -138,7 +138,7 @@ internal object GeneratedOverrides {
 	 * version 2 split that failed only on the drawables that split supersedes and replayed as no-ops (from the
 	 * entries this replay ran; a checkpoint hit skips the ones before it).
 	 */
-	class Outcome(val model: PuppetModel, val issues: List<GeneratedOverrideIssue>, val notes: List<String> = emptyList()) {
+	class Outcome(val model: PuppetModel, val issues: List<GeneratedOverrideIssue>, val notes: List<SupersededEntryNote> = emptyList()) {
 		val conflicts: List<String> get() = issues.map(GeneratedOverrideIssue::describe)
 	}
 

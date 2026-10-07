@@ -40,8 +40,8 @@ internal object ReplayCheckpoints {
 		val base: WeakReference<PuppetModel>,
 		val legacy: Legacy,
 		val entries: List<JsonObject>,
-		/** Sorted by index; a cleared reference is skipped. */
-		val states: Map<Int, SoftReference<PuppetModel>>,
+		/** Sorted by index; a cleared reference is skipped. A state is whatever the caller's [replay] steps carry. */
+		val states: Map<Int, SoftReference<Any>>,
 	)
 
 	private val chains = ArrayList<Chain>()
@@ -49,16 +49,17 @@ internal object ReplayCheckpoints {
 	fun clear() = synchronized(chains) { chains.clear() }
 
 	/**
-	 * The model after [legacy] and every entry of [journal], replayed from the nearest checkpoint: [start] runs
-	 * the legacy edits on [base], [step] replays one entry.
+	 * The state after [legacy] and every entry of [journal], replayed from the nearest checkpoint: [start] runs
+	 * the legacy edits on [base], [step] replays one entry. The state is the model with whatever a step reports
+	 * (the replay's notes), so a checkpoint hit carries what the entries before it reported; one caller, one type.
 	 */
-	fun replay(
+	fun <S : Any> replay(
 		base: PuppetModel,
 		legacy: Legacy,
 		journal: List<JsonObject>,
-		start: () -> PuppetModel,
-		step: (PuppetModel, JsonObject) -> PuppetModel,
-	): PuppetModel {
+		start: () -> S,
+		step: (S, JsonObject) -> S,
+	): S {
 		if (!enabled) {
 			var model = start()
 			for (entry in journal) model = step(model, entry)
@@ -69,7 +70,7 @@ internal object ReplayCheckpoints {
 		var found: Chain? = null
 		var foundShared = 0
 		var from = -1
-		var model: PuppetModel? = null
+		var model: S? = null
 		for (chain in candidates) {
 			val limit = minOf(chain.entries.size, journal.size)
 			val best = chain.states.keys.filter { it <= limit && it > from }.sortedDescending()
@@ -78,12 +79,13 @@ internal object ReplayCheckpoints {
 			val shared = sharedPrefix(chain.entries, journal, best.first())
 			for (index in best) {
 				if (index > shared) continue
-				val state = chain.states.getValue(index).get() ?: continue
+				@Suppress("UNCHECKED_CAST")
+				val state = chain.states.getValue(index).get() as S? ?: continue
 				if (index > from) { from = index; model = state; found = chain; foundShared = sharedPrefix(chain.entries, journal, limit) }
 				break
 			}
 		}
-		val recorded = HashMap<Int, PuppetModel>()
+		val recorded = HashMap<Int, Any>()
 		var current = model ?: start().also { recorded[0] = it; from = 0 }
 		for (i in from until journal.size) {
 			current = step(current, journal[i])
@@ -106,9 +108,9 @@ internal object ReplayCheckpoints {
 	private fun keep(index: Int, size: Int) = index == 0 || index % INTERVAL == 0 || index > size - RECENT
 
 	private fun remember(base: PuppetModel, legacy: Legacy, journal: List<JsonObject>, found: Chain?, shared: Int,
-						 recorded: Map<Int, PuppetModel>) {
+						 recorded: Map<Int, Any>) {
 		synchronized(chains) {
-			val fresh = recorded.mapValues { SoftReference(it.value) }
+			val fresh = recorded.mapValues { SoftReference<Any>(it.value) }
 			val next = if (found != null && shared == journal.size && found.entries.size >= journal.size) {
 				// An undo (or a replay of a journal the chain already holds): its states fit the chain as is.
 				Chain(found.base, found.legacy, found.entries, (found.states + fresh).toSortedMap())

@@ -9,11 +9,12 @@ import java.util.UUID
 /**
  * The base rig a candidate document generates, with the parts of its version 2 `art_primitive` records held back in
  * [BuiltRig.primitiveSkins]: what the second pass of a split's capture computes residuals against. Called off the
- * GUI thread inside the split's job; [checkpoint] throws when the job is cancelled.
+ * GUI thread inside the split's candidate; [progress] reports the build and throws when the originating job is
+ * cancelled.
  */
 fun interface PrimitiveBaseProvider {
     /** The base rig of [document], or null when no resolved base is available (the split then writes version 1). */
-    fun base(document: WorkspaceDocument, checkpoint: () -> Unit): BuiltRig?
+    fun base(document: WorkspaceDocument, progress: ProgressListener): BuiltRig?
 
     companion object {
         /** No resolved base: every split falls back to version 1 with reason [WorkspaceArtPrimitives.REASON_NO_BASE]. */
@@ -23,14 +24,15 @@ fun interface PrimitiveBaseProvider {
 
 /**
  * The resolved base through the pipeline: the candidate document built with only its version 2 records in the
- * journal (the base reads nothing else of it; the records replay on their own), and that build's base rig.
+ * journal (the base reads nothing else of it; the records replay on their own), and that build's base rig. Each
+ * call builds on its own pipeline unless one is given, so no cache outlives the split.
  */
-class PipelineBaseProvider(private val pipeline: PSD2LivePipeline = PSD2LivePipeline()) : PrimitiveBaseProvider {
-    override fun base(document: WorkspaceDocument, checkpoint: () -> Unit): BuiltRig {
+class PipelineBaseProvider(private val pipeline: PSD2LivePipeline? = null) : PrimitiveBaseProvider {
+    override fun base(document: WorkspaceDocument, progress: ProgressListener): BuiltRig {
         val config = document.config()
         val records = config.rigEdits.authoringJournal.filter(ArtPrimitiveV2::isV2)
-        return pipeline.buildPreview(document.source, config.copy(rigEdits = config.rigEdits.copy(authoringJournal = records)),
-            ProgressListener { _, _ -> checkpoint() }).baseRig
+        return (pipeline ?: PSD2LivePipeline()).buildPreview(document.source,
+            config.copy(rigEdits = config.rigEdits.copy(authoringJournal = records)), progress).baseRig
     }
 }
 
@@ -44,8 +46,11 @@ internal object WorkspaceArtPrimitives {
     const val REASON_REPLAY = "replay_failed"
     const val REASON_CAPTURE = "capture_failed"
 
-    /** Where the second capture pass gets its base. Phase 2 sets the resolved pipeline here; tests set fixtures. */
-    @Volatile var baseProvider: PrimitiveBaseProvider = PrimitiveBaseProvider.Unavailable
+    /**
+     * Where the second capture pass gets its base: the resolved pipeline for every split path - the GUI's and MCP's
+     * single splits and document batches all reach [decide] through the split edits. Tests set fixtures here.
+     */
+    @Volatile var baseProvider: PrimitiveBaseProvider = PipelineBaseProvider()
 
     /** What a split captured, for its version 2 record: the original and its parts in the authored and base rigs. */
     class SplitCapture(
@@ -82,6 +87,17 @@ internal object WorkspaceArtPrimitives {
         return GeneratedOverrides.applyAll(authored, overlay.authoringJournal).model
     }
 
+    /**
+     * The base puppet with [original]'s generated form: a version 2 part being split again is parked in the side
+     * channel ([BuiltRig.primitiveSkins]), not in the base puppet, and is generated there like any layer.
+     */
+    fun generated(base: BuiltRig, original: DrawableId): org.umamo.runtime.model.PuppetModel {
+        val puppet = base.puppet
+        if (puppet.drawables.any { it.id == original }) return puppet
+        val parked = base.primitiveSkins.drawables[original] ?: return puppet
+        return puppet.copy(drawables = puppet.drawables + parked)
+    }
+
     private class Fallback(val reason: String, val detail: String) : Exception(detail)
 
     /**
@@ -93,7 +109,8 @@ internal object WorkspaceArtPrimitives {
      * its record. [v2Document] places a record and its overrides into the version 2 document.
      */
     fun decide(v1: WorkspaceDocument, v1Record: JsonObject, model: RigPreviewModel, capture: () -> SplitCapture,
-               v2Document: (JsonObject, List<JsonObject>) -> WorkspaceDocument, checkpoint: () -> Unit = {}): WorkspaceDocument {
+               v2Document: (JsonObject, List<JsonObject>) -> WorkspaceDocument,
+               work: WorkspaceRasterWork = WorkspaceRasterWork.Direct, provider: PrimitiveBaseProvider = baseProvider): WorkspaceDocument {
         if (!ArtPrimitiveV2.enabled) return v1
         fun fallback(reason: String, detail: String): WorkspaceDocument {
             val journal = v1.rigEdits.authoringJournal
@@ -105,7 +122,11 @@ internal object WorkspaceArtPrimitives {
             return v1.copy(rigEdits = v1.rigEdits.copy(authoringJournal = journal.toMutableList().also { it[index] = marked }))
         }
         return try {
-            v2(model, capture(), v2Document, checkpoint)
+            work.progress(0.78f, "Capturing split parts")
+            v2(model, capture(), v2Document, work, provider)
+        } catch (failure: java.util.concurrent.CancellationException) {
+            // A cancelled job is an IllegalStateException too, never a reason to write version 1.
+            throw failure
         } catch (failure: Fallback) {
             fallback(failure.reason, failure.detail)
         } catch (failure: IllegalArgumentException) {
@@ -116,7 +137,8 @@ internal object WorkspaceArtPrimitives {
     }
 
     private fun v2(model: RigPreviewModel, capture: SplitCapture, v2Document: (JsonObject, List<JsonObject>) -> WorkspaceDocument,
-                   checkpoint: () -> Unit): WorkspaceDocument {
+                   work: WorkspaceRasterWork, provider: PrimitiveBaseProvider): WorkspaceDocument {
+        val checkpoint: () -> Unit = work::checkpoint
         if (capture.ghostGenerated.drawables.none { it.id == capture.ghost })
             throw Fallback(REASON_ORIGINAL, "The split original is not a generated mesh: ${capture.ghost.raw}")
         fun record(parked: BuiltRig?): Pair<JsonObject, List<JsonObject>> {
@@ -140,8 +162,11 @@ internal object WorkspaceArtPrimitives {
             return JsonObject(encoded + capture.extra) to parts.flatMap { it.overrides }
         }
         val (first, _) = record(null)
-        val base = baseProvider.base(v2Document(first, emptyList()), checkpoint)
-            ?: throw Fallback(REASON_NO_BASE, "No resolved base is available to generate the parts")
+        // The second pass: the candidate's resolved base, built on this (background) thread under the split's job.
+        val base = provider.base(v2Document(first, emptyList()), ProgressListener { message, fraction ->
+            work.progress(0.8f + 0.12f * fraction.toFloat().coerceIn(0f, 1f), message)
+        }) ?: throw Fallback(REASON_NO_BASE, "No resolved base is available to generate the parts")
+        work.progress(0.92f, "Recording split parts")
         val missing = capture.partIds.filterNot { base.primitiveSkins.holds(it) }
         if (missing.isNotEmpty()) throw Fallback(REASON_PARTS, "The base did not generate ${missing.joinToString { it.raw }}")
         checkpoint()
@@ -171,6 +196,8 @@ internal object WorkspaceArtPrimitives {
         checkpoint()
         try {
             document.rigEdits.applyTo(base.puppet, base.primitiveSkins)
+        } catch (failure: java.util.concurrent.CancellationException) {
+            throw failure
         } catch (failure: RuntimeException) {
             throw Fallback(REASON_REPLAY, failure.message ?: failure.javaClass.simpleName)
         }
