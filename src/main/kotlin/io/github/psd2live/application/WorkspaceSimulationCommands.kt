@@ -29,9 +29,7 @@ internal class WorkspaceSimulationCommands(private val runtime: WorkspaceRuntime
         val work = observer.cancellable(context)
         var report = JsonObject(emptyMap())
         val committed = commands.executeCandidate(projectId, state, summary, author, taskId, mutation = { document, preview ->
-            val candidate = if (operation.operation == "simulation_put")
-                WorkspaceSimulationEdits.put(document, preview, operation.request, autoBake, work)
-            else WorkspaceSimulationEdits.apply(operation, document, preview, work)
+            val candidate = WorkspaceSimulationEdits.apply(operation, document, preview, work, autoBake)
             report = candidate.report
             candidate.document
         }, beforeCommit = beforeCommit)

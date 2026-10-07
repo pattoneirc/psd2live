@@ -423,35 +423,155 @@ class PSD2LiveViewModel : AutoCloseable {
     private var simBaking: kotlinx.coroutines.Job? = null
 
     /**
-     * Bakes simulation [id] off the frame thread into parameters, keyforms and pendulums, then commits it
-     * as one history node. Progress arrives in [simulationBaking], a failure in [simulationStatus].
+     * Simulations waiting for the background bake, each with whether it bakes afresh (the Bake buttons) or,
+     * after an edit, only when missing or stale and from its old pendulum. Touched on the main thread only.
+     */
+    private val simBakeQueue = LinkedHashMap<String, Boolean>()
+    /** The simulations the running bake round is computing; a new request for one of them restarts the round. */
+    private var simBakeRound: Set<String> = emptySet()
+    @Volatile private var simBakeRestart = false
+
+    /**
+     * Bakes simulation [id] in the background into parameters, keyforms and pendulums; editing goes on
+     * meanwhile and the bake lands as its own history node once done. Progress arrives in [simulationBaking],
+     * a failure in [simulationStatus].
      */
     internal fun bakeSimulation(id: String) {
-        val current = _state.value
-        val model = current.previewModel ?: return
-        if (simBaking?.isActive == true || current.rigEdits.simEdits.none { it.id == id }) return
-        val expected = workspaceBackend?.snapshot()
-        _simulationBaking.value = SimulationBaking(id, 0f)
+        if (_state.value.rigEdits.simEdits.none { it.id == id }) return
+        queueSimulationBakes(listOf(id), fresh = true)
+    }
+
+    /**
+     * Queues [ids] for the background bake. A round bakes everything queued one after another, each on the
+     * rig with the bakes before it, and commits the round as one history node on whatever version is current
+     * then; a simulation whose setup changed while it baked is baked again instead of committed stale.
+     */
+    private fun queueSimulationBakes(ids: Collection<String>, fresh: Boolean) {
+        if (ids.isEmpty() || _state.value.previewModel == null) return
+        ids.forEach { simBakeQueue[it] = fresh || simBakeQueue[it] == true }
+        if (ids.any { it in simBakeRound }) simBakeRestart = true
+        if (simBaking?.isActive == true) return
         simBaking = scope.launch {
+            val self = coroutineContext[kotlinx.coroutines.Job]
             try {
-                val bake = withContext(Dispatchers.Default) {
-                    val job = coroutineContext[kotlinx.coroutines.Job]
-                    io.github.psd2live.core.sim.SimAuthoring.bake(current.rigEdits, model.baseRig.puppet, id,
-                        progress = { _simulationBaking.value = SimulationBaking(id, it) },
-                        cancelled = { job?.isCancelled == true },
-                        skins = model.baseRig.primitiveSkins,
-                    )
+                while (simBakeQueue.isNotEmpty()) {
+                    val round = LinkedHashMap(simBakeQueue)
+                    simBakeQueue.clear()
+                    simBakeRound = round.keys
+                    simBakeRestart = false
+                    try {
+                        bakeRound(round)
+                    } catch (restart: kotlinx.coroutines.CancellationException) {
+                        if (!simBakeRestart || self?.isActive != true) throw restart
+                        round.forEach { (id, fresh) -> simBakeQueue[id] = fresh || simBakeQueue[id] == true }
+                    } catch (failure: Exception) {
+                        _simulationStatus.value = SimulationStatus.Failed(failure.message ?: failure.toString())
+                    }
                 }
-                check(!_state.value.workspaceEditBusy) { "Workspace has another edit in progress" }
-                updateState { it.copy(canvasEditBusy = true) }
-                performSimulationMutation("Baked simulation $id", { workspace, state ->
-                    workspace.putSimulationBake(id, bake, state)
-                }, expected)
+            } finally {
+                // A cancelled runner may finish after a new one started; the queue is the new one's then.
+                if (simBaking === self) {
+                    simBakeRound = emptySet()
+                    simBakeQueue.clear()
+                    _simulationBaking.value = null
+                }
+            }
+        }
+    }
+
+    /** Waits until the background bake has committed or dropped everything queued. */
+    internal suspend fun awaitSimulationBakes() {
+        while (true) withContext(Dispatchers.Main) { simBaking?.takeIf { it.isActive } }?.join() ?: return
+    }
+
+    /** Bakes [round] off the main thread, then commits what is still current; see [queueSimulationBakes]. */
+    private suspend fun bakeRound(round: Map<String, Boolean>) {
+        val start = _state.value
+        val model = start.previewModel ?: return
+        val snapshot = workspaceBackend?.snapshot() ?: return
+        // An edit's bake waits only when it is missing or stale; the Bake buttons always bake.
+        val ids = withContext(Dispatchers.Default) {
+            round.keys.filter { id ->
+                val edit = start.rigEdits.simEdits.firstOrNull { it.id == id && it.enabled } ?: return@filter false
+                round.getValue(id) || edit.bake == null || io.github.psd2live.core.sim.SimBake.stale(model.rig.puppet, edit)
+            }
+        }
+        if (ids.isEmpty()) return
+        _simulationBaking.value = SimulationBaking(ids.first(), 0f, 0, ids.size)
+        val (bakes, failures) = withContext(Dispatchers.Default) {
+            val job = coroutineContext[kotlinx.coroutines.Job]
+            val cancelled = { job?.isCancelled == true || simBakeRestart }
+            var overlay = start.rigEdits
+            val bakes = LinkedHashMap<String, io.github.psd2live.core.sim.SimBakeResult>()
+            val failures = ArrayList<String>()
+            ids.forEachIndexed { index, id ->
+                val progress = { value: Float -> _simulationBaking.value = SimulationBaking(id, value, index, ids.size) }
+                try {
+                    if (round.getValue(id)) {
+                        val bake = io.github.psd2live.core.sim.SimAuthoring.bake(overlay, model.baseRig.puppet, id, progress, cancelled,
+                            model.baseRig.primitiveSkins)
+                        overlay = io.github.psd2live.core.sim.SimAuthoring.withBake(overlay, id, bake)
+                        bakes[id] = bake
+                    } else {
+                        val (next, failure) = io.github.psd2live.core.sim.SimAuthoring.rebaked(overlay, model.baseRig.puppet, id, progress, cancelled,
+                            autoBake = true, skins = model.baseRig.primitiveSkins)
+                        if (cancelled()) throw kotlinx.coroutines.CancellationException("Bake cancelled")
+                        if (failure != null) failures += "$id: $failure"
+                        else next.simEdits.single { it.id == id }.bake?.takeIf { next !== overlay }?.let { bakes[id] = it }
+                        overlay = next
+                    }
+                } catch (failure: IllegalArgumentException) {
+                    failures += "$id: ${failure.message ?: failure}"
+                }
+                if (cancelled()) throw kotlinx.coroutines.CancellationException("Bake cancelled")
+            }
+            bakes to failures
+        }
+        if (failures.isNotEmpty()) _simulationStatus.value = SimulationStatus.Failed(failures.joinToString("\n"))
+        if (bakes.isNotEmpty()) commitBakes(bakes, round, snapshot.projectId, model.rig.puppet)
+    }
+
+    /**
+     * Commits [bakes] as one history node once no other edit is applying, on the version current then. A
+     * simulation deleted meanwhile is dropped; one whose setup changed is queued again instead.
+     */
+    private suspend fun commitBakes(bakes: Map<String, io.github.psd2live.core.sim.SimBakeResult>, round: Map<String, Boolean>,
+                                    projectId: String?, baked: org.umamo.runtime.model.PuppetModel) {
+        while (true) {
+            _state.first { !it.workspaceEditBusy }
+            val workspace = workspaceBackend ?: return
+            val expected = workspace.snapshot()
+            val head = _state.value
+            val puppet = head.previewModel?.rig?.puppet
+            if (expected.projectId != projectId || puppet == null) return
+            val present = bakes.filterKeys { id -> head.rigEdits.simEdits.any { it.id == id } }
+            // The rig the round started on needs no check; on a newer one each bake must still match its setup.
+            val changed = if (puppet === baked) emptySet() else withContext(Dispatchers.Default) {
+                present.filter { (id, bake) ->
+                    bake.fingerprint != io.github.psd2live.core.sim.SimBake.fingerprint(puppet, head.rigEdits.simEdits.first { it.id == id })
+                }.keys
+            }
+            changed.forEach { id -> simBakeQueue[id] = round.getValue(id) || simBakeQueue[id] == true }
+            val current = present - changed
+            if (current.isEmpty()) return
+            if (_state.value.workspaceEditBusy) continue
+            updateState { it.copy(canvasEditBusy = true) }
+            try {
+                withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(
+                    expected.projectId, expected.state, io.github.psd2live.project.MutationAuthor.USER)) {
+                    workspace.putSimulationBakes(current, expected.state)
+                }
+                return
+            } catch (conflict: io.github.psd2live.application.WorkspaceConflict) {
+                continue
+            } catch (switched: io.github.psd2live.application.WorkspaceProjectConflict) {
+                return
             } catch (failure: Exception) {
                 if (failure is kotlinx.coroutines.CancellationException) throw failure
                 _simulationStatus.value = SimulationStatus.Failed(failure.message ?: failure.toString())
+                return
             } finally {
-                _simulationBaking.value = null
+                updateState { it.copy(canvasEditBusy = false) }
             }
         }
     }
@@ -465,55 +585,10 @@ class PSD2LiveViewModel : AutoCloseable {
     }
 
     /**
-     * Bakes [simulationsToBake] one after another, each on the rig with the bakes before it, and commits
-     * them together as one history node. A simulation that fails keeps its old bake and is reported.
+     * Bakes [simulationsToBake] in the background, one after another, each on the rig with the bakes before
+     * it, and commits them together as one history node. A simulation that fails keeps its old bake and is reported.
      */
-    internal fun bakeAllSimulations() {
-        val current = _state.value
-        val model = current.previewModel ?: return
-        val ids = simulationsToBake(current)
-        if (simBaking?.isActive == true || ids.isEmpty()) return
-        val expected = workspaceBackend?.snapshot()
-        _simulationBaking.value = SimulationBaking(ids.first(), 0f, 0, ids.size)
-        simBaking = scope.launch {
-            try {
-                val (bakes, failures) = withContext(Dispatchers.Default) {
-                    val job = coroutineContext[kotlinx.coroutines.Job]
-                    var overlay = current.rigEdits
-                    val bakes = LinkedHashMap<String, io.github.psd2live.core.sim.SimBakeResult?>()
-                    val failures = ArrayList<String>()
-                    ids.forEachIndexed { index, id ->
-                        try {
-                            val bake = io.github.psd2live.core.sim.SimAuthoring.bake(overlay, model.baseRig.puppet, id,
-                                progress = { _simulationBaking.value = SimulationBaking(id, it, index, ids.size) },
-                                cancelled = { job?.isCancelled == true },
-                                skins = model.baseRig.primitiveSkins,
-                            )
-                            overlay = io.github.psd2live.core.sim.SimAuthoring.withBake(overlay, id, bake)
-                            bakes[id] = bake
-                        } catch (failure: IllegalArgumentException) {
-                            failures += "$id: ${failure.message ?: failure}"
-                        }
-                        if (job?.isCancelled == true) throw kotlinx.coroutines.CancellationException("Bake cancelled")
-                    }
-                    bakes to failures
-                }
-                if (bakes.isNotEmpty()) {
-                    check(!_state.value.workspaceEditBusy) { "Workspace has another edit in progress" }
-                    updateState { it.copy(canvasEditBusy = true) }
-                    performSimulationMutation("Baked simulations ${bakes.keys.joinToString()}", { workspace, state ->
-                        workspace.putSimulationBakes(bakes, state)
-                    }, expected)
-                }
-                if (failures.isNotEmpty()) _simulationStatus.value = SimulationStatus.Failed(failures.joinToString("\n"))
-            } catch (failure: Exception) {
-                if (failure is kotlinx.coroutines.CancellationException) throw failure
-                _simulationStatus.value = SimulationStatus.Failed(failure.message ?: failure.toString())
-            } finally {
-                _simulationBaking.value = null
-            }
-        }
-    }
+    internal fun bakeAllSimulations() = queueSimulationBakes(simulationsToBake(), fresh = true)
 
     /** Removes every simulation's bake as one history node. */
     internal fun clearAllSimulationBakes() {
@@ -522,8 +597,11 @@ class PSD2LiveViewModel : AutoCloseable {
         runSimulationMutation("Cleared simulation bakes") { workspace, state -> workspace.putSimulationBakes(ids.associateWith { null }, state) }
     }
 
+    /** Stops the background bake and drops what was queued, and stops a bake running inside a workspace edit. */
     internal fun cancelSimulationBake() {
         simBakeCancelled = true
+        simBakeQueue.clear()
+        simBakeRound = emptySet()
         simBaking?.cancel()
         simBaking = null
         _simulationBaking.value = null
@@ -636,13 +714,16 @@ class PSD2LiveViewModel : AutoCloseable {
         _simulationAutoBake.value = on
     }
 
-    /** Creates or replaces [edit] as one history node, baked again in it when [simulationAutoBake] is on. */
-    internal fun putSimulation(edit: io.github.psd2live.core.sim.RigSimEdit) =
-        runSimulationMutation("Set simulation ${edit.id}") { workspace, state ->
-            val (result, report) = workspace.putSimulation(edit.toJson(), state, null, _simulationAutoBake.value)
-            report["bake_error"]?.jsonPrimitive?.contentOrNull?.let { _simulationStatus.value = SimulationStatus.Failed(it) }
-            result
+    /**
+     * Creates or replaces [edit] as one history node at once; with [simulationAutoBake] on, a missing or stale
+     * bake then follows in the background as its own node.
+     */
+    internal fun putSimulation(edit: io.github.psd2live.core.sim.RigSimEdit) {
+        val autoBake = _simulationAutoBake.value
+        runSimulationMutation("Set simulation ${edit.id}", then = { if (autoBake) queueSimulationBakes(listOf(edit.id), fresh = false) }) { workspace, state ->
+            workspace.putSimulation(edit.toJson(), state, null, autoBake = false).first
         }
+    }
 
     /**
      * Names output [outputId] (a parameter or pendulum of simulation [simId]'s bake) [name]; blank or
@@ -683,16 +764,20 @@ class PSD2LiveViewModel : AutoCloseable {
         runSimulationMutation("Applied model preset ${preset.jsonName}", mutation = modelPresetMutation(preset, layers))
     }
 
-    /** Applies [preset] to [layers] (empty: every recognized part), keeping its report and any bake failure. */
+    /**
+     * Applies [preset] to [layers] (empty: every recognized part), keeping its report; the simulations it made
+     * that bake on their own are then baked in the background, as their own history node.
+     */
     private fun modelPresetMutation(
         preset: io.github.psd2live.core.sim.ModelPresets.Preset,
         layers: Set<String>,
     ): suspend (WorkspaceSimulationPort, String) -> io.github.psd2live.project.WorkspaceMutationResult = { workspace, state ->
-        val (result, report) = workspace.applyModelPreset(preset, layers, state, io.github.psd2live.project.MutationAuthor.USER)
+        val (result, report) = workspace.applyModelPreset(preset, layers, state, io.github.psd2live.project.MutationAuthor.USER, autoBake = false)
         _modelPresetReport.value = report
-        (report["bakes"] as? kotlinx.serialization.json.JsonObject)?.values?.firstNotNullOfOrNull { bake ->
-            ((bake as? kotlinx.serialization.json.JsonObject)?.get("error") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
-            ?.let { _simulationStatus.value = SimulationStatus.Failed(it) }
+        val made = (report["simulations"] as? kotlinx.serialization.json.JsonArray)?.map { it.jsonPrimitive.content }.orEmpty()
+        withContext(Dispatchers.Main) {
+            queueSimulationBakes(_state.value.rigEdits.simEdits.filter { it.id in made && it.autoBake }.map { it.id }, fresh = false)
+        }
         result
     }
 
@@ -740,22 +825,27 @@ class PSD2LiveViewModel : AutoCloseable {
         canvasEditor.activateTool(io.github.psd2live.ui.CanvasTool.WEIGHT_PAINT)
     }
 
+    /** Runs [mutation] in the background, then [then] on the main thread when it succeeded. */
     private fun runSimulationMutation(
         summary: String,
         expected: io.github.psd2live.project.WorkspaceProjectSnapshot? = workspaceBackend?.snapshot(),
+        then: () -> Unit = {},
         mutation: suspend (WorkspaceSimulationPort, String) -> io.github.psd2live.project.WorkspaceMutationResult,
     ) {
         if (_state.value.workspaceEditBusy) return
         updateState { it.copy(canvasEditBusy = true) }
-        scope.launch { performSimulationMutation(summary, mutation, expected) }
+        scope.launch { if (performSimulationMutation(summary, mutation, expected)) then() }
     }
 
-    /** Runs [mutation] on the project workspace; the caller has set canvasEditBusy, which this clears. */
+    /**
+     * Runs [mutation] on the project workspace; the caller has set canvasEditBusy, which this clears. Returns
+     * whether it succeeded.
+     */
     private suspend fun performSimulationMutation(
         summary: String,
         mutation: suspend (WorkspaceSimulationPort, String) -> io.github.psd2live.project.WorkspaceMutationResult,
         expected: io.github.psd2live.project.WorkspaceProjectSnapshot? = workspaceBackend?.snapshot(),
-    ) {
+    ): Boolean {
         try {
             val workspace = requireNotNull(workspaceBackend) { "Project workspace unavailable" }
             val captured = requireNotNull(expected) { "Project workspace unavailable" }
@@ -763,9 +853,11 @@ class PSD2LiveViewModel : AutoCloseable {
                 captured.projectId, captured.state, io.github.psd2live.project.MutationAuthor.USER)) {
                 mutation(workspace, captured.state)
             }
+            return true
         } catch (failure: Exception) {
             if (failure is kotlinx.coroutines.CancellationException) throw failure
             _simulationStatus.value = SimulationStatus.Failed(failure.message ?: summary)
+            return false
         } finally {
             updateState { it.copy(canvasEditBusy = false) }
         }

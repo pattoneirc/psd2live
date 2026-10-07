@@ -43,11 +43,12 @@ internal object WorkspaceSimulationEdits {
     private val pipeline = PSD2LivePipeline()
     val supported = setOf("simulation_put", "simulation_delete", "simulation_bake", "simulation_clear_bake", "model_apply_preset")
 
+    /** [autoBake] overrides each simulation's own setting for the bakes a put or preset makes; false leaves them to the caller. */
     fun apply(operation: WorkspaceDocumentOperation, document: WorkspaceDocument, preview: RigPreviewModel,
-              work: WorkspaceSimulationWork = WorkspaceSimulationWork.Direct): WorkspaceSimulationCandidate {
+              work: WorkspaceSimulationWork = WorkspaceSimulationWork.Direct, autoBake: Boolean? = null): WorkspaceSimulationCandidate {
         val request = operation.request
         return when (operation.operation) {
-            "simulation_put" -> put(document, preview, request, work = work)
+            "simulation_put" -> put(document, preview, request, autoBake, work)
             "simulation_delete" -> WorkspaceSimulationCandidate(remove(document, request.text("id")))
             "simulation_clear_bake" -> WorkspaceSimulationCandidate(withBakes(document, mapOf(request.text("id") to null)))
             "simulation_bake" -> {
@@ -60,7 +61,7 @@ internal object WorkspaceSimulationEdits {
                     name == "classic_front_hair", request["sway"]?.jsonPrimitive?.boolean ?: true))
                 "remove_clothing" -> WorkspaceSimulationCandidate(removeClothing(document))
                 else -> preset(document, preview, ModelPresets.Preset.parse(name),
-                    request["layers"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet().orEmpty(), work)
+                    request["layers"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet().orEmpty(), work, autoBake)
             }
             else -> throw IllegalArgumentException("Not a simulation edit: ${operation.operation}")
         }
@@ -82,7 +83,7 @@ internal object WorkspaceSimulationEdits {
     }
 
     fun preset(document: WorkspaceDocument, preview: RigPreviewModel, preset: ModelPresets.Preset, layers: Set<String>,
-               work: WorkspaceSimulationWork = WorkspaceSimulationWork.Direct): WorkspaceSimulationCandidate {
+               work: WorkspaceSimulationWork = WorkspaceSimulationWork.Direct, autoBake: Boolean? = null): WorkspaceSimulationCandidate {
         require(layers.all { id -> preview.analysis.layers.any { it.source.id.raw == id } }) { "Unknown layer in preset selection" }
         val flag = when (preset) { ModelPresets.Preset.FRONT_HAIR -> "hairSimulationFront"; ModelPresets.Preset.BACK_HAIR -> "hairSimulationBack"; else -> null }
         var next = document
@@ -103,7 +104,7 @@ internal object WorkspaceSimulationEdits {
         var overlay = applied.overlay
         val failures = LinkedHashMap<String, String>()
         for (id in applied.simulationIds) {
-            val (rebaked, failure) = work.run(id) { progress, cancelled -> SimAuthoring.rebaked(overlay, base.puppet, id, progress, cancelled, skins = base.primitiveSkins) }
+            val (rebaked, failure) = work.run(id) { progress, cancelled -> SimAuthoring.rebaked(overlay, base.puppet, id, progress, cancelled, autoBake, base.primitiveSkins) }
             if (failure != null) failures[id] = failure
             overlay = rebaked
         }

@@ -182,7 +182,7 @@ internal fun SimulationPresetsGroup(state: PSD2LiveState, viewModel: PSD2LiveVie
 	val status by viewModel.simulationStatus.collectAsState()
 	val report by viewModel.modelPresetReport.collectAsState()
 	var selectedOnly by remember { mutableStateOf(false) }
-	val busy = state.isAnalyzing || state.isGenerating || state.canvasEditBusy || baking != null
+	val busy = state.isAnalyzing || state.isGenerating || state.canvasEditBusy
 	val ready = state.previewModel != null && !state.meshOnly && !busy
 	val selectedCount = state.selectedLayerIds.ifEmpty { setOfNotNull(state.selectedLayerId) }.size
 	// Turning a preset on reaches the selection when narrowed to it; turning one off always takes it all.

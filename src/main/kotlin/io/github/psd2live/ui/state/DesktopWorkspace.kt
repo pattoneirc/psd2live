@@ -1315,10 +1315,10 @@ class DesktopWorkspace(
             "Set simulation ${arguments.getValue("id").jsonPrimitive.content}", taskId = taskId, autoBake = autoBake)
 
     override suspend fun applyModelPreset(preset: io.github.psd2live.core.sim.ModelPresets.Preset, layers: Set<String>, expectedState: String,
-        author: MutationAuthor): Pair<WorkspaceMutationResult, kotlinx.serialization.json.JsonObject> =
+        author: MutationAuthor, autoBake: Boolean?): Pair<WorkspaceMutationResult, kotlinx.serialization.json.JsonObject> =
         simulationCommand(WorkspaceDocumentOperation("model_apply_preset", kotlinx.serialization.json.buildJsonObject {
             put("preset", preset.jsonName); put("layers", kotlinx.serialization.json.JsonArray(layers.map { kotlinx.serialization.json.JsonPrimitive(it) }))
-        }), expectedState, "Applied model preset ${preset.jsonName}", author)
+        }), expectedState, "Applied model preset ${preset.jsonName}", author, autoBake = autoBake)
 
     override suspend fun restoreClassicHair(front: Boolean, expectedState: String, author: MutationAuthor, sway: Boolean) =
         simulationCommand(WorkspaceDocumentOperation("model_apply_preset", kotlinx.serialization.json.buildJsonObject {

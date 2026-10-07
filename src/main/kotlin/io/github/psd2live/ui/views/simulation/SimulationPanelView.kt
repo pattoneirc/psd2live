@@ -227,7 +227,7 @@ private fun SimulationToolbar(
 			}
 		}
 		PanelToolButton(labels[1], showLabel = labelsShown > 1, onClick = viewModel::bakeAllSimulations,
-			enabled = sims.any { it.enabled } && baking == null && !state.canvasEditBusy,
+			enabled = sims.any { it.enabled } && !state.canvasEditBusy,
 			tooltip = tr(if (outdated) "sim.bakeAllTip" else "sim.rebakeAllTip")) {
 			SimSectionIconView(SimSectionIcon.BAKE, if (outdated) colors.warning else colors.textPrimary, size = 11.dp)
 		}
@@ -347,9 +347,11 @@ private fun SimulationRow(
 @Composable
 private fun SimulationMenuItems(viewModel: PSD2LiveViewModel, state: PSD2LiveState, sim: RigSimEdit, dismiss: () -> Unit) {
 	val baking by viewModel.simulationBaking.collectAsState()
-	val idle = baking == null && !state.canvasEditBusy
-	CompactMenuItem(tr(if (sim.bake == null) "sim.bakeAction" else "sim.rebake"), { dismiss(); viewModel.bakeSimulation(sim.id) }, enabled = idle && sim.enabled)
-	CompactMenuItem(tr("sim.clearBake"), { dismiss(); viewModel.clearSimulationBake(sim.id) }, enabled = idle && sim.bake != null)
+	// Bakes queue in the background; only clearing the bake being made would be overtaken by it.
+	CompactMenuItem(tr(if (sim.bake == null) "sim.bakeAction" else "sim.rebake"), { dismiss(); viewModel.bakeSimulation(sim.id) },
+		enabled = !state.canvasEditBusy && sim.enabled)
+	CompactMenuItem(tr("sim.clearBake"), { dismiss(); viewModel.clearSimulationBake(sim.id) },
+		enabled = !state.canvasEditBusy && baking?.id != sim.id && sim.bake != null)
 	CompactMenuDivider()
 	CompactMenuItem(tr("sim.delete"), { dismiss(); viewModel.deleteSimulation(sim.id) }, enabled = !state.canvasEditBusy, danger = true)
 }
@@ -634,10 +636,10 @@ private fun BakeEditor(
 	}
 	Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
 		CompactButton(tr(if (bake == null) "sim.bakeAction" else "sim.rebake"), { viewModel.bakeSimulation(sim.id) }, Modifier.weight(1f),
-			enabled = baking == null && sim.enabled && !state.canvasEditBusy,
+			enabled = running == null && sim.enabled && !state.canvasEditBusy,
 			isPrimary = bakeState == BakeState.UNBAKED || bakeState == BakeState.STALE, height = 22.dp)
 		CompactButton(tr("sim.clearBake"), { viewModel.clearSimulationBake(sim.id) }, Modifier.weight(1f),
-			enabled = bake != null && baking == null && !state.canvasEditBusy, height = 22.dp)
+			enabled = bake != null && running == null && !state.canvasEditBusy, height = 22.dp)
 	}
 
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {

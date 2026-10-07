@@ -230,10 +230,11 @@ interface WorkspaceSimulationPort {
     /**
      * Applies a model preset (weights, simulations, and for hair the switch from the legacy sway) and bakes
      * what it made, as one history step; [layers] narrows it, empty means every recognized part. The second
-     * value reports the simulations, the garments read and any bake failure.
+     * value reports the simulations, the garments read and any bake failure. [autoBake] overrides the
+     * simulations' own setting when given; false leaves them unbaked for the caller to bake.
      */
     suspend fun applyModelPreset(preset: ModelPresets.Preset, layers: Set<String>, expectedState: String,
-        author: MutationAuthor = MutationAuthor.AGENT): Pair<WorkspaceMutationResult, JsonObject>
+        author: MutationAuthor = MutationAuthor.AGENT, autoBake: Boolean? = null): Pair<WorkspaceMutationResult, JsonObject>
     /**
      * Removes the hair simulation preset of the [front] or back hair and brings back its legacy sway, running
      * when [sway], as one history step.
