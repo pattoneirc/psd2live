@@ -69,6 +69,8 @@ internal class GlCanvasRenderer(
 		/** Layer rasters the atlas page draws, by array; those a frame no longer draws are freed after it. */
 		val rasters = IdentityHashMap<ByteArray, Int>()
 		val rastersDrawn: MutableSet<ByteArray> = java.util.Collections.newSetFromMap(IdentityHashMap())
+		/** The page images of the last scene drawn: their textures stay while this view may draw them again. */
+		var pages: List<BufferedImage> = emptyList()
 	}
 
 	private val artwork = program(Shaders.ARTWORK_VERTEX, Shaders.ARTWORK_FRAGMENT)
@@ -155,6 +157,7 @@ internal class GlCanvasRenderer(
 		GL11.glEnable(GL11.GL_BLEND)
 		GL11.glBlendFunc(GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA)
 		worldTransform(scene.viewport, width, height)
+		holdPages(view, scene)
 
 		when (scene) {
 			is CanvasScene -> {
@@ -203,15 +206,43 @@ internal class GlCanvasRenderer(
 		if (view.depthStencil != 0) GL30.glDeleteRenderbuffers(view.depthStencil)
 		if (view.paintTexture != 0) GL11.glDeleteTextures(view.paintTexture)
 		view.rasters.values.forEach(GL11::glDeleteTextures)
+		if (view.pages.isNotEmpty()) dropUnusedTextures()
 	}
 
-	/** Drops atlas pages no longer in [live]; called when a model's atlas is replaced. */
-	fun retainTextures(live: Collection<BufferedImage>) {
-		val keep = java.util.Collections.newSetFromMap(IdentityHashMap<BufferedImage, Boolean>()).apply { addAll(live) }
+	/** How many atlas page textures are on the GPU. */
+	internal val pageTextureCount: Int get() = textures.size
+
+	/**
+	 * Makes the page images [scene] may draw, its model's atlas and the atlas page's tiles, the ones [view] holds.
+	 * Every atlas rebuild makes new page images, so once no view's latest scene shows the old ones their textures,
+	 * and the images they keep alive, are freed.
+	 */
+	private fun holdPages(view: View, scene: GpuScene) {
+		val pages = ArrayList<BufferedImage>()
+		if (scene is CanvasScene) scene.model.atlas.pages.mapTo(pages) { it.image }
+		val overlay = when (scene) {
+			is CanvasScene -> scene.overlay
+			is AtlasScene -> scene.overlay
+		}
+		for (item in overlay.items) {
+			val image = ((item as? TextureQuad)?.texture as? ImageTexture)?.image ?: continue
+			if (pages.none { it === image }) pages += image
+		}
+		val changed = pages.size != view.pages.size || pages.indices.any { pages[it] !== view.pages[it] }
+		if (!changed) return
+		view.pages = pages
+		dropUnusedTextures()
+	}
+
+	/** Deletes the page textures no view holds; two views can show two atlases at once. */
+	private fun dropUnusedTextures() {
+		if (textures.isEmpty()) return
+		val held = java.util.Collections.newSetFromMap(IdentityHashMap<BufferedImage, Boolean>())
+		for (view in views.values) held += view.pages
 		val iterator = textures.entries.iterator()
 		while (iterator.hasNext()) {
 			val (image, texture) = iterator.next()
-			if (image !in keep) { GL11.glDeleteTextures(texture); iterator.remove() }
+			if (image !in held) { GL11.glDeleteTextures(texture); iterator.remove() }
 		}
 	}
 
