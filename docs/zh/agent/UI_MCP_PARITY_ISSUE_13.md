@@ -15,6 +15,7 @@
 | 范围 | UI 入口 | MCP 入口 | 共用结果 / 边界 |
 | --- | --- | --- | --- |
 | 项目与源图 | PSD 打开、图层导入、画笔、网格连通块及深度拆分对话框 | `project_import_psd / project_create_artwork / layer_add_from_asset / layer_soft_delete / layer_restore / source_get_components / source_split_components / source_split_polygon / source_split_depth`、`source_paint_brush / source_paint_pencil / source_paint_eraser / source_paint_bucket / source_paint_shape / source_paint_clear` | 同一 `SourceArt` → 分析 / Rig 重建；分区分配现有 RGBA；深度拆分复制所选网格及运动 |
+| 拆分记录升级 | 工具 > 升级拆分记录 | `source_upgrade_split_records` | `WorkspaceSplitUpgradeCommands` 与纯候选 `WorkspaceSplitUpgradeEdits` 共用；MCP 进程任务与原子批量成员，GUI 升级全部版本 1 记录；一次可撤销历史节点，无升级时不追加，逐条结果含未升级原因 |
 | CMO3 导入 | 新工程导入、替换导入 | `project_import_cmo3` | 独立应用层导入器与同一源图接口；MCP 进程任务，新建默认拒绝未保存切换，替换一次历史提交并保留未出现对象和辅助数据 |
 | 图层分类 | Layers 表格：类型、部件、侧别、参数关联、关联 ID | `layer_classify` | 同一应用命令与纯候选；MCP 后台任务，省略字段取捕获值，GUI 文字会话结束时提交一次 |
 | 生成配置 | 项目设置、单层网格设置 | `settings_update`、`layer_mesh_update` | 共享生成候选/重建/CAS；MCP 后台任务，GUI 连续拖动结束时提交，单层预览确认正式重建 |

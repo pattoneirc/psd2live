@@ -74,6 +74,8 @@ For collar and hair occlusion workflows, see the [illustrated front/back layerin
 
 For hair and clothing simulation, pin weights and baking, see the [illustrated simulation tutorial (Chinese)](../../zh/guide/SIMULATION_TUTORIAL.md).
 
+Splits made by earlier versions (mesh islands, polygon, front/back layering) froze the original layer's state into their parts, so later face settings, stance, skeleton or part classification changes never reach those parts. **Tools → Upgrade Split Records** rewrites such records in the current format: the parts then take part in generation like any mesh, and the shape keys, paths, weights and Glues you made on the original and the parts are kept. The item is enabled only while old records exist; the whole upgrade is one undoable history step. A record that cannot be upgraded safely stays as it is, with the reason in the status bar. Opening a project never upgrades it.
+
 ## Default shortcuts
 
 These are the default (Photoshop-style) bindings. **Settings** can switch to Blender- or Cubism-style presets or rebind individual actions; **Help → Keyboard Shortcuts…** shows the current bindings.

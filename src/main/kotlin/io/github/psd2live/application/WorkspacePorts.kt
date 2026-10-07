@@ -344,11 +344,22 @@ interface WorkspaceTaskRecordPort {
     fun tasks(): List<WorkspaceTaskSnapshot>
 }
 
+/** The explicit upgrade of version 1 split records; GUI and MCP commit through the same command. */
+interface WorkspaceSplitUpgradePort {
+    /**
+     * Rewrites the `art_primitive` records at [indexes] (all version 1 records when null) as version 2 in one history
+     * node, none when nothing changed. Returns the lifecycle fields and `records`: per selected record its index,
+     * superseded layers, whether it was upgraded and otherwise the reason.
+     */
+    suspend fun upgradeSplitRecords(state: String, indexes: List<Int>?, author: MutationAuthor = MutationAuthor.AGENT): JsonObject
+}
+
 /** Composition at the host boundary only. Command consumers depend on the relevant narrow port. */
 interface WorkspaceBackend :
     WorkspaceEditorDraftPort,
     WorkspaceReadPort,
     WorkspaceSourcePort,
+    WorkspaceSplitUpgradePort,
     WorkspaceTexturePort,
     WorkspacePaintPort,
     WorkspaceSettingsPort,

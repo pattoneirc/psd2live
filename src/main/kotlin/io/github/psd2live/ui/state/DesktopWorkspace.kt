@@ -513,6 +513,7 @@ class DesktopWorkspace(
     private val layerCommands = WorkspaceLayerCommands(runtime)
     private val generationCommands = WorkspaceGenerationCommands(runtime)
     private val partitionCommands = WorkspacePartitionCommands(runtime)
+    private val splitUpgradeCommands = WorkspaceSplitUpgradeCommands(runtime)
     private val warpCommands = WorkspaceWarpCommands(runtime)
     private val warpControlCommands = WorkspaceWarpControlCommands(runtime)
     private val previewCommands = WorkspacePreviewCommands(runtime)
@@ -1134,6 +1135,24 @@ class DesktopWorkspace(
             viewModel.refreshWorkspaceRenderer(result.commit.capture.model)
         }
         result.mutation
+    }
+
+    override suspend fun upgradeSplitRecords(state: String, indexes: List<Int>?, author: MutationAuthor): JsonObject = editMutex.withLock {
+        val before = captureForMutation()
+        requireExpected(state, before)
+        require(recoveringProjectId != before.projectId) { "Workspace is still being restored; retry shortly" }
+        val current = viewModel.state.value
+        if (current.isAnalyzing || current.isGenerating) throw WorkspaceBusy()
+        val summary = "Upgraded split records"
+        val result = splitUpgradeCommands.execute(before.projectId, before.state, indexes, summary, mutationAuthor(author)) { _, document, model ->
+            applyPreviewOrThrow(model, documentFrom(current), document, summary, current)
+        }
+        if (result.commit.applied) {
+            scheduleHistoryPersistence(before.projectId)
+            viewModel.updateHistorySnapshot(history())
+            viewModel.refreshWorkspaceRenderer(result.commit.capture.model)
+        }
+        result.result
     }
 
     override suspend fun importImages(state: String, paths: List<Path>, parentDeformerId: String?): WorkspaceMutationResult = editMutex.withLock {

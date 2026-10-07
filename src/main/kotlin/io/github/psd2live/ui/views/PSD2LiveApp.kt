@@ -540,6 +540,8 @@ fun FrameWindowScope.PSD2LiveApp(
 						onShowAgentConnection = { showAgentDialog = true },
 						onShowTextureUpscale = { viewModel.openTextureUpscaleDialog() },
 						onStartScreen = { viewModel.requestStartScreen() },
+						canUpgradeSplitRecords = viewModel.canUpgradeSplitRecords(state),
+						onUpgradeSplitRecords = { viewModel.upgradeSplitRecords() },
 						onShowHistory = { viewModel.showHistoryModule() },
 						onNewEditTab = { viewModel.addWorkspace() },
 						onNewPreviewTab = { viewModel.addCanvas(CanvasMode.PREVIEW) },

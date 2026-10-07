@@ -27,10 +27,17 @@ fun interface PrimitiveBaseProvider {
  * journal (the base reads nothing else of it; the records replay on their own), and that build's base rig. Each
  * call builds on its own pipeline unless one is given, so no cache outlives the split.
  */
-class PipelineBaseProvider(private val pipeline: PSD2LivePipeline? = null) : PrimitiveBaseProvider {
+class PipelineBaseProvider(private val pipeline: PSD2LivePipeline? = null,
+                           private val keep: (kotlinx.serialization.json.JsonObject) -> Boolean = ArtPrimitiveV2::isV2) : PrimitiveBaseProvider {
+    /**
+     * The same base with every `art_primitive` record kept, version 1 too: an upgrade rewrites a record that later
+     * version 1 records may follow - splits of its parts, whose layers the current source no longer holds.
+     */
+    fun withAllRecords() = PipelineBaseProvider(pipeline, ArtPrimitiveJournal::isRecord)
+
     override fun base(document: WorkspaceDocument, progress: ProgressListener): BuiltRig {
         val config = document.config()
-        val records = config.rigEdits.authoringJournal.filter(ArtPrimitiveV2::isV2)
+        val records = config.rigEdits.authoringJournal.filter(keep)
         return (pipeline ?: PSD2LivePipeline()).buildPreview(document.source,
             config.copy(rigEdits = config.rigEdits.copy(authoringJournal = records)), progress).baseRig
     }
@@ -45,6 +52,9 @@ internal object WorkspaceArtPrimitives {
     const val REASON_REFERENCE = "reference_missing"
     const val REASON_REPLAY = "replay_failed"
     const val REASON_CAPTURE = "capture_failed"
+    /** Upgrade only: the record is version 2 already, or the model is an imported CMO3 (legacy partition rules). */
+    const val REASON_ALREADY = "already_version_2"
+    const val REASON_IMPORTED = "imported_model"
 
     /**
      * Where the second capture pass gets its base: the resolved pipeline for every split path - the GUI's and MCP's
@@ -79,9 +89,11 @@ internal object WorkspaceArtPrimitives {
     )
 
     /** The authored rig a split captures: the journal replayed, with the overrides of version 2 parts' generated cells. */
-    fun capturedAuthored(model: RigPreviewModel): org.umamo.runtime.model.PuppetModel {
-        val overlay = model.config.rigEdits
-        val authored = overlay.authored(model.baseRig)
+    fun capturedAuthored(model: RigPreviewModel): org.umamo.runtime.model.PuppetModel = capturedAuthored(model.baseRig, model.config.rigEdits)
+
+    /** [capturedAuthored] of [overlay] on [base]: an upgrade reads the journal before the record it rewrites. */
+    fun capturedAuthored(base: BuiltRig, overlay: RigEditOverlay): org.umamo.runtime.model.PuppetModel {
+        val authored = overlay.authored(base)
         if (overlay.authoringJournal.none(ArtPrimitiveV2::isV2) || overlay.authoringJournal.none(GeneratedOverrides::isOverride)) return authored
         // Overrides of swings and simulations find no cell before those generators run and change nothing here.
         return GeneratedOverrides.applyAll(authored, overlay.authoringJournal).model
@@ -137,7 +149,8 @@ internal object WorkspaceArtPrimitives {
     }
 
     private fun v2(model: RigPreviewModel, capture: SplitCapture, v2Document: (JsonObject, List<JsonObject>) -> WorkspaceDocument,
-                   work: WorkspaceRasterWork, provider: PrimitiveBaseProvider): WorkspaceDocument {
+                   work: WorkspaceRasterWork, provider: PrimitiveBaseProvider,
+                   named: List<JsonObject> = model.config.rigEdits.authoringJournal): WorkspaceDocument {
         val checkpoint: () -> Unit = work::checkpoint
         if (capture.ghostGenerated.drawables.none { it.id == capture.ghost })
             throw Fallback(REASON_ORIGINAL, "The split original is not a generated mesh: ${capture.ghost.raw}")
@@ -172,8 +185,9 @@ internal object WorkspaceArtPrimitives {
         checkpoint()
         val (final, overrides) = record(base)
         val document = v2Document(final, overrides)
-        // Guard: whatever the journal before the split names must still be generated (the original may be a stub).
-        val before = model.config.rigEdits.authoringJournal
+        // Guard: whatever the journal before the split names - for an upgrade, every other entry - must still be
+        // generated (the original may be a stub).
+        val before = named
         val old = model.baseRig.puppet
         val generated = HashSet<String>().apply {
             old.drawables.forEach { add(it.id.raw) }; old.deformers.forEach { add(it.id.raw) }; old.parameters.forEach { add(it.id.raw) }
@@ -202,6 +216,108 @@ internal object WorkspaceArtPrimitives {
             throw Fallback(REASON_REPLAY, failure.message ?: failure.javaClass.simpleName)
         }
         return document
+    }
+
+    /** What an upgrade of one version 1 record gave: the version 2 document, or why the record stays version 1. */
+    class Upgrade(val document: WorkspaceDocument?, val reason: String? = null, val detail: String? = null)
+
+    private val v1RecordFields = setOf("op", "v", "origin", "texture_source_id", "supersedes", "supersedes_layers", "replace",
+        "masks", "primitives", "glues", ArtPrimitiveV2.FALLBACK)
+
+    /**
+     * [document] with its version 1 `art_primitive` record at journal position [position] rewritten as version 2,
+     * as a split there would have written it from the current state: the authored original is the journal before the
+     * record replayed on [model]'s base, its generated form is that base's, and the parts are the record's own (its
+     * meshes, material and user data). The parts' vertices derive from the original's by their recorded rest positions.
+     * The version 2 record takes the record's place, its `generated_override` entries follow it, every later entry
+     * stays; bones bound to the original bind the parts and the parts' pinned parents go unless the original had an
+     * explicit one. The same guard as a split's decides: when it fails, [Upgrade.document] is null with the reason.
+     * [model] must be built from [document].
+     */
+    fun upgrade(document: WorkspaceDocument, model: RigPreviewModel, position: Int,
+                work: WorkspaceRasterWork = WorkspaceRasterWork.Direct, provider: PrimitiveBaseProvider = baseProvider): Upgrade {
+        val journal = document.rigEdits.authoringJournal
+        val record = journal[position]
+        require(ArtPrimitiveJournal.isRecord(record) && !ArtPrimitiveV2.isV2(record)) { "Not a version 1 split record: $position" }
+        if (!ArtPrimitiveV2.enabled) return Upgrade(null, REASON_DISABLED, "Version 2 records are disabled")
+        return try {
+            if (model.config.rigEdits.importedCmo3 != null) throw Fallback(REASON_IMPORTED, "An imported model keeps version 1 records")
+            val ghosts = record.getValue("supersedes").jsonArray.map { DrawableId(it.jsonPrimitive.content) }
+            if (ghosts.size != 1) throw Fallback(REASON_ORIGINAL, "The record supersedes ${ghosts.size} meshes")
+            val ghost = ghosts.single()
+            val generated = generated(model.baseRig, ghost)
+            if (generated.drawables.none { it.id == ghost }) throw Fallback(REASON_ORIGINAL, "The split original is not a generated mesh: ${ghost.raw}")
+            work.checkpoint()
+            val capture = upgradeCapture(document, model, record, journal.take(position), ghost, generated)
+            val masks = (record["masks"] as? JsonObject ?: record.getValue("replace").jsonObject).getValue(ghost.raw).jsonArray.map { it.jsonPrimitive.content }
+            val ghostLayer = record.getValue("supersedes_layers").jsonArray.single().jsonPrimitive.content
+            val pinned = ArtPrimitiveJournal.primitives(record).associate { it.getValue("layer_id").jsonPrimitive.content to it["parent"]?.jsonPrimitive?.contentOrNull }
+            val upgraded = v2(model, capture, v2Document = { v2Record, overrides ->
+                val next = journal.take(position) + v2Record + overrides + journal.drop(position + 1)
+                val overlay = SourcePartitionJournal.migrateBones(document.rigEdits.copy(authoringJournal = next), ghost.raw, masks)
+                // A version 1 split pinned its parts under the original's parent; version 2 parts are generated.
+                val parents = if (ghostLayer in document.parentOverrides) document.parentOverrides
+                    else document.parentOverrides.filterNot { (layer, parent) -> layer in pinned && parent == pinned[layer] }
+                document.copy(rigEdits = overlay, parentOverrides = parents)
+            }, work = work, provider = (provider as? PipelineBaseProvider)?.withAllRecords() ?: provider,
+                named = journal.filterIndexed { index, _ -> index != position })
+            Upgrade(upgraded)
+        } catch (failure: java.util.concurrent.CancellationException) {
+            throw failure
+        } catch (failure: Fallback) {
+            Upgrade(null, failure.reason, failure.detail)
+        } catch (failure: IllegalArgumentException) {
+            Upgrade(null, REASON_CAPTURE, failure.message ?: failure.javaClass.simpleName)
+        } catch (failure: IllegalStateException) {
+            Upgrade(null, REASON_CAPTURE, failure.message ?: failure.javaClass.simpleName)
+        }
+    }
+
+    /** The capture a split at [record]'s position would have made, rebuilt from the record and the journal [before] it. */
+    private fun upgradeCapture(document: WorkspaceDocument, model: RigPreviewModel, record: JsonObject, before: List<JsonObject>,
+                               ghost: DrawableId, generated: org.umamo.runtime.model.PuppetModel): SplitCapture {
+        val authored = capturedAuthored(model.baseRig, model.config.rigEdits.copy(authoringJournal = before))
+        val original = authored.drawables.singleOrNull { it.id == ghost }
+            ?: throw Fallback(REASON_REPLAY, "The journal before the record does not hold ${ghost.raw}")
+        val mesh = requireNotNull(original.mesh) { "The split original has no mesh" }
+        // The record's parts as they replay: the partition's output, with the record's meshes and user data.
+        val primitives = ArtPrimitiveJournal.primitives(record)
+        val recorded = primitives.associate { it.getValue("id").jsonPrimitive.content to it }
+        val replayed = ArtPrimitiveJournal.replay(authored, record)
+        fun floats(value: JsonObject, field: String) = value.getValue(field).jsonArray.map { it.jsonPrimitive.float }.toFloatArray()
+        // Texture coordinates in canvas units, as the partition gives them.
+        val partitioned = replayed.copy(drawables = replayed.drawables.map { drawable ->
+            val primitive = recorded[drawable.id.raw] ?: return@map drawable
+            val part = requireNotNull(drawable.mesh)
+            drawable.copy(mesh = org.umamo.runtime.model.DrawableMesh(part.positions, floats(primitive, "canvas_uvs"), part.indices))
+        })
+        // A partition keeps the original's parent and builds each part vertex from the original's vertices with the
+        // same weights for position and texture: the recorded rest positions find their sources among the original's.
+        val sources = primitives.map { primitive ->
+            if (primitive["parent"]?.jsonPrimitive?.contentOrNull != original.parentDeformerId?.raw)
+                throw Fallback(REASON_CAPTURE, "A part left the original's parent: ${primitive.getValue("id").jsonPrimitive.content}")
+            val positions = floats(primitive, "positions")
+            val triangles = primitive.getValue("triangles").jsonArray.map { it.jsonPrimitive.int }.toIntArray()
+            RasterMeshJournal.prepare(mesh, org.umamo.runtime.model.DrawableMesh(positions, positions, triangles)).sources
+        }
+        val layers = primitives.map { it.getValue("layer_id").jsonPrimitive.content }
+        val classifications = layers.map { layer ->
+            document.layerOverrides[layer] ?: model.analysis.layers.firstOrNull { it.source.id.raw == layer }?.semantic?.let {
+                LayerClassificationOverride(it.type, it.tag, it.side, it.parameter, it.switchId)
+            } ?: LayerClassificationOverride()
+        }
+        fun ids(value: JsonObject) = value.entries.associate { (id, parts) -> DrawableId(id) to parts.jsonArray.map { DrawableId(it.jsonPrimitive.content) } }
+        val replace = ids(record.getValue("replace").jsonObject)
+        val glues = record.getValue("glues").jsonObject
+        return SplitCapture(record.getValue("origin").jsonPrimitive.content, record.getValue("texture_source_id").jsonPrimitive.content,
+            ghost, record.getValue("supersedes_layers").jsonArray.single().jsonPrimitive.content, authored, generated, partitioned,
+            primitives.map { DrawableId(it.getValue("id").jsonPrimitive.content) }, layers, sources,
+            primitives.map { RasterMeshCreation.sourceBounds(it) },
+            primitives.map { floats(it, "neutral_bounds").let { b -> Bounds(b[0], b[1], b[2], b[3]) } }, classifications,
+            replace, (record["masks"] as? JsonObject)?.let(::ids) ?: replace,
+            glues.getValue("replaced").jsonArray.map { group -> group.jsonArray.map { ArtPrimitiveJournal.decodeGlue(authored, it.jsonObject) } },
+            glues.getValue("appended").jsonArray.map { ArtPrimitiveJournal.decodeGlue(authored, it.jsonObject) },
+            JsonObject(record.filterKeys { it !in v1RecordFields }))
     }
 
     /**

@@ -394,7 +394,7 @@ internal object ArtPrimitiveJournal {
 			culling = record.getValue("culling").jsonPrimitive.boolean, userData = record.text("user_data"))
 	}
 
-	private fun decodeGlue(model: PuppetModel, value: JsonObject): Glue = Glue(DrawableId(value.text("a")), DrawableId(value.text("b")),
+	fun decodeGlue(model: PuppetModel, value: JsonObject): Glue = Glue(DrawableId(value.text("a")), DrawableId(value.text("b")),
 		value.getValue("pairs").jsonArray.map { element ->
 			val row = element.jsonArray
 			require(row.size == 4) { "Invalid art primitive Glue pair" }
