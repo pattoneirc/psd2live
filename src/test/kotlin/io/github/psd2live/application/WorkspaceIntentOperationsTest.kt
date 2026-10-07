@@ -106,6 +106,8 @@ class WorkspaceIntentOperationsTest {
             // An ID with a fit target refits the group as it is; changed fields and the fit commit together.
             val refit = operations.run("author_physics", host, buildJsonObject { put("id", "IntentSway"); put("fit_target", 80) })
             assertEquals(1, refit.getValue("result").jsonObject.getValue("edit_count").jsonPrimitive.int, refit.toString())
+            // The fit target is a percent, not an object: only the group is reported changed.
+            assertEquals(listOf("IntentSway"), refit.getValue("result").jsonObject.getValue("changed").jsonArray.map { it.jsonPrimitive.content })
             val history = host.runtime.history().selections.size
             val changed = operations.run("author_physics", host, buildJsonObject { put("id", "IntentSway"); put("mobility", 0.6) })
             assertEquals(2, changed.getValue("result").jsonObject.getValue("edit_count").jsonPrimitive.int, changed.toString())

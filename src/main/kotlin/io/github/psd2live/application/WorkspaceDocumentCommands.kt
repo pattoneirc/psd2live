@@ -173,7 +173,10 @@ internal class WorkspaceDocumentCommands(private val runtime: WorkspaceRuntime<R
         fun mutationResult(before: WorkspaceCapture<RigPreviewModel>, result: WorkspaceCommit<RigPreviewModel>,
                            summary: String, edits: List<WorkspaceDocumentOperation>): WorkspaceMutationResult {
             val changed = if (!result.applied) emptyList() else edits.flatMap { edit ->
-                listOf("layer_id", "parameter_id", "target", "id", "path_id").mapNotNull { edit.request[it]?.jsonPrimitive?.contentOrNull }
+                // Only strings name objects: physics_fit's target is a percent.
+                listOf("layer_id", "parameter_id", "target", "id", "path_id").mapNotNull { field ->
+                    (edit.request[field] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                }
             }.plus((before.document.deletedLayerIds - result.capture.document.deletedLayerIds) +
                 (result.capture.document.deletedLayerIds - before.document.deletedLayerIds))
                 .plus(createdObjectIds(before.model.rig.puppet, result.capture.model.rig.puppet)).distinct()
