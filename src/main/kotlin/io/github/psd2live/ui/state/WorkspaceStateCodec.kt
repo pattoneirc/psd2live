@@ -647,7 +647,7 @@ internal object WorkspaceStateCodec {
                 tag = l.getValue("tag").jsonPrimitive.content, message = l.getValue("message").jsonPrimitive.content,
                 detail = l["detail"]?.jsonPrimitive?.contentOrNull, imageLabel = l["imageLabel"]?.jsonPrimitive?.contentOrNull,
                 imageBytes = l["image"]?.jsonPrimitive?.content?.let { java.util.Base64.getDecoder().decode(it) })
-        } ?: base.logEntries,
+        }?.takeLast(LOG_ENTRY_LIMIT) ?: base.logEntries,
         ).let { decoded ->
             val savedActive = value["workspaces"]?.jsonArray?.map { it.jsonObject }
                 ?.firstOrNull { it["id"]?.jsonPrimitive?.content == decoded.activeWorkspace.id }

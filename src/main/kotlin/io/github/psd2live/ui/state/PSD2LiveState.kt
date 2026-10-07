@@ -351,6 +351,13 @@ enum class LogLevel {
 	ERROR,
 }
 
+/** The log keeps the newest this many entries: a long session, or an agent's, would otherwise grow it for good. */
+internal const val LOG_ENTRY_LIMIT = 1000
+
+/** [this] log with [entries] appended, dropping the oldest past [LOG_ENTRY_LIMIT]. */
+internal fun List<AppLogEntry>.appendingLog(entries: List<AppLogEntry>): List<AppLogEntry> =
+	if (size + entries.size <= LOG_ENTRY_LIMIT) this + entries else (this + entries).takeLast(LOG_ENTRY_LIMIT)
+
 @Immutable
 data class AppLogEntry(
 	val id: String = java.util.UUID.randomUUID().toString(),
@@ -493,7 +500,6 @@ data class PSD2LiveState(
 	val progress: Float = 0f,
 	val isIndeterminateProgress: Boolean = false,
 	val statusText: String = "",
-	val logLines: List<String> = emptyList(),
 	val logEntries: List<AppLogEntry> = emptyList(),
 	val logPanelHeight: Float = 190f,
 	val historySnapshot: WorkspaceHistorySnapshot? = null,

@@ -4805,15 +4805,12 @@ class PSD2LiveViewModel : AutoCloseable {
 			imageLabel = imageLabel,
 		)
 		updateState { current ->
-			current.copy(
-				logLines = current.logLines + message,
-				logEntries = current.logEntries + entry,
-			)
+			current.copy(logEntries = current.logEntries.appendingLog(listOf(entry)))
 		}
 	}
 
 	fun clearLogs() {
-		updateState { it.copy(logLines = emptyList(), logEntries = emptyList()) }
+		updateState { it.copy(logEntries = emptyList()) }
 	    markWorkspaceChanged()
 	}
 
@@ -4823,7 +4820,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		tag: String = "System",
 	): PSD2LiveState {
 		val entry = AppLogEntry(source = LogSource.SYSTEM, level = level, tag = tag, message = message)
-		return copy(logLines = logLines + message, logEntries = logEntries + entry)
+		return copy(logEntries = logEntries.appendingLog(listOf(entry)))
 	}
 
 	private fun PSD2LiveState.withLogs(
@@ -4832,7 +4829,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		tag: String = "System",
 	): PSD2LiveState {
 		val entries = messages.map { AppLogEntry(source = LogSource.SYSTEM, level = level, tag = tag, message = it) }
-		return copy(logLines = logLines + messages, logEntries = logEntries + entries)
+		return copy(logEntries = logEntries.appendingLog(entries))
 	}
 
 	fun setLogPanelExpanded(expanded: Boolean) {
@@ -6169,7 +6166,6 @@ class PSD2LiveViewModel : AutoCloseable {
 					parameter.id to (current.parameterValues[parameter.id] ?: parameter.default).coerceIn(parameter.min, parameter.max)
 				},
 				statusText = status,
-				logLines = current.logLines + status,
 				errorMessage = null,
 			)
 		}
