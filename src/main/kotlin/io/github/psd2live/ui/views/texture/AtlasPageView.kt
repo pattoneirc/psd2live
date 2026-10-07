@@ -719,7 +719,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 					if (isSelected && draft == null && scaling == null && turning == null && !busy) {
 						val over = pointer?.let { hitGrip(it) }?.takeIf { it.first.layerId == tile.layerId }?.second
 						drawTransformBox(boxOf(TileFrame.of(tile), transform, anchors[tile.layerId]),
-							if (anchorDrag == tile.layerId) BoundingHandle.ANCHOR else over ?: BoundingHandle.NONE, colors, handles, outline = false)
+							if (anchorDrag == tile.layerId) BoundingHandle.ANCHOR else over ?: BoundingHandle.NONE, colors, handles, outline = false, pointer = pointer)
 					}
 				}
 				if (texture.showMeshes && meshes != null && !gpuReady) {

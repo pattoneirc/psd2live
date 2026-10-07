@@ -600,7 +600,7 @@ internal fun BoxScope.CanvasEditorOverlay(
         // 3. Transform box (shared by TRANSFORM tool and points)
         if (editor.drawsTransformBox) {
             editor.transformFrame(viewport)?.let { frame ->
-                drawTransformBox(frame, editor.hoveredHandle, colors, axis = editor.axis.takeIf { editor.inGesture })
+                drawTransformBox(frame, editor.hoveredHandle, colors, axis = editor.axis.takeIf { editor.inGesture }, pointer = editor.cursor)
             }
         }
 

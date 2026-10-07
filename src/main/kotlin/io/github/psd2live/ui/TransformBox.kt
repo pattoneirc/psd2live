@@ -188,18 +188,29 @@ private fun hitBoundingHandle(pos: Offset, frame: TransformFrame, handles: Trans
     val u = handles.unit
     // The anchor first: it sits on the pivot by default, and once it is dragged onto a handle it has to be
     // possible to drag it off again. The ring of the handle around it still reaches the handle.
-    if (handles.reachesAnchor(bounds) && (pos - frame.anchor.intoTransformFrame(frame.pivot, frame.angleDeg)).getDistance() <= 6f * u) {
+    if (handles.reachesAnchor(bounds) && (pos - frame.anchor.intoTransformFrame(frame.pivot, frame.angleDeg)).getDistance() <= 9f * u) {
         return BoundingHandle.ANCHOR
     }
     if (handles.rotates && (pos - bounds.rotateGrip(u)).getDistance() <= 9f * u) return BoundingHandle.ROTATE
     val points = bounds.handlePoints()
     for ((handle, at) in points.take(4)) if ((pos - at).getDistance() <= 8f * u) return handle
     for ((handle, at) in points.drop(4)) if (handles.showsEdge(bounds, handle) && (pos - at).getDistance() <= 7f * u) return handle
-    if (handles.rotates && !bounds.contains(pos) && points.take(4).any { (_, at) -> (pos - at).getDistance() <= ROTATE_REACH * u }) {
-        return BoundingHandle.ROTATE
-    }
+    if (handles.rotates && turnCorner(pos, bounds, u) != null) return BoundingHandle.ROTATE
     return BoundingHandle.NONE
 }
+
+/** The corner, in frame coordinates, whose turn zone the frame point [pos] is in: outside the box, near the corner. */
+private fun turnCorner(pos: Offset, bounds: BoundingBox, unit: Float): Offset? {
+    if (bounds.contains(pos)) return null
+    return bounds.handlePoints().take(4).map { it.second }.firstOrNull { (pos - it).getDistance() <= ROTATE_REACH * unit }
+}
+
+/**
+ * The corner whose turn zone the screen point [pointer] is in, in frame coordinates, so the zone can light up
+ * under the pointer; null outside every zone and on a box that does not turn.
+ */
+internal fun turnCornerAt(pointer: Offset, frame: TransformFrame, handles: TransformHandles = TransformHandles.ALL): Offset? =
+    if (!handles.rotates) null else turnCorner(pointer.intoTransformFrame(frame.pivot, frame.angleDeg), frame.bounds, handles.unit)
 
 /**
  * The handle ring only — BODY is never reported.

@@ -16,6 +16,10 @@ class TransformBoxTest {
         // Outside the box, past the corner handle: the turn zone.
         assertEquals(BoundingHandle.ROTATE, transformHandleAt(Offset(214f, 172f), frame))
         assertEquals(BoundingHandle.ROTATE, transformHandleAt(Offset(88f, 92f), frame))
+        // The zone under the pointer names its corner, for the hover to light.
+        assertEquals(Offset(200f, 160f), turnCornerAt(Offset(214f, 172f), frame))
+        assertNull(turnCornerAt(Offset(214f, 172f), frame, TransformHandles(rotates = false)))
+        assertNull(turnCornerAt(Offset(188f, 150f), frame))
         // Inside the box near a corner is still a move, never a turn.
         assertEquals(BoundingHandle.BODY, transformHandleAt(Offset(188f, 150f), frame))
         // Far from every corner, outside: nothing.
@@ -94,5 +98,7 @@ class TransformBoxTest {
         assertEquals(Cursor.NW_RESIZE_CURSOR, type(BoundingHandle.RIGHT, 45f))
         assertEquals(Cursor.NE_RESIZE_CURSOR, type(BoundingHandle.TOP_LEFT, 90f))
         assertEquals(Cursor.MOVE_CURSOR, type(BoundingHandle.BODY, 30f))
+        // Turning keeps the plain arrow; the box lights the zone instead.
+        assertEquals(Cursor.DEFAULT_CURSOR, type(BoundingHandle.ROTATE, 30f))
     }
 }
