@@ -128,6 +128,7 @@ private fun flatShape(element: JsonElement): JsonElement {
 
 internal fun AgentToolFamily.description(members: List<WorkspaceOperationDefinition>): String = buildString {
     append(summary)
+    if (members.any { it.jobBacked }) append(" Ops marked [job] run in the background. ").append(CORE_WAIT_NOTE)
     append(" Ops and required request fields:")
     members.forEach { member ->
         val request = compactRequest(member.requestSchema)

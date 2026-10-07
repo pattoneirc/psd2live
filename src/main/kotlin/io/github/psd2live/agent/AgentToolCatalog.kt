@@ -30,6 +30,10 @@ internal const val WAIT_FIELD = "wait_ms"
 internal const val MAX_WAIT_MS = 30_000L
 internal const val DEFAULT_CORE_WAIT_MS = 20_000L
 
+/** The registry describes background operations as returning a job handle; in the core profile the call waits first. */
+internal const val CORE_WAIT_NOTE = "Here the call waits up to wait_ms (default $DEFAULT_CORE_WAIT_MS) and returns the finished job with its " +
+    "result; a job still running returns its id for job_wait."
+
 private val CONTEXT_FIELDS = setOf("request_id", "project_id")
 
 internal class AgentTool(
@@ -59,7 +63,7 @@ internal class AgentToolCatalog(
     }
 
     private fun operationTool(operation: WorkspaceOperationDefinition) = AgentTool(
-        operation.id, operation.description,
+        operation.id, if (profile == AgentToolProfile.CORE && operation.jobBacked) operation.description + " " + CORE_WAIT_NOTE else operation.description,
         inputSchema = if (profile == AgentToolProfile.CORE) operation.compactEnvelope() else operation.requestEnvelope(),
         outputSchema = if (profile == AgentToolProfile.CORE) null else operation.responseEnvelope(),
         annotations = ToolAnnotations(readOnlyHint = operation.kind == WorkspaceOperationKind.QUERY,

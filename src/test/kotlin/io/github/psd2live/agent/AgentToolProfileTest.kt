@@ -68,6 +68,10 @@ class AgentToolProfileTest {
             val project = catalog.tools.getValue("project")
             assertTrue(WAIT_FIELD in project.inputSchema.getValue("properties").jsonObject)
             assertTrue("\n- export_model: state, output_directory [job]" in project.description, project.description)
+            // Background tools say that the core call waits, not only that it returns a job handle.
+            assertTrue(CORE_WAIT_NOTE in project.description && CORE_WAIT_NOTE in catalog.tools.getValue("workspace_apply_edits").description)
+            assertFalse(CORE_WAIT_NOTE in catalog.tools.getValue("rig_deform").description || CORE_WAIT_NOTE in catalog.tools.getValue("motion").description)
+            assertFalse(CORE_WAIT_NOTE in AgentToolCatalog(operations.registry, backend, AgentToolProfile.FULL).tools.getValue("workspace_apply_edits").description)
             assertFalse(WAIT_FIELD in catalog.tools.getValue("rig_deform").inputSchema.getValue("properties").jsonObject)
         }
     }
