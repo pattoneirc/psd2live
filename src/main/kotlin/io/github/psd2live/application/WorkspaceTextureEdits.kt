@@ -196,6 +196,14 @@ class WorkspaceTextureView internal constructor(private val capture: WorkspaceCa
     /** The mesh footprint [layerId]'s tile was arranged by, or null when it owns its whole rectangle. */
     fun footprint(layerId: String): TextureFootprint? = model.atlas.footprints[layerId]
 
+    private val meshFootprints: Map<String, TextureFootprint> by lazy { WorkspaceAtlasFootprints.of(model) + model.atlas.footprints }
+
+    /**
+     * The cells [layerId]'s meshes use on its tile: the footprint it was arranged by, else its meshes' own. Tiles
+     * collide only where these overlap, as the commit keeps them ([AtlasArrange.keep]); null for a tile no mesh samples.
+     */
+    fun meshFootprint(layerId: String): TextureFootprint? = meshFootprints[layerId]
+
     /** The layer ids of the tiles on [page]. */
     fun pageLayers(page: Int): List<String> = model.atlas.placementByLayerId.filterValues { it.page == page }.keys.sorted()
 }
@@ -368,7 +376,20 @@ internal object WorkspaceTextureEdits {
             val kept = tiles[id]
             if (kept == null || kept.page != at.page || kept.x != at.x || kept.y != at.y) tiles[id] = ArrangedTile(at.page, at.x, at.y, model.atlas.footprints[id])
         }
-        return stored.copy(tiles = tiles)
+        return meshed(stored.copy(tiles = tiles), model)
+    }
+
+    /**
+     * [arrangement] with every tile that has no footprint given its meshes' one, so tiles overlap only where their
+     * meshes do - by the cells the meshes use, never by their rectangles - and each writes only those cells, as
+     * the atlas view's drag tests ([WorkspaceTextureView.meshFootprint]) with the very same footprints.
+     */
+    private fun meshed(arrangement: AtlasArrangement, model: RigPreviewModel): AtlasArrangement {
+        if (arrangement.tiles.values.all { it.footprint != null }) return arrangement
+        val footprints = WorkspaceAtlasFootprints.of(model)
+        return arrangement.copy(tiles = arrangement.tiles.mapValues { (id, tile) ->
+            if (tile.footprint != null) tile else tile.copy(footprint = footprints[id])
+        })
     }
 
     /**
@@ -390,7 +411,7 @@ internal object WorkspaceTextureEdits {
         overrides[edit.layerId]?.let { put(overrides, edit.layerId, it.copy(pin = null)) }
         val cleared = withOverrides(document, overrides)
         if (stored == null && edit.pin == null) return cleared
-        val arrangement = stored?.let { settled(it, model) } ?: AtlasLayout.frozen(model.atlas)
+        val arrangement = stored?.let { settled(it, model) } ?: meshed(AtlasLayout.frozen(model.atlas), model)
         val tiles = arrangement.tiles.toMutableMap()
         val pin = edit.pin
         if (pin == null) tiles.remove(edit.layerId)

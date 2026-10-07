@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.Density
 import io.github.psd2live.ui.state.AppSettings
 import io.github.psd2live.ui.state.DesktopWorkspace
 import io.github.psd2live.ui.state.PSD2LiveViewModel
+import io.github.psd2live.ui.state.TextureDensity
 import io.github.psd2live.ui.theme.CompactToolTheme
 import io.github.psd2live.ui.theme.ToolColors
 import kotlinx.serialization.json.JsonPrimitive
@@ -24,6 +25,8 @@ import java.awt.image.BufferedImage
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -87,12 +90,12 @@ class AtlasRealtimeEditTest {
 					settle()
 
 					// A first edit commits, so the gestures below run on a later version than the view was first composed with.
-					vm.setTextureDensity(first, listOf(red.layerId), 2f)
+					vm.setTextureDensity(first, listOf(red.layerId), 0.5f)
 					vm.awaitTextureEdits()
 					settle()
 					val tile = requireNotNull(vm.textureSnapshot()).tilesByLayer.getValue(red.layerId)
 					val pageSize = requireNotNull(vm.textureSnapshot()).atlas.pages[tile.page].width
-					val target = pageSize - tile.width - 8f to pageSize - tile.height - 8f
+					val target = pageSize - tile.width * 3f to pageSize - tile.height * 3f
 					val from = view(tile.x + tile.width / 2f, tile.y + tile.height / 2f)
 					val to = view(target.first + tile.width / 2f, target.second + tile.height / 2f)
 					val primary = PointerButtons(isPrimaryPressed = true)
@@ -107,7 +110,8 @@ class AtlasRealtimeEditTest {
 					assertTrue(vm.state.value.textureWorkspace.pending.containsKey(red.layerId), "the move is queued")
 					assertTrue(isRed(render(), to), "the dropped tile shows at once")
 					// A second edit while the first commits is queued, not refused.
-					vm.scaleTextureDensity(requireNotNull(vm.textureSnapshot()), listOf(red.layerId), 0.5f)
+					// Back to full size where it was dropped, in free space.
+					vm.scaleTextureDensity(requireNotNull(vm.textureSnapshot()), listOf(red.layerId), 2f)
 					assertNull(vm.state.value.textureWorkspace.error)
 					vm.awaitTextureEdits()
 					settle()
@@ -134,6 +138,97 @@ class AtlasRealtimeEditTest {
 					scene.sendPointerEvent(PointerEventType.Release, outward, button = PointerButton.Primary)
 					vm.awaitTextureEdits()
 					assertTrue((requireNotNull(vm.textureSnapshot()).layer(red.layerId)?.override?.density ?: 1f) < 1f, "the corner drag committed")
+					scene.close()
+				}
+			}
+		} finally {
+			AppSettings.softwareCanvas = saved
+		}
+	}
+
+	/**
+	 * Two triangles whose rectangles overlap but whose meshes do not: one may stand on the other's rectangle, and lands
+	 * exactly where it was dropped; where their meshes meet the drop is refused. A corner drag scales without steps
+	 * and keeps the opposite corner where it was, as its preview showed.
+	 */
+	@OptIn(ExperimentalComposeUiApi::class)
+	@Test fun tilesCollideByTheirMeshesAndScaleWithoutSteps() = kotlinx.coroutines.runBlocking<Unit> {
+		val saved = AppSettings.softwareCanvas
+		AppSettings.softwareCanvas = true
+		val temp = Files.createTempDirectory("atlas-mesh")
+		fun triangle(name: String, lower: Boolean) = temp.resolve("$name.png").also { path ->
+			val image = BufferedImage(96, 96, BufferedImage.TYPE_INT_ARGB)
+			// A wide diagonal band between the two halves stays empty.
+			for (y in 0 until 96) for (x in 0 until 96) if (if (lower) y - x > 24 else x - y > 24) image.setRGB(x, y, 0xff40a040.toInt())
+			javax.imageio.ImageIO.write(image, "png", path.toFile())
+		}
+		try {
+			PSD2LiveViewModel().use { vm ->
+				DesktopWorkspace(vm, temp.resolve("store")).use { workspace ->
+					vm.attachWorkspace(workspace)
+					workspace.createArtwork(buildJsonObject {
+						put("width", JsonPrimitive(128)); put("height", JsonPrimitive(128))
+						put("layers", buildJsonArray {
+							for ((name, lower) in listOf("lower" to true, "upper" to false)) add(buildJsonObject {
+								put("path", JsonPrimitive(triangle(name, lower).toString())); put("name", JsonPrimitive(name)); put("role", JsonPrimitive("objects"))
+							})
+						})
+					})
+					vm.setAtlasBudget(requireNotNull(vm.textureSnapshot()), pageSize = 512)
+					vm.awaitTextureEdits()
+					val snapshot = requireNotNull(vm.textureSnapshot())
+					fun tile(name: String) = requireNotNull(vm.textureSnapshot()).let { s -> s.atlas.tiles.single { s.layer(it.layerId)?.name == name } }
+					val lower = tile("lower"); val upper = tile("upper")
+
+					// On the other's very rectangle: the boxes overlap entirely, the meshes not at all.
+					val onTop = assertNotNull(vm.draggedTextureTile(snapshot, upper.layerId, lower.x.toFloat(), lower.y.toFloat()))
+					assertFalse(onTop.collides, "rectangles overlap but meshes do not")
+					assertTrue(vm.moveTextureTile(snapshot, onTop))
+					vm.awaitTextureEdits()
+					assertNull(vm.state.value.textureWorkspace.error)
+					val landed = tile("upper")
+					assertEquals(lower.x to lower.y, landed.x to landed.y, "the tile lands exactly where it was dropped")
+					assertEquals(lower.x to lower.y, tile("lower").let { it.x to it.y }, "and the other stays")
+
+					// Shifted down and left, the upper triangle's mesh runs into the lower one's: refused.
+					val after = requireNotNull(vm.textureSnapshot())
+					val into = assertNotNull(vm.draggedTextureTile(after, upper.layerId, lower.x.toFloat(), lower.y + 40f))
+					assertTrue(into.collides, "meshes overlap")
+					assertFalse(vm.moveTextureTile(after, into))
+
+					// Scaling the lower tile by its top left grip keeps its bottom right corner and takes no step.
+					val shown = tile("lower")
+					val scene = ImageComposeScene(400, 400, density = Density(1f)) {
+						CompactToolTheme(colors = ToolColors.Dark) {
+							val state by vm.state.collectAsState()
+							Box(Modifier.fillMaxSize()) { AtlasPageView(state, vm) }
+						}
+					}
+					var clock = 0L
+					fun render() { clock += 16_000_000L; scene.render(clock).close() }
+					// Out of the other's way first, so a grown tile has room.
+					vm.moveTextureTile(after, assertNotNull(vm.draggedTextureTile(after, upper.layerId, 300f, 300f)))
+					vm.awaitTextureEdits()
+					vm.selectLayer(shown.layerId)
+					repeat(10) { render(); Thread.sleep(20) }
+					fun view(x: Float, y: Float): Offset { val c = AtlasPageProbe.camera; return Offset(c[0] + x * c[2], c[1] + y * c[2]) }
+					val grip = view(shown.x.toFloat(), shown.y.toFloat())
+					val anchor = view((shown.x + shown.width).toFloat(), (shown.y + shown.height).toFloat())
+					val target = anchor + (grip - anchor) * 0.83f
+					val primary = PointerButtons(isPrimaryPressed = true)
+					scene.sendPointerEvent(PointerEventType.Move, grip)
+					scene.sendPointerEvent(PointerEventType.Press, grip, buttons = primary, button = PointerButton.Primary)
+					for (i in 1..10) { scene.sendPointerEvent(PointerEventType.Move, grip + (target - grip) * (i / 10f), buttons = primary); render() }
+					scene.sendPointerEvent(PointerEventType.Release, target, button = PointerButton.Primary)
+					vm.awaitTextureEdits()
+					assertNull(vm.state.value.textureWorkspace.error)
+					val scaled = tile("lower")
+					val density = requireNotNull(vm.textureSnapshot()).layer(scaled.layerId)?.override?.density ?: 1f
+					assertEquals(0.83f, density, 0.02f, "the density follows the pointer")
+					val quarter = Math.round(TextureDensity.log2(density) * 4f) / 4f
+					assertTrue(kotlin.math.abs(TextureDensity.log2(density) - quarter) > 0.01f, "no quarter-power step: $density")
+					assertTrue(kotlin.math.abs(scaled.x + scaled.width - (shown.x + shown.width)) <= 1 &&
+						kotlin.math.abs(scaled.y + scaled.height - (shown.y + shown.height)) <= 1, "the opposite corner stays: $shown -> $scaled")
 					scene.close()
 				}
 			}

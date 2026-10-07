@@ -102,11 +102,37 @@ class TextureSnapshot(private val view: WorkspaceTextureView) {
 	 */
 	fun tiles(page: Int): List<WorkspaceAtlasTile> = atlas.tiles.filter { it.page == page && layer(it.layerId)?.deleted == false }
 
-	/** The cells [tile] occupies if it stood at ([x], [y]): its meshes' footprint when it was arranged by one, else its rectangle. */
-	internal fun shape(tile: WorkspaceAtlasTile, x: Int, y: Int): io.github.psd2live.core.AtlasArrange.Shape {
+	/** The cells [tile] writes on the page if it stood at ([x], [y]): its arranged footprint's, else its whole rectangle. */
+	internal fun shape(tile: WorkspaceAtlasTile, x: Int, y: Int): io.github.psd2live.core.AtlasArrange.Shape =
+		shapeOf(tile, x, y, view.footprint(tile.layerId))
+
+	/**
+	 * The cells [tile]'s meshes use if it stood at ([x], [y]) at its size: what a drag or a resize collides by. These
+	 * are the very cells the commit keeps tiles apart by, so a spot the view allows is the spot that lands.
+	 */
+	internal fun collisionShape(tile: WorkspaceAtlasTile, x: Int, y: Int): io.github.psd2live.core.AtlasArrange.Shape {
+		// A drag asks for the standing tiles' shapes on every pointer move; they are the same each time.
+		val key = CollisionKey(tile.layerId, x, y, tile.width, tile.height)
+		collisionShapes[key]?.let { return it }
+		if (collisionShapes.size > 4096) collisionShapes.clear()
+		return shapeOf(tile, x, y, view.meshFootprint(tile.layerId)).also { collisionShapes[key] = it }
+	}
+
+	private data class CollisionKey(val layerId: String, val x: Int, val y: Int, val width: Int, val height: Int)
+	private val collisionShapes = ConcurrentHashMap<CollisionKey, io.github.psd2live.core.AtlasArrange.Shape>()
+
+	private fun shapeOf(tile: WorkspaceAtlasTile, x: Int, y: Int, footprint: io.github.psd2live.project.TextureFootprint?): io.github.psd2live.core.AtlasArrange.Shape {
 		val layer = layer(tile.layerId)
 		val rasterWidth = layer?.rasterWidth ?: tile.width; val rasterHeight = layer?.rasterHeight ?: tile.height
-		return io.github.psd2live.core.AtlasArrange.shape(x, y, tile.width, tile.height, rasterWidth, rasterHeight, view.footprint(tile.layerId))
+		return io.github.psd2live.core.AtlasArrange.shape(x, y, tile.width, tile.height, rasterWidth, rasterHeight, footprint)
+	}
+
+	/** Whether [tile], standing at ([x], [y]) at its size, would share a cell (with the padding) with any of [others]. */
+	internal fun collides(tile: WorkspaceAtlasTile, x: Int, y: Int, others: List<WorkspaceAtlasTile>): Boolean {
+		val grown = io.github.psd2live.core.AtlasArrange.dilate(collisionShape(tile, x, y),
+			io.github.psd2live.core.AtlasArrange.paddingCells(atlas.budget.padding))
+		return others.any { other -> other.layerId != tile.layerId && other.page == tile.page &&
+			io.github.psd2live.core.AtlasArrange.overlaps(grown, collisionShape(other, other.x, other.y)) }
 	}
 
 	/** The raster [layerId]'s tile shows (at its tile size); the views draw tiles from it while the pages are not [upscaled]. */
@@ -159,56 +185,24 @@ object TextureDensity {
 	/** A density rounded for display: two decimals below 10, one above. */
 	fun format(value: Float): String = if (value >= 10f) "%.1f".format(value) else "%.2f".format(value)
 
-	/** [value] on the quarter-power-of-two grid the slider and the corner handles step along, within MIN..MAX. */
-	fun snap(value: Float): Float {
-		if (!(value > 0f)) return MIN
-		return pow2(Math.round(log2(value) * 4f) / 4f).coerceIn(MIN, MAX)
-	}
+	/** [value] within MIN..MAX; densities are continuous, so a drag or the slider follows the pointer without steps. */
+	fun clamp(value: Float): Float = if (!(value > 0f)) MIN else value.coerceIn(MIN, MAX)
 
 	/**
 	 * The density a corner drag asks for: [current] scaled by how far the pointer is from the tile's opposite
-	 * corner, [distance], against that corner's own distance, [startDistance], snapped to the slider's grid.
+	 * corner, [distance], against that corner's own distance, [startDistance].
 	 */
 	fun dragged(current: Float, startDistance: Float, distance: Float): Float =
-		if (!(startDistance > 0f)) current else snap(current * (distance / startDistance).coerceAtLeast(1e-3f))
+		if (!(startDistance > 0f)) current else clamp(current * (distance / startDistance).coerceAtLeast(1e-3f))
 }
 
-/** Tiles placed on a page collide when their rectangles, grown by the padding, overlap. */
-internal fun tilesOverlap(ax: Int, ay: Int, aw: Int, ah: Int, b: WorkspaceAtlasTile, padding: Int): Boolean =
-	ax < b.x + b.width + padding && b.x < ax + aw + padding && ay < b.y + b.height + padding && b.y < ay + ah + padding
-
 /**
- * Where a tile dragged to ([x], [y]) lands: inside the page, snapped to a neighbour's edge (plus padding) within
- * [snap] texture pixels, and whether it then overlaps another tile. Every other tile keeps its place once a tile
- * is moved, so any overlap collides: of rectangles, or of [shape]s for tiles arranged by their meshes.
+ * Where a tile dragged to ([x], [y]) lands: exactly there, kept inside the page - no snapping, so it follows the
+ * pointer smoothly - and whether its meshes' cells then meet another tile's ([collides]).
  */
-internal fun placeDraggedTile(
-	tile: WorkspaceAtlasTile, x: Float, y: Float, pageWidth: Int, pageHeight: Int,
-	others: List<WorkspaceAtlasTile>, padding: Int, snap: Float,
-	shape: ((WorkspaceAtlasTile, Int, Int) -> io.github.psd2live.core.AtlasArrange.Shape)? = null,
-): TileDragDraft {
-	var px = x.coerceIn(0f, (pageWidth - tile.width).coerceAtLeast(0).toFloat())
-	var py = y.coerceIn(0f, (pageHeight - tile.height).coerceAtLeast(0).toFloat())
-	fun nearest(value: Float, size: Int, edges: List<Float>): Float {
-		var best = value; var distance = snap
-		for (edge in edges) for (candidate in listOf(edge, edge - size)) {
-			val d = kotlin.math.abs(candidate - value)
-			if (d < distance) { distance = d; best = candidate }
-		}
-		return best
-	}
-	val neighbours = others.filter { it.layerId != tile.layerId && it.page == tile.page }
-	px = nearest(px, tile.width, listOf(0f, pageWidth.toFloat()) + neighbours.flatMap {
-		listOf((it.x + it.width + padding).toFloat(), (it.x - padding).toFloat(), it.x.toFloat())
-	}).coerceIn(0f, (pageWidth - tile.width).coerceAtLeast(0).toFloat())
-	py = nearest(py, tile.height, listOf(0f, pageHeight.toFloat()) + neighbours.flatMap {
-		listOf((it.y + it.height + padding).toFloat(), (it.y - padding).toFloat(), it.y.toFloat())
-	}).coerceIn(0f, (pageHeight - tile.height).coerceAtLeast(0).toFloat())
-	val ix = Math.round(px); val iy = Math.round(py)
-	val collides = neighbours.any { other ->
-		if ((!tile.shaped && !other.shaped) || shape == null) tilesOverlap(ix, iy, tile.width, tile.height, other, padding)
-		else io.github.psd2live.core.AtlasArrange.overlaps(io.github.psd2live.core.AtlasArrange.dilate(shape(tile, ix, iy),
-			io.github.psd2live.core.AtlasArrange.paddingCells(padding)), shape(other, other.x, other.y))
-	}
-	return TileDragDraft(tile.layerId, tile.page, ix, iy, collides)
+internal fun placeDraggedTile(tile: WorkspaceAtlasTile, x: Float, y: Float, pageWidth: Int, pageHeight: Int,
+                              collides: (Int, Int) -> Boolean): TileDragDraft {
+	val ix = Math.round(x.coerceIn(0f, (pageWidth - tile.width).coerceAtLeast(0).toFloat()))
+	val iy = Math.round(y.coerceIn(0f, (pageHeight - tile.height).coerceAtLeast(0).toFloat()))
+	return TileDragDraft(tile.layerId, tile.page, ix, iy, collides(ix, iy))
 }

@@ -4115,12 +4115,28 @@ class PSD2LiveViewModel : AutoCloseable {
 	 * (queued edits applied); the atlas view keeps it while the pointer moves, so a drag touches no application state
 	 * until [moveTextureTile].
 	 */
-	fun draggedTextureTile(snapshot: TextureSnapshot, layerId: String, x: Float, y: Float, snap: Float): TileDragDraft? {
+	fun draggedTextureTile(snapshot: TextureSnapshot, layerId: String, x: Float, y: Float): TileDragDraft? {
 		val pending = _state.value.textureWorkspace.pending
 		val tile = snapshot.tilesByLayer[layerId]?.shownAs(pending) ?: return null
 		val page = snapshot.atlas.pages.getOrNull(tile.page) ?: return null
-		return placeDraggedTile(tile, x, y, page.width, page.height, snapshot.shownTiles(tile.page, pending), snapshot.atlas.budget.padding, snap,
-			snapshot::shape)
+		val others = snapshot.shownTiles(tile.page, pending)
+		return placeDraggedTile(tile, x, y, page.width, page.height) { ix, iy -> snapshot.collides(tile, ix, iy, others) }
+	}
+
+	/**
+	 * Whether [placed] - tiles by layer at the spots and sizes an edit would give them - would meet any other tile by
+	 * their meshes' cells, the others as the atlas shows them. A placement that does is refused rather than committed,
+	 * since the commit would push a tile into free space and land somewhere the preview never showed.
+	 */
+	fun texturePlacementCollides(snapshot: TextureSnapshot, placed: Map<String, io.github.psd2live.application.WorkspaceAtlasTile>): Boolean {
+		val pending = _state.value.textureWorkspace.pending
+		val pages = placed.values.mapTo(HashSet()) { it.page }
+		val shown = pages.flatMap { page -> snapshot.shownTiles(page, pending) }.map { placed[it.layerId] ?: it }
+		return placed.values.any { tile ->
+			val page = snapshot.atlas.pages.getOrNull(tile.page)
+			page == null || tile.x < 0 || tile.y < 0 || tile.x + tile.width > page.width || tile.y + tile.height > page.height ||
+				snapshot.collides(tile, tile.x, tile.y, shown)
+		}
 	}
 
 	/**
@@ -4156,22 +4172,40 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	/**
 	 * Queued density changes: [densities] by layer (null resets to 1), shown at once at the sizes they give, each
-	 * tile growing or shrinking from its top left; [lock] when given.
+	 * tile growing or shrinking from its top left, or from [origins] where given (a corner drag's opposite corner
+	 * stays put, so its tile moves too); [lock] when given. Refused when a tile would then meet another by their
+	 * meshes. False when nothing was queued.
 	 */
-	private fun queueDensities(snapshot: TextureSnapshot, densities: Map<String, Float?>, lock: Boolean? = null) {
-		if (densities.isEmpty()) return
+	private fun queueDensities(snapshot: TextureSnapshot, densities: Map<String, Float?>, lock: Boolean? = null,
+	                           origins: Map<String, Pair<Int, Int>> = emptyMap()): Boolean {
+		if (densities.isEmpty()) return false
 		val pending = _state.value.textureWorkspace.pending
-		val edits = densities.entries.groupBy({ it.value }, { it.key })
-			.map { (density, ids) -> io.github.psd2live.application.WorkspaceTextureEdit.SetPixelDensity(ids, density, lock) }
-		queueTextureEdits(edits) { token ->
-			densities.mapNotNull { (id, density) ->
-				val committed = snapshot.tilesByLayer[id] ?: return@mapNotNull null
-				val shown = committed.shownAs(pending)
-				val ratio = (density ?: 1f) / (snapshot.layer(id)?.override?.density ?: 1f)
-				id to PendingTile(shown.page, shown.x, shown.y, Math.round(committed.width * ratio).coerceAtLeast(1),
-					Math.round(committed.height * ratio).coerceAtLeast(1), density ?: 1f, token)
-			}.toMap()
+		val placed = densities.mapNotNull { (id, density) ->
+			val committed = snapshot.tilesByLayer[id] ?: return@mapNotNull null
+			val shown = committed.shownAs(pending)
+			val ratio = (density ?: 1f) / (snapshot.layer(id)?.override?.density ?: 1f)
+			val (x, y) = origins[id] ?: (shown.x to shown.y)
+			id to shown.copy(x = x, y = y, width = Math.round(committed.width * ratio).coerceAtLeast(1),
+				height = Math.round(committed.height * ratio).coerceAtLeast(1))
+		}.toMap()
+		// Only tiles that grow or move can newly meet another; a lock or a shrink never does.
+		val changed = placed.filter { (id, tile) ->
+			val shown = snapshot.tilesByLayer[id]?.shownAs(pending)
+			shown == null || tile.x != shown.x || tile.y != shown.y || tile.width > shown.width || tile.height > shown.height
 		}
+		if (changed.isNotEmpty() && texturePlacementCollides(snapshot, changed)) {
+			updateTextureWorkspace { it.copy(error = tr("texture.scale.collides")) }
+			return false
+		}
+		val edits = densities.entries.groupBy({ it.value }, { it.key })
+			.map { (density, ids) -> io.github.psd2live.application.WorkspaceTextureEdit.SetPixelDensity(ids, density, lock) } +
+			origins.filterKeys { it in placed }.map { (id, at) ->
+				io.github.psd2live.application.WorkspaceTextureEdit.SetTile(id, io.github.psd2live.project.TexturePin(placed.getValue(id).page, at.first, at.second))
+			}
+		queueTextureEdits(edits) { token ->
+			placed.mapValues { (id, tile) -> PendingTile(tile.page, tile.x, tile.y, tile.width, tile.height, densities[id] ?: 1f, token) }
+		}
+		return true
 	}
 
 	/** Sets the texture density of [layerIds] (null resets to 1), keeping each layer's lock. */
@@ -4232,16 +4266,17 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	/**
 	 * Scales the density of [layerIds] by [factor], as a corner handle drag or a "×2" menu row does: each layer
-	 * keeps its own ratio to the others, snapped to the slider's grid, from the density the atlas shows for it.
-	 * Layers that land on one density share one command, keeping their locks.
+	 * keeps its own ratio to the others, from the density the atlas shows for it, with no steps. [origins] moves a
+	 * tile to keep a corner drag's opposite corner where it was. Layers that land on one density share one command,
+	 * keeping their locks.
 	 */
-	fun scaleTextureDensity(snapshot: TextureSnapshot, layerIds: List<String>, factor: Float) {
+	fun scaleTextureDensity(snapshot: TextureSnapshot, layerIds: List<String>, factor: Float, origins: Map<String, Pair<Int, Int>> = emptyMap()) {
 		if (layerIds.isEmpty() || !(factor > 0f) || factor == 1f) return
 		val densities = layerIds.associateWith { id ->
 			val shown = shownTextureDensity(snapshot, id)
-			TextureDensity.snap(shown * factor).takeIf { it != shown }
+			TextureDensity.clamp(shown * factor).takeIf { it != shown }
 		}.filterValues { it != null }.mapValues { (_, density) -> density!!.takeUnless { it == 1f } }
-		queueDensities(snapshot, densities)
+		queueDensities(snapshot, densities, origins = origins)
 	}
 
 	/** A run of texture edits waiting to commit, and the tiles it shows meanwhile. */

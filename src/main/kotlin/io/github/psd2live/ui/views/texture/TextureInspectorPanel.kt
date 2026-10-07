@@ -154,13 +154,14 @@ private fun DensitySection(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, lay
 		CompactSlider(
 			value = draft,
 			onValueChange = {
-				draft = Math.round(it * 4f) / 4f
+				// Continuous: the tiles follow the thumb, no steps.
+				draft = it
 				// The atlas shows every selected tile at the size the slider's value gives it, before it is committed.
-				val next = TextureDensity.snap(TextureDensity.pow2(draft))
+				val next = TextureDensity.clamp(TextureDensity.pow2(draft))
 				vm.previewTextureDensity(layers.associate { it.layerId to next / vm.shownTextureDensity(snapshot, it.layerId) })
 			},
 			onValueChangeFinished = {
-				val next = TextureDensity.snap(TextureDensity.pow2(draft))
+				val next = TextureDensity.clamp(TextureDensity.pow2(draft))
 				if (mixed || next != density) vm.setTextureDensity(snapshot, ids, next.takeUnless { it == 1f })
 				else vm.previewTextureDensity(emptyMap())
 			},

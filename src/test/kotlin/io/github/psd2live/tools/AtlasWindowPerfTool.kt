@@ -160,7 +160,7 @@ class AtlasWindowPerfTool {
 				if (t == 0.0 || t < 0.01) SwingUtilities.invokeAndWait {
 					val s = requireNotNull(vm.textureSnapshot())
 					val at = s.tilesByLayer.getValue(tile.layerId)
-					vm.draggedTextureTile(s, tile.layerId, at.x + 0f, at.y + 600f, snap = 0f)?.let { vm.moveTextureTile(s, it) }
+					vm.draggedTextureTile(s, tile.layerId, at.x + 0f, at.y + 600f)?.let { vm.moveTextureTile(s, it) }
 				}
 			}
 			Thread.sleep(1000)

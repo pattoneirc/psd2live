@@ -163,8 +163,24 @@ private data class PageTransform(val left: Float, val top: Float, val scale: Flo
 	fun rect(tile: WorkspaceAtlasTile) = rect(tile.x.toFloat(), tile.y.toFloat(), tile.width.toFloat(), tile.height.toFloat())
 }
 
-/** A corner-handle drag in flight: [factor] scales every selected tile's density, about [anchor]'s tile corner. */
-private data class DensityDrag(val layerIds: List<String>, val primary: String, val anchor: Offset, val corner: Offset, val factor: Float)
+/**
+ * A corner-handle drag in flight: [factor] scales every selected tile's density, about [anchor]'s tile corner;
+ * [collides] when a tile would then meet another by their meshes (or leave the page), so the release changes nothing.
+ */
+private data class DensityDrag(val layerIds: List<String>, val primary: String, val anchor: Offset, val corner: Offset, val factor: Float,
+                               val collides: Boolean = false)
+
+/**
+ * Where a corner drag puts [tile] (as the atlas shows it), in whole texture pixels: the grabbed tile keeps its opposite
+ * corner, the others their top left. The preview, the overlap test and the commit all take this one placement.
+ */
+private fun scaledTile(tile: WorkspaceAtlasTile, drag: DensityDrag): WorkspaceAtlasTile {
+	val width = Math.round(tile.width * drag.factor).coerceAtLeast(1); val height = Math.round(tile.height * drag.factor).coerceAtLeast(1)
+	if (tile.layerId != drag.primary) return tile.copy(width = width, height = height)
+	val x = if (drag.anchor.x > tile.x) Math.round(drag.anchor.x) - width else Math.round(drag.anchor.x)
+	val y = if (drag.anchor.y > tile.y) Math.round(drag.anchor.y) - height else Math.round(drag.anchor.y)
+	return tile.copy(x = x, y = y, width = width, height = height)
+}
 
 /** What a right-click opened its menu on: a tile's layer, or the page itself. */
 private data class AtlasMenu(val at: Offset, val layerId: String?)
@@ -383,10 +399,17 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 							val distance = (currentTransform.toPage(change.position) - anchor).getDistance()
 							val density = TextureDensity.dragged(primaryDensity, start, distance)
 							drag = drag.copy(factor = density / primaryDensity)
+							val placed = currentTiles.filter { it.layerId in drag.layerIds }.associate { it.layerId to scaledTile(it, drag) }
+							drag = drag.copy(collides = vm.texturePlacementCollides(snapshotAtStart, placed))
 							densityDrag = drag
 							change.consume()
 						}
-						if (drag.factor != 1f) vm.scaleTextureDensity(snapshotAtStart, drag.layerIds, drag.factor)
+						if (drag.factor != 1f) {
+							// The grabbed tile moves to keep its opposite corner; the commit takes the spot the preview showed.
+							val primary = currentTiles.firstOrNull { it.layerId == drag.primary }?.let { scaledTile(it, drag) }
+							val origins = primary?.takeIf { it.x != tile.x || it.y != tile.y }?.let { mapOf(it.layerId to (it.x to it.y)) }.orEmpty()
+							vm.scaleTextureDensity(snapshotAtStart, drag.layerIds, drag.factor, origins)
+						}
 						densityDrag = null
 						return@awaitEachGesture
 					}
@@ -437,8 +460,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 						if (!dragging && (distance < viewConfiguration.touchSlop || currentBusy || select == CanvasNavigation.SelectMode.SUBTRACT)) continue
 						dragging = true
 						val at = currentTransform.toPage(change.position)
-						tileDrag = vm.draggedTextureTile(snapshotAtStart, tile.layerId, tile.x + at.x - start.x, tile.y + at.y - start.y,
-							snap = 6f / currentTransform.scale)
+						tileDrag = vm.draggedTextureTile(snapshotAtStart, tile.layerId, tile.x + at.x - start.x, tile.y + at.y - start.y)
 						change.consume()
 					}
 					val dropped = tileDrag
@@ -474,13 +496,8 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 					return Rect(Offset(tile.x.toFloat(), tile.y.toFloat()), Size(tile.width * factor, tile.height * factor))
 				}
 				if (scaling == null || tile.layerId !in scaling.layerIds) return null
-				val width = tile.width * scaling.factor; val height = tile.height * scaling.factor
-				// The grabbed tile grows from its opposite corner, the others from their own top left.
-				val origin = if (tile.layerId == scaling.primary) Offset(
-					if (scaling.anchor.x > tile.x) scaling.anchor.x - width else scaling.anchor.x,
-					if (scaling.anchor.y > tile.y) scaling.anchor.y - height else scaling.anchor.y,
-				) else Offset(tile.x.toFloat(), tile.y.toFloat())
-				return Rect(origin, Size(width, height))
+				val at = scaledTile(tile, scaling)
+				return Rect(at.x.toFloat(), at.y.toFloat(), (at.x + at.width).toFloat(), (at.y + at.height).toFloat())
 			}
 			val filter = if (transform.scale >= 2f) FilterQuality.None else FilterQuality.Low
 			/** Draws what [tile]'s cells hold - its raster, or that part of the page - into [at] (page pixels). */
@@ -602,24 +619,15 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 					}
 				}
 				// The lifted tiles, live: their pixels where the gesture puts them, over everything they pass.
-				val padding = atlas.budget.padding
 				for (tile in tiles) {
 					val at = moved(tile) ?: continue
 					if (texture.showPage && !gpuReady) withTransform({ translate(transform.left, transform.top); scale(transform.scale, transform.scale, Offset.Zero) }) {
 						tilePixels(tile, at, 1f)
 					}
 					val rect = transform.rect(at.left, at.top, at.width, at.height)
-					// A drop onto another tile is refused; a tile grown onto a neighbour is kept but pushes that neighbour
-					// into free space, which the warning colour says before the release.
-					val crowds = draft?.layerId != tile.layerId && tiles.any { other ->
-						other.layerId != tile.layerId && moved(other) == null && at.left < other.x + other.width + padding &&
-							other.x < at.right + padding && at.top < other.y + other.height + padding && other.y < at.bottom + padding
-					}
-					val color = when {
-						draft?.layerId == tile.layerId && draft.collides -> colors.error
-						crowds -> colors.warning
-						else -> colors.accent
-					}
+					// Where the tiles' meshes would meet another's, the release changes nothing: red says so beforehand.
+					val color = if ((draft?.layerId == tile.layerId && draft.collides) || (scaling?.collides == true && tile.layerId in scaling.layerIds))
+						colors.error else colors.accent
 					if (!texture.showPage) drawRect(color.copy(alpha = 0.18f), rect.topLeft, rect.size)
 					drawRect(color, rect.topLeft, rect.size, style = Stroke(2f))
 				}
