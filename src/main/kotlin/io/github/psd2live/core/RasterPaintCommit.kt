@@ -268,6 +268,12 @@ internal object RasterPaintCommit {
                     // frames those deformers were built on - the context of the analysis the rig came
                     // from - and not against frames derived from the freshly painted bounds, which
                     // would rescale the drawable against every sibling that kept the old frames.
+                    // A rotation's children live in its pixel space, which no frame describes: a mesh
+                    // the skeleton re-homed under a bone is in that bone's rest space. Such a mesh is
+                    // built on the canvas and placed through the parent's actual neutral transform.
+                    val rotationParent = drawable.parentDeformerId?.let { id ->
+                        currentPreview.rig.puppet.deformers.firstOrNull { it.id == id }
+                    } is Deformer.Rotation
                     val rebuilt = RigBuilder.rebuildDrawableMesh(
                         layer = targetClassifiedLayer,
                         context = rigContext,
@@ -275,18 +281,23 @@ internal object RasterPaintCommit {
                         pageWidth = targetPageWidth,
                         pageHeight = targetPageHeight,
                         config = currentPreview.config,
-                        parentId = drawable.parentDeformerId,
+                        parentId = drawable.parentDeformerId.takeUnless { rotationParent },
                         owner = drawable,
                         atlas = newAtlas,
                         generatedLips = regeneratedLips,
-                        previous = drawable.mesh?.let { replacedMesh(it, oldAtlas, drawable.id.raw, layerId, oldLayer ?: newLayer) },
+                        previous = drawable.mesh?.takeUnless { rotationParent }
+                            ?.let { replacedMesh(it, oldAtlas, drawable.id.raw, layerId, oldLayer ?: newLayer) },
                     )
                     for (lip in rebuilt.mouthLips) rebuiltLips[lip.drawable.id.raw] = lip
 
+                    val mesh = if (!rotationParent) rebuilt.mesh else DrawableMesh(
+                        RasterMeshPlacement.underParent(currentPreview.rig.puppet, drawable.id, rebuilt.mesh.positions),
+                        rebuilt.mesh.uvs, rebuilt.mesh.indices)
                     drawable.copy(
-                        mesh = rebuilt.mesh,
+                        mesh = mesh,
                         texturePage = targetPlacement.page,
-                        geometryGrid = drawable.geometryGrid ?: rebuilt.geometryGrid,
+                        // A canvas grid would not move a mesh in its parent's pixel space.
+                        geometryGrid = drawable.geometryGrid ?: rebuilt.geometryGrid.takeUnless { rotationParent },
                     )
                 } else {
                     val oldMesh = requireNotNull(drawable.mesh)
