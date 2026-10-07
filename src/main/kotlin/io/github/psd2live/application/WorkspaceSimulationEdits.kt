@@ -40,6 +40,7 @@ internal data class WorkspaceSimulationCandidate(val document: WorkspaceDocument
 
 /** Pure document preparation shared by single calls, GUI commands and ordered atomic batches. */
 internal object WorkspaceSimulationEdits {
+    private val pipeline = PSD2LivePipeline()
     val supported = setOf("simulation_put", "simulation_delete", "simulation_bake", "simulation_clear_bake", "model_apply_preset")
 
     fun apply(operation: WorkspaceDocumentOperation, document: WorkspaceDocument, preview: RigPreviewModel,
@@ -85,14 +86,20 @@ internal object WorkspaceSimulationEdits {
         require(layers.all { id -> preview.analysis.layers.any { it.source.id.raw == id } }) { "Unknown layer in preset selection" }
         val flag = when (preset) { ModelPresets.Preset.FRONT_HAIR -> "hairSimulationFront"; ModelPresets.Preset.BACK_HAIR -> "hairSimulationBack"; else -> null }
         var next = document
-        var base = preview.baseRig
-        var rig = preview.rig.puppet
+        var model = preview
         if (flag != null && document.settings[flag]?.jsonPrimitive?.booleanOrNull != true) {
             next = document.copy(settings = JsonObject(document.settings + (flag to JsonPrimitive(true))))
-            base = RigBuilder.build(preview.analysis, preview.atlas, next.config())
-            rig = base.withRigEdits(next.rigEdits).puppet
+            // The same generation the preview uses: saved generation input, superseded split originals in their
+            // slots and the journal replayed onto it. The visible analysis alone would generate split parts as
+            // ordinary layers that their records then fail to create.
+            val config = next.config()
+            model = pipeline.rebuildPreview(preview, preview.config.copy(hairSimulationFront = config.hairSimulationFront,
+                hairSimulationBack = config.hairSimulationBack))
         }
-        val applied = ModelPresets.apply(next.rigEdits, rig, preview.analysis, base.layerIdByDrawableId, preset, layers, next.config().alphaThreshold)
+        val base = model.baseRig
+        // Parts of a materialized split exist only after the journal: address meshes by the replayed layer map.
+        val applied = ModelPresets.apply(next.rigEdits, model.rig.puppet, model.analysis, model.rig.layerIdByDrawableId, preset, layers,
+            next.config().alphaThreshold)
         var overlay = applied.overlay
         val failures = LinkedHashMap<String, String>()
         for (id in applied.simulationIds) {
