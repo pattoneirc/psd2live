@@ -118,6 +118,9 @@ import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.state.ShortcutAction
 import io.github.psd2live.ui.state.ShortcutScope
+import io.github.psd2live.ui.state.MouseInput
+import io.github.psd2live.ui.state.buttonBindingOf
+import io.github.psd2live.ui.state.wheelBindingOf
 import io.github.psd2live.ui.state.TabViewOptions
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
@@ -142,6 +145,12 @@ private const val PAUSED_TRACKING_SETTLE_NANOS = 750_000_000L
 private const val PAUSED_PHYSICS_WARMUP_NANOS = 400_000_000L
 /** How often a paused-physics pump at rest looks for a new pose or a swing. */
 private const val PAUSED_PHYSICS_POLL_MILLIS = 16L
+
+/** Pointer travel, in dp, that a zoom drag counts as one wheel notch. */
+private const val ZOOM_DRAG_NOTCH_PX = 24f
+
+/** The tools whose tip has an angle a wheel notch can turn. */
+private val ANGLED_BRUSH_TOOLS = setOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE)
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -206,6 +215,11 @@ fun CanvasViewportComposable(
     }
 	var lastDragPos by remember { mutableStateOf(Offset.Zero) }
 	var dragStartPos by remember { mutableStateOf(Offset.Zero) }
+	// Set while a camera drag zooms (ShortcutAction.ZOOM_DRAG) rather than pans: the point it zooms about.
+	var zoomDragAnchor by remember { mutableStateOf<Offset?>(null) }
+	// The buttons that started a brush adjustment and a held temporary selection, so their own release ends them.
+	var brushAdjustButton by remember { mutableStateOf<PointerButton?>(null) }
+	var temporarySelectButton by remember { mutableStateOf<PointerButton?>(null) }
 	var showContextMenu by remember { mutableStateOf(false) }
 	var contextMenuOffset by remember { mutableStateOf(Offset.Zero) }
 	var fps by remember { mutableStateOf(0f) }
@@ -587,6 +601,193 @@ fun CanvasViewportComposable(
 		}
 	}
 
+	// One canvas command, from a key press, a wheel notch ([wheel]) or a button click. False lets the input
+	// through: a key to the views behind the canvas, a wheel notch to the zoom.
+	fun runCanvasCommand(action: ShortcutAction, shift: Boolean, wheel: Boolean): Boolean {
+		if (action == ShortcutAction.QUICK_PREVIEW) {
+			if (previewModel != null && !canvasState.workspaceEditBusy) editor.toggleQuickPreview()
+			return true
+		}
+		// Camera commands sit outside the mode and busy gates, as they always have: a
+		// long commit must not take the view controls away.
+		when (action) {
+			ShortcutAction.FRAME_VIEW -> {
+				if (mode == CanvasMode.EDIT) frameSelection() else resetCamera()
+				return true
+			}
+			ShortcutAction.RESET_CAMERA -> {
+				resetCamera()
+				return true
+			}
+			else -> Unit
+		}
+		CanvasModeChoice.entries.firstOrNull { it.shortcut == action }?.let { choice ->
+			if (previewModel == null) return false
+			if (!editor.busy && !canvasState.workspaceEditBusy) editor.chooseCanvasMode(choice)
+			return true
+		}
+		if (mode != CanvasMode.EDIT || previewModel == null) return false
+		// Consumes rather than falls through while a commit is running.
+		if (editor.busy || canvasState.workspaceEditBusy) return true
+		return when (action) {
+			ShortcutAction.SELECT_ALL -> { editor.selectAll(); true }
+			ShortcutAction.INVERT_SELECTION -> { editor.selectAll(true); true }
+			ShortcutAction.TOOL_SELECT -> { editor.activateTool(CanvasTool.SELECT); true }
+			ShortcutAction.TOOL_TRANSFORM -> { editor.activateTool(CanvasTool.TRANSFORM); true }
+			ShortcutAction.TOOL_LASSO_SELECT -> { editor.activateTool(CanvasTool.LASSO_SELECT); true }
+			ShortcutAction.TOOL_BRUSH_SELECT -> { editor.activateTool(CanvasTool.BRUSH_SELECT); true }
+			ShortcutAction.TOOL_BRUSH -> { editor.activateTool(CanvasTool.BRUSH); true }
+			ShortcutAction.TOOL_SMOOTH -> { editor.activateTool(CanvasTool.SMOOTH); true }
+			ShortcutAction.TOOL_INFLATE -> { editor.activateTool(CanvasTool.INFLATE); true }
+			ShortcutAction.TOOL_SKELETON_POSE -> { editor.activateTool(CanvasTool.SKELETON_POSE); true }
+			ShortcutAction.TOOL_SKELETON_EDIT -> { editor.activateTool(CanvasTool.SKELETON_EDIT); true }
+			ShortcutAction.TOOL_CREATE_WARP -> { editor.activateTool(CanvasTool.CREATE_WARP); true }
+			ShortcutAction.TOOL_CREATE_ROTATION -> { editor.activateTool(CanvasTool.CREATE_ROTATION); true }
+			ShortcutAction.TOOL_CREATE_DEFORM_PATH -> { editor.activateTool(CanvasTool.CREATE_DEFORM_PATH); true }
+			ShortcutAction.TOOL_GLUE -> { editor.activateTool(CanvasTool.GLUE); true }
+			ShortcutAction.TOOL_SUBDIVIDE -> { editor.activateTool(CanvasTool.SUBDIVIDE); true }
+			ShortcutAction.TOOL_KNIFE -> { editor.activateTool(CanvasTool.KNIFE); true }
+			ShortcutAction.TOOL_WEIGHT_PAINT -> { editor.activateTool(CanvasTool.WEIGHT_PAINT); true }
+			ShortcutAction.TOOL_WEIGHT_GRADIENT -> { editor.activateTool(CanvasTool.WEIGHT_GRADIENT); true }
+			ShortcutAction.SELECTION_STYLE_BOX -> { editor.selectionStyle = SelectionStyle.BOX; true }
+			ShortcutAction.SELECTION_STYLE_LASSO -> { editor.selectionStyle = SelectionStyle.LASSO; true }
+			ShortcutAction.SELECT_LINKED -> { editor.selectLinked(); true }
+			ShortcutAction.CANCEL -> {
+				if (showContextMenu) {
+					showContextMenu = false
+					true
+				} else {
+					if (viewModel.swingSession != null) viewModel.endSwing()
+					else if (editor.placement != null) editor.cancelPlacement() else editor.cancel()
+					true
+				}
+			}
+			ShortcutAction.FINISH_PATH -> {
+				when {
+					viewModel.swingSession != null -> { viewModel.commitSwing(); true }
+					editor.tool == CanvasTool.KNIFE -> { editor.finishKnife(); true }
+					editor.placement != null && editor.placement?.kind != CreatePlacementKind.PATH -> {
+						editor.confirmPlacement(); true
+					}
+					editor.tool == CanvasTool.CREATE_DEFORM_PATH || editor.drawingPath ||
+						editor.placement?.kind == CreatePlacementKind.PATH -> {
+						editor.finishPath(); true
+					}
+					editor.placement != null -> { editor.confirmPlacement(); true }
+					editor.tool == CanvasTool.GLUE -> { editor.applyGlue(); true }
+					else -> false
+				}
+			}
+			ShortcutAction.DELETE_SELECTION -> {
+				if (editor.tool == CanvasTool.KNIFE || editor.drawingPath) editor.undoDraftPoint()
+                        else if (editor.tool == CanvasTool.CREATE_DEFORM_PATH || editor.activePath != null) editor.deletePathPoint()
+				else if (editor.hierarchyMode == EditHierarchyMode.EDIT) editor.topology("delete")
+				true
+			}
+			ShortcutAction.TOOL_PAINT_BRUSH -> {
+				if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
+				editor.activateTool(CanvasTool.PAINT_BRUSH); true
+			}
+			ShortcutAction.TOOL_PAINT_PENCIL -> {
+				if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
+				editor.activateTool(CanvasTool.PAINT_PENCIL); true
+			}
+			ShortcutAction.TOOL_PAINT_ERASER -> {
+				if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
+				editor.activateTool(CanvasTool.PAINT_ERASER); true
+			}
+			ShortcutAction.TOOL_PAINT_BUCKET -> {
+				if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
+				editor.activateTool(CanvasTool.PAINT_BUCKET); true
+			}
+			ShortcutAction.TOOL_PAINT_EYEDROPPER -> {
+				if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
+				editor.activateTool(CanvasTool.PAINT_EYEDROPPER); true
+			}
+			// The shape chords pick a shape, and with it the shape tool: the three are one tool
+			// with three faces, so a chord is enough to start drawing with the face it names.
+			ShortcutAction.TOOL_PAINT_LINE -> {
+				if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
+				editor.selectPaintShape(PaintShape.LINE); true
+			}
+			ShortcutAction.TOOL_PAINT_RECT -> {
+				if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
+				editor.selectPaintShape(PaintShape.RECTANGLE); true
+			}
+			ShortcutAction.TOOL_PAINT_ELLIPSE -> {
+				if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
+				editor.selectPaintShape(PaintShape.ELLIPSE); true
+			}
+			ShortcutAction.PAINT_SHAPE_CYCLE -> {
+				if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
+				editor.cyclePaintShape(); true
+			}
+			// The brush keys drive whichever brush is in hand: the paint tip in paint mode,
+			// the deform brush's radius/hardness everywhere else.
+			ShortcutAction.BRUSH_RADIUS_DOWN -> {
+				if (editor.paintSizeActive) editor.paintSize = (editor.paintSize / 1.2f).coerceAtLeast(1f)
+				else editor.radius = (editor.radius / 1.2f).coerceAtLeast(4f)
+				true
+			}
+			ShortcutAction.BRUSH_RADIUS_UP -> {
+				if (editor.paintSizeActive) editor.paintSize = (editor.paintSize * 1.2f).coerceAtMost(editor.brushSizeLimit)
+				else editor.radius = (editor.radius * 1.2f).coerceAtMost(editor.brushSizeLimit)
+				true
+			}
+			// Never let the deform brush's hardness reach 1.0: brushWeight divides by (1 - hardness).
+			ShortcutAction.BRUSH_HARDNESS_DOWN -> {
+				if (editor.paintBrushActive) editor.paintHardness = (editor.paintHardness - 0.05f).coerceIn(0f, 1f)
+				else editor.hardness = (editor.hardness - 0.05f).coerceIn(0f, 0.95f)
+				true
+			}
+			ShortcutAction.BRUSH_HARDNESS_UP -> {
+				if (editor.paintBrushActive) editor.paintHardness = (editor.paintHardness + 0.05f).coerceIn(0f, 1f)
+				else editor.hardness = (editor.hardness + 0.05f).coerceIn(0f, 0.95f)
+				true
+			}
+			ShortcutAction.PAINT_OPACITY_DOWN -> {
+				if (!editor.paintBrushActive) false
+				else {
+					editor.paintOpacity = (editor.paintOpacity - 0.05f).coerceIn(0.01f, 1f)
+					true
+				}
+			}
+			ShortcutAction.PAINT_OPACITY_UP -> {
+				if (!editor.paintBrushActive) false
+				else {
+					editor.paintOpacity = (editor.paintOpacity + 0.05f).coerceIn(0.01f, 1f)
+					true
+				}
+			}
+			// A wheel notch only turns a deform brush's tip; with any other tool the wheel keeps zooming.
+			ShortcutAction.BRUSH_ROTATE_LEFT -> if (wheel && editor.tool !in ANGLED_BRUSH_TOOLS) false else {
+				val step = if (shift) 45f else 15f
+				editor.brushAngle = (editor.brushAngle - step).mod(360f)
+				true
+			}
+			ShortcutAction.BRUSH_ROTATE_RIGHT -> if (wheel && editor.tool !in ANGLED_BRUSH_TOOLS) false else {
+				val step = if (shift) 45f else 15f
+				editor.brushAngle = (editor.brushAngle + step).mod(360f)
+				true
+			}
+			ShortcutAction.BRUSH_SHAPE_CYCLE -> {
+				editor.cycleBrushShape()
+				true
+			}
+			ShortcutAction.AXIS_CONSTRAIN_X -> {
+				// Painting has no axis to constrain, so in paint mode X is what it is in every
+				// paint program: the foreground and background colours change places.
+				if (editor.hierarchyMode == EditHierarchyMode.PAINT) {
+					editor.swapPaintColors(); true
+				} else {
+					editor.axis = if (editor.axis == "x") null else "x"; true
+				}
+			}
+			ShortcutAction.AXIS_CONSTRAIN_Y -> { editor.axis = if (editor.axis == "y") null else "y"; true }
+			else -> false
+		}
+	}
+
 	Box(
 		modifier = modifier
 			.fillMaxSize()
@@ -602,7 +803,9 @@ fun CanvasViewportComposable(
                 else {
                     editor.endTemporarySelection()
                     temporarySelectKey = null
+                    temporarySelectButton = null
                     isDragging = false
+                    zoomDragAnchor = null
                     persistCamera()
                     if (mode == CanvasMode.EDIT) {
                         editor.altHeld = false
@@ -646,11 +849,6 @@ fun CanvasViewportComposable(
 					editor.altHeld = event.type == KeyEventType.KeyDown
 					return@onKeyEvent false
 				}
-                if (mode == CanvasMode.EDIT && !editor.busy && event.type == KeyEventType.KeyDown &&
-                    event.key == Key.Backspace && (editor.tool == CanvasTool.KNIFE || editor.drawingPath)) {
-                    editor.undoDraftPoint()
-                    return@onKeyEvent true
-                }
 				val action = canvasState.keymap.match(event, ShortcutScope.CANVAS)
 					?: return@onKeyEvent false
                 if (action == ShortcutAction.TEMPORARY_SELECT) {
@@ -660,190 +858,16 @@ fun CanvasViewportComposable(
                 }
                 if (action == ShortcutAction.QUICK_PREVIEW) {
                     // Toggle on release so holding the key never flips repeatedly through both modes.
-                    if (event.type == KeyEventType.KeyUp && previewModel != null && !canvasState.workspaceEditBusy)
-                        editor.toggleQuickPreview()
+                    if (event.type == KeyEventType.KeyUp) runCanvasCommand(action, shift = false, wheel = false)
                     return@onKeyEvent true
                 }
-				// Camera commands sit outside the mode and busy gates, as they always have: a
-				// long commit must not take the view controls away.
-				when (action) {
-					ShortcutAction.FRAME_VIEW -> {
-						if (mode == CanvasMode.EDIT) frameSelection() else resetCamera()
-						return@onKeyEvent true
-					}
-					ShortcutAction.RESET_CAMERA -> {
-						resetCamera()
-						return@onKeyEvent true
-					}
-					else -> Unit
-				}
-				if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
-                CanvasModeChoice.entries.firstOrNull { it.shortcut == action }?.let { choice ->
-                    if (previewModel == null) return@onKeyEvent false
-                    if (!editor.busy && !canvasState.workspaceEditBusy) editor.chooseCanvasMode(choice)
-                    return@onKeyEvent true
-                }
-				if (mode != CanvasMode.EDIT || previewModel == null) return@onKeyEvent false
-				// Consumes rather than falls through while a commit is running.
-				if (editor.busy || canvasState.workspaceEditBusy) return@onKeyEvent true
-				return@onKeyEvent when (action) {
-					ShortcutAction.SELECT_ALL -> { editor.selectAll(); true }
-					ShortcutAction.INVERT_SELECTION -> { editor.selectAll(true); true }
-					ShortcutAction.TOOL_SELECT -> { editor.activateTool(CanvasTool.SELECT); true }
-					ShortcutAction.TOOL_TRANSFORM -> { editor.activateTool(CanvasTool.TRANSFORM); true }
-					ShortcutAction.TOOL_LASSO_SELECT -> { editor.activateTool(CanvasTool.LASSO_SELECT); true }
-					ShortcutAction.TOOL_BRUSH_SELECT -> { editor.activateTool(CanvasTool.BRUSH_SELECT); true }
-					ShortcutAction.TOOL_BRUSH -> { editor.activateTool(CanvasTool.BRUSH); true }
-					ShortcutAction.TOOL_SMOOTH -> { editor.activateTool(CanvasTool.SMOOTH); true }
-					ShortcutAction.TOOL_INFLATE -> { editor.activateTool(CanvasTool.INFLATE); true }
-					ShortcutAction.TOOL_SKELETON_POSE -> { editor.activateTool(CanvasTool.SKELETON_POSE); true }
-					ShortcutAction.TOOL_SKELETON_EDIT -> { editor.activateTool(CanvasTool.SKELETON_EDIT); true }
-					ShortcutAction.TOOL_CREATE_WARP -> { editor.activateTool(CanvasTool.CREATE_WARP); true }
-					ShortcutAction.TOOL_CREATE_ROTATION -> { editor.activateTool(CanvasTool.CREATE_ROTATION); true }
-					ShortcutAction.TOOL_CREATE_DEFORM_PATH -> { editor.activateTool(CanvasTool.CREATE_DEFORM_PATH); true }
-					ShortcutAction.TOOL_GLUE -> { editor.activateTool(CanvasTool.GLUE); true }
-					ShortcutAction.TOOL_SUBDIVIDE -> { editor.activateTool(CanvasTool.SUBDIVIDE); true }
-					ShortcutAction.TOOL_KNIFE -> { editor.activateTool(CanvasTool.KNIFE); true }
-					ShortcutAction.TOOL_WEIGHT_PAINT -> { editor.activateTool(CanvasTool.WEIGHT_PAINT); true }
-					ShortcutAction.TOOL_WEIGHT_GRADIENT -> { editor.activateTool(CanvasTool.WEIGHT_GRADIENT); true }
-					ShortcutAction.SELECTION_STYLE_BOX -> { editor.selectionStyle = SelectionStyle.BOX; true }
-					ShortcutAction.SELECTION_STYLE_LASSO -> { editor.selectionStyle = SelectionStyle.LASSO; true }
-					ShortcutAction.SELECT_LINKED -> { editor.selectLinked(); true }
-					ShortcutAction.CANCEL -> {
-						if (showContextMenu) {
-							showContextMenu = false
-							true
-						} else {
-							if (viewModel.swingSession != null) viewModel.endSwing()
-							else if (editor.placement != null) editor.cancelPlacement() else editor.cancel()
-							true
-						}
-					}
-					ShortcutAction.FINISH_PATH -> {
-						when {
-							viewModel.swingSession != null -> { viewModel.commitSwing(); true }
-							editor.tool == CanvasTool.KNIFE -> { editor.finishKnife(); true }
-							editor.placement != null && editor.placement?.kind != CreatePlacementKind.PATH -> {
-								editor.confirmPlacement(); true
-							}
-							editor.tool == CanvasTool.CREATE_DEFORM_PATH || editor.drawingPath ||
-								editor.placement?.kind == CreatePlacementKind.PATH -> {
-								editor.finishPath(); true
-							}
-							editor.placement != null -> { editor.confirmPlacement(); true }
-							editor.tool == CanvasTool.GLUE -> { editor.applyGlue(); true }
-							else -> false
-						}
-					}
-					ShortcutAction.DELETE_SELECTION -> {
-						if (editor.tool == CanvasTool.KNIFE || editor.drawingPath) editor.undoDraftPoint()
-                        else if (editor.tool == CanvasTool.CREATE_DEFORM_PATH || editor.activePath != null) editor.deletePathPoint()
-						else if (editor.hierarchyMode == EditHierarchyMode.EDIT) editor.topology("delete")
-						true
-					}
-					ShortcutAction.TOOL_PAINT_BRUSH -> {
-						if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
-						editor.activateTool(CanvasTool.PAINT_BRUSH); true
-					}
-					ShortcutAction.TOOL_PAINT_PENCIL -> {
-						if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
-						editor.activateTool(CanvasTool.PAINT_PENCIL); true
-					}
-					ShortcutAction.TOOL_PAINT_ERASER -> {
-						if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
-						editor.activateTool(CanvasTool.PAINT_ERASER); true
-					}
-					ShortcutAction.TOOL_PAINT_BUCKET -> {
-						if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
-						editor.activateTool(CanvasTool.PAINT_BUCKET); true
-					}
-					ShortcutAction.TOOL_PAINT_EYEDROPPER -> {
-						if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
-						editor.activateTool(CanvasTool.PAINT_EYEDROPPER); true
-					}
-					// The shape chords pick a shape, and with it the shape tool: the three are one tool
-					// with three faces, so a chord is enough to start drawing with the face it names.
-					ShortcutAction.TOOL_PAINT_LINE -> {
-						if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
-						editor.selectPaintShape(PaintShape.LINE); true
-					}
-					ShortcutAction.TOOL_PAINT_RECT -> {
-						if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
-						editor.selectPaintShape(PaintShape.RECTANGLE); true
-					}
-					ShortcutAction.TOOL_PAINT_ELLIPSE -> {
-						if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
-						editor.selectPaintShape(PaintShape.ELLIPSE); true
-					}
-					ShortcutAction.PAINT_SHAPE_CYCLE -> {
-						if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
-						editor.cyclePaintShape(); true
-					}
-					// The brush keys drive whichever brush is in hand: the paint tip in paint mode,
-					// the deform brush's radius/hardness everywhere else.
-					ShortcutAction.BRUSH_RADIUS_DOWN -> {
-						if (editor.paintSizeActive) editor.paintSize = (editor.paintSize / 1.2f).coerceAtLeast(1f)
-						else editor.radius = (editor.radius / 1.2f).coerceAtLeast(4f)
-						true
-					}
-					ShortcutAction.BRUSH_RADIUS_UP -> {
-						if (editor.paintSizeActive) editor.paintSize = (editor.paintSize * 1.2f).coerceAtMost(editor.brushSizeLimit)
-						else editor.radius = (editor.radius * 1.2f).coerceAtMost(editor.brushSizeLimit)
-						true
-					}
-					// Never let the deform brush's hardness reach 1.0: brushWeight divides by (1 - hardness).
-					ShortcutAction.BRUSH_HARDNESS_DOWN -> {
-						if (editor.paintBrushActive) editor.paintHardness = (editor.paintHardness - 0.05f).coerceIn(0f, 1f)
-						else editor.hardness = (editor.hardness - 0.05f).coerceIn(0f, 0.95f)
-						true
-					}
-					ShortcutAction.BRUSH_HARDNESS_UP -> {
-						if (editor.paintBrushActive) editor.paintHardness = (editor.paintHardness + 0.05f).coerceIn(0f, 1f)
-						else editor.hardness = (editor.hardness + 0.05f).coerceIn(0f, 0.95f)
-						true
-					}
-					ShortcutAction.PAINT_OPACITY_DOWN -> {
-						if (!editor.paintBrushActive) false
-						else {
-							editor.paintOpacity = (editor.paintOpacity - 0.05f).coerceIn(0.01f, 1f)
-							true
-						}
-					}
-					ShortcutAction.PAINT_OPACITY_UP -> {
-						if (!editor.paintBrushActive) false
-						else {
-							editor.paintOpacity = (editor.paintOpacity + 0.05f).coerceIn(0.01f, 1f)
-							true
-						}
-					}
-					ShortcutAction.BRUSH_ROTATE_LEFT -> {
-						val step = if (event.isShiftPressed) 45f else 15f
-						editor.brushAngle = (editor.brushAngle - step).mod(360f)
-						true
-					}
-					ShortcutAction.BRUSH_ROTATE_RIGHT -> {
-						val step = if (event.isShiftPressed) 45f else 15f
-						editor.brushAngle = (editor.brushAngle + step).mod(360f)
-						true
-					}
-					ShortcutAction.BRUSH_SHAPE_CYCLE -> {
-						editor.cycleBrushShape()
-						true
-					}
-					ShortcutAction.AXIS_CONSTRAIN_X -> {
-						// Painting has no axis to constrain, so in paint mode X is what it is in every
-						// paint program: the foreground and background colours change places.
-						if (editor.hierarchyMode == EditHierarchyMode.PAINT) {
-							editor.swapPaintColors(); true
-						} else {
-							editor.axis = if (editor.axis == "x") null else "x"; true
-						}
-					}
-					ShortcutAction.AXIS_CONSTRAIN_Y -> { editor.axis = if (editor.axis == "y") null else "y"; true }
-					else -> false
-				}
+				// The camera commands' releases are swallowed with their presses.
+				if (event.type != KeyEventType.KeyDown)
+					return@onKeyEvent action == ShortcutAction.FRAME_VIEW || action == ShortcutAction.RESET_CAMERA
+				runCanvasCommand(action, event.isShiftPressed, wheel = false)
 			}
 			.pointerHoverIcon(PointerIcon(when {
+                isDragging && zoomDragAnchor != null -> Cursor.getPredefinedCursor(Cursor.N_RESIZE_CURSOR)
                 isDragging -> Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)
                 mode == CanvasMode.EDIT -> editor.activeCursor()
                 else -> Cursor.getDefaultCursor()
@@ -860,18 +884,25 @@ fun CanvasViewportComposable(
                 }
                 focusRequester.requestFocus()
                 if (mode == CanvasMode.EDIT) editor.altHeld = event.keyboardModifiers.isAltPressed
+                // The press as a binding: a drag gesture it starts, or a command a click of it fires.
+                val pressed = buttonBindingOf(event.button, event.keyboardModifiers)
+                val gesture = if (canvasState.keyCapture == null) canvasState.keymap.gesture(pressed) else null
                 // Photoshop parity: Alt + right-drag retunes the brush — right/left grows/shrinks the radius,
-                // down/up hardens/softens. The Alt state is latched by the editor, so releasing Alt mid-drag
-                // neither aborts the gesture nor changes what it is doing.
-                if (mode == CanvasMode.EDIT && previewModel != null && event.button == PointerButton.Secondary &&
-                    event.keyboardModifiers.isAltPressed && !isDragging && !editor.inGesture && editor.beginBrushAdjust(change.position, event.keyboardModifiers.isShiftPressed)
+                // down/up hardens/softens, and the Shift variant takes the tip's third parameter. The modifiers
+                // are latched by the editor, so releasing them mid-drag neither aborts the gesture nor changes
+                // what it is doing.
+                if (mode == CanvasMode.EDIT && previewModel != null &&
+                    (gesture == ShortcutAction.BRUSH_ADJUST_DRAG || gesture == ShortcutAction.BRUSH_ADJUST_ALT_DRAG) &&
+                    !isDragging && !editor.inGesture &&
+                    editor.beginBrushAdjust(change.position, shift = gesture == ShortcutAction.BRUSH_ADJUST_ALT_DRAG)
                 ) {
+                    brushAdjustButton = event.button
                     showContextMenu = false
                     change.consume(); return@onPointerEvent
                 }
-                // Plain right-click opens the mode/tool context menu (parameters + topology/paint actions).
+                // A right press that starts no gesture opens the mode/tool context menu (parameters + topology/paint actions).
                 if (mode == CanvasMode.EDIT && previewModel != null && event.button == PointerButton.Secondary &&
-                    !event.keyboardModifiers.isAltPressed && !isDragging && !editor.inGesture && !editor.adjustingBrush &&
+                    gesture == null && !isDragging && !editor.inGesture && !editor.adjustingBrush &&
                     viewModel.swingSession == null && canvasContextMenuHasContent(editor)
                 ) {
                     contextMenuOffset = change.position
@@ -879,13 +910,26 @@ fun CanvasViewportComposable(
                     change.consume()
                     return@onPointerEvent
                 }
-                // Middle mouse drag or Space + Left drag -> Canvas Pan
-                if (CanvasNavigation.pans(event.button, mode == CanvasMode.EDIT && editor.space)) {
+                // The pan gesture (the middle button by default) or Space + left drag pans; the zoom gesture
+                // zooms about the press point as the pointer moves up and down.
+                if (gesture == ShortcutAction.ZOOM_DRAG || CanvasNavigation.pans(gesture, event.button, mode == CanvasMode.EDIT && editor.space)) {
                     isDragging = true
+                    zoomDragAnchor = if (gesture == ShortcutAction.ZOOM_DRAG) change.position else null
                     lastDragPos = change.position
                     dragStartPos = change.position
                     change.consume()
                     return@onPointerEvent
+                }
+                // A middle or side button bound to a canvas command fires it; a held temporary selection lasts
+                // until that button's release.
+                val command = if (canvasState.keyCapture == null) canvasState.keymap.mouseCommand(pressed, ShortcutScope.CANVAS) else null
+                if (command == ShortcutAction.TEMPORARY_SELECT) {
+                    if (mode == CanvasMode.EDIT && !canvasState.workspaceEditBusy && editor.beginTemporarySelection())
+                        temporarySelectButton = event.button
+                    change.consume(); return@onPointerEvent
+                }
+                if (command != null && runCanvasCommand(command, event.keyboardModifiers.isShiftPressed, wheel = false)) {
+                    change.consume(); return@onPointerEvent
                 }
                 if (mode == CanvasMode.EDIT && previewModel != null && event.button == PointerButton.Primary) {
                     if (showContextMenu) {
@@ -901,8 +945,9 @@ fun CanvasViewportComposable(
                         change.consume(); return@onPointerEvent
                     }
                 }
-				if (event.button == PointerButton.Primary || event.button == PointerButton.Tertiary) {
+				if (event.button == PointerButton.Primary) {
 					isDragging = true
+					zoomDragAnchor = null
 					lastDragPos = change.position
 					dragStartPos = change.position
 					// Pressing deliberately leaves the look alone. It used to hand the pointer back
@@ -913,11 +958,17 @@ fun CanvasViewportComposable(
 			}
 			.onPointerEvent(PointerEventType.Release) { event ->
 				val change = event.changes.firstOrNull()
-                // Must be tested before the consumed check below, and the button test is load-bearing: a middle
-                // button release during an adjustment has to fall through to the pan-end block, otherwise
+                // Must be tested before the consumed check below, and the button test is load-bearing: a release of
+                // another button during an adjustment has to fall through to the pan-end block, otherwise
                 // isDragging stays true and the canvas pans forever.
-                if (mode == CanvasMode.EDIT && editor.adjustingBrush && event.button == PointerButton.Secondary) {
+                if (mode == CanvasMode.EDIT && editor.adjustingBrush && event.button == brushAdjustButton) {
+                    brushAdjustButton = null
                     editor.endBrushAdjust(cancel = false)
+                    return@onPointerEvent
+                }
+                if (temporarySelectButton != null && event.button == temporarySelectButton) {
+                    temporarySelectButton = null
+                    editor.endTemporarySelection()
                     return@onPointerEvent
                 }
                 if(change?.isConsumed==true && (mode != CanvasMode.EDIT || !editor.inGesture) && !isDragging) return@onPointerEvent
@@ -930,12 +981,16 @@ fun CanvasViewportComposable(
                 }
                 if (isDragging) {
 					isDragging = false
+					zoomDragAnchor = null
 					persistCamera()
 				}
 			}
 			.onPointerEvent(PointerEventType.Exit) {
                 // Releasing the right button outside the window may never route a Release back here.
-				if (mode == CanvasMode.EDIT && editor.adjustingBrush) editor.endBrushAdjust(cancel = false)
+				if (mode == CanvasMode.EDIT && editor.adjustingBrush) {
+					brushAdjustButton = null
+					editor.endBrushAdjust(cancel = false)
+				}
 				if (mode == CanvasMode.EDIT) editor.clearHover()
                 if (mode == CanvasMode.PREVIEW) {
 					viewModel.clearPointer(renderKey)
@@ -964,7 +1019,11 @@ fun CanvasViewportComposable(
                 }
                 if (isDragging) {
 					val delta = change.position - lastDragPos
-					if (delta != Offset.Zero) {
+					val anchor = zoomDragAnchor
+					if (anchor != null) {
+						// Up zooms in, as the wheel turned away does; one notch per ZOOM_DRAG_NOTCH_PX.
+						if (delta.y != 0f) zoomAt(anchor.x, anchor.y, delta.y / (ZOOM_DRAG_NOTCH_PX * density))
+					} else if (delta != Offset.Zero) {
 						panX += delta.x
 						panY += delta.y
                         cameraDirty = true
@@ -980,23 +1039,27 @@ fun CanvasViewportComposable(
 			}
 			.onPointerEvent(PointerEventType.Scroll) { event ->
 				val change = event.changes.firstOrNull() ?: return@onPointerEvent
+				if (change.isConsumed) return@onPointerEvent
+				// A wheel notch bound to a canvas command (Alt + wheel turns the brush by default) fires it; one
+				// the command does not take keeps zooming below.
+				val notch = wheelBindingOf(change.scrollDelta, event.keyboardModifiers)
+				val command = if (canvasState.keyCapture == null) canvasState.keymap.mouseCommand(notch, ShortcutScope.CANVAS) else null
+				if (command != null && command != ShortcutAction.TEMPORARY_SELECT &&
+					runCanvasCommand(command, event.keyboardModifiers.isShiftPressed, wheel = true)
+				) {
+					change.consume()
+					return@onPointerEvent
+				}
 				if (mode == CanvasMode.EDIT && editor.tool == CanvasTool.CREATE_WARP && !editor.warpCreateParentIsWarp()) {
-					val delta = if (change.scrollDelta.y > 0) -1 else 1
+					val delta = if (notch?.mouse == MouseInput.WHEEL_DOWN || notch?.mouse == MouseInput.WHEEL_RIGHT) -1 else 1
                     editor.warpCreateGridRows = (editor.warpCreateGridRows + delta).coerceIn(2, 20)
                     editor.warpCreateGridCols = (editor.warpCreateGridCols + delta).coerceIn(2, 20)
 					change.consume()
 					return@onPointerEvent
 				}
-				if (mode == CanvasMode.EDIT && event.keyboardModifiers.isAltPressed &&
-					editor.tool in listOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE)
-				) {
-					val step = if (event.keyboardModifiers.isShiftPressed) 45f else 15f
-					editor.brushAngle = (editor.brushAngle + if (change.scrollDelta.y > 0) step else -step).mod(360f)
-					change.consume()
-					return@onPointerEvent
-				}
-				if(change.isConsumed || (mode == CanvasMode.EDIT && (editor.inGesture || editor.adjustingBrush))) return@onPointerEvent
-                val delta = change.scrollDelta.y
+				if (mode == CanvasMode.EDIT && (editor.inGesture || editor.adjustingBrush)) return@onPointerEvent
+                // Compose turns Shift + wheel into a horizontal scroll; it zooms the same.
+                val delta = if (change.scrollDelta.y != 0f) change.scrollDelta.y else change.scrollDelta.x
                 zoomAt(change.position.x, change.position.y, delta)
 			},
 	) {

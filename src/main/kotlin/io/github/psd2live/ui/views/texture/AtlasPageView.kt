@@ -90,6 +90,8 @@ import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.state.ShortcutAction
 import io.github.psd2live.ui.state.ShortcutScope
+import io.github.psd2live.ui.state.buttonBindingOf
+import io.github.psd2live.ui.state.wheelBindingOf
 import io.github.psd2live.ui.state.TextureDensity
 import io.github.psd2live.ui.state.TextureSnapshot
 import io.github.psd2live.ui.state.TileDragDraft
@@ -293,6 +295,10 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	var menu by remember { mutableStateOf<AtlasMenu?>(null) }
 	/** Where the pointer was at the last step of a pan, while one is in progress. */
 	var panFrom by remember { mutableStateOf<Offset?>(null) }
+	/** The button that started the pan, whose release ends it. */
+	var panButton by remember { mutableStateOf<PointerButton?>(null) }
+	/** While a zoom drag is in progress: the point it zooms about and the pointer's last height. */
+	var zoomDrag by remember { mutableStateOf<Pair<Offset, Float>?>(null) }
 	/** The pointer over the view, for the cursor; null once it leaves. */
 	var pointer by remember { mutableStateOf<Offset?>(null) }
 	val focusRequester = remember { FocusRequester() }
@@ -309,6 +315,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	val currentSelection by rememberUpdatedState(selection)
 	val currentBusy by rememberUpdatedState(busy)
 	val currentSpace by rememberUpdatedState(space)
+	val currentKeymap by rememberUpdatedState(state.keymap)
 	// The edit canvas's transform box, in dp: corners scale the density, the grip and the corners' outsides turn the tile.
 	val handles = TransformHandles(edges = false, unit = androidx.compose.ui.platform.LocalDensity.current.density)
 
@@ -351,6 +358,36 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 
 	var lastClick by remember { mutableStateOf<Pair<String, Long>?>(null) }
 
+	// Zooms by [wheelDelta] notches (negative zooms in), keeping the texel under [at] where it was.
+	fun zoomAbout(at: Offset, wheelDelta: Float) {
+		val before = currentTransform.toPage(at)
+		val next = CanvasNavigation.wheelZoom(zoom.toDouble(), wheelDelta).toFloat()
+		zoom = next
+		val nextScale = fitScale * next
+		val left = (viewSize.width - pageInfo.width * nextScale) / 2f
+		val top = (viewSize.height - pageInfo.height * nextScale) / 2f
+		pan = Offset(at.x - left - before.x * nextScale, at.y - top - before.y * nextScale)
+	}
+
+	// The canvas commands the page answers, from a key, a wheel notch or a button click. False lets the input through.
+	fun runAtlasCommand(action: ShortcutAction?): Boolean = when (action) {
+		ShortcutAction.CANCEL -> {
+			when {
+				tileDrag != null || densityDrag != null || turnDrag != null || anchorDrag != null || marquee != null -> {
+					tileDrag = null; densityDrag = null; turnDrag = null; anchorDrag = null; marquee = null
+				}
+				else -> vm.selectLayer(null)
+			}
+			true
+		}
+		// Confirming applies the session, as a paint session commits.
+		ShortcutAction.FINISH_PATH -> if (sessionOpen) { vm.applyTextureSession(); true } else false
+		ShortcutAction.FRAME_VIEW -> { frameSelection(); true }
+		ShortcutAction.RESET_CAMERA -> { resetView(); true }
+		ShortcutAction.SELECT_ALL -> { vm.selectLayers(tiles.map { it.layerId }); true }
+		else -> false
+	}
+
 	Box(
 		Modifier
 			.fillMaxSize()
@@ -360,47 +397,39 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 				if (state.keyCapture != null) return@onKeyEvent false
 				if (event.key == Key.Spacebar) { space = event.type == KeyEventType.KeyDown; return@onKeyEvent true }
 				if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
-				if (event.key == Key.Escape) {
-					when {
-						tileDrag != null || densityDrag != null || turnDrag != null || anchorDrag != null || marquee != null -> {
-							tileDrag = null; densityDrag = null; turnDrag = null; anchorDrag = null; marquee = null
-						}
-						else -> vm.selectLayer(null)
-					}
-					return@onKeyEvent true
-				}
-				// Enter applies the session, as a paint session commits.
-				if ((event.key == Key.Enter || event.key == Key.NumPadEnter) && sessionOpen) { vm.applyTextureSession(); return@onKeyEvent true }
-				when (state.keymap.match(event, ShortcutScope.CANVAS)) {
-					ShortcutAction.FRAME_VIEW -> { frameSelection(); true }
-					ShortcutAction.RESET_CAMERA -> { resetView(); true }
-					ShortcutAction.SELECT_ALL -> { vm.selectLayers(tiles.map { it.layerId }); true }
-					else -> false
-				}
+				runAtlasCommand(state.keymap.match(event, ShortcutScope.CANVAS))
 			}
 			.focusable()
 			.onPointerEvent(PointerEventType.Scroll) { event ->
 				val change = event.changes.firstOrNull() ?: return@onPointerEvent
-				val delta = change.scrollDelta.y
+				val notch = wheelBindingOf(change.scrollDelta, event.keyboardModifiers)
+				if (state.keyCapture == null && runAtlasCommand(state.keymap.mouseCommand(notch, ShortcutScope.CANVAS))) {
+					change.consume()
+					return@onPointerEvent
+				}
+				// Compose turns Shift + wheel into a horizontal scroll; it zooms the same.
+				val delta = if (change.scrollDelta.y != 0f) change.scrollDelta.y else change.scrollDelta.x
 				if (delta == 0f) return@onPointerEvent
-				val before = currentTransform.toPage(change.position)
-				val next = CanvasNavigation.wheelZoom(zoom.toDouble(), delta).toFloat()
-				zoom = next
-				// Keep the texel under the pointer where it was.
-				val nextScale = fitScale * next
-				val left = (viewSize.width - pageInfo.width * nextScale) / 2f
-				val top = (viewSize.height - pageInfo.height * nextScale) / 2f
-				pan = Offset(change.position.x - left - before.x * nextScale, change.position.y - top - before.y * nextScale)
+				zoomAbout(change.position, delta)
 				change.consume()
 			}
-			// The middle button (or Space with the primary one) pans and the right one opens the menu. Like the
-			// edit canvas, these are read from the raw press, move and release events: a gesture's awaitFirstDown
-			// does not see a press of another button than the primary one.
+			// The pan gesture (or Space with the primary button) pans, the zoom gesture zooms and the right button
+			// opens the menu. Like the edit canvas, these are read from the raw press, move and release events: a
+			// gesture's awaitFirstDown does not see a press of another button than the primary one.
 			.onPointerEvent(PointerEventType.Press) { event ->
 				val change = event.changes.firstOrNull() ?: return@onPointerEvent
 				focusRequester.requestFocus()
-				if (CanvasNavigation.pans(event.button, currentSpace)) {
+				val pressed = buttonBindingOf(event.button, event.keyboardModifiers)
+				val gesture = if (state.keyCapture == null) state.keymap.gesture(pressed) else null
+				if (CanvasNavigation.pans(gesture, event.button, currentSpace)) {
 					panFrom = change.position
+					panButton = event.button
+					change.consume()
+				} else if (gesture == ShortcutAction.ZOOM_DRAG) {
+					zoomDrag = change.position to change.position.y
+					panButton = event.button
+					change.consume()
+				} else if (state.keyCapture == null && runAtlasCommand(state.keymap.mouseCommand(pressed, ShortcutScope.CANVAS))) {
 					change.consume()
 				} else if (event.button == PointerButton.Secondary) {
 					val tile = hit(change.position)
@@ -412,6 +441,13 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 			.onPointerEvent(PointerEventType.Move) { event ->
 				val change = event.changes.firstOrNull() ?: return@onPointerEvent
 				pointer = change.position
+				zoomDrag?.let { (anchor, lastY) ->
+					// Up zooms in, as the wheel turned away does.
+					zoomAbout(anchor, (change.position.y - lastY) / (24f * density))
+					zoomDrag = anchor to change.position.y
+					change.consume()
+					return@onPointerEvent
+				}
 				val from = panFrom
 				if (from != null) {
 					pan += change.position - from
@@ -422,11 +458,15 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 				hovered = hit(change.position)?.layerId
 			}
 			.onPointerEvent(PointerEventType.Release) { event ->
-				if (panFrom != null && (event.button == PointerButton.Tertiary || event.button == PointerButton.Primary || !event.buttons.areAnyPressed)) panFrom = null
+				if ((panFrom != null || zoomDrag != null) && (event.button == panButton || !event.buttons.areAnyPressed)) {
+					panFrom = null
+					zoomDrag = null
+					panButton = null
+				}
 			}
 			.onPointerEvent(PointerEventType.Exit) { hovered = null; pointer = null }
 			.pointerHoverIcon(PointerIcon(atlasCursor(
-				panning = panFrom != null, space = space, moving = tileDrag != null, boxing = marquee != null,
+				panning = panFrom != null || zoomDrag != null, space = space, moving = tileDrag != null, boxing = marquee != null,
 				grip = (densityDrag?.let { d -> d.handle to (currentTiles.firstOrNull { it.layerId == d.primary }?.rotation ?: 0f) })
 					?: turnDrag?.let { BoundingHandle.ROTATE to 0f }
 					?: anchorDrag?.let { BoundingHandle.ANCHOR to 0f }
@@ -439,7 +479,9 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 					val event = currentEvent
 					focusRequester.requestFocus()
 					// Panning and the menu belong to the press handler above.
-					if (panFrom != null || CanvasNavigation.pans(event.button, currentSpace) || event.button == PointerButton.Secondary) return@awaitEachGesture
+					val gesture = currentKeymap.gesture(buttonBindingOf(event.button, event.keyboardModifiers))
+					if (panFrom != null || zoomDrag != null || gesture != null || CanvasNavigation.pans(gesture, event.button, currentSpace) ||
+						event.button == PointerButton.Secondary) return@awaitEachGesture
 					if (event.button != null && event.button != PointerButton.Primary) return@awaitEachGesture
 					val select = CanvasNavigation.selectMode(event.keyboardModifiers)
 					val snapshotAtStart = currentSnapshot

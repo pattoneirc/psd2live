@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.i18n.tr
+import io.github.psd2live.ui.tutorial.expandShortcutMarkup
 import io.github.psd2live.ui.BrushShape
 import io.github.psd2live.ui.PaintShape
 import io.github.psd2live.ui.CanvasEditor
@@ -301,7 +302,7 @@ internal fun ToolDetailsView(
                             color = colors.textPrimary,
                         )
                         Text(
-                            text = tr("editor.createWarpHint"),
+                            text = expandShortcutMarkup(tr("editor.createWarpHint"), editor.state.keymap),
                             style = typography.caption.copy(fontSize = 10.5.sp),
                             color = colors.textMuted,
                         )
@@ -461,7 +462,7 @@ internal fun ToolDetailsView(
                             color = colors.textPrimary,
                         )
                         Text(
-                            text = tr("editor.createRotationHint"),
+                            text = expandShortcutMarkup(tr("editor.createRotationHint"), editor.state.keymap),
                             style = typography.caption.copy(fontSize = 10.5.sp),
                             color = colors.textMuted,
                         )
@@ -956,7 +957,7 @@ internal fun ToolDetailsView(
                     }
                 }
                 CanvasTool.KNIFE -> {
-                    Text(tr("editor.knifeGestureHint"), style = typography.caption, color = colors.textMuted)
+                    Text(expandShortcutMarkup(tr("editor.knifeGestureHint"), editor.state.keymap), style = typography.caption, color = colors.textMuted)
                     // No snap toggle: snapping is always on and the radius is the only thing to tune. Inside it a
                     // click takes the vertex or edge; outside it the click drops a new point.
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {

@@ -4614,13 +4614,21 @@ class PSD2LiveViewModel : AutoCloseable {
 	 * through [KeyCapture.feedback] and recording continues.
 	 */
 	fun captureKeyEvent(event: KeyEvent) {
-		val capture = _state.value.keyCapture ?: return
+		if (_state.value.keyCapture == null) return
 		if (event.key == Key.Escape) {
 			cancelKeyCapture()
 			return
 		}
 		if (isModifierKey(event.key)) return
-		val binding = keyBindingOf(event)
+		captureBinding(keyBindingOf(event))
+	}
+
+	/**
+	 * Feeds one wheel notch or mouse button press to the active capture, as [captureKeyEvent] does a
+	 * key. The settings panel forwards them from the cell being recorded.
+	 */
+	fun captureBinding(binding: KeyBinding) {
+		val capture = _state.value.keyCapture ?: return
 		val check = _state.value.keymap.validateCapture(capture.action, capture.index, binding)
 		if (check != CaptureCheck.Ok) {
 			updateState { it.copy(keyCapture = capture.copy(feedback = check)) }

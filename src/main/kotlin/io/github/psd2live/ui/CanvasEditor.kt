@@ -14,6 +14,7 @@ import io.github.psd2live.application.CanvasDraftSubmit
 import io.github.psd2live.application.WorkspaceCanvasInputDraft
 import io.github.psd2live.core.*
 import io.github.psd2live.i18n.tr
+import io.github.psd2live.ui.tutorial.expandShortcutMarkup
 import io.github.psd2live.ui.state.*
 import kotlinx.serialization.json.*
 import org.umamo.edit.MeshElement
@@ -1078,7 +1079,7 @@ internal class CanvasEditor(
             tool == CanvasTool.GLUE && glueCount == 2 -> tr("editor.glueReadyHint")
             tool == CanvasTool.GLUE -> tr("editor.glueNeedTwo", glueCount)
             else -> tr(hintKey)
-        }
+        }.let { expandShortcutMarkup(it, state.keymap) }
         val text = tr("editor.selectionCount", objects.size, vertices.size) + "   ·   " + hint
         val tone = if (tool == CanvasTool.GLUE && glueCount != 2) CanvasStatusTone.WARNING else CanvasStatusTone.NORMAL
         return CanvasStatusMessage(text, tone)

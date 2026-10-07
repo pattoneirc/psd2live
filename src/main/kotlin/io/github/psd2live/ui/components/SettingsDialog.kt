@@ -31,14 +31,19 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -56,7 +61,10 @@ import io.github.psd2live.ui.state.KeyBinding
 import io.github.psd2live.ui.state.KeyCapture
 import io.github.psd2live.ui.state.Keymap
 import io.github.psd2live.ui.state.KeymapPreset
+import io.github.psd2live.ui.state.MouseInput
 import io.github.psd2live.ui.state.ShortcutAction
+import io.github.psd2live.ui.state.buttonBindingOf
+import io.github.psd2live.ui.state.wheelBindingOf
 import io.github.psd2live.ui.state.ShortcutCategory
 import io.github.psd2live.ui.theme.CustomTheme
 import io.github.psd2live.ui.theme.LocalToolColors
@@ -119,6 +127,7 @@ fun SettingsDialog(
 	onRestorePrompts: () -> Unit = {},
 	onLanguageChange: (AppLanguage) -> Unit = {},
 	onKeyCapture: (ShortcutAction, Int) -> Unit = { _, _ -> },
+	onKeyCaptureBinding: (KeyBinding) -> Unit = {},
 	onKeyRemoveBinding: (ShortcutAction, Int) -> Unit = { _, _ -> },
 	onKeyResetBinding: (ShortcutAction) -> Unit = {},
 	onKeyPresetChange: (KeymapPreset) -> Unit = {},
@@ -227,6 +236,7 @@ fun SettingsDialog(
 						preset = keyPreset,
 						capture = keyCapture,
 						onBeginCapture = onKeyCapture,
+						onCaptureBinding = onKeyCaptureBinding,
 						onRemoveBinding = onKeyRemoveBinding,
 						onResetBinding = onKeyResetBinding,
 						onPresetChange = onKeyPresetChange,
@@ -617,6 +627,7 @@ private fun SettingsShortcutsSection(
 	preset: KeymapPreset,
 	capture: KeyCapture?,
 	onBeginCapture: (ShortcutAction, Int) -> Unit,
+	onCaptureBinding: (KeyBinding) -> Unit,
 	onRemoveBinding: (ShortcutAction, Int) -> Unit,
 	onResetBinding: (ShortcutAction) -> Unit,
 	onPresetChange: (KeymapPreset) -> Unit,
@@ -662,6 +673,7 @@ private fun SettingsShortcutsSection(
 			CaptureCheck.DuplicateSelf -> tr("dialog.settings.shortcuts.duplicateSelf")
 			is CaptureCheck.Conflict ->
 				tr("dialog.settings.shortcuts.conflict", tr(feedback.action.labelKey))
+			is CaptureCheck.Unsupported -> tr(feedback.messageKey)
 		}
 		Row(
 			modifier = Modifier
@@ -703,6 +715,7 @@ private fun SettingsShortcutsSection(
 						capture = capture,
 						conflicts = conflicts,
 						onBeginCapture = onBeginCapture,
+						onCaptureBinding = onCaptureBinding,
 						onRemoveBinding = onRemoveBinding,
 						onResetBinding = onResetBinding,
 					)
@@ -719,6 +732,7 @@ private fun ShortcutRow(
 	capture: KeyCapture?,
 	conflicts: Map<KeyBinding, List<ShortcutAction>>,
 	onBeginCapture: (ShortcutAction, Int) -> Unit,
+	onCaptureBinding: (KeyBinding) -> Unit,
 	onRemoveBinding: (ShortcutAction, Int) -> Unit,
 	onResetBinding: (ShortcutAction) -> Unit,
 ) {
@@ -729,7 +743,13 @@ private fun ShortcutRow(
 	// equal the preset default is deliberately not stored, so the two agree.
 	val isCustomised = bindings != Keymap.of(keymap.preset).bindingsFor(action)
 	val isRecording = capture?.action == action
-	val clash = bindings.any { binding -> conflicts[binding].orEmpty().any { it != action } }
+	// Only a chord shared with an action that can fire alongside this one clashes: the canvas and the
+	// timeline never hold focus together.
+	fun clashes(binding: KeyBinding) = conflicts[binding].orEmpty().any { it != action && it.scope.overlaps(action.scope) }
+	val clash = bindings.any(::clashes)
+	// The cell being recorded also takes the mouse: a wheel notch or a button press over it is recorded
+	// as a key press anywhere is.
+	val mouseCapture: ((KeyBinding) -> Unit)? = if (isRecording) onCaptureBinding else null
 	val jump = action.jumpIndex
 	val label = if (jump == null) tr(action.labelKey) else tr(action.labelKey, jump)
 
@@ -756,6 +776,7 @@ private fun ShortcutRow(
 					tint = colors.textDisabled,
 					highlighted = isRecording,
 					onClick = { onBeginCapture(action, 0) },
+					onMouseBinding = mouseCapture,
 				)
 			} else {
 				bindings.forEachIndexed { index, binding ->
@@ -767,11 +788,12 @@ private fun ShortcutRow(
 						},
 						tint = when {
 							isRecording && capture.index == index -> colors.accent
-							conflicts[binding].orEmpty().any { it != action } -> colors.error
+							clashes(binding) -> colors.error
 							else -> colors.selectionText
 						},
 						highlighted = isRecording && capture.index == index,
 						onClick = { onBeginCapture(action, index) },
+						onMouseBinding = mouseCapture?.takeIf { capture?.index == index },
 					)
 					if (bindings.size > 1) {
 						Text(
@@ -787,6 +809,17 @@ private fun ShortcutRow(
 				}
 			}
 
+			// An alternate being added has no cell of its own yet; this one stands in for it, so the
+			// mouse has somewhere to be recorded.
+			if (isRecording && bindings.isNotEmpty() && capture.index >= bindings.size) {
+				KeyChip(
+					text = tr("dialog.settings.shortcuts.captureShort"),
+					tint = colors.accent,
+					highlighted = true,
+					onClick = {},
+					onMouseBinding = mouseCapture,
+				)
+			}
 			CompactIconButton(
 				onClick = { onBeginCapture(action, bindings.size) },
 				size = 18.dp,
@@ -826,19 +859,38 @@ private fun ShortcutRow(
  * A single key combination. Shares the canvas toolbar's chip styling so "a key" reads the same
  * everywhere in the application.
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun KeyChip(
 	text: String,
 	tint: Color,
 	highlighted: Boolean,
 	onClick: () -> Unit,
+	onMouseBinding: ((KeyBinding) -> Unit)? = null,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
+	val latestMouseBinding by rememberUpdatedState(onMouseBinding)
 
 	Box(
 		modifier = Modifier
 			.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
+			// Recording: a wheel notch, or a press of any button but a bare left one (which is still a
+			// click on the cell), becomes the binding. Read in the initial pass so the panel's scroll
+			// and the cell's click never see it.
+			.onPointerEvent(PointerEventType.Scroll, PointerEventPass.Initial) { event ->
+				val record = latestMouseBinding ?: return@onPointerEvent
+				val change = event.changes.firstOrNull() ?: return@onPointerEvent
+				wheelBindingOf(change.scrollDelta, event.keyboardModifiers)?.let(record)
+				change.consume()
+			}
+			.onPointerEvent(PointerEventType.Press, PointerEventPass.Initial) { event ->
+				val record = latestMouseBinding ?: return@onPointerEvent
+				val binding = buttonBindingOf(event.button, event.keyboardModifiers) ?: return@onPointerEvent
+				if (binding.mouse == MouseInput.LEFT && !binding.hasModifier) return@onPointerEvent
+				record(binding)
+				event.changes.forEach { it.consume() }
+			}
 			.clickable(onClick = onClick)
 			.background(
 				if (highlighted) colors.accent.copy(alpha = 0.18f) else colors.inputBackground,

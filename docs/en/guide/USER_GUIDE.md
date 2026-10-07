@@ -79,7 +79,7 @@ Splits made by earlier versions (mesh islands, polygon, front/back layering) fro
 
 ## Default shortcuts
 
-These are the default (Photoshop-style) bindings. **Settings** can switch to Blender- or Cubism-style presets or rebind individual actions; **Help → Keyboard Shortcuts…** shows the current bindings.
+These are the default (Photoshop-style) bindings. **Settings** can switch to Blender- or Cubism-style presets or rebind individual actions; **Help → Keyboard Shortcuts…** shows the current bindings. Besides keys, the wheel with modifiers (up / down / left / right) and the middle and side mouse buttons (`MouseBack` / `MouseForward`) can be bound to any command: while recording, turn the wheel or press the button over the cell being recorded. The **canvas mouse gestures** (pan, zoom drag, brush adjust) are bound to the button that is pressed and dragged; the left and right buttons may be used there, with a modifier. A bare wheel, left button and right button stay with scrolling and zooming, the tools and the context menus. Windows reports a tilted wheel as Shift + wheel, so it records as `Shift+WheelUp` / `Shift+WheelDown`.
 
 | Action | Keys |
 | --- | --- |
@@ -90,10 +90,14 @@ These are the default (Photoshop-style) bindings. **Settings** can switch to Ble
 | Reanalyze PSD | `Ctrl+R` |
 | Texture upscale | `Ctrl+U` |
 | Tutorials | `F1` |
-| Zoom / pan | Wheel / middle drag or Space + left drag |
+| Zoom / pan | Wheel / middle (or `Shift+MouseMiddle`) drag, or Space + left drag |
+| Zoom by dragging | `Ctrl+MouseMiddle`, drag up / down |
+| Adjust the brush: size·hardness / opacity·angle | Drag with `Alt+MouseRight` / `Shift+Alt+MouseRight` |
+| Turn the brush | `Alt+WheelUp` / `Alt+WheelDown`, 45° steps with Shift |
 | Frame selection / reset camera | `F` / `Home` or `0` |
 | Temporary selection / toggle quick preview | Hold `Z`, release to restore / grave accent key (below Esc) |
 | Confirm / cancel | `Enter` / `Esc`; the current tool shows its own gestures |
+| Motion timeline: play / key the pose / step a frame | `Space` / `K` / `Left` `Right` (while the timeline has focus) |
 
 ## Troubleshooting
 

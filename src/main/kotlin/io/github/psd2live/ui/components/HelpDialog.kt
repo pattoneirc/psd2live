@@ -305,12 +305,13 @@ private fun DccSpecTable(title: String, rows: List<String>) {
 // ---------------------------------------------------------------------------
 @Composable
 private fun DccShortcutsContent(keymap: Keymap) {
-	// Pointer gestures have no key to rebind, so they stay literal.
+	// The pointer basics no binding can change stay literal; the rebindable mouse gestures (pan, zoom drag,
+	// brush adjust) are listed with the registry below.
 	DccShortcutGroup(
 		title = tr("help.shortcuts.group.view"),
 		shortcuts = listOf(
 			tr("help.shortcuts.zoomWheel") to "Wheel",
-			tr("help.shortcuts.panCanvas") to "Middle Drag / Left Drag",
+			tr("help.shortcuts.panCanvas") to "Space + Left Drag",
 			tr("help.shortcuts.selectLayer") to "Left Click",
 		),
 	)

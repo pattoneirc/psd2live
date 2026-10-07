@@ -80,6 +80,11 @@ import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.state.ShortcutAction
 import io.github.psd2live.ui.state.ShortcutScope
+import io.github.psd2live.ui.state.buttonBindingOf
+import io.github.psd2live.ui.state.wheelBindingOf
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
 import io.github.psd2live.ui.state.CanvasMode
 import io.github.psd2live.ui.tutorial.InteractiveTutorialState
 import io.github.psd2live.ui.tutorial.LocalTutorialTargets
@@ -127,6 +132,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import javax.swing.JOptionPane
 import androidx.compose.ui.input.key.Key
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun FrameWindowScope.PSD2LiveApp(
 	viewModel: PSD2LiveViewModel,
@@ -378,6 +384,93 @@ fun FrameWindowScope.PSD2LiveApp(
 			}
 		}
 
+		// One application shortcut, from a key or a mouse input. False lets the input through to
+		// the canvas, the open dialogs and any focused text field.
+		fun runAppAction(action: ShortcutAction): Boolean {
+			if (action == ShortcutAction.GENERATE) {
+				val glueEditor = viewModel.canvasEditor
+				if (!modalOpen && !state.showExportDialog &&
+					glueEditor.hierarchyMode == io.github.psd2live.ui.EditHierarchyMode.EDIT &&
+					glueEditor.glueMeshPair() != null
+				) {
+					glueEditor.glueSelectedVertices()
+					return true
+				}
+				return when {
+					state.showExportDialog && canGenerate -> { onGenerateAction(); true }
+					state.showExportDialog -> true
+					tutorial.active && hasInput && !isBusy -> { viewModel.openExportDialog(); true }
+					modalOpen -> false
+					!hasInput || isBusy -> false
+					else -> { viewModel.openExportDialog(); true }
+				}
+			}
+			if (tutorial.active) {
+				return when (action) {
+					ShortcutAction.OPEN_PSD -> { onOpenPsdAction(); true }
+					ShortcutAction.OPEN_PROJECT -> { onOpenProjectAction(); true }
+					ShortcutAction.OPEN_HELP -> { stopInteractiveTutorial(); true }
+					else -> true // consume other app shortcuts during the tour
+				}
+			}
+			if (modalOpen) return false
+			return when (action) {
+				ShortcutAction.OPEN_PROJECT -> { onOpenProjectAction(); true }
+				ShortcutAction.OPEN_PSD -> { onOpenPsdAction(); true }
+				ShortcutAction.SAVE_PROJECT -> { viewModel.requestProjectSave(false); true }
+				ShortcutAction.SAVE_PROJECT_AS -> { viewModel.requestProjectSave(true); true }
+				ShortcutAction.REANALYZE -> { onReanalyzeAction(); true }
+				// Falls through when there is no source PSD, as the old Shift-gated branch did.
+				ShortcutAction.REEXPORT_PSD ->
+					if (hasInput && !isBusy) { viewModel.openExportPsdDialog(); true } else false
+				ShortcutAction.TEXTURE_UPSCALE -> {
+					if (hasInput && !isBusy) viewModel.openTextureUpscaleDialog()
+					true
+				}
+				ShortcutAction.UNDO -> {
+					val ed = viewModel.canvasEditor
+					// An open atlas edit session steps back first, as a paint session does.
+					if (state.textureWorkspace.sessionUndo.isNotEmpty()) {
+						viewModel.undoTextureSession()
+					} else if (ed.hierarchyMode == EditHierarchyMode.PAINT && ed.canUndoPaint()) {
+						ed.undoPaint()
+					} else {
+						viewModel.undoHistory()
+					}
+					true
+				}
+				ShortcutAction.REDO -> {
+					val ed = viewModel.canvasEditor
+					if (state.textureWorkspace.sessionRedo.isNotEmpty()) {
+						viewModel.redoTextureSession()
+					} else if (ed.hierarchyMode == EditHierarchyMode.PAINT && ed.canRedoPaint()) {
+						ed.redoPaint()
+					} else {
+						viewModel.redoHistory()
+					}
+					true
+				}
+				ShortcutAction.NEW_EDIT_TAB -> { viewModel.addWorkspace(); true }
+				ShortcutAction.NEW_PREVIEW_TAB -> { viewModel.addCanvas(CanvasMode.PREVIEW); true }
+				ShortcutAction.OPEN_HISTORY_TAB -> { viewModel.showHistoryModule(); true }
+				ShortcutAction.DUPLICATE_TAB -> { viewModel.duplicateWorkspace(); true }
+				ShortcutAction.CLOSE_TAB -> { viewModel.closeWorkspace(state.activeWorkspace.id); true }
+				ShortcutAction.NEXT_TAB -> { viewModel.cycleWorkspace(1); true }
+				ShortcutAction.PREV_TAB -> { viewModel.cycleWorkspace(-1); true }
+				ShortcutAction.ZOOM_IN -> { viewModel.zoomIn(); true }
+				ShortcutAction.ZOOM_OUT -> { viewModel.zoomOut(); true }
+				ShortcutAction.ZOOM_RESET -> { viewModel.resetZoom(); true }
+				ShortcutAction.OPEN_SETTINGS -> { viewModel.openSettingsDialog(); true }
+				ShortcutAction.OPEN_HELP -> { openTutorialCatalog(); true }
+				else -> {
+					// The nine tab-jump actions share one body. A null index means this is a
+					// canvas action, which this handler does not own.
+					val jump = action.jumpIndex
+					if (jump == null) false else { viewModel.activateWorkspaceByIndex(jump - 1); true }
+				}
+			}
+		}
+
 		Box(Modifier.fillMaxSize()) {
 		CompositionLocalProvider(LocalTutorialTargets provides tutorialTargets) {
 		Box(
@@ -400,88 +493,23 @@ fun FrameWindowScope.PSD2LiveApp(
 					// dialogs and any focused text field.
 					val action = state.keymap.match(event, ShortcutScope.APP)
 						?: return@onPreviewKeyEvent false
-					if (action == ShortcutAction.GENERATE) {
-						val glueEditor = viewModel.canvasEditor
-						if (!modalOpen && !state.showExportDialog &&
-							glueEditor.hierarchyMode == io.github.psd2live.ui.EditHierarchyMode.EDIT &&
-							glueEditor.glueMeshPair() != null
-						) {
-							glueEditor.glueSelectedVertices()
-							return@onPreviewKeyEvent true
-						}
-						return@onPreviewKeyEvent when {
-							state.showExportDialog && canGenerate -> { onGenerateAction(); true }
-							state.showExportDialog -> true
-							tutorial.active && hasInput && !isBusy -> { viewModel.openExportDialog(); true }
-							modalOpen -> false
-							!hasInput || isBusy -> false
-							else -> { viewModel.openExportDialog(); true }
-						}
-					}
-					if (tutorial.active) {
-						return@onPreviewKeyEvent when (action) {
-							ShortcutAction.OPEN_PSD -> { onOpenPsdAction(); true }
-							ShortcutAction.OPEN_PROJECT -> { onOpenProjectAction(); true }
-							ShortcutAction.OPEN_HELP -> { stopInteractiveTutorial(); true }
-							else -> true // consume other app shortcuts during the tour
-						}
-					}
-					if (modalOpen) return@onPreviewKeyEvent false
-					when (action) {
-						ShortcutAction.OPEN_PROJECT -> { onOpenProjectAction(); true }
-						ShortcutAction.OPEN_PSD -> { onOpenPsdAction(); true }
-						ShortcutAction.SAVE_PROJECT -> { viewModel.requestProjectSave(false); true }
-						ShortcutAction.SAVE_PROJECT_AS -> { viewModel.requestProjectSave(true); true }
-						ShortcutAction.REANALYZE -> { onReanalyzeAction(); true }
-						// Falls through when there is no source PSD, as the old Shift-gated branch did.
-						ShortcutAction.REEXPORT_PSD ->
-							if (hasInput && !isBusy) { viewModel.openExportPsdDialog(); true } else false
-						ShortcutAction.TEXTURE_UPSCALE -> {
-							if (hasInput && !isBusy) viewModel.openTextureUpscaleDialog()
-							true
-						}
-						ShortcutAction.UNDO -> {
-							val ed = viewModel.canvasEditor
-							// An open atlas edit session steps back first, as a paint session does.
-							if (state.textureWorkspace.sessionUndo.isNotEmpty()) {
-								viewModel.undoTextureSession()
-							} else if (ed.hierarchyMode == EditHierarchyMode.PAINT && ed.canUndoPaint()) {
-								ed.undoPaint()
-							} else {
-								viewModel.undoHistory()
-							}
-							true
-						}
-						ShortcutAction.REDO -> {
-							val ed = viewModel.canvasEditor
-							if (state.textureWorkspace.sessionRedo.isNotEmpty()) {
-								viewModel.redoTextureSession()
-							} else if (ed.hierarchyMode == EditHierarchyMode.PAINT && ed.canRedoPaint()) {
-								ed.redoPaint()
-							} else {
-								viewModel.redoHistory()
-							}
-							true
-						}
-						ShortcutAction.NEW_EDIT_TAB -> { viewModel.addWorkspace(); true }
-						ShortcutAction.NEW_PREVIEW_TAB -> { viewModel.addCanvas(CanvasMode.PREVIEW); true }
-						ShortcutAction.OPEN_HISTORY_TAB -> { viewModel.showHistoryModule(); true }
-						ShortcutAction.DUPLICATE_TAB -> { viewModel.duplicateWorkspace(); true }
-						ShortcutAction.CLOSE_TAB -> { viewModel.closeWorkspace(state.activeWorkspace.id); true }
-						ShortcutAction.NEXT_TAB -> { viewModel.cycleWorkspace(1); true }
-						ShortcutAction.PREV_TAB -> { viewModel.cycleWorkspace(-1); true }
-						ShortcutAction.ZOOM_IN -> { viewModel.zoomIn(); true }
-						ShortcutAction.ZOOM_OUT -> { viewModel.zoomOut(); true }
-						ShortcutAction.ZOOM_RESET -> { viewModel.resetZoom(); true }
-						ShortcutAction.OPEN_SETTINGS -> { viewModel.openSettingsDialog(); true }
-						ShortcutAction.OPEN_HELP -> { openTutorialCatalog(); true }
-						else -> {
-							// The nine tab-jump actions share one body. A null index means this is a
-							// canvas action, which this handler does not own.
-							val jump = action.jumpIndex
-							if (jump == null) false else { viewModel.activateWorkspaceByIndex(jump - 1); true }
-						}
-					}
+					runAppAction(action)
+				}
+				// The mouse twin of the key handler above: a wheel notch or a button bound to an application
+				// shortcut fires it before any view sees the input, and anything unbound passes untouched.
+				// While a shortcut is being recorded the recording cell takes the mouse instead.
+				.onPointerEvent(PointerEventType.Scroll, PointerEventPass.Initial) { event ->
+					if (state.keyCapture != null) return@onPointerEvent
+					val change = event.changes.firstOrNull() ?: return@onPointerEvent
+					val action = state.keymap.mouseCommand(wheelBindingOf(change.scrollDelta, event.keyboardModifiers), ShortcutScope.APP)
+						?: return@onPointerEvent
+					if (runAppAction(action)) change.consume()
+				}
+				.onPointerEvent(PointerEventType.Press, PointerEventPass.Initial) { event ->
+					if (state.keyCapture != null) return@onPointerEvent
+					val action = state.keymap.mouseCommand(buttonBindingOf(event.button, event.keyboardModifiers), ShortcutScope.APP)
+						?: return@onPointerEvent
+					if (runAppAction(action)) event.changes.forEach { it.consume() }
 				},
 		) {
 			Column(
@@ -743,6 +771,7 @@ fun FrameWindowScope.PSD2LiveApp(
 				onRestorePrompts = viewModel::restorePrompts,
 				onLanguageChange = viewModel::setLanguage,
 				onKeyCapture = viewModel::beginKeyCapture,
+				onKeyCaptureBinding = viewModel::captureBinding,
 				onKeyRemoveBinding = viewModel::removeKeyBinding,
 				onKeyResetBinding = viewModel::resetKeyBinding,
 				onKeyPresetChange = viewModel::applyKeymapPreset,

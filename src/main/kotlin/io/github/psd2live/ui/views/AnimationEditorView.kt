@@ -56,13 +56,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isAltPressed
-import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.input.key.isMetaPressed
-import androidx.compose.ui.input.key.isShiftPressed
-import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -108,6 +102,12 @@ import io.github.psd2live.ui.state.MotionKeyRef
 import io.github.psd2live.ui.state.MotionEditorState
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
+import io.github.psd2live.ui.state.Keymap
+import io.github.psd2live.ui.state.ShortcutAction
+import io.github.psd2live.ui.state.ShortcutScope
+import io.github.psd2live.ui.state.buttonBindingOf
+import io.github.psd2live.ui.state.wheelBindingOf
+import io.github.psd2live.ui.tutorial.expandShortcutMarkup
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import java.awt.Cursor
@@ -164,7 +164,7 @@ internal fun AnimationEditorView(state: PSD2LiveState, viewModel: PSD2LiveViewMo
 			)
 			Timeline(viewModel, clip, parameters, trackScroll, Modifier.weight(1f).fillMaxHeight())
 		}
-		KeyInspector(viewModel, clip, parameters)
+		KeyInspector(viewModel, clip, parameters, state.keymap)
 		// An undo can leave the selection pointing at keys that are gone.
 		LaunchedEffect(clip) {
 			val live = editor.selection.filterTo(HashSet()) { ref ->
@@ -674,34 +674,55 @@ private fun Timeline(
 			}
 		}
 
+		// The timeline's commands, from a key, a wheel notch or a button click; all of them rebindable in
+		// Settings -> Shortcuts (ShortcutScope.TIMELINE). False lets the input through.
+		fun runTimelineCommand(action: ShortcutAction?): Boolean {
+			when (action) {
+				ShortcutAction.MOTION_DELETE_KEYS -> viewModel.deleteSelectedMotionKeys()
+				ShortcutAction.MOTION_COPY_KEYS -> viewModel.copySelectedMotionKeys()
+				ShortcutAction.MOTION_PASTE_KEYS -> viewModel.pasteMotionKeys()
+				ShortcutAction.MOTION_SELECT_ALL ->
+					editor.selection = latestClip.curves.flatMapTo(HashSet()) { curve -> curve.keys.map { MotionKeyRef(curve.parameterId, it.time) } }
+				ShortcutAction.MOTION_PLAY_PAUSE -> viewModel.setMotionEditorPlaying(!editor.playing)
+				ShortcutAction.MOTION_TOGGLE_AUTO_KEY -> viewModel.toggleMotionAutoKey()
+				ShortcutAction.MOTION_KEY_POSE -> viewModel.keyCurrentPose()
+				ShortcutAction.MOTION_FIT_VIEW -> fitView()
+				ShortcutAction.MOTION_GO_START -> viewModel.setMotionPlayhead(0f)
+				ShortcutAction.MOTION_GO_END -> viewModel.setMotionPlayhead(latestClip.duration)
+				ShortcutAction.MOTION_PREV_FRAME -> viewModel.setMotionPlayhead(editor.playhead - 1f / latestClip.fps)
+				ShortcutAction.MOTION_NEXT_FRAME -> viewModel.setMotionPlayhead(editor.playhead + 1f / latestClip.fps)
+				else -> return false
+			}
+			return true
+		}
+
 		Canvas(
 			Modifier.fillMaxSize()
 				.focusRequester(focusRequester)
 				.focusable()
 				.onPreviewKeyEvent { event ->
 					if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-					val command = event.isCtrlPressed || event.isMetaPressed
-					when {
-						event.key == Key.Delete || event.key == Key.Backspace -> { viewModel.deleteSelectedMotionKeys(); true }
-						command && event.key == Key.C -> { viewModel.copySelectedMotionKeys(); true }
-						command && event.key == Key.V -> { viewModel.pasteMotionKeys(); true }
-						command && event.key == Key.A -> {
-							editor.selection = latestClip.curves.flatMapTo(HashSet()) { curve -> curve.keys.map { MotionKeyRef(curve.parameterId, it.time) } }
-							true
-						}
-						event.key == Key.Spacebar -> { viewModel.setMotionEditorPlaying(!editor.playing); true }
-						event.key == Key.K && (event.isAltPressed || event.isShiftPressed) -> { viewModel.toggleMotionAutoKey(); true }
-						event.key == Key.K -> { viewModel.keyCurrentPose(); true }
-						event.key == Key.F -> { fitView(); true }
-						event.key == Key.MoveHome -> { viewModel.setMotionPlayhead(0f); true }
-						event.key == Key.MoveEnd -> { viewModel.setMotionPlayhead(latestClip.duration); true }
-						event.key == Key.DirectionLeft -> { viewModel.setMotionPlayhead(editor.playhead - 1f / latestClip.fps); true }
-						event.key == Key.DirectionRight -> { viewModel.setMotionPlayhead(editor.playhead + 1f / latestClip.fps); true }
-						else -> false
-					}
+					val state = viewModel.state.value
+					if (state.keyCapture != null) return@onPreviewKeyEvent false
+					runTimelineCommand(state.keymap.match(event, ShortcutScope.TIMELINE))
+				}
+				// A middle or side button bound to a timeline command fires it.
+				.onPointerEvent(PointerEventType.Press) { event ->
+					val state = viewModel.state.value
+					if (state.keyCapture != null) return@onPointerEvent
+					val action = state.keymap.mouseCommand(buttonBindingOf(event.button, event.keyboardModifiers), ShortcutScope.TIMELINE)
+					if (runTimelineCommand(action)) event.changes.forEach { it.consume() }
 				}
 				.onPointerEvent(PointerEventType.Scroll) { event ->
 					val change = event.changes.firstOrNull() ?: return@onPointerEvent
+					val state = viewModel.state.value
+					if (state.keyCapture == null && runTimelineCommand(
+							state.keymap.mouseCommand(wheelBindingOf(change.scrollDelta, event.keyboardModifiers), ShortcutScope.TIMELINE),
+						)
+					) {
+						change.consume()
+						return@onPointerEvent
+					}
 					val delta = change.scrollDelta.y
 					val mods = event.keyboardModifiers
 					when {
@@ -1019,6 +1040,7 @@ private fun KeyInspector(
 	viewModel: PSD2LiveViewModel,
 	clip: MotionClip,
 	parameters: List<org.umamo.runtime.model.Parameter>,
+	keymap: Keymap,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
@@ -1035,7 +1057,7 @@ private fun KeyInspector(
 		horizontalArrangement = Arrangement.spacedBy(6.dp),
 	) {
 		if (keys.isEmpty()) {
-			Text(tr("animation.editor.hint"), color = colors.textMuted, style = typography.caption.copy(fontSize = 10.sp), maxLines = 1)
+			Text(expandShortcutMarkup(tr("animation.editor.hint"), keymap), color = colors.textMuted, style = typography.caption.copy(fontSize = 10.sp), maxLines = 1)
 			return@Row
 		}
 		val interpolations = MotionInterpolation.entries

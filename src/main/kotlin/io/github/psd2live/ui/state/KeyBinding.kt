@@ -1,5 +1,6 @@
 package io.github.psd2live.ui.state
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.isAltPressed
@@ -7,22 +8,80 @@ import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.pointer.PointerButton
+import androidx.compose.ui.input.pointer.PointerKeyboardModifiers
+import androidx.compose.ui.input.pointer.isAltPressed as isPointerAltPressed
+import androidx.compose.ui.input.pointer.isCtrlPressed as isPointerCtrlPressed
+import androidx.compose.ui.input.pointer.isMetaPressed as isPointerMetaPressed
+import androidx.compose.ui.input.pointer.isShiftPressed as isPointerShiftPressed
+import kotlin.math.abs
 
 /**
- * A single keyboard binding: one key plus an exact modifier combination.
+ * A mouse input a binding can name in place of a key. The wheel's four directions are discrete
+ * notches; the buttons are a click for a command, or the button that starts a drag for a gesture
+ * ([ShortcutKind.DRAG]).
+ */
+enum class MouseInput(val token: String, val isWheel: Boolean) {
+    WHEEL_UP("WheelUp", true),
+    WHEEL_DOWN("WheelDown", true),
+    WHEEL_LEFT("WheelLeft", true),
+    WHEEL_RIGHT("WheelRight", true),
+    LEFT("MouseLeft", false),
+    RIGHT("MouseRight", false),
+    MIDDLE("MouseMiddle", false),
+    BACK("MouseBack", false),
+    FORWARD("MouseForward", false),
+    ;
+
+    companion object {
+        fun fromToken(token: String): MouseInput? = entries.firstOrNull { it.token == token }
+
+        /** The button input a press of [button] is, or null for a button no binding can name. */
+        fun of(button: PointerButton?): MouseInput? = when (button) {
+            PointerButton.Primary -> LEFT
+            PointerButton.Secondary -> RIGHT
+            PointerButton.Tertiary -> MIDDLE
+            PointerButton.Back -> BACK
+            PointerButton.Forward -> FORWARD
+            else -> null
+        }
+
+        /**
+         * The wheel direction one scroll event is. Compose turns a Shift + wheel into a horizontal
+         * scroll (and Windows reports a tilted wheel as Shift + wheel), so a horizontal delta with
+         * Shift held reads as the vertical notch it came from: `Shift+WheelUp` is then what the user
+         * did, both when it is recorded and when it fires.
+         */
+        fun wheel(delta: Offset, shift: Boolean): MouseInput? = when {
+            delta.y != 0f && abs(delta.y) >= abs(delta.x) -> if (delta.y < 0f) WHEEL_UP else WHEEL_DOWN
+            delta.x == 0f -> null
+            shift -> if (delta.x < 0f) WHEEL_UP else WHEEL_DOWN
+            else -> if (delta.x < 0f) WHEEL_LEFT else WHEEL_RIGHT
+        }
+    }
+}
+
+/**
+ * A single binding: one key or one mouse input, plus an exact modifier combination. Exactly one of
+ * [key] and [mouse] is set.
  *
- * The serialized form is also the display form (`"Ctrl+Shift+Z"`, `"["`, `"Shift+["`, `"NumPad0"`),
- * so there is exactly one printer to keep in sync with the parser.
+ * The serialized form is also the display form (`"Ctrl+Shift+Z"`, `"["`, `"Shift+["`, `"NumPad0"`,
+ * `"Alt+WheelUp"`, `"MouseMiddle"`), so there is exactly one printer to keep in sync with the parser.
  *
  * Match is *exact*: extra modifiers do not match. A binding of `Ctrl+W` is not triggered by
  * `Ctrl+Shift+W`.
  */
 data class KeyBinding(
-    val key: Key,
+    val key: Key?,
     val ctrl: Boolean = false,
     val shift: Boolean = false,
     val alt: Boolean = false,
+    val mouse: MouseInput? = null,
 ) {
+    init {
+        require((key == null) != (mouse == null)) { "A binding names exactly one key or one mouse input" }
+    }
+
     /**
      * Canonical text form. Modifier order is fixed so that two equal bindings always format
      * identically — the conflict index relies on this being a stable map key.
@@ -31,8 +90,10 @@ data class KeyBinding(
         if (ctrl) append("Ctrl+")
         if (shift) append("Shift+")
         if (alt) append("Alt+")
-        append(nameOf(key))
+        append(mouse?.token ?: nameOf(key!!))
     }
+
+    val hasModifier: Boolean get() = ctrl || shift || alt
 
     /** Exact-modifier match against a Compose key event. */
     fun matches(event: KeyEvent): Boolean = keyBindingOf(event) == this
@@ -51,11 +112,29 @@ internal fun keyBindingOf(event: KeyEvent): KeyBinding = KeyBinding(
     alt = event.isAltPressed,
 )
 
+/** The binding a mouse [input] with these pointer [modifiers] represents; the pointer twin of [keyBindingOf]. */
+internal fun mouseBindingOf(input: MouseInput, modifiers: PointerKeyboardModifiers): KeyBinding = KeyBinding(
+    key = null,
+    ctrl = if (IS_MAC) modifiers.isPointerCtrlPressed || modifiers.isPointerMetaPressed else modifiers.isPointerCtrlPressed,
+    shift = modifiers.isPointerShiftPressed,
+    alt = modifiers.isPointerAltPressed,
+    mouse = input,
+)
+
+/** The binding of one scroll event, or null for a scroll with no direction. */
+internal fun wheelBindingOf(delta: Offset, modifiers: PointerKeyboardModifiers): KeyBinding? =
+    MouseInput.wheel(delta, modifiers.isPointerShiftPressed)?.let { mouseBindingOf(it, modifiers) }
+
+/** The binding of a press of [button], or null for a button no binding can name. */
+internal fun buttonBindingOf(button: PointerButton?, modifiers: PointerKeyboardModifiers): KeyBinding? =
+    MouseInput.of(button)?.let { mouseBindingOf(it, modifiers) }
+
 /** Parses the canonical form produced by [KeyBinding.format]. Returns null on anything malformed. */
 internal fun parseKeyBinding(text: String): KeyBinding? {
     val tokens = text.split('+')
     if (tokens.size < 2 && tokens.firstOrNull().isNullOrEmpty()) return null
-    val key = NAME_TO_KEY[tokens.last()] ?: return null
+    val mouse = MouseInput.fromToken(tokens.last())
+    val key = if (mouse != null) null else NAME_TO_KEY[tokens.last()] ?: return null
     var ctrl = false
     var shift = false
     var alt = false
@@ -67,7 +146,7 @@ internal fun parseKeyBinding(text: String): KeyBinding? {
             else -> return null
         }
     }
-    return KeyBinding(key, ctrl, shift, alt)
+    return KeyBinding(key, ctrl, shift, alt, mouse)
 }
 
 /**
@@ -75,7 +154,7 @@ internal fun parseKeyBinding(text: String): KeyBinding? {
  * binding that is in this table, which is exactly the set the dispatchers know how to match.
  *
  * No name may contain '+' — that is what makes [parseKeyBinding]'s split unambiguous, and why
- * `Key.Plus` is spelled `"Plus"` rather than `"+"`.
+ * `Key.Plus` is spelled `"Plus"` rather than `"+"`. No name may equal a [MouseInput.token] either.
  */
 private val NAME_TO_KEY: Map<String, Key> = buildMap {
     put("A", Key.A); put("B", Key.B); put("C", Key.C); put("D", Key.D); put("E", Key.E); put("F", Key.F)
@@ -90,6 +169,7 @@ private val NAME_TO_KEY: Map<String, Key> = buildMap {
     put("F11", Key.F11); put("F12", Key.F12)
     put("Tab", Key.Tab)
     put("Enter", Key.Enter)
+    put("NumPadEnter", Key.NumPadEnter)
     put("Esc", Key.Escape)
     put("Del", Key.Delete)
     put("Backspace", Key.Backspace)
@@ -141,17 +221,27 @@ internal fun isModifierKey(key: Key): Boolean = when (key) {
 }
 
 /**
- * Bindings the registry refuses.
+ * Bindings the registry refuses in [scope].
  *
  * `Esc` is how a capture is abandoned, so no Escape chord can be recorded. A bare `Space` is a held
  * latch in the canvas (press starts panning, release stops) rather than a discrete event, and
  * letting it be swallowed by a recorder would leave the latch stuck on; `Ctrl+Space` and friends
- * stay free.
+ * stay free, and so does a bare Space in the timeline, which has no latch and plays with it.
+ *
+ * A bare wheel scrolls every list and zooms every view, a bare left press is what every tool and
+ * control is used with, and a bare right press opens the context menus: none of the three can be
+ * given away.
  */
-internal fun isReservedBinding(binding: KeyBinding): Boolean {
-    if (isModifierKey(binding.key)) return true
-    if (binding.key == Key.Escape) return true
-    if (binding.key == Key.Spacebar && !binding.ctrl && !binding.shift && !binding.alt) return true
+internal fun isReservedBinding(binding: KeyBinding, scope: ShortcutScope = ShortcutScope.APP): Boolean {
+    val mouse = binding.mouse
+    if (mouse != null) {
+        if (binding.hasModifier) return false
+        return mouse.isWheel || mouse == MouseInput.LEFT || mouse == MouseInput.RIGHT
+    }
+    val key = binding.key!!
+    if (isModifierKey(key)) return true
+    if (key == Key.Escape) return true
+    if (key == Key.Spacebar && !binding.hasModifier && scope != ShortcutScope.TIMELINE) return true
     return false
 }
 

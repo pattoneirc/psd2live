@@ -11,11 +11,30 @@ import androidx.compose.ui.input.key.KeyEvent
  * `onKeyEvent`, which only runs while the canvas holds focus. That focus dependency is the
  * mechanism that keeps canvas editing keys inert while a text field is being typed into.
  *
- * Because the root handler always runs first, a chord may appear in exactly one scope. A duplicate
- * across scopes is as much a hard error as one inside a scope — it would silently kill the canvas
+ * `TIMELINE` bindings are matched by the motion editor's timeline the same way, while it holds focus.
+ * The canvas and the timeline never hold focus together, so they may share a chord (Del deletes
+ * vertices in one and keys in the other).
+ *
+ * Because the root handler always runs first, an `APP` chord may appear in no other scope. Such a
+ * duplicate is as much a hard error as one inside a scope — it would silently kill the canvas
  * action ("my tool key does nothing").
  */
-enum class ShortcutScope { APP, CANVAS }
+enum class ShortcutScope {
+    APP, CANVAS, TIMELINE;
+
+    /** Whether one chord in both scopes would collide: the same scope, or either is the root's. */
+    fun overlaps(other: ShortcutScope): Boolean = this == other || this == APP || other == APP
+}
+
+/**
+ * How an action answers its input.
+ *
+ * - `COMMAND` fires once per key press, wheel notch or button click.
+ * - `HOLD` lasts while its key or button is held, so a wheel notch cannot drive it.
+ * - `DRAG` is a mouse gesture: a button (with its modifiers) starts it and the pointer's motion
+ *   drives it until the button is released, so only a mouse button can be bound to it.
+ */
+enum class ShortcutKind { COMMAND, HOLD, DRAG }
 
 enum class ShortcutCategory(val scope: ShortcutScope, val labelKey: String) {
     FILE(ShortcutScope.APP, "shortcut.category.file"),
@@ -24,13 +43,19 @@ enum class ShortcutCategory(val scope: ShortcutScope, val labelKey: String) {
     VIEW(ShortcutScope.APP, "shortcut.category.view"),
     CANVAS_TOOLS(ShortcutScope.CANVAS, "shortcut.category.canvasTools"),
     CANVAS_EDIT(ShortcutScope.CANVAS, "shortcut.category.canvasEdit"),
+    CANVAS_MOUSE(ShortcutScope.CANVAS, "shortcut.category.canvasMouse"),
+    TIMELINE(ShortcutScope.TIMELINE, "shortcut.category.timeline"),
 }
 
 /**
  * Every rebindable action. The label keys deliberately reuse the wording already shown in the menu
  * bar, the canvas toolbar and the help dialog, so renaming an action does not fork its name.
  */
-enum class ShortcutAction(val category: ShortcutCategory, val labelKey: String) {
+enum class ShortcutAction(
+    val category: ShortcutCategory,
+    val labelKey: String,
+    val kind: ShortcutKind = ShortcutKind.COMMAND,
+) {
     // File
     OPEN_PROJECT(ShortcutCategory.FILE, "help.shortcuts.openProject"),
     OPEN_PSD(ShortcutCategory.FILE, "help.shortcuts.openPsd"),
@@ -71,7 +96,7 @@ enum class ShortcutAction(val category: ShortcutCategory, val labelKey: String) 
     OPEN_SETTINGS(ShortcutCategory.VIEW, "help.shortcuts.settings"),
     OPEN_HELP(ShortcutCategory.VIEW, "help.shortcuts.help"),
 
-    TEMPORARY_SELECT(ShortcutCategory.CANVAS_TOOLS, "shortcut.temporarySelect"),
+    TEMPORARY_SELECT(ShortcutCategory.CANVAS_TOOLS, "shortcut.temporarySelect", ShortcutKind.HOLD),
     QUICK_PREVIEW(ShortcutCategory.CANVAS_TOOLS, "shortcut.quickPreview"),
 
     MODE_SELECT(ShortcutCategory.CANVAS_TOOLS, "editor.mode.select"),
@@ -132,6 +157,26 @@ enum class ShortcutAction(val category: ShortcutCategory, val labelKey: String) 
     AXIS_CONSTRAIN_Y(ShortcutCategory.CANVAS_EDIT, "shortcut.axisY"),
     FRAME_VIEW(ShortcutCategory.CANVAS_EDIT, "shortcut.frameView"),
     RESET_CAMERA(ShortcutCategory.CANVAS_EDIT, "shortcut.resetCamera"),
+
+    // Canvas mouse gestures: a button starts them, the pointer's motion drives them.
+    PAN_VIEW(ShortcutCategory.CANVAS_MOUSE, "shortcut.panView", ShortcutKind.DRAG),
+    ZOOM_DRAG(ShortcutCategory.CANVAS_MOUSE, "shortcut.zoomDrag", ShortcutKind.DRAG),
+    BRUSH_ADJUST_DRAG(ShortcutCategory.CANVAS_MOUSE, "shortcut.brushAdjustDrag", ShortcutKind.DRAG),
+    BRUSH_ADJUST_ALT_DRAG(ShortcutCategory.CANVAS_MOUSE, "shortcut.brushAdjustAltDrag", ShortcutKind.DRAG),
+
+    // Motion editor timeline
+    MOTION_PLAY_PAUSE(ShortcutCategory.TIMELINE, "shortcut.motion.playPause"),
+    MOTION_KEY_POSE(ShortcutCategory.TIMELINE, "shortcut.motion.keyPose"),
+    MOTION_TOGGLE_AUTO_KEY(ShortcutCategory.TIMELINE, "shortcut.motion.autoKey"),
+    MOTION_DELETE_KEYS(ShortcutCategory.TIMELINE, "shortcut.motion.deleteKeys"),
+    MOTION_COPY_KEYS(ShortcutCategory.TIMELINE, "shortcut.motion.copyKeys"),
+    MOTION_PASTE_KEYS(ShortcutCategory.TIMELINE, "shortcut.motion.pasteKeys"),
+    MOTION_SELECT_ALL(ShortcutCategory.TIMELINE, "shortcut.motion.selectAll"),
+    MOTION_FIT_VIEW(ShortcutCategory.TIMELINE, "shortcut.motion.fitView"),
+    MOTION_GO_START(ShortcutCategory.TIMELINE, "shortcut.motion.goStart"),
+    MOTION_GO_END(ShortcutCategory.TIMELINE, "shortcut.motion.goEnd"),
+    MOTION_PREV_FRAME(ShortcutCategory.TIMELINE, "shortcut.motion.prevFrame"),
+    MOTION_NEXT_FRAME(ShortcutCategory.TIMELINE, "shortcut.motion.nextFrame"),
     ;
 
     val scope: ShortcutScope get() = category.scope
@@ -253,14 +298,15 @@ private val PS_DEFAULTS: Map<ShortcutAction, List<KeyBinding>> = mapOf(
     ShortcutAction.SELECTION_STYLE_LASSO to keys("Shift+Q"),
     ShortcutAction.SELECT_LINKED to keys("Shift+L"),
     ShortcutAction.CANCEL to keys("Esc"),
-    ShortcutAction.FINISH_PATH to keys("Enter"),
+    ShortcutAction.FINISH_PATH to keys("Enter", "NumPadEnter"),
     ShortcutAction.DELETE_SELECTION to keys("Del", "Backspace"),
     ShortcutAction.BRUSH_RADIUS_DOWN to keys("["),
     ShortcutAction.BRUSH_RADIUS_UP to keys("]"),
     ShortcutAction.BRUSH_HARDNESS_DOWN to keys("Shift+["),
     ShortcutAction.BRUSH_HARDNESS_UP to keys("Shift+]"),
-    ShortcutAction.BRUSH_ROTATE_LEFT to keys("Alt+[", ","),
-    ShortcutAction.BRUSH_ROTATE_RIGHT to keys("Alt+]", "."),
+    // Alt + wheel turns the brush, Shift making the step 45° instead of 15°.
+    ShortcutAction.BRUSH_ROTATE_LEFT to keys("Alt+[", ",", "Alt+WheelUp", "Alt+Shift+WheelUp"),
+    ShortcutAction.BRUSH_ROTATE_RIGHT to keys("Alt+]", ".", "Alt+WheelDown", "Alt+Shift+WheelDown"),
     ShortcutAction.BRUSH_SHAPE_CYCLE to keys("Alt+B"),
     // The paint shape tool's three faces, on the same "the tool's key, shifted" pairing.
     ShortcutAction.PAINT_SHAPE_CYCLE to keys("Shift+U"),
@@ -271,6 +317,26 @@ private val PS_DEFAULTS: Map<ShortcutAction, List<KeyBinding>> = mapOf(
     ShortcutAction.AXIS_CONSTRAIN_Y to keys("Y"),
     ShortcutAction.FRAME_VIEW to keys("F"),
     ShortcutAction.RESET_CAMERA to keys("Home", "0"),
+
+    // Space + left drag also pans, but Space is a latch rather than a modifier and is not rebindable.
+    ShortcutAction.PAN_VIEW to keys("MouseMiddle", "Shift+MouseMiddle"),
+    ShortcutAction.ZOOM_DRAG to keys("Ctrl+MouseMiddle"),
+    // Photoshop parity: Alt + right drag retunes the brush, Shift picking its third parameter.
+    ShortcutAction.BRUSH_ADJUST_DRAG to keys("Alt+MouseRight"),
+    ShortcutAction.BRUSH_ADJUST_ALT_DRAG to keys("Alt+Shift+MouseRight"),
+
+    ShortcutAction.MOTION_PLAY_PAUSE to keys("Space"),
+    ShortcutAction.MOTION_KEY_POSE to keys("K"),
+    ShortcutAction.MOTION_TOGGLE_AUTO_KEY to keys("Alt+K", "Shift+K"),
+    ShortcutAction.MOTION_DELETE_KEYS to keys("Del", "Backspace"),
+    ShortcutAction.MOTION_COPY_KEYS to keys("Ctrl+C"),
+    ShortcutAction.MOTION_PASTE_KEYS to keys("Ctrl+V"),
+    ShortcutAction.MOTION_SELECT_ALL to keys("Ctrl+A"),
+    ShortcutAction.MOTION_FIT_VIEW to keys("F"),
+    ShortcutAction.MOTION_GO_START to keys("Home"),
+    ShortcutAction.MOTION_GO_END to keys("End"),
+    ShortcutAction.MOTION_PREV_FRAME to keys("Left"),
+    ShortcutAction.MOTION_NEXT_FRAME to keys("Right"),
 )
 
 /**
@@ -293,6 +359,8 @@ private val BLENDER_OVERRIDES: Map<ShortcutAction, List<KeyBinding>> = mapOf(
     // Workspace cycling.
     ShortcutAction.NEXT_TAB to keys("Ctrl+PageDown"),
     ShortcutAction.PREV_TAB to keys("Ctrl+PageUp"),
+    // Insert keyframe.
+    ShortcutAction.MOTION_KEY_POSE to keys("I", "K"),
 )
 
 /**
@@ -331,8 +399,9 @@ class Keymap private constructor(
         check(missing.isEmpty()) { "Shortcut actions missing a default binding: $missing" }
     }
 
-    private val appIndex: Map<KeyBinding, ShortcutAction> by lazy { buildIndex(ShortcutScope.APP) }
-    private val canvasIndex: Map<KeyBinding, ShortcutAction> by lazy { buildIndex(ShortcutScope.CANVAS) }
+    private val indexes: Map<ShortcutScope, Map<KeyBinding, ShortcutAction>> by lazy {
+        ShortcutScope.entries.associateWith(::buildIndex)
+    }
 
     fun bindingsFor(action: ShortcutAction): List<KeyBinding> = bindings[action].orEmpty()
 
@@ -343,20 +412,39 @@ class Keymap private constructor(
     fun labelFor(action: ShortcutAction): String? = bindingsFor(action).firstOrNull()?.format()
 
     /** The action bound to this exact chord in this scope, or null. */
-    fun match(event: KeyEvent, scope: ShortcutScope): ShortcutAction? {
-        val index = if (scope == ShortcutScope.APP) appIndex else canvasIndex
-        return index[keyBindingOf(event)]
-    }
+    fun match(event: KeyEvent, scope: ShortcutScope): ShortcutAction? = match(keyBindingOf(event), scope)
+
+    /** The action bound to [binding] in [scope], or null; a null binding (an unnameable input) matches nothing. */
+    fun match(binding: KeyBinding?, scope: ShortcutScope): ShortcutAction? =
+        binding?.let { indexes.getValue(scope)[it] }
+
+    /**
+     * The command a wheel notch or a button click fires in [scope]. Gestures are left out: a press
+     * that starts a drag is [gesture]'s.
+     */
+    fun mouseCommand(binding: KeyBinding?, scope: ShortcutScope): ShortcutAction? =
+        match(binding, scope)?.takeIf { it.kind != ShortcutKind.DRAG }
+
+    /** The drag gesture a press of this button with these modifiers starts in [scope], or null. */
+    fun gesture(binding: KeyBinding?, scope: ShortcutScope = ShortcutScope.CANVAS): ShortcutAction? =
+        match(binding, scope)?.takeIf { it.kind == ShortcutKind.DRAG }
+
+    /** The other actions [binding] would collide with if [action] used it: same chord, overlapping scope. */
+    fun conflictsFor(action: ShortcutAction, binding: KeyBinding): List<ShortcutAction> =
+        conflictIndex()[binding].orEmpty().filter { it != action && it.scope.overlaps(action.scope) }
 
     /** Replaces one action's bindings; an empty list is a legitimate "unbound". */
     fun with(action: ShortcutAction, list: List<KeyBinding>): Keymap =
         Keymap(preset, bindings + (action to list))
 
     /** Every chord of every action mapped to the actions using it, for conflict display. */
-    fun conflictIndex(): Map<KeyBinding, List<ShortcutAction>> =
+    fun conflictIndex(): Map<KeyBinding, List<ShortcutAction>> = conflicts
+
+    private val conflicts: Map<KeyBinding, List<ShortcutAction>> by lazy {
         bindings.entries
             .flatMap { (action, list) -> list.map { it to action } }
             .groupBy({ it.first }, { it.second })
+    }
 
     /**
      * Decides whether [binding] may be assigned to [action] at [index]. Refusing rather than warning
@@ -364,12 +452,23 @@ class Keymap private constructor(
      * exact failure this feature exists to remove.
      */
     fun validateCapture(action: ShortcutAction, index: Int, binding: KeyBinding): CaptureCheck {
-        if (isReservedBinding(binding)) return CaptureCheck.Reserved
+        val mouse = binding.mouse
+        when (action.kind) {
+            // A drag needs a button to hold; keys and wheel notches have no motion to drive it.
+            ShortcutKind.DRAG -> if (mouse == null || mouse.isWheel) return CaptureCheck.Unsupported(UNSUPPORTED_DRAG)
+            else -> {
+                // The left and right presses belong to the tools and the context menus, and only a
+                // drag gesture may claim one (with a modifier).
+                if (mouse == MouseInput.LEFT || mouse == MouseInput.RIGHT) return CaptureCheck.Unsupported(UNSUPPORTED_BUTTON)
+                if (action.kind == ShortcutKind.HOLD && mouse?.isWheel == true) return CaptureCheck.Unsupported(UNSUPPORTED_HOLD)
+            }
+        }
+        if (isReservedBinding(binding, action.scope)) return CaptureCheck.Reserved
         val own = bindingsFor(action)
         own.forEachIndexed { i, existing ->
             if (existing == binding && i != index) return CaptureCheck.DuplicateSelf
         }
-        val owner = conflictIndex()[binding]?.firstOrNull { it != action }
+        val owner = conflictsFor(action, binding).firstOrNull()
         return if (owner == null) CaptureCheck.Ok else CaptureCheck.Conflict(owner)
     }
 
@@ -394,7 +493,13 @@ sealed interface CaptureCheck {
     data object Reserved : CaptureCheck
     data object DuplicateSelf : CaptureCheck
     data class Conflict(val action: ShortcutAction) : CaptureCheck
+    /** The input is of a kind the action cannot use; [messageKey] says which. */
+    data class Unsupported(val messageKey: String) : CaptureCheck
 }
+
+private const val UNSUPPORTED_DRAG = "dialog.settings.shortcuts.dragNeedsButton"
+private const val UNSUPPORTED_BUTTON = "dialog.settings.shortcuts.buttonDragOnly"
+private const val UNSUPPORTED_HOLD = "dialog.settings.shortcuts.holdNoWheel"
 
 /**
  * Which binding cell the settings panel is currently recording into, plus the reason the last

@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import io.github.psd2live.ui.components.KeyChordCaps
 import io.github.psd2live.ui.components.KeyCap
 import io.github.psd2live.ui.components.ShortcutActionCaps
+import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.state.Keymap
 import io.github.psd2live.ui.state.ShortcutAction
 
@@ -58,6 +59,19 @@ internal fun parseTutorialMarkup(text: String): List<TutorialSpan> {
 	if (last < text.length) out += TutorialSpan.Text(text.substring(last))
 	return out
 }
+
+/**
+ * The same markup as plain text, for one-line hints that have no room for keycaps: each `{key:…}` becomes
+ * the action's primary binding in [keymap] (so a rebound key shows its new chord), each `{kbd:…}` its token.
+ */
+internal fun expandShortcutMarkup(text: String, keymap: Keymap): String =
+	parseTutorialMarkup(text).joinToString("") { span ->
+		when (span) {
+			is TutorialSpan.Text -> span.value
+			is TutorialSpan.Action -> keymap.labelFor(span.action) ?: tr("help.shortcuts.unbound")
+			is TutorialSpan.LiteralKey -> span.token
+		}
+	}
 
 /**
  * Tutorial body/action copy that mixes prose with keyboard-shaped keycaps resolved from [keymap].
