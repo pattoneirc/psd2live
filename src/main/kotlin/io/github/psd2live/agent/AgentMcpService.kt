@@ -1,11 +1,8 @@
 package io.github.psd2live.agent
 
-
+import io.github.psd2live.application.WorkspaceBackend
 import io.github.psd2live.application.WorkspaceOperations
 import io.github.psd2live.application.toJson
-
-import io.github.psd2live.application.WorkspaceBackend
-
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -39,12 +36,8 @@ import io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.add
 import java.security.SecureRandom
 import java.util.Base64
-import java.util.prefs.Preferences
 
 private const val MCP_SESSION_ID_HEADER = "mcp-session-id"
 // A 4096 x 4096 RGBA PNG can approach 64 MiB; Base64 adds another third, plus JSON overhead.
@@ -52,58 +45,47 @@ internal const val DEFAULT_MCP_MAX_REQUEST_BODY_BYTES = 96L * 1024 * 1024
 private const val SHUTDOWN_GRACE_MILLIS = 100L
 private const val SHUTDOWN_TIMEOUT_MILLIS = 500L
 
+const val DEFAULT_MCP_PORT = 23871
+
 data class AgentMcpConfig(
 	val host: String = "127.0.0.1",
-	val port: Int = 23871,
-	val token: String = AgentMcpCredentials.loadOrCreateToken(),
+	val port: Int = DEFAULT_MCP_PORT,
+	val token: String,
+	val profile: AgentToolProfile = AgentToolProfile.CORE,
     val maxRequestBodyBytes: Long = DEFAULT_MCP_MAX_REQUEST_BODY_BYTES,
 ) {
-    init { require(maxRequestBodyBytes > 0) { "MCP request body limit must be positive" } }
+    init {
+        require(maxRequestBodyBytes > 0) { "MCP request body limit must be positive" }
+        require(port in 0..65535) { "MCP port must be 0..65535" }
+    }
 }
 
 data class AgentMcpConnectionInfo(
 	val endpoint: String,
 	val token: String,
+	val profile: AgentToolProfile = AgentToolProfile.CORE,
 ) {
-	val configGeminiJson: String
-		get() {
-			val endpointJson = JsonPrimitive(endpoint)
-			val authorizationJson = JsonPrimitive("Bearer $token")
-			return """
-				{
-				  "mcpServers": {
-				    "psd2live": {
-				      "serverUrl": $endpointJson,
-				      "headers": {
-				        "Authorization": $authorizationJson
-				      }
-				    }
-				  }
-				}
-			""".trimIndent()
-		}
-
-	val configToml: String
-		get() = """
-			[mcp_servers.psd2live]
-			url = "$endpoint"
-			http_headers = { Authorization = "Bearer $token" }
-		""".trimIndent()
+	val port: Int get() = java.net.URI(endpoint).port
 }
 
-class AgentMcpService(
+/**
+ * Serves one MCP endpoint over [operations]. The operations, their jobs and request results belong to the caller,
+ * so restarting the endpoint with other settings keeps them.
+ */
+class AgentMcpService internal constructor(
 	private val workspace: WorkspaceBackend,
-	private val config: AgentMcpConfig = AgentMcpConfig(),
+	private val config: AgentMcpConfig,
+	private val operations: WorkspaceOperations,
 ) : AutoCloseable {
 	private var engine: EmbeddedServer<*, *>? = null
 	private val isClosed = AtomicBoolean(false)
-    private val operations = WorkspaceOperations(workspace)
 
 	lateinit var connectionInfo: AgentMcpConnectionInfo
 		private set
 
 	fun start(): AgentMcpConnectionInfo {
 		check(engine == null) { "Agent MCP service is already running" }
+		val catalog = AgentToolCatalog(operations.registry, workspace, config.profile)
 		val started = embeddedServer(CIO, configure = {
 			connector {
 				host = config.host
@@ -114,7 +96,7 @@ class AgentMcpService(
 			shutdownGracePeriod = SHUTDOWN_GRACE_MILLIS
 			shutdownTimeout = SHUTDOWN_TIMEOUT_MILLIS
 		}) {
-			configureAgentMcp(workspace, config.token, config.maxRequestBodyBytes, operations)
+			configureAgentMcp(workspace, config.token, config.maxRequestBodyBytes, catalog)
 		}
 		try {
 			started.start(wait = false)
@@ -128,6 +110,7 @@ class AgentMcpService(
 			return AgentMcpConnectionInfo(
 				endpoint = "http://${config.host}:$actualPort/mcp",
 				token = config.token,
+				profile = config.profile,
 			).also { connectionInfo = it }
 		} catch (t: Throwable) {
 			runCatching { started.stop(gracePeriodMillis = 50, timeoutMillis = 200) }
@@ -142,29 +125,23 @@ class AgentMcpService(
 			engine?.stop(SHUTDOWN_GRACE_MILLIS, SHUTDOWN_TIMEOUT_MILLIS)
 		}
 		engine = null
-        operations.close()
-		runCatching {
-			(workspace as? AutoCloseable)?.close()
-		}
 	}
 }
 
 object AgentMcpCredentials {
-	private const val TOKEN_KEY = "agent_mcp_bearer_token"
-	private val preferences: Preferences by lazy { Preferences.userNodeForPackage(AgentMcpCredentials::class.java) }
+	/** Header-safe and long enough not to be guessed: the URL-safe Base64 alphabet, 32..256 characters. */
+	fun isValidToken(token: String): Boolean = token.length in 32..256 && token.all { it.isLetterOrDigit() && it.code < 128 || it == '-' || it == '_' }
 
-	fun loadOrCreateToken(): String {
-		preferences.get(TOKEN_KEY, null)?.takeIf { it.length >= 32 }?.let { return it }
+	fun generateToken(): String {
 		val bytes = ByteArray(32).also(SecureRandom()::nextBytes)
-		return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes).also { preferences.put(TOKEN_KEY, it) }
+		return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
 	}
-
 }
 
-internal fun Application.configureAgentMcp(workspace: WorkspaceBackend, authToken: String, maxRequestBodyBytes: Long = DEFAULT_MCP_MAX_REQUEST_BODY_BYTES, operations: WorkspaceOperations = WorkspaceOperations(workspace)) {
-	require(authToken.length >= 32) { "Agent MCP bearer token is too short" }
+internal fun Application.configureAgentMcp(workspace: WorkspaceBackend, authToken: String, maxRequestBodyBytes: Long, catalog: AgentToolCatalog) {
+	require(AgentMcpCredentials.isValidToken(authToken)) { "Agent MCP bearer token is invalid" }
 	install(ContentNegotiation) { json(McpJson) }
-    installExactToolPublication(operations.registry)
+    installExactToolPublication(catalog)
 	install(SSE)
 	install(Authentication) {
 		bearer("agent-mcp-bearer") {
@@ -190,7 +167,7 @@ internal fun Application.configureAgentMcp(workspace: WorkspaceBackend, authToke
 				post {
 					val sessionId = call.request.header(MCP_SESSION_ID_HEADER)
 					val transport = if (sessionId == null) {
-						createTransport(workspace, transports, maxRequestBodyBytes, operations)
+						createTransport(workspace, transports, maxRequestBodyBytes, catalog)
 					} else {
 						findTransport(sessionId, transports)
 					}
@@ -223,20 +200,23 @@ private suspend fun createTransport(
 	workspace: WorkspaceBackend,
 	transports: ConcurrentMap<String, StreamableHttpServerTransport>,
     maxRequestBodyBytes: Long,
-    operations: WorkspaceOperations,
+    catalog: AgentToolCatalog,
 ): StreamableHttpServerTransport {
 	val transport = StreamableHttpServerTransport(
 		StreamableHttpServerTransport.Configuration(enableJsonResponse = true, maxRequestBodySize = maxRequestBodyBytes),
 	)
 	transport.setOnSessionInitialized { sessionId -> transports[sessionId] = transport }
 	transport.setOnSessionClosed { sessionId -> transports.remove(sessionId) }
-	val server = createAgentMcpServer(workspace, operations = operations)
+	val server = createAgentMcpServer(workspace, catalog)
 	server.onClose { transport.sessionId?.let(transports::remove) }
 	server.createSession(transport)
 	return transport
 }
 
-internal fun createAgentMcpServer(workspace: WorkspaceBackend, operations: WorkspaceOperations = WorkspaceOperations(workspace)): Server {
+internal fun createAgentMcpServer(workspace: WorkspaceBackend, operations: WorkspaceOperations, profile: AgentToolProfile): Server =
+    createAgentMcpServer(workspace, AgentToolCatalog(operations.registry, workspace, profile))
+
+internal fun createAgentMcpServer(workspace: WorkspaceBackend, catalog: AgentToolCatalog): Server {
 	val server = Server(
 		serverInfo = Implementation("psd2live", "2.0.4"),
 		options = ServerOptions(
@@ -245,7 +225,7 @@ internal fun createAgentMcpServer(workspace: WorkspaceBackend, operations: Works
 				tools = ServerCapabilities.Tools(listChanged = false),
 			),
 		),
-		instructions = AGENT_INSTRUCTIONS,
+		instructions = agentInstructions(catalog.profile),
 	)
 
 	server.addResource(
@@ -259,15 +239,25 @@ internal fun createAgentMcpServer(workspace: WorkspaceBackend, operations: Works
 		)
 	}
 
-    installOperationTools(server, operations.registry)
+    installOperationTools(server, catalog)
     return server
 }
 
-private val AGENT_INSTRUCTIONS = """
-    PSD2Live is a recoverable model editor. Use workspace_list_operations to discover capabilities and workspace_get_operation for exact fields. Use workspace_inspect to inspect context and relevant objects, understand existing motion ownership, and plan your own work. There are no task recipes or required skills.
-    Wrap all tool arguments in a request object and follow the published exact schema. Model and PSD exports return process-local job handles; use job_wait/job_get to collect results and job_cancel to cancel explicitly. All mutations require request_id; workspace-bound mutations also require project_id and the opaque state from workspace_inspect. Use null project_id only for creation/import into an unloaded workspace. Retry identical arguments and request_id to recover the original result after a disconnected call. Use a new request_id for changed arguments or expectations.
-    Chain the returned project_id and state after document writes. history_node_id identifies a history entry and cannot be used as a state token. A write updates the model and creates history; it is not an uncommitted preview. Reconcile workspace_inspect/history_list after uncertain writes. Preserve useful milestones and restore deliberately.
-    Separate source artwork, motion hierarchy, parameter definitions, authored keyforms, and observation poses. Prefer existing owners; add a fitted Warp only for independent motion. All surface points may deform, including empty and boundary cage points. Use broad fields, not isolated mesh vertices.
-    Keyform and deformation edits name exact destination keys; viewing parent parameters does not mean binding them again. Plan endpoints, meaningful combinations and intermediate observations. Keep other keys and channels. Physics drives already-authored output forms.
-    Generate or edit artwork with available host image tools when needed, then import/register it through asset_import_png and asset_register. Compare actual model renders, never generated illustrations as proof of motion. Structural validity and appearance are different. Report only observed results and remaining limitations.
-""".trimIndent()
+private fun agentInstructions(profile: AgentToolProfile): String {
+    val discovery = when (profile) {
+        AgentToolProfile.CORE -> """
+            PSD2Live is a recoverable model editor. The listed tools cover inspection, rendering, atomic edits and the project lifecycle; every other operation is called through workspace_call. Find operations with workspace_list_operations (filter by domain) and read exact fields with workspace_get_operation. Use workspace_inspect to inspect context and relevant objects, understand existing motion ownership, and plan your own work. There are no task recipes or required skills.
+            Wrap tool arguments in a request object. Writes require the opaque state from workspace_inspect or the preceding result; request_id and project_id may be omitted, and an identical retry recovers the original result. Background operations wait up to wait_ms and return the finished job with its result; a job still running returns its id for job_wait. Apply several document edits as one history step with workspace_apply_edits.
+        """
+        AgentToolProfile.FULL -> """
+            PSD2Live is a recoverable model editor. Use workspace_list_operations to discover capabilities and workspace_get_operation for exact fields. Use workspace_inspect to inspect context and relevant objects, understand existing motion ownership, and plan your own work. There are no task recipes or required skills.
+            Wrap all tool arguments in a request object and follow the published exact schema. Model and PSD exports return process-local job handles; use job_wait/job_get to collect results and job_cancel to cancel explicitly. All mutations require request_id; workspace-bound mutations also require project_id and the opaque state from workspace_inspect. Use null project_id only for creation/import into an unloaded workspace. Retry identical arguments and request_id to recover the original result after a disconnected call. Use a new request_id for changed arguments or expectations.
+        """
+    }.trimIndent()
+    return discovery + "\n" + """
+        Chain the returned project_id and state after document writes. history_node_id identifies a history entry and cannot be used as a state token. A write updates the model and creates history; it is not an uncommitted preview. Reconcile workspace_inspect/history_list after uncertain writes. Preserve useful milestones and restore deliberately.
+        Separate source artwork, motion hierarchy, parameter definitions, authored keyforms, and observation poses. Prefer existing owners; add a fitted Warp only for independent motion. All surface points may deform, including empty and boundary cage points. Use broad fields, not isolated mesh vertices.
+        Keyform and deformation edits name exact destination keys; viewing parent parameters does not mean binding them again. Plan endpoints, meaningful combinations and intermediate observations. Keep other keys and channels. Physics drives already-authored output forms.
+        Generate or edit artwork with available host image tools when needed, then import/register it through asset_import_png and asset_register. Compare actual model renders, never generated illustrations as proof of motion. Structural validity and appearance are different. Report only observed results and remaining limitations.
+    """.trimIndent()
+}

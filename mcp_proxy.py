@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover - only available on Windows
     winreg = None
 
 
-ENDPOINT = os.environ.get("PSD2LIVE_MCP_ENDPOINT", "http://127.0.0.1:23871/mcp")
+DEFAULT_PORT = 23871
 REQUEST_TIMEOUT_SECONDS = float(os.environ.get("PSD2LIVE_MCP_TIMEOUT", "60"))
 TOKEN_ENV = "PSD2LIVE_MCP_TOKEN"
 TRANSIENT_HTTP_STATUSES = {408, 425, 429, 502, 503, 504}
@@ -34,9 +34,15 @@ SAFE_PROTOCOL_METHODS = {
     "notifications/initialized",
     "notifications/cancelled",
 }
+# Read-only tools, used until the server's tools/list arrives and replaces this set
+# with every tool it marks read-only or idempotent.
 SAFE_PSD2LIVE_TOOLS = {
-    "inspect",
-    "view",
+    "workspace_inspect",
+    "workspace_list_operations",
+    "workspace_get_operation",
+    "history_list",
+    "job_get",
+    "job_list",
 }
 
 
@@ -54,10 +60,8 @@ def _decode_java_preferences_value(value: str) -> str:
     return "".join(result)
 
 
-def get_token() -> str | None:
-    token = os.environ.get(TOKEN_ENV)
-    if token:
-        return token
+def _read_saved(name: str) -> str | None:
+    """Read a value PSD2Live saved in its Java preferences node (Windows only)."""
     if winreg is None:
         return None
     try:
@@ -65,10 +69,25 @@ def get_token() -> str | None:
             winreg.HKEY_CURRENT_USER,
             r"Software\JavaSoft\Prefs\io\github\psd2live\agent",
         ) as key:
-            value, _ = winreg.QueryValueEx(key, "agent_mcp_bearer_token")
+            value, _ = winreg.QueryValueEx(key, name)
         return _decode_java_preferences_value(value)
     except OSError:
         return None
+
+
+def get_token() -> str | None:
+    return os.environ.get(TOKEN_ENV) or _read_saved("agent_mcp_bearer_token")
+
+
+def get_endpoint() -> str:
+    endpoint = os.environ.get("PSD2LIVE_MCP_ENDPOINT")
+    if endpoint:
+        return endpoint
+    port = _read_saved("agent_mcp_port")
+    return f"http://127.0.0.1:{port if port and port.isdigit() else DEFAULT_PORT}/mcp"
+
+
+ENDPOINT = get_endpoint()
 
 
 def _is_retry_safe(message: object) -> bool:
@@ -116,7 +135,24 @@ def _write_json_payload(payload: str) -> None:
     except json.JSONDecodeError as error:
         sys.stderr.write(f"PSD2Live MCP returned invalid JSON: {error}\n")
         return
+    _learn_safe_tools(parsed)
     _write_message(json.dumps(parsed, separators=(",", ":"), ensure_ascii=False))
+
+
+def _learn_safe_tools(message: object) -> None:
+    """Writes repeat their request ID, so the server marks them idempotent and a retry recovers the result."""
+    result = message.get("result") if isinstance(message, dict) else None
+    tools = result.get("tools") if isinstance(result, dict) else None
+    if not isinstance(tools, list):
+        return
+    for tool in tools:
+        if not isinstance(tool, dict) or not isinstance(tool.get("name"), str):
+            continue
+        hints = tool.get("annotations")
+        if isinstance(hints, dict) and (hints.get("readOnlyHint") or hints.get("idempotentHint")):
+            SAFE_PSD2LIVE_TOOLS.add(tool["name"])
+        else:
+            SAFE_PSD2LIVE_TOOLS.discard(tool["name"])
 
 
 def _write_http_body(body: str, content_type: str) -> None:
@@ -254,7 +290,7 @@ def main() -> int:
                         session_id = None
                         summary = (
                             "PSD2Live MCP session expired. Initialize a new MCP session, "
-                            "then inspect/revision before resuming."
+                            "then call workspace_inspect before resuming."
                         )
                     elif (
                         error.code in TRANSIENT_HTTP_STATUSES
@@ -270,8 +306,8 @@ def main() -> int:
                             summary += f": {detail}"
                         if not retry_safe and error.code in TRANSIENT_HTTP_STATUSES:
                             summary += (
-                                ". The write commit state may be unknown; reconnect and "
-                                "inspect/revision before retrying"
+                                ". The write commit state may be unknown; reconnect and check "
+                                "workspace_inspect/history_list before retrying"
                             )
 
                     sys.stderr.write(summary + "\n")
@@ -289,7 +325,7 @@ def main() -> int:
                     if not retry_safe:
                         summary += (
                             ". The write commit state is unknown; reconnect and check "
-                            "inspect/revision before retrying"
+                            "workspace_inspect/history_list before retrying"
                         )
                     sys.stderr.write(summary + "\n")
                     _write_rpc_error(request_id, summary)

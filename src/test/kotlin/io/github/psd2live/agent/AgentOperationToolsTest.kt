@@ -35,7 +35,7 @@ class AgentOperationToolsTest {
     @Test fun publishedSchemaIsTheExactRegistryContractAndValidationPrecedesExecution() = runBlocking {
         val backend = Backend()
         WorkspaceOperations(backend).use { operations ->
-            val server = createAgentMcpServer(backend, operations = operations)
+            val server = createAgentMcpServer(backend, operations, AgentToolProfile.FULL)
             val tool = server.tools.getValue("project_export_model")
             assertEquals(listOf("request"), tool.tool.inputSchema.required)
             assertEquals(operations.registry.definition("project_export_model").requestSchema,
@@ -52,7 +52,7 @@ class AgentOperationToolsTest {
     @Test fun exportJobSurvivesCancelledWaitAndRequestRetryDoesNotExportAgain() = runBlocking {
         val backend = Backend()
         WorkspaceOperations(backend).use { operations ->
-            val firstServer = createAgentMcpServer(backend, operations = operations)
+            val firstServer = createAgentMcpServer(backend, operations, AgentToolProfile.FULL)
             suspend fun call(server: io.modelcontextprotocol.kotlin.sdk.server.Server, id: String, request: JsonObject) =
                 server.tools.getValue(id).handler.invoke(connection, CallToolRequest(CallToolRequestParams(id,
                     buildJsonObject { put("request", request) }))).structuredContent!!.getValue("data").jsonObject
@@ -62,7 +62,7 @@ class AgentOperationToolsTest {
             val waiting = launch { call(firstServer, "job_wait", buildJsonObject { put("id", id) }) }
             yield()
             waiting.cancelAndJoin()
-            val reconnected = createAgentMcpServer(backend, operations = operations)
+            val reconnected = createAgentMcpServer(backend, operations, AgentToolProfile.FULL)
             assertEquals(id, call(reconnected, "project_export_model", request).getValue("id").jsonPrimitive.content)
             backend.release.complete(Unit)
             val completed = call(reconnected, "job_wait", buildJsonObject { put("id", id) })
@@ -95,7 +95,7 @@ class AgentOperationToolsTest {
 
     @Test fun requestEnvelopeAndOperationFieldsRejectUnknownArguments() = runBlocking {
         WorkspaceOperations(Backend()).use { operations ->
-            val server = createAgentMcpServer(Backend(), operations)
+            val server = createAgentMcpServer(Backend(), operations, AgentToolProfile.FULL)
             for (arguments in listOf(
                 buildJsonObject { putJsonObject("request") {}; put("extra", true) },
                 buildJsonObject { putJsonObject("request") { put("mode", "get") } },
@@ -110,7 +110,7 @@ class AgentOperationToolsTest {
     }
 
     @Test fun authoringPublicationRetainsVariantsAndFieldHelp() {
-        val server = createAgentMcpServer(Backend())
+        val server = createAgentMcpServer(Backend(), WorkspaceOperations(Backend()), AgentToolProfile.FULL)
         val definitions = WorkspaceOperations(Backend()).use { operations -> operations.registry.definitions().associateBy { it.id } }
         server.tools.values.forEach { registered ->
             assertEquals(listOf("request"), registered.tool.inputSchema.required)

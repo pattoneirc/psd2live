@@ -1,8 +1,5 @@
 package io.github.psd2live.agent
 
-import io.github.psd2live.application.WorkspaceOperationRegistry
-import io.github.psd2live.application.requestEnvelope
-import io.github.psd2live.application.responseEnvelope
 import io.ktor.http.ContentType
 import io.ktor.http.content.OutgoingContent
 import io.ktor.server.application.Application
@@ -10,7 +7,7 @@ import io.ktor.server.response.ApplicationSendPipeline
 import kotlinx.serialization.json.*
 
 /** Retain root schema constraints omitted by the SDK's narrow ToolSchema at the JSON transport boundary. */
-internal fun Application.installExactToolPublication(registry: WorkspaceOperationRegistry) {
+internal fun Application.installExactToolPublication(catalog: AgentToolCatalog) {
     sendPipeline.intercept(ApplicationSendPipeline.After) {
         val content = subject as? OutgoingContent.ByteArrayContent ?: return@intercept
         if (content.contentType?.match(ContentType.Application.Json) != true) return@intercept
@@ -19,7 +16,7 @@ internal fun Application.installExactToolPublication(registry: WorkspaceOperatio
         if (!original.containsToolList()) return@intercept
         val response = runCatching { Json.parseToJsonElement(original.decodeToString()) }.getOrNull() as? JsonObject
             ?: return@intercept
-        val rewritten = response.withExactToolPublication(registry)
+        val rewritten = response.withExactToolPublication(catalog)
         if (rewritten == response) return@intercept
         val bytes = rewritten.toString().encodeToByteArray()
         proceedWith(object : OutgoingContent.ByteArrayContent() {
@@ -47,17 +44,15 @@ private fun ByteArray.containsToolList(): Boolean {
     return false
 }
 
-internal fun JsonObject.withExactToolPublication(registry: WorkspaceOperationRegistry): JsonObject {
+internal fun JsonObject.withExactToolPublication(catalog: AgentToolCatalog): JsonObject {
     if (this["jsonrpc"] != JsonPrimitive("2.0")) return this
     val result = this["result"] as? JsonObject ?: return this
     val tools = result["tools"] as? JsonArray ?: return this
     val published = tools.map { item ->
         val tool = item.jsonObject
-        val operation = registry.definition(tool.getValue("name").jsonPrimitive.content)
-        JsonObject(tool + buildJsonObject {
-            put("inputSchema", operation.requestEnvelope())
-            put("outputSchema", operation.responseEnvelope())
-        })
+        val entry = catalog.tools.getValue(tool.getValue("name").jsonPrimitive.content)
+        val withInput = tool + ("inputSchema" to entry.inputSchema)
+        JsonObject(entry.outputSchema?.let { withInput + ("outputSchema" to it) } ?: (withInput - "outputSchema"))
     }
     return JsonObject(this + ("result" to JsonObject(result + ("tools" to JsonArray(published)))))
 }

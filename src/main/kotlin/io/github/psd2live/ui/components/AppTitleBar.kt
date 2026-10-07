@@ -639,22 +639,15 @@ fun AppTitleBar(
 
 					AppMenuSeparator()
 
-					// 二级菜单: MCP
-					AppSubmenuItem(
+					AppMenuItem(
 						text = tr("menu.agent"),
-						isOpen = activeSubmenu == "mcp",
-						onOpen = { activeSubmenu = "mcp" },
-						onDismiss = { if (activeSubmenu == "mcp") activeSubmenu = null },
-					) {
-						AppMenuItem(
-							text = tr("menu.agent.connection"),
-							onClick = {
-								activeMenu = null
-								activeSubmenu = null
-								onShowAgentConnection()
-							},
-						)
-					}
+						onHover = { activeSubmenu = null },
+						onClick = {
+							activeMenu = null
+							activeSubmenu = null
+							onShowAgentConnection()
+						},
+					)
 				}
 			}
 

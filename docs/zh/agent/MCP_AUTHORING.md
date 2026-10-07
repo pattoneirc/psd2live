@@ -2,17 +2,29 @@
 
 [文档目录](../../README.md) · [设计与验收](AGENT_DESIGN.md) · [UI / MCP 双向清单](UI_MCP_PARITY_ISSUE_13.md) · [能力实测](../STATUS.md)
 
-公开定义位于应用层 [WorkspaceAuthoringOperations.kt](../../../src/main/kotlin/io/github/psd2live/application/WorkspaceAuthoringOperations.kt) 、[WorkspaceDocumentBatch.kt](../../../src/main/kotlin/io/github/psd2live/application/WorkspaceDocumentBatch.kt)、[WorkspaceAuxiliaryOperations.kt](../../../src/main/kotlin/io/github/psd2live/application/WorkspaceAuxiliaryOperations.kt) 和 [WorkspaceOperations.kt](../../../src/main/kotlin/io/github/psd2live/application/WorkspaceOperations.kt)，MCP 绑定见 [AgentOperationTools.kt](../../../src/main/kotlin/io/github/psd2live/agent/AgentOperationTools.kt)。工具使用 `domain_operation` 名称；旧的分支工具已删除，没有兼容别名。先调用 `workspace_list_operations` 分页发现能力，再用 `workspace_get_operation` 读取单项完整 schema。
+公开定义位于应用层 [WorkspaceAuthoringOperations.kt](../../../src/main/kotlin/io/github/psd2live/application/WorkspaceAuthoringOperations.kt) 、[WorkspaceDocumentBatch.kt](../../../src/main/kotlin/io/github/psd2live/application/WorkspaceDocumentBatch.kt)、[WorkspaceAuxiliaryOperations.kt](../../../src/main/kotlin/io/github/psd2live/application/WorkspaceAuxiliaryOperations.kt) 和 [WorkspaceOperations.kt](../../../src/main/kotlin/io/github/psd2live/application/WorkspaceOperations.kt)，MCP 绑定见 [AgentToolCatalog.kt](../../../src/main/kotlin/io/github/psd2live/agent/AgentToolCatalog.kt)。工具使用 `domain_operation` 名称；旧的分支工具已删除，没有兼容别名。用 `workspace_list_operations` 分页发现能力，再用 `workspace_get_operation` 读取单项完整 schema。
 
 ## 接入
 
 1. 启动桌面应用，载入或创建工作区。
-2. 打开 **工具 → MCP → MCP 连接与安装…**，复制宿主对应的配置。
-3. 优先使用 Streamable HTTP 和界面提供的 Bearer Token。不要改用已废弃的 `/sse` 端点。
-4. 仅支持 Stdio 的宿主使用 Python 3 运行根目录 `mcp_proxy.py`；代理支持 `PSD2LIVE_MCP_ENDPOINT` 和 `PSD2LIVE_MCP_TOKEN`。
+2. 打开 **工具 → MCP…**，按宿主复制命令或配置：Claude Code 命令、Codex TOML、通用 `mcpServers` JSON（地址字段因宿主而异）或 Stdio 代理。「复制安装提示词」生成一段让 Agent 自行配置的短提示。
+3. 优先使用 Streamable HTTP 和 Bearer 令牌。不要改用已废弃的 `/sse` 端点。
+4. 仅支持 Stdio 的宿主使用 Python 3 运行根目录 `mcp_proxy.py`；代理读取 `PSD2LIVE_MCP_ENDPOINT` 和 `PSD2LIVE_MCP_TOKEN`，未设置时在 Windows 上读取应用保存的端口与令牌。
 5. 列出工具后调用 `workspace_inspect`，读取实际对象 ID、参数、当前 `project_id` 与 `state`。
 
-Token 允许编辑当前工作区，应保留在本机宿主配置中。工具不提供图像生成模型；新增图片可来自已有像素、绘画或宿主的图像生成器。
+同一对话框设置是否启用服务、端口（1024–65535，默认 23871）、访问令牌（32–256 个字母、数字、`-`、`_`，可重新生成或自行填写）和工具集，保存在用户偏好中，应用后重启端点。重启保留进程内任务与请求去重记录；已连接的宿主需重连，改了端口或令牌还要更新宿主配置。
+
+令牌允许编辑当前工作区，应保留在本机宿主配置中。工具不提供图像生成模型；新增图片可来自已有像素、绘画或宿主的图像生成器。
+
+## 工具集
+
+工具集只决定 `tools/list` 发布哪些工具，所有操作在两种工具集下都能调用，执行与校验相同。
+
+- **精简（默认）**：发布 21 项常用操作和 `workspace_call`（共 22 个工具，输入 schema 与说明约 3.4 万字符；完整工具集约 45 万字符，另有约 275 万字符的输出 schema）。包括 `workspace_inspect`、`workspace_list_operations`、`workspace_get_operation`、`workspace_apply_edits`、`workspace_preview_edits`、`view_render_model/poses`、`view_compare_history`、`rig_deform`、`keyform_apply`、`parameter_create`、`history_list/checkout`、`project_open/import_psd/save/save_as/export_model` 与 `job_wait/get/cancel`。其他操作经 `workspace_call` 调用：`{"operation":"motion_set_key","request":{...},"wait_ms":20000}`，`request` 按该操作的完整 schema 校验。
+  - 不发布 `outputSchema`（结果仍以 `structuredContent` 返回，契约见 `workspace_get_operation`）；原子批量的 `edits` 成员只发布操作名枚举与 `request` 对象，成员字段执行时按单项 schema 严格校验。
+  - `request_id` 与 `project_id` 可省略。`project_id` 取当前加载的工程；`state` 仍为必填，属于其他加载的 `state` 照常报 `state_conflict`。`request_id` 由操作与参数（含 `state`）派生，相同参数的重试取回原结果；上次相同调用已失败（含任务 `failed/cancelled`）时，再次调用作为新尝试执行。
+  - 后台操作接受 `wait_ms`（0–30000，默认 20000）：任务在时限内结束则直接返回终态与结果（与 `job_wait` 相同结构），否则返回运行中的任务，继续用 `job_wait`。`wait_ms: 0` 立即返回任务句柄。
+- **完整**：每项操作一个工具，发布完整输入与输出 schema，不派生上下文、不等待任务。适合按需加载工具的宿主或需要逐项契约的客户端。
 
 ## 公开工具速查
 
@@ -64,9 +76,9 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `path_get / path_list / path_preview / path_put / path_delete / path_deform` | `request` | `get/list/preview/put/delete/deform` |
 | `project_save / history_checkpoint / history_list / history_checkout` | `request` | 保存工程、创建检查点、读取历史或切换节点 |
 
-表中列出业务字段；所有修改还须携带 `request_id`，工作区修改须携带 `project_id` 和 `state`。只读后台采样 `physics_simulate/simulation_simulate/view_sample_motion` 同样要求这三个字段，用于去重并固定采样版本。各项操作字段不同，调用前读取当前服务提供的 JSON Schema。所有公开工具统一使用 `{"request": {...}}` 包装。发布与校验保留同一份 `oneOf`、`const`、字段约束及说明，外层和业务对象都拒绝未知字段。结果统一为 `{"ok":true,"operation":"...","data":{...}}`；错误包含 `ok:false` 和 `error.code/message`，字段校验错误还带 `field`。PNG 以 MCP 图片内容返回。
+表中列出业务字段；所有修改还须携带 `request_id`，工作区修改须携带 `project_id` 和 `state`（精简工具集可省略前两者，见[工具集](#工具集)）。只读后台采样 `physics_simulate/simulation_simulate/view_sample_motion` 同样要求这三个字段，用于去重并固定采样版本。各项操作字段不同，调用前读取当前服务提供的 JSON Schema。所有公开工具统一使用 `{"request": {...}}` 包装。发布与校验保留同一份 `oneOf`、`const`、字段约束及说明，外层和业务对象都拒绝未知字段。结果统一为 `{"ok":true,"operation":"...","data":{...}}`；错误包含 `ok:false` 和 `error.code/message`，字段校验错误还带 `field`。PNG 以 MCP 图片内容返回。
 
-全部 183 项公开操作（其中 67 项后台、86 项可批量）都必须声明并发布完整 `outputSchema`，能力详情中的 `output_schema` 与其一致；成功 data 和失败 error 严格互斥。注册表在执行及去重边界校验业务结果，MCP 校验完整返回包装，遗漏结果契约不能注册。后台操作必须另有终态 `job_result_schema`，非后台操作不允许该字段。能力详情通过本地 `$defs/$ref` 描述嵌套 schema，查询自己的 schema 也可校验；实际 HTTP 保留所有根约束。`output_contract` 表示服务实现的结果与声明不符，不能作为修改已回滚的证据。
+全部 183 项公开操作（其中 67 项后台、86 项可批量）都必须声明完整 `outputSchema`，完整工具集发布它，能力详情中的 `output_schema` 与其一致；成功 data 和失败 error 严格互斥。注册表在执行及去重边界校验业务结果，MCP 校验完整返回包装，遗漏结果契约不能注册。后台操作必须另有终态 `job_result_schema`，非后台操作不允许该字段。能力详情通过本地 `$defs/$ref` 描述嵌套 schema，查询自己的 schema 也可校验；实际 HTTP 保留所有根约束。`output_contract` 表示服务实现的结果与声明不符，不能作为修改已回滚的证据。
 
 图片追加使用 `layer_import_images`：必需 `state` 和 1–128 个绝对路径组成的 `paths`，可选 `parent_deformer_id` 指向已有父变形器；省略时绑定模型根。透明边缘裁剪后居中；栅格保持原分辨率，超过画布时只把画布矩形等比缩小到画布内（图层密度大于 1 像素/画布单位），网格按画布分辨率生成。单文件最多 64 MiB、16 百万像素，整批最多 32 百万像素。一次成功只追加一个历史节点，任意文件失败则整批不发布；它读取文件，不能作为原子文档批量成员。新增源图及网格句柄从任务终态 `affectedLayerIds/affectedObjectIds` 获取。原图像素写入工程，后续重开不依赖输入文件。
 

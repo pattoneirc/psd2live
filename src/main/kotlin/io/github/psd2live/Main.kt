@@ -10,7 +10,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
-import io.github.psd2live.agent.AgentMcpService
+import io.github.psd2live.agent.AgentMcpController
 import io.github.psd2live.project.WorkspaceStore
 import io.github.psd2live.ui.state.DesktopWorkspace
 import io.github.psd2live.core.PSD2LivePipeline
@@ -96,16 +96,12 @@ private fun runGui() {
 	val viewModel = PSD2LiveViewModel()
 	val agentWorkspace = DesktopWorkspace(viewModel)
 	viewModel.attachWorkspace(agentWorkspace)
-	var agentMcpService: AgentMcpService? = null
-	val agentMcpStartup = runCatching {
-		AgentMcpService(agentWorkspace)
-			.also { agentMcpService = it }
-			.start()
-	}
+	val agentMcp = AgentMcpController(agentWorkspace)
+	agentMcp.start()
 
 	// Both close() calls are idempotent, so the hook (Ctrl+C, SIGTERM, logoff) and the normal exit can race.
 	val shutdown = {
-		runCatching { agentMcpService?.close() }
+		runCatching { agentMcp.close() }
 		runCatching { viewModel.close() }
 		Unit
 	}
@@ -147,8 +143,7 @@ private fun runGui() {
 						window = window,
 						windowState = windowState,
 						onCloseRequest = closeApp,
-						agentConnectionInfo = agentMcpStartup.getOrNull(),
-						agentStartupError = agentMcpStartup.exceptionOrNull()?.message,
+						agentMcp = agentMcp,
 					)
 				}
 			}

@@ -60,8 +60,8 @@ import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.state.LogLevel
 import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.CanvasStatusTone
-import io.github.psd2live.agent.AgentMcpConnectionInfo
-import io.github.psd2live.ui.components.AgentConnectionDialog
+import io.github.psd2live.agent.AgentMcpController
+import io.github.psd2live.ui.components.AgentMcpDialog
 import io.github.psd2live.ui.components.AppTitleBar
 import io.github.psd2live.ui.components.AppMenuHeader
 import io.github.psd2live.ui.components.AppMenuItem
@@ -129,8 +129,7 @@ fun FrameWindowScope.PSD2LiveApp(
 	viewModel: PSD2LiveViewModel,
 	window: ComposeWindow? = null,
 	windowState: WindowState? = null,
-	agentConnectionInfo: AgentMcpConnectionInfo? = null,
-	agentStartupError: String? = null,
+	agentMcp: AgentMcpController? = null,
 	onCloseRequest: () -> Unit = {
 		viewModel.close()
 		window?.dispose()
@@ -670,10 +669,9 @@ fun FrameWindowScope.PSD2LiveApp(
 			)
 		}
 
-		if (showAgentDialog) {
-			AgentConnectionDialog(
-				connection = agentConnectionInfo,
-				startupError = agentStartupError,
+		if (showAgentDialog && agentMcp != null) {
+			AgentMcpDialog(
+				controller = agentMcp,
 				onDismiss = { showAgentDialog = false },
 			)
 		}
