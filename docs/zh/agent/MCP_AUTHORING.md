@@ -83,7 +83,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 - `layer_replace_image`：`layer_id` 与 `path`（绝对路径，PNG/WebP/TIFF/BMP，仅单项）或 `png_base64` 二选一，可选 `fit`（`stretch` 默认铺满，`contain` 保持比例居中补透明）与 `rebuild_mesh`（默认 false）。画布矩形不变，生成输入冻结在首次替换前的像素，网格、关键形与绑定保留，仅图块和 UV 改变；`rebuild_mesh=true` 改由新像素重新生成该层网格，带作者编辑或物化几何时拒绝。单项先核对状态再读取文件；批量成员只接受 `png_base64`，给出 `path` 时整批以 `invalid_edit` 失败。最多 16MP，像素相同为无变化。
 - `layer_set_pixel_density`：1–128 个唯一 `layer_ids`、必需的 `density`（1/64–16，`null` 恢复为 1），可选 `lock`（省略保持原值）。
 - `atlas_set_tile`：`layer_id` 与 `pin{page,x,y}`（纹理像素）或 `null` 放入空闲区域；页号须在预算内。位置保存在排布（`atlasArrangement` 设置）中；自动排布的纹理集先按当前布局保存（`auto` 变为 false），其他图块不动。放不下或与其他图块重叠的位置会被放入空闲区域并在 `atlas_get` 的 `notices` 中说明。
-- `atlas_set_budget`：`page_size`（256–16384 的 2 的幂）、`max_pages`（1–64）、`padding`（0–32）与 `auto`，至少给一项，省略项沿用当前值；预算写入 `atlas` 设置。`auto=true` 删除保存的排布，此后每次重建按矩形货架自动排布；`auto=false` 保存当前布局。
+- `atlas_set_budget`：`page_size`（256–16384 的 2 的幂）、`max_pages`（1–64）、`padding`（0–32）与 `auto`，至少给一项，省略项沿用当前值；预算写入 `atlas` 设置。`auto=true` 删除保存的排布，此后每次重建按矩形自动排布（MaxRects）；`auto=false` 保存当前布局。
 - `atlas_pack`：一次性排布并保存结果（`auto` 变为 false）。可选 `shape`：`mesh`（默认）按各图层最终网格的纹理坐标覆盖区域（每格 4 栅格像素、外加间距）排布，矩形可以相互嵌套，各图块只写入自己的单元格；`rect` 按矩形。按占用面积从大到小放置，放不下预算页数时所有未锁定图块按 1/64 步长共同缩小。可选 `layer_ids` 只移动这些图块，其余保持原位与原 fit。同时清除自动排布的固定位置及已不存在图层的覆盖；相同输入再次排布无变化。之后若网格编辑超出排布时的覆盖区域，`atlas_get` 的 `notices` 会提示重新排布。图块 `shaped` 表示按网格覆盖区域排布。
 
 六项编辑均为进程任务和原子批量成员，经 `WorkspaceTextureEdits` 纯候选、完整重建与 CAS 提交，一次成功只追加一个历史节点，撤销恢复此前图块。终态为 `project_id/state/history_node_id/revision/applied/layers/atlas_fit/notices`（可含 `geometry_diagnostics`），`layers` 为纹理实际变化的图层。

@@ -60,6 +60,8 @@ class TexturePerfTool {
 				2 -> WorkspaceTextureEdit.Pack(byMesh = round % 8 == 2)
 				else -> WorkspaceTextureEdit.SetBudget(padding = if (round % 8 == 3) 4 else 2)
 			}
+			// TEXTURE_PERF_JFR=1 records the rounds to build/tools/texture-perf/runtime.jfr.
+			val recording = if (setting("TEXTURE_PERF_JFR", "0") == "1") jdk.jfr.Recording(jdk.jfr.Configuration.getConfiguration("profile")).apply { start() } else null
 			repeat(12) { round ->
 				val before = runtime.capture()
 				val change = edit(round)
@@ -73,6 +75,7 @@ class TexturePerfTool {
 				val decode = ms(t)
 				report.appendLine("%-20s commit %5.0f ms  rebuild alone %5.0f ms  config %4.1f ms".format(change.operation, commit, rebuild, decode))
 			}
+			recording?.run { stop(); dump(out.resolve("runtime.jfr").toPath()); close() }
 		}
 		out.resolve("runtime-${setting("TEXTURE_PERF_SCENARIO", "plain")}.txt").writeText(report.toString())
 		println(report)

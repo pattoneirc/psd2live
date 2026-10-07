@@ -73,11 +73,18 @@ class PSD2LivePipeline {
             val bundle = buildRuntimeBundle("psd2live-preview", importedAnalysis, atlas, rig, config).first
             return RigPreviewModel(importedAnalysis, atlas, rig, config, bundle, baseRig)
         }
-        val (effectiveAnalysis, atlas, baseRig) = generatedBase(analysis, config, progress, previousAtlas)
-		val rig = baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides)
+        val (effectiveAnalysis, fullAtlas, baseRig) = generatedBase(analysis, config, progress, previousAtlas)
+		// The base packs superseded layers (the originals of a split) too; once no mesh samples them the model
+		// packs only the layers it shows, as exports do.
+		val (atlas, rig) = RigLayerDeletion.compact(fullAtlas, effectiveAnalysis, effectiveAnalysis,
+			baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides), config, previousAtlas)
 		val runtimeBundle = buildRuntimeBundle("psd2live-preview", effectiveAnalysis, atlas, rig, config).first
-		return RigPreviewModel(effectiveAnalysis, atlas, rig, config, runtimeBundle, baseRig = baseRig)
+		return RigPreviewModel(effectiveAnalysis, atlas, rig, config, runtimeBundle, baseRig = baseRig,
+			generationAtlas = fullAtlas.takeIf { it !== atlas })
 	}
+
+	private fun PipelineConfig.withoutTextureLayout() =
+		if (textureOverrides.isEmpty() && atlasArrangement == null) this else copy(textureOverrides = emptyMap(), atlasArrangement = null)
 
 	private data class GeneratedBase(val analysis: PipelineAnalysis, val atlas: PackedAtlas, val rig: BuiltRig)
 
@@ -95,9 +102,14 @@ class PSD2LivePipeline {
 		val visible = ArtPrimitiveJournal.visibleAnalysis(analyses.textures, config.rigEdits)
 		if (config.generationSource == null) return GeneratedBase(visible, atlas,
 			withoutCreatedMeshes(RigBuilder.build(analyses.geometry, atlas, generationConfig, meshCache), config))
-		val geometry = generatedGeometry.getOrPut(analyses.geometry.source, generationConfig, baselineConfig) {
-			val geometryAtlas = RigBuildProfile.stage("pipeline: geometry atlas layout") { AtlasLayout.pack(analyses.geometry.layers, config, progress) }
-			GeneratedGeometryCache.Entry(geometryAtlas, RigBuilder.build(analyses.geometry, geometryAtlas, generationConfig, meshCache))
+		// The geometry rig's UVs are moved onto the texture atlas below, so its own layout ignores the texture
+		// overrides and the stored arrangement, and a texture commit keeps hitting the geometry cache.
+		val geometryConfig = generationConfig.withoutTextureLayout()
+		val geometry = generatedGeometry.getOrPut(analyses.geometry.source, geometryConfig, baselineConfig.withoutTextureLayout()) {
+			val geometryAtlas = RigBuildProfile.stage("pipeline: geometry atlas layout") {
+				AtlasLayout.pack(analyses.geometry.layers, config.withoutTextureLayout(), progress)
+			}
+			GeneratedGeometryCache.Entry(geometryAtlas, RigBuilder.build(analyses.geometry, geometryAtlas, geometryConfig, meshCache))
 		}
 		// The repacked base depends on the geometry rig, its layout, the layout and the texture layers' metadata -
 		// never on their pixels - so a repaint that keeps every tile's size and spot gets the very same base instance,

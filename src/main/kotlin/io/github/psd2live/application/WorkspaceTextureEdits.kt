@@ -180,6 +180,19 @@ class WorkspaceTextureView internal constructor(private val capture: WorkspaceCa
         return model.atlas.pages[page].png
     }
 
+    private val tileRasters: Map<String, LayerRaster> by lazy {
+        model.analysis.layers.associate { it.source.id.raw to it.source.textureLayer.raster }
+    }
+
+    /**
+     * The raster [layerId]'s tile shows, resampled to the tile's size; null when it packs none. The pages hold it
+     * as it is unless [upscaled].
+     */
+    fun tileRaster(layerId: String): LayerRaster? = tileRasters[layerId]?.takeIf { layerId in model.atlas.placementByLayerId }
+
+    /** Whether the pages hold upscaled textures rather than the layers' own rasters. */
+    val upscaled: Boolean get() = model.config.textureUpscale.scale != 1
+
     /** The mesh footprint [layerId]'s tile was arranged by, or null when it owns its whole rectangle. */
     fun footprint(layerId: String): TextureFootprint? = model.atlas.footprints[layerId]
 

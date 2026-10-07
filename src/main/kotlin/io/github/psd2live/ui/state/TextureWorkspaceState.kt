@@ -80,6 +80,12 @@ class TextureSnapshot(private val view: WorkspaceTextureView) {
 		return io.github.psd2live.core.AtlasArrange.shape(x, y, tile.width, tile.height, rasterWidth, rasterHeight, view.footprint(tile.layerId))
 	}
 
+	/** The raster [layerId]'s tile shows (at its tile size); the views draw tiles from it while the pages are not [upscaled]. */
+	fun tileRaster(layerId: String): org.umamo.format.art.LayerRaster? = view.tileRaster(layerId)
+
+	/** Whether the pages hold upscaled textures, which only the page images show. */
+	val upscaled: Boolean get() = view.upscaled
+
 	/** The page's canonical PNG; encoding a large page takes a while, so read it off the UI thread. */
 	fun pagePng(page: Int): ByteArray = view.pagePng(page)
 

@@ -100,6 +100,11 @@ class WorkspaceMaterializedSplitTest {
             assertTrue(puppet.drawables.none { it.id == original.id })
             assertTrue(result.model.analysis.layers.none { it.source.id.raw == "islands" })
             assertTrue(puppet.atlas.tiles.none { it.source?.layerKey == "islands" })
+            // The generation still packs the original; the model's own atlas holds only the parts.
+            assertFalse("islands" in result.model.atlas.placementByLayerId)
+            // Arranging the parts keeps them where they were put: no tile is reported as moved on the next build.
+            val arranged = WorkspaceTextureEdits.apply(document, result.model, WorkspaceTextureEdit.Pack()) {}
+            assertTrue(builder.build(arranged).atlas.notices.none { "free space" in it })
             assertTrue(puppet.sources.flatMap { it.layers }.none { it.key == "islands" })
             assertTrue(puppet.glues.none { it.meshA == original.id || it.meshB == original.id })
             val parts = listOf("first", "second").map { mesh(result.model, it) }

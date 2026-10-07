@@ -24,20 +24,19 @@ import javax.imageio.ImageIO
  * and fit, a tile arranged by its meshes writes only the cells its meshes use, and only tiles without a free
  * stored spot are placed into free space ([AtlasArrange]). [arrange] finds such an arrangement once, on request.
  *
- * Without one the layout is the canonical one - a deterministic multi-page shelf pack of every textured layer,
- * tallest first - so a document's atlas is a function of the document alone: a fresh build, a reopen, an
- * undo, a paint commit and an export all put the same tiles in the same spots, and exports stay byte for
- * byte what they were. What is incremental is the pages. Given the atlas a commit starts from (`previous`),
+ * Without one the layout is the canonical one - a deterministic multi-page rectangle pack of every textured
+ * layer ([RectPack]) - so a document's atlas is a function of the document alone: a fresh build, a reopen, an
+ * undo, a paint commit and an export all put the same tiles in the same spots. What is incremental is the pages. Given the atlas a commit starts from (`previous`),
  * a page none of whose tiles changed - same pixels, same spot, none removed - is that atlas's page itself; a
  * changed page is composed again and remembers which rows differ from the page it replaces, so its preview
  * PNG re-encodes only those strips ([AtlasPagePng]). A paint that keeps its layer's size thus redraws one
- * tile in place; one that resizes it reflows the shelf, which moves the tiles after it and costs a page
+ * tile in place; one that resizes it reflows the pack, which may move other tiles and costs a page
  * composition plus the strips they cross, but never a layout that depends on the editing history.
  *
  * Tile sizes follow the atlas budget ([AtlasBudget]) and the layers' texture overrides ([TextureOverride]):
  * a tile holds `texture raster pixels x upscale x density x fit` texture pixels, where the density is the
  * layer's override (1 by default) and fit (at most 1) is one factor for every unlocked layer, the largest
- * multiple of 1/[FIT_STEPS] at which the shelf fits the budget's page count. Locked layers keep fit 1 and
+ * multiple of 1/[FIT_STEPS] at which the pack fits the budget's page count. Locked layers keep fit 1 and
  * pinned layers keep their page position. With every override at its default and the layout fitting at
  * fit 1, tiles are exactly `raster x upscale` and the layout is the one pages always had.
  *
@@ -188,8 +187,9 @@ internal object AtlasLayout {
             }
         }
         val notices = ArrayList<String>()
-        if (kept.moved.isNotEmpty()) notices += "Textures without a free stored spot were placed into free space (" + kept.moved.joinToString() +
-            "); arrange the atlas to lay them out again."
+        // Layers new to the arrangement fill free space quietly; only a tile that lost its stored spot is news.
+        if (kept.displaced.isNotEmpty()) notices += "Textures whose stored spot no longer fits were placed into free space (" +
+            kept.displaced.joinToString() + "); arrange the atlas to lay them out again."
         if (kept.pageCount > maxPages) notices += "Textures need ${kept.pageCount} atlas pages, more than the budget of $maxPages."
         if (arrangement.fitStep < AtlasArrangement.FIT_STEPS)
             notices += "Textures are scaled to ${String.format(Locale.ROOT, "%.1f", fit * 100)}% to fit the atlas budget of $maxPages page(s) of ${pageSize}px."
@@ -199,7 +199,7 @@ internal object AtlasLayout {
     /**
      * A compact arrangement of [layers] under [config]'s budget, to store once. Tiles with a mesh footprint in
      * [footprints] are placed by their meshes, the others by their rectangles, largest first, at the largest fit
-     * (a multiple of 64/[FIT_STEPS]) at which all fit within the budget's pages. With [only], every other tile
+     * (to 8/[FIT_STEPS]) at which all fit within the budget's pages. With [only], every other tile
      * keeps its spot and footprint in [current] and the current fit holds. Null when nothing fits.
      */
     fun arrange(layers: List<ClassifiedLayer>, config: PipelineConfig, footprints: Map<String, TextureFootprint>,
@@ -228,7 +228,9 @@ internal object AtlasLayout {
             val step = Math.round(current!!.fit * AtlasArrangement.FIT_STEPS).coerceIn(1, AtlasArrangement.FIT_STEPS)
             return attempt(step)
         }
+        if (moving.none { it.id in footprints }) rectangles(items, pageSize, padding, budget.maxPages)?.let { return it }
         attempt(AtlasArrangement.FIT_STEPS)?.let { return it }
+        // Coarse steps of 64 first, then the step between the best and the next is narrowed down to 8.
         var low = 1; var high = AtlasArrangement.FIT_STEPS / 64 - 1
         var best: AtlasArrangement? = null
         while (low <= high) {
@@ -236,7 +238,31 @@ internal object AtlasLayout {
             val tried = attempt(middle * 64)
             if (tried != null) { best = tried; low = middle + 1 } else high = middle - 1
         }
+        var fine = 64
+        while (fine > 8) {
+            fine /= 2
+            val step = (best?.fitStep ?: 0) + fine
+            if (step < AtlasArrangement.FIT_STEPS) attempt(step)?.let { best = it }
+        }
         return best
+    }
+
+    /**
+     * The automatic layout of [items] as an arrangement: by rectangles, at the finest fit. Null when it needs more
+     * pages than the budget or drops a lock, which the cell search below then handles.
+     */
+    private fun rectangles(items: List<Item>, pageSize: Int, padding: Int, maxPages: Int): AtlasArrangement? {
+        val result = solve(items, pageSize, padding, maxPages)
+        if (result.pageCount > maxPages) return null
+        val step = Math.round(result.fit * AtlasArrangement.FIT_STEPS).coerceIn(1, AtlasArrangement.FIT_STEPS)
+        val fit = step.toDouble() / AtlasArrangement.FIT_STEPS
+        val tiles = HashMap<String, ArrangedTile>()
+        for (item in items) {
+            val at = result.placements.getValue(item.id)
+            if (at.width != item.width(fit, true) || at.height != item.height(fit, true)) return null
+            tiles[item.id] = ArrangedTile(at.page, at.x, at.y, null)
+        }
+        return AtlasArrangement(step, tiles)
     }
 
     /** [atlas]'s layout as a stored arrangement, to keep it exactly as it is. */
@@ -282,6 +308,19 @@ internal object AtlasLayout {
      * not fit, they lose their lock and pin and a notice says so; when nothing fits, pages are added.
      */
     private fun solve(items: List<Item>, pageSize: Int, padding: Int, maxPages: Int): Solved {
+        // The layout reads only the tiles' sizes, locks and pins, so most commits find it here.
+        val key = SolveKey(items.map { listOf(it.id, it.baseWidth, it.baseHeight, it.locked, it.pin) }, pageSize, padding, maxPages)
+        synchronized(solved) { solved[key] }?.let { return it }
+        return solveUncached(items, pageSize, padding, maxPages).also { synchronized(solved) { solved[key] = it } }
+    }
+
+    private data class SolveKey(val items: List<List<Any?>>, val pageSize: Int, val padding: Int, val maxPages: Int)
+
+    private val solved = object : LinkedHashMap<SolveKey, Solved>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<SolveKey, Solved>?) = size > 8
+    }
+
+    private fun solveUncached(items: List<Item>, pageSize: Int, padding: Int, maxPages: Int): Solved {
         layout(items, 1.0, pageSize, padding, maxPages, honour = true)?.let { return Solved(it.placements, it.pageCount, 1f, emptyList()) }
         val notices = ArrayList<String>()
         var honour = true
@@ -290,7 +329,7 @@ internal object AtlasLayout {
                 ") do not fit the atlas budget of $maxPages page(s) of ${pageSize}px; they are scaled and placed with the other textures."
             honour = false
         }
-        // The largest step that fits; shelf packing is not strictly monotonic in the fit, but the search is deterministic.
+        // The largest step that fits; packing is not strictly monotonic in the fit, but the search is deterministic.
         var low = 1; var high = FIT_STEPS - 1
         var best: Layout? = null
         var bestStep = 0
@@ -310,52 +349,63 @@ internal object AtlasLayout {
     }
 
     /**
-     * The shelf layout of [items] at [fit], or null when it needs more than [maxPages] pages, a tile is larger
-     * than a page, or (while [honour]ing locks and pins) a pin lies outside the budget or on another pinned
-     * tile. Pinned tiles take their spot first; the shelf skips past them.
+     * The layout of [items] at [fit], or null when it needs more than [maxPages] pages, a tile is larger than a
+     * page, or (while [honour]ing locks and pins) a pin lies outside the budget or on another pinned tile.
+     * Pinned tiles take their spot first. The others are packed by [RectPack] - each tile with [padding] on every
+     * side, so neighbours keep twice that apart - in a few orders and with both heuristics; the layout with the
+     * fewest pages and then the least used height on its last page wins.
      */
     private fun layout(items: List<Item>, fit: Double, pageSize: Int, padding: Int, maxPages: Int, honour: Boolean): Layout? {
         val pinned = HashMap<String, AtlasPlacement>()
-        val obstacles = HashMap<Int, MutableList<AtlasPlacement>>()
-        var lastPinnedPage = -1
+        val obstacles = HashMap<Int, MutableList<IntArray>>()
         fun sized(item: Item, page: Int, x: Int, y: Int): AtlasPlacement {
             val width = item.width(fit, honour); val height = item.height(fit, honour)
             return AtlasPlacement(page, x, y, width, height, width.toFloat() / item.texture.raster.width, height.toFloat() / item.texture.raster.height)
         }
-        fun clash(a: AtlasPlacement, x: Int, y: Int, width: Int, height: Int): Boolean =
-            x < a.x + a.width + padding * 2 && a.x < x + width + padding * 2 && y < a.y + a.height + padding * 2 && a.y < y + height + padding * 2
+        fun clash(a: AtlasPlacement, b: AtlasPlacement): Boolean = a.page == b.page &&
+            b.x < a.x + a.width + padding * 2 && a.x < b.x + b.width + padding * 2 && b.y < a.y + a.height + padding * 2 && a.y < b.y + b.height + padding * 2
         if (honour) for (item in items) {
             val pin = item.pin ?: continue
             val placed = sized(item, pin.page, pin.x, pin.y)
             if (pin.page >= maxPages || pin.x + placed.width + padding > pageSize || pin.y + placed.height + padding > pageSize) return null
-            if (obstacles[pin.page].orEmpty().any { clash(it, pin.x, pin.y, placed.width, placed.height) }) return null
-            obstacles.getOrPut(pin.page) { ArrayList() } += placed
+            if (pinned.values.any { clash(it, placed) }) return null
+            obstacles.getOrPut(pin.page) { ArrayList() } += intArrayOf(pin.x - padding, pin.y - padding, placed.width + padding * 2, placed.height + padding * 2)
             pinned[item.id] = placed
-            lastPinnedPage = maxOf(lastPinnedPage, pin.page)
+        }
+        val free = items.filter { it.id !in pinned }
+        val tiles = free.map { sized(it, 0, 0, 0) }
+        val sizes = tiles.map { intArrayOf(it.width + padding * 2, it.height + padding * 2) }
+        var best: RectPack.Packed? = null
+        var bestOrder: IntArray? = null
+        for (order in ORDERS) {
+            val indices = free.indices.sortedWith(order(tiles)).toIntArray()
+            val ordered = indices.map { sizes[it] }
+            for (heuristic in RectPack.Heuristic.entries) {
+                val packed = RectPack.pack(ordered, pageSize, maxPages, obstacles, heuristic) ?: continue
+                val current = best
+                if (current == null || packed.pageCount < current.pageCount ||
+                    packed.pageCount == current.pageCount && packed.lastBottom < current.lastBottom) { best = packed; bestOrder = indices }
+            }
+        }
+        val packed = best ?: return null
+        val order = bestOrder!!
+        val spots = HashMap<String, AtlasPlacement>()
+        for ((k, index) in order.withIndex()) {
+            val spot = packed.spots[k]
+            spots[free[index].id] = tiles[index].copy(page = spot[0], x = spot[1] + padding, y = spot[2] + padding)
         }
         val placements = LinkedHashMap<String, AtlasPlacement>()
-        var x = padding; var y = padding; var rowHeight = 0; var pageIndex = 0
-        for (item in items) {
-            pinned[item.id]?.let { placements[item.id] = it; continue }
-            val tile = sized(item, 0, 0, 0)
-            val width = tile.width; val height = tile.height
-            if (width + padding * 2 > pageSize || height + padding * 2 > pageSize) return null
-            while (true) {
-                // A row that holds nothing yet (only after skipping a pin) moves down a pixel at a time.
-                if (x + width + padding > pageSize) { x = padding; y += if (rowHeight == 0) 1 else rowHeight + padding; rowHeight = 0 }
-                if (y + height + padding > pageSize) {
-                    pageIndex++; x = padding; y = padding; rowHeight = 0
-                    if (pageIndex >= maxPages) return null
-                }
-                val hit = obstacles[pageIndex]?.firstOrNull { clash(it, x, y, width, height) } ?: break
-                x = hit.x + hit.width + padding * 2
-            }
-            placements[item.id] = tile.copy(page = pageIndex, x = x, y = y)
-            x += width + padding * 2
-            rowHeight = maxOf(rowHeight, height)
-        }
-        return Layout(placements, maxOf(pageIndex, lastPinnedPage) + 1)
+        for (item in items) placements[item.id] = pinned[item.id] ?: spots.getValue(item.id)
+        val lastPinnedPage = pinned.values.maxOfOrNull { it.page } ?: -1
+        return Layout(placements, maxOf(packed.pageCount, lastPinnedPage + 1))
     }
+
+    /** The orders [layout] tries, largest first by area, by the longer side and by height; ties by size, then input order. */
+    private val ORDERS: List<(List<AtlasPlacement>) -> Comparator<Int>> = listOf(
+        { t -> compareByDescending<Int> { t[it].width.toLong() * t[it].height }.thenByDescending { t[it].height }.thenBy { it } },
+        { t -> compareByDescending<Int> { maxOf(t[it].width, t[it].height) }.thenByDescending { minOf(t[it].width, t[it].height) }.thenBy { it } },
+        { t -> compareByDescending<Int> { t[it].height }.thenByDescending { t[it].width }.thenBy { it } },
+    )
 
     /** One tile of a 1:1 page: its rectangle, the digest of the raster drawn there and the cells it may write ("" for all). */
     internal data class TileKey(val x: Int, val y: Int, val width: Int, val height: Int, val digest: String, val mask: String = "")

@@ -20,12 +20,12 @@ class LegacySplitReplayTest {
     private val builder = WorkspacePreviewBuilder()
 
     private val hashes = mapOf(
-        "history-a8855e4e-2343-4c25-ac37-5bbd5975f837" to "4b6091ae739d9cfc97bca6185e2dcfe4fb97cc194fab810f62389db93ddf848f",
-        "history-35307cf9-8818-4ab3-9203-604da84ce587" to "7629519a31e7dc497f053ed392776c2c754fde9291a794723c6760f2e97d9884",
-        // In the two split nodes the soft-deleted original no longer packs a tile, so the remaining tiles and their uvs move left;
-        // geometry, keyforms and every other object are as that build replayed them.
-        "history-9720a4c9-5233-4a5b-848c-220ad1c5d75c" to "71b26714226c216764d4bbaa98ee2219c636cfabdb8e7553acd10db71da2048e",
-        "history-0493aaf9-0a1c-4310-baf5-5896117ab92e" to "13755df4d9290a2d05a109d8363d6e0f874c83decc0bccac9c2947179bc670d2",
+        "history-a8855e4e-2343-4c25-ac37-5bbd5975f837" to "4a0b26852596e8ebcb3371a571667378edc016d7e515258298ecd7aabd2ff6a0",
+        "history-35307cf9-8818-4ab3-9203-604da84ce587" to "b4290513e609f3c64a16989f2b247e9dc72db16f5cde4621f07c2bd6f94abb02",
+        // The atlas is packed by rectangles (MaxRects) and, in the two split nodes, the soft-deleted original packs no tile, so
+        // tiles and their uvs differ; geometry, keyforms and every other object are as that build replayed them.
+        "history-9720a4c9-5233-4a5b-848c-220ad1c5d75c" to "ca99aaf7971bbbc12c7a3f3783cb3df16a93a213e60aee61a34e1cca61353af7",
+        "history-0493aaf9-0a1c-4310-baf5-5896117ab92e" to "1c0d97c54f189f64a79c4f4f877a8b4e7f153658249d63b65d1f01bb8b48e7db",
     )
 
     private suspend fun open(): OpenedProject {

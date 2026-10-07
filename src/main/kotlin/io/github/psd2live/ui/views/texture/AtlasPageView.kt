@@ -2,21 +2,17 @@ package io.github.psd2live.ui.views.texture
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -37,6 +33,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.Path
@@ -57,13 +54,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.application.WorkspaceAtlasTile
 import io.github.psd2live.i18n.tr
-import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactMenuDivider
 import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactMenuSection
-import io.github.psd2live.ui.components.CompactToggleChip
 import io.github.psd2live.ui.components.IconCheck
-import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconMeshWireframe
 import io.github.psd2live.ui.components.IconTextureView
 import io.github.psd2live.ui.components.IconLock
@@ -78,6 +72,7 @@ import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.theme.frostedGlass
 import io.github.psd2live.ui.utils.NativeFilePicker
+import io.github.psd2live.ui.utils.rgbaImageBitmap
 import io.github.psd2live.ui.utils.toImageBitmapFast
 import io.github.psd2live.ui.views.CanvasNavigation
 import io.github.psd2live.ui.views.CanvasOptionsRail
@@ -143,7 +138,8 @@ private data class PageTransform(val left: Float, val top: Float, val scale: Flo
 }
 
 /** A corner-handle drag in flight: [factor] scales every selected tile's density, about [anchor]'s tile corner. */
-private data class DensityDrag(val layerIds: List<String>, val primary: String, val anchor: Offset, val corner: Offset, val factor: Float)
+private data class DensityDrag(val layerIds: List<String>, val primary: String, val anchor: Offset, val corner: Offset, val factor: Float,
+                               val committing: Boolean = false)
 
 /** What a right-click opened its menu on: a tile's layer, or the page itself. */
 private data class AtlasMenu(val at: Offset, val layerId: String?)
@@ -157,7 +153,11 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	val atlas = snapshot.atlas
 	val pageInfo = atlas.pages[page]
 	val tiles = remember(snapshot, page) { snapshot.tiles(page) }
-	val image = rememberPageImage(state, snapshot, page)
+	// Tiles are drawn from their layers' rasters, so a moved or rescaled tile shows at once, without waiting for
+	// the page to be composed and converted; only upscaled pages, which hold pixels no raster has, are drawn whole.
+	val tileImages = rememberTileImages(snapshot)
+	val pageImage = rememberPageImage(state, snapshot, page, enabled = snapshot.upscaled)
+	val masks = remember(snapshot, page) { tiles.filter { it.shaped }.associate { it.layerId to maskPath(snapshot.shape(it, it.x, it.y)) } }
 	val selection = remember(state.selectedLayerIds, state.selectedLayerId, snapshot) { textureSelection(state, snapshot) }
 	val selected = remember(selection) { selection.toSet() }
 	val shownIds = remember(tiles) { tiles.mapTo(HashSet()) { it.layerId } }
@@ -169,7 +169,9 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	var hovered by remember(snapshot, page) { mutableStateOf<String?>(null) }
 	var viewSize by remember { mutableStateOf(IntSize.Zero) }
 	var marquee by remember { mutableStateOf<Rect?>(null) }
+	// A released corner drag keeps showing its sizes until the commit's version arrives (or the command ends).
 	var densityDrag by remember(snapshot) { mutableStateOf<DensityDrag?>(null) }
+	LaunchedEffect(texture.busy) { if (!texture.busy && densityDrag?.committing == true) densityDrag = null }
 	var space by remember { mutableStateOf(false) }
 	var menu by remember { mutableStateOf<AtlasMenu?>(null) }
 	val focusRequester = remember { FocusRequester() }
@@ -240,7 +242,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 				if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
 				if (event.key == Key.Escape) {
 					when {
-						texture.dragDraft != null || densityDrag != null || marquee != null -> {
+						texture.dragDraft != null || densityDrag?.committing == false || marquee != null -> {
 							vm.cancelTextureTileDrag(); densityDrag = null; marquee = null
 						}
 						else -> vm.selectLayer(null)
@@ -319,8 +321,8 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 							densityDrag = drag
 							change.consume()
 						}
-						densityDrag = null
 						if (drag.factor != 1f) vm.scaleTextureDensity(snapshotAtStart, drag.layerIds, drag.factor)
+						densityDrag = if (drag.factor != 1f && vm.state.value.textureWorkspace.busy) drag.copy(committing = true) else null
 						return@awaitEachGesture
 					}
 
@@ -394,33 +396,67 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 		Canvas(Modifier.fillMaxSize()) {
 			if (viewSize != IntSize(size.width.toInt(), size.height.toInt())) viewSize = IntSize(size.width.toInt(), size.height.toInt())
 			val pageRect = transform.rect(0f, 0f, pageInfo.width.toFloat(), pageInfo.height.toFloat())
+			val draft = texture.dragDraft?.takeIf { it.page == page }
+			val scaling = densityDrag
+			/** Where [tile] shows while a gesture moves or scales it, in page pixels; null where it stands. */
+			fun moved(tile: WorkspaceAtlasTile): Rect? {
+				if (draft?.layerId == tile.layerId) return Rect(draft.x.toFloat(), draft.y.toFloat(), (draft.x + tile.width).toFloat(), (draft.y + tile.height).toFloat())
+				if (scaling == null || tile.layerId !in scaling.layerIds) return null
+				val width = tile.width * scaling.factor; val height = tile.height * scaling.factor
+				// The grabbed tile grows from its opposite corner, the others from their own top left.
+				val origin = if (tile.layerId == scaling.primary) Offset(
+					if (scaling.anchor.x > tile.x) scaling.anchor.x - width else scaling.anchor.x,
+					if (scaling.anchor.y > tile.y) scaling.anchor.y - height else scaling.anchor.y,
+				) else Offset(tile.x.toFloat(), tile.y.toFloat())
+				return Rect(origin, Size(width, height))
+			}
+			val filter = if (transform.scale >= 2f) FilterQuality.None else FilterQuality.Low
+			/** Draws what [tile]'s cells hold - its raster, or that part of the page - into [at] (page pixels). */
+			fun DrawScope.tilePixels(tile: WorkspaceAtlasTile, at: Rect, alpha: Float) {
+				val image = tileImages[tile.layerId]
+				val source = if (image == null) pageImage ?: return else null
+				withTransform({
+					translate(at.left, at.top); scale(at.width / tile.width, at.height / tile.height, Offset.Zero); translate(-tile.x.toFloat(), -tile.y.toFloat())
+				}) {
+					clipRect(tile.x.toFloat(), tile.y.toFloat(), (tile.x + tile.width).toFloat(), (tile.y + tile.height).toFloat()) {
+						val mask = masks[tile.layerId]
+						val draw: DrawScope.() -> Unit = {
+							if (image != null) drawImage(image, dstOffset = IntOffset(tile.x, tile.y), dstSize = IntSize(tile.width, tile.height),
+								alpha = alpha, filterQuality = filter)
+							else drawImage(source!!, srcOffset = IntOffset(tile.x, tile.y), srcSize = IntSize(tile.width, tile.height),
+								dstOffset = IntOffset(tile.x, tile.y), dstSize = IntSize(tile.width, tile.height), alpha = alpha, filterQuality = filter)
+						}
+						if (mask != null) clipPath(mask) { draw() } else draw()
+					}
+				}
+			}
 			clipRect {
 				drawChecker(pageRect, colors.checkerLight, colors.checkerDark)
-				if (image != null && texture.showPage) {
-					drawImage(
-						image,
-						dstOffset = IntOffset(pageRect.left.toInt(), pageRect.top.toInt()),
-						dstSize = IntSize(pageRect.width.toInt().coerceAtLeast(1), pageRect.height.toInt().coerceAtLeast(1)),
-						// The heatmap dims the art so the tint reads on any colour.
-						alpha = if (texture.heatmap) 0.45f else 1f,
-						filterQuality = if (transform.scale >= 2f) FilterQuality.None else FilterQuality.Low,
-					)
-				}
-				// Packed space no shown tile owns (a deleted layer's leftover) reads as empty page.
-				val shown = shownIds
-				for (tile in atlas.tiles) {
-					if (tile.page != page || tile.layerId in shown) continue
-					val rect = transform.rect(tile)
-					drawChecker(rect, colors.checkerLight, colors.checkerDark)
+				val art = if (texture.heatmap) 0.45f else 1f
+				withTransform({ translate(transform.left, transform.top); scale(transform.scale, transform.scale, Offset.Zero) }) {
+					if (texture.showPage && tileImages.isEmpty() && pageImage != null) {
+						// Upscaled pages hold pixels no layer raster has; they are drawn as they are.
+						drawImage(pageImage, dstSize = IntSize(pageInfo.width, pageInfo.height), alpha = art, filterQuality = filter)
+						// Packed space no shown tile owns (a deleted layer's leftover), and tiles a gesture lifts, read as empty page.
+						for (tile in atlas.tiles) if (tile.page == page && (tile.layerId !in shownIds || moved(tile) != null))
+							drawRect(colors.checkerDark, Offset(tile.x.toFloat(), tile.y.toFloat()), Size(tile.width.toFloat(), tile.height.toFloat()))
+					} else if (texture.showPage) {
+						for (tile in tiles) if (moved(tile) == null) tilePixels(tile, Rect(tile.x.toFloat(), tile.y.toFloat(),
+							(tile.x + tile.width).toFloat(), (tile.y + tile.height).toFloat()), art)
+					}
 				}
 				drawRect(colors.border, pageRect.topLeft, pageRect.size, style = Stroke(1f))
-				val draft = texture.dragDraft?.takeIf { it.page == page }
-				val scaling = densityDrag
 				for (tile in tiles) {
+					val lifted = moved(tile)
 					val rect = transform.rect(tile)
-					if (texture.heatmap) drawRect(heatColor(TextureDensity.heat(snapshot.texelsPerCanvasUnit(tile))).copy(alpha = 0.55f), rect.topLeft, rect.size)
+					if (texture.heatmap && lifted == null) drawRect(heatColor(TextureDensity.heat(snapshot.texelsPerCanvasUnit(tile))).copy(alpha = 0.55f), rect.topLeft, rect.size)
 					val isSelected = tile.layerId in selected
 					val isHovered = tile.layerId == hovered
+					if (lifted != null) {
+						// Where the tile was: a ghost frame.
+						drawRect(colors.textMuted.copy(alpha = 0.6f), rect.topLeft, rect.size, style = Stroke(1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 3f))))
+						continue
+					}
 					if (texture.showOutlines || isSelected || isHovered) {
 						val color = when {
 							isSelected -> colors.accent
@@ -436,11 +472,8 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 						drawRoundRect(colors.highlight, Offset(rect.right - badge * 1.25f, rect.top + badge * 0.25f), Size(badge, badge),
 							androidx.compose.ui.geometry.CornerRadius(badge / 4f))
 					}
-					if (draft?.layerId == tile.layerId || scaling?.layerIds?.contains(tile.layerId) == true) {
-						drawRect(colors.textMuted.copy(alpha = 0.35f), rect.topLeft, rect.size)
-					}
 					// Corner handles: the density grips of a selected tile, as the edit canvas draws its transform box.
-					if (isSelected && draft == null && scaling == null && rect.width >= handleRadius * 3 && rect.height >= handleRadius * 3) {
+					if (isSelected && draft == null && scaling == null && !busy && rect.width >= handleRadius * 3 && rect.height >= handleRadius * 3) {
 						for ((corner, _) in corners(tile)) {
 							val at = transform.toView(corner.x, corner.y)
 							drawRect(colors.panelBackground, at - Offset(handleRadius / 2f + 1f, handleRadius / 2f + 1f), Size(handleRadius + 2f, handleRadius + 2f))
@@ -451,37 +484,28 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 				if (texture.showMeshes && meshes != null) {
 					// The wireframes are in page pixels; one transform draws them all at a hairline width.
 					withTransform({ translate(transform.left, transform.top); scale(transform.scale, transform.scale, Offset.Zero) }) {
-						val hairline = 1f / transform.scale
-						for ((layerId, path) in meshes) {
-							if (layerId !in shownIds) continue
-							val chosen = layerId in selected
-							drawPath(path, if (chosen) colors.accent.copy(alpha = 0.9f) else colors.textPrimary.copy(alpha = 0.35f),
-								style = Stroke(if (chosen) hairline * 1.5f else hairline))
+						for (tile in tiles) {
+							val path = meshes[tile.layerId] ?: continue
+							val chosen = tile.layerId in selected
+							val at = moved(tile)
+							val color = if (chosen || at != null) colors.accent.copy(alpha = 0.9f) else colors.textPrimary.copy(alpha = 0.35f)
+							if (at == null) drawPath(path, color, style = Stroke((if (chosen) 1.5f else 1f) / transform.scale))
+							else withTransform({
+								translate(at.left, at.top); scale(at.width / tile.width, at.height / tile.height, Offset.Zero); translate(-tile.x.toFloat(), -tile.y.toFloat())
+							}) { drawPath(path, color, style = Stroke(1f / (transform.scale * at.width / tile.width))) }
 						}
 					}
 				}
-				if (draft != null) {
-					val tile = snapshot.tilesByLayer[draft.layerId]
-					if (tile != null) {
-						val rect = transform.rect(draft.x.toFloat(), draft.y.toFloat(), tile.width.toFloat(), tile.height.toFloat())
-						val color = if (draft.collides) colors.error else colors.accent
-						drawRect(color.copy(alpha = 0.22f), rect.topLeft, rect.size)
-						drawRect(color, rect.topLeft, rect.size, style = Stroke(2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f))))
+				// The lifted tiles, live: their pixels where the gesture puts them, over everything they pass.
+				for (tile in tiles) {
+					val at = moved(tile) ?: continue
+					if (texture.showPage) withTransform({ translate(transform.left, transform.top); scale(transform.scale, transform.scale, Offset.Zero) }) {
+						tilePixels(tile, at, 1f)
 					}
-				}
-				if (scaling != null) {
-					// The tiles at the dragged density: the grabbed one grows from its opposite corner, the others from their own.
-					for (id in scaling.layerIds) {
-						val tile = tiles.firstOrNull { it.layerId == id } ?: continue
-						val width = tile.width * scaling.factor; val height = tile.height * scaling.factor
-						val origin = if (id == scaling.primary) Offset(
-							if (scaling.anchor.x > tile.x) scaling.anchor.x - width else scaling.anchor.x,
-							if (scaling.anchor.y > tile.y) scaling.anchor.y - height else scaling.anchor.y,
-						) else Offset(tile.x.toFloat(), tile.y.toFloat())
-						val rect = transform.rect(origin.x, origin.y, width, height)
-						drawRect(colors.accent.copy(alpha = 0.18f), rect.topLeft, rect.size)
-						drawRect(colors.accent, rect.topLeft, rect.size, style = Stroke(2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f))))
-					}
+					val rect = transform.rect(at.left, at.top, at.width, at.height)
+					val color = if (draft?.layerId == tile.layerId && draft.collides) colors.error else colors.accent
+					if (!texture.showPage) drawRect(color.copy(alpha = 0.18f), rect.topLeft, rect.size)
+					drawRect(color, rect.topLeft, rect.size, style = Stroke(2f))
 				}
 				marquee?.let { box ->
 					drawRect(colors.accent.copy(alpha = 0.12f), box.topLeft, box.size)
@@ -490,51 +514,58 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 			}
 		}
 
-		// Top left: pages.
-		if (atlas.pages.size > 1) {
-			Row(
-				Modifier.align(Alignment.TopStart).padding(8.dp)
-					.frostedGlass(RoundedCornerShape(6.dp), elevation = 2.dp, alpha = 0.82f).padding(3.dp),
-				horizontalArrangement = Arrangement.spacedBy(3.dp),
-			) {
+		// Top left: arranging, as the edit canvas's mode bar - the one-shot Arrange with its options, the automatic
+		// mode, and the pages.
+		FloatingBar(Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp)) {
+			var arrangeMenu by remember { mutableStateOf(false) }
+			Box {
+				AccentSplitButton(
+					label = tr("texture.atlas.arrange"),
+					icon = { if (texture.arrangeByMesh) IconArrangeMesh(it) else IconArrangeRect(it) },
+					onClick = { vm.arrangeAtlas(snapshot, selection) },
+					open = arrangeMenu,
+					onMenu = { arrangeMenu = !arrangeMenu },
+					enabled = !busy,
+					tooltip = tr("texture.atlas.arrangeHint"),
+					menuTooltip = tr("texture.atlas.arrangeMenu"),
+				)
+				FloatingMenu(arrangeMenu, { arrangeMenu = false }, width = 260.dp) {
+					FloatingMenuSection(tr("texture.atlas.arrangeOptions"))
+					FloatingMenuRow(tr("texture.atlas.arrangeByMesh"), { vm.setTextureArrangeOptions(true, texture.arrangeSelectionOnly) },
+						selected = texture.arrangeByMesh, hint = tr("texture.atlas.arrangeMeshHint"), icon = { IconArrangeMesh(it) })
+					FloatingMenuRow(tr("texture.atlas.arrangeByRect"), { vm.setTextureArrangeOptions(false, texture.arrangeSelectionOnly) },
+						selected = !texture.arrangeByMesh, hint = tr("texture.atlas.arrangeRectHint"), icon = { IconArrangeRect(it) })
+					FloatingMenuDivider()
+					FloatingMenuSwitch(tr("texture.atlas.arrangeSelection"), texture.arrangeSelectionOnly,
+						{ vm.setTextureArrangeOptions(texture.arrangeByMesh, !texture.arrangeSelectionOnly) }, hint = tr("texture.atlas.arrangeSelectionHint"))
+					FloatingMenuDivider()
+					FloatingMenuRow(tr("texture.atlas.arrange"), { arrangeMenu = false; vm.arrangeAtlas(snapshot, selection) }, enabled = !busy,
+						icon = { IconArrange(it) })
+				}
+			}
+			BarDivider()
+			// The automatic arrangement is a mode; Arrange is one action that keeps its result.
+			BarChip(tr("texture.atlas.auto"), atlas.auto, { vm.setAtlasAuto(snapshot, !atlas.auto) }, enabled = !busy,
+				tooltip = tr("texture.atlas.autoHint"), icon = { IconAutoArrange(it) })
+			if (atlas.pages.size > 1) {
+				BarDivider()
 				for (info in atlas.pages) {
-					CompactToggleChip(tr("texture.atlas.pageShort", info.index + 1), info.index == page, { vm.setTexturePage(info.index) },
-						showCheckWhenSelected = false, tooltip = tr("texture.atlas.page", info.index + 1, info.width))
+					BarChip("${info.index + 1}", info.index == page, { vm.setTexturePage(info.index) },
+						tooltip = tr("texture.atlas.page", info.index + 1, info.width))
 				}
 			}
 		}
 
-		// Top right: packing and the budget.
-		Row(
-			Modifier.align(Alignment.TopEnd).padding(8.dp)
-				.frostedGlass(RoundedCornerShape(6.dp), elevation = 2.dp, alpha = 0.82f).padding(3.dp),
-			horizontalArrangement = Arrangement.spacedBy(3.dp),
-			verticalAlignment = Alignment.CenterVertically,
-		) {
-			var arrangeMenu by remember { mutableStateOf(false) }
+		// Top right: the budget.
+		FloatingBar(Modifier.align(Alignment.TopEnd).padding(end = 8.dp, top = 8.dp)) {
 			var budgetMenu by remember { mutableStateOf(false) }
-			// The automatic arrangement is a mode; Arrange is one action that keeps its result.
-			CompactToggleChip(tr("texture.atlas.auto"), atlas.auto, { vm.setAtlasAuto(snapshot, !atlas.auto) }, enabled = !busy,
-				showCheckWhenSelected = true, tooltip = tr("texture.atlas.autoHint"))
-			CompactButton(tr("texture.atlas.arrange"), onClick = { vm.arrangeAtlas(snapshot, selection) }, enabled = !busy, isPrimary = !atlas.auto, height = 22.dp)
 			Box {
-				CompactButton("▾", onClick = { arrangeMenu = true }, height = 22.dp)
-				TreeContextMenu(arrangeMenu, { arrangeMenu = false }, frosted = true, minWidth = 230.dp) {
-					CompactMenuSection(tr("texture.atlas.arrangeOptions"))
-					CompactMenuItem(tr("texture.atlas.arrangeByMesh"), onClick = { vm.setTextureArrangeOptions(true, texture.arrangeSelectionOnly) },
-						active = texture.arrangeByMesh, icon = { if (texture.arrangeByMesh) IconCheck(tint = colors.accent) })
-					CompactMenuItem(tr("texture.atlas.arrangeByRect"), onClick = { vm.setTextureArrangeOptions(false, texture.arrangeSelectionOnly) },
-						active = !texture.arrangeByMesh, icon = { if (!texture.arrangeByMesh) IconCheck(tint = colors.accent) })
-					CompactMenuDivider()
-					CompactMenuItem(tr("texture.atlas.arrangeSelection"), onClick = { vm.setTextureArrangeOptions(texture.arrangeByMesh, !texture.arrangeSelectionOnly) },
-						active = texture.arrangeSelectionOnly, icon = { if (texture.arrangeSelectionOnly) IconCheck(tint = colors.accent) })
-				}
-			}
-			Box {
-				CompactButton("${atlas.budget.pageSize} · ${atlas.pages.size}/${atlas.budget.maxPages} ▾", onClick = { budgetMenu = true }, height = 22.dp)
-				TreeContextMenu(budgetMenu, { budgetMenu = false }, frosted = true, minWidth = 250.dp, maxWidth = 300.dp) {
-					CompactMenuSection(tr("texture.atlas.budget"))
-					Box(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) { AtlasBudgetControls(vm, snapshot, !busy, labelWidth = 92.dp) }
+				BarChip(tr("texture.atlas.budgetSummary", atlas.budget.pageSize, atlas.pages.size, atlas.budget.maxPages), false,
+					{ budgetMenu = !budgetMenu }, tooltip = tr("texture.atlas.budget"), chevron = true, open = budgetMenu,
+					icon = { IconAtlasPages(it) })
+				FloatingMenu(budgetMenu, { budgetMenu = false }, width = 270.dp, alignment = Alignment.TopEnd) {
+					FloatingMenuSection(tr("texture.atlas.budget"))
+					Box(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) { AtlasBudgetControls(vm, snapshot, !busy, labelWidth = 96.dp) }
 				}
 			}
 		}
@@ -542,22 +573,10 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 		// Top centre: why the last command was refused, and what the layout reported.
 		val messages = (texture.error?.let { listOf(it to colors.error) }.orEmpty() +
 			(texture.notices.ifEmpty { atlas.notices }).map { it to colors.warning }).take(3)
-		if (messages.isNotEmpty()) {
-			Row(
-				Modifier.align(Alignment.TopCenter).padding(top = if (atlas.pages.size > 1) 44.dp else 40.dp, start = 8.dp, end = 8.dp)
-					.widthIn(max = 460.dp)
-					.frostedGlass(RoundedCornerShape(6.dp), elevation = 2.dp, alpha = 0.9f).padding(horizontal = 8.dp, vertical = 4.dp),
-				verticalAlignment = Alignment.Top,
-			) {
-				Column(Modifier.weight(1f, fill = false)) {
-					for ((message, color) in messages) {
-						Text(message, style = typography.caption.copy(fontSize = 10.5.sp), color = color, maxLines = 2, overflow = TextOverflow.Ellipsis)
-					}
-				}
-				if (texture.error != null) {
-					Box(Modifier.padding(start = 6.dp).clickable { vm.clearTextureError() }) { IconClose(tint = colors.textMuted) }
-				}
-			}
+		var dismissed by remember(snapshot.state) { mutableStateOf(false) }
+		if (messages.isNotEmpty() && (!dismissed || texture.error != null)) {
+			NoticeBanner(messages, onClose = { dismissed = true; vm.clearTextureError() },
+				modifier = Modifier.align(Alignment.TopCenter).padding(top = 42.dp, start = 8.dp, end = 8.dp))
 		}
 
 		// Bottom right: the display rail of the edit canvas, with the heat scale beside it while the heatmap shows.
@@ -689,29 +708,65 @@ private fun DrawScope.drawChecker(rect: Rect, light: Color, dark: Color) {
 
 /**
  * Each tile's meshes on [page] as one wireframe path per layer, in page pixels: the preview model's triangles at
- * their texture coordinates, when that model's atlas is this version's. Built once per model and page.
+ * their texture coordinates, when that model's atlas is this version's. Built off the UI thread, once per model
+ * and page; null until they are, or while the model is another version's.
  */
 @Composable
 private fun rememberMeshPaths(state: PSD2LiveState, snapshot: TextureSnapshot, page: Int): Map<String, Path>? {
 	val model = state.previewModel
-	return remember(model, snapshot, page) {
-		if (model == null || !snapshot.matches(model.atlas)) return@remember null
-		val image = model.atlas.pages.getOrNull(page)?.image ?: return@remember null
-		val paths = HashMap<String, Path>()
-		for (drawable in model.rig.puppet.drawables) {
-			val mesh = drawable.mesh ?: continue
-			if (drawable.texturePage != page) continue
-			val layerId = model.rig.layerIdByDrawableId[drawable.id.raw] ?: continue
-			val path = paths.getOrPut(layerId) { Path() }
-			val uv = mesh.uvs; val indices = mesh.indices
-			fun x(v: Int) = uv[v * 2] * image.width
-			fun y(v: Int) = uv[v * 2 + 1] * image.height
-			for (t in 0 until indices.size - 2 step 3) {
-				val a = indices[t]; val b = indices[t + 1]; val c = indices[t + 2]
-				path.moveTo(x(a), y(a)); path.lineTo(x(b), y(b)); path.lineTo(x(c), y(c)); path.close()
+	val built by produceState<Pair<Any, Map<String, Path>>?>(null, model, snapshot, page) {
+		if (model == null || !snapshot.matches(model.atlas)) return@produceState
+		val key = Triple(model, snapshot, page)
+		value = key to withContext(Dispatchers.Default) {
+			val image = model.atlas.pages.getOrNull(page)?.image ?: return@withContext emptyMap()
+			val paths = HashMap<String, Path>()
+			for (drawable in model.rig.puppet.drawables) {
+				val mesh = drawable.mesh ?: continue
+				if (drawable.texturePage != page) continue
+				val layerId = model.rig.layerIdByDrawableId[drawable.id.raw] ?: continue
+				val path = paths.getOrPut(layerId) { Path() }
+				val uv = mesh.uvs; val indices = mesh.indices
+				fun x(v: Int) = uv[v * 2] * image.width
+				fun y(v: Int) = uv[v * 2 + 1] * image.height
+				for (t in 0 until indices.size - 2 step 3) {
+					val a = indices[t]; val b = indices[t + 1]; val c = indices[t + 2]
+					path.moveTo(x(a), y(a)); path.lineTo(x(b), y(b)); path.lineTo(x(c), y(c)); path.close()
+				}
 			}
+			paths
 		}
-		paths
+	}
+	return built?.takeIf { it.first == Triple(model, snapshot, page) }?.second
+}
+
+/**
+ * Each tile's raster as a Compose image, made off the UI thread. Images are kept by raster identity, so a commit
+ * converts only the rasters it changed; empty while the pages are upscaled, which only the page image shows.
+ */
+@Composable
+private fun rememberTileImages(snapshot: TextureSnapshot): Map<String, ImageBitmap> {
+	val value by produceState(emptyMap<String, ImageBitmap>(), snapshot) {
+		value = if (snapshot.upscaled) emptyMap() else withContext(Dispatchers.Default) {
+			snapshot.atlas.tiles.mapNotNull { tile ->
+				val raster = snapshot.tileRaster(tile.layerId) ?: return@mapNotNull null
+				tile.layerId to synchronized(tileImageCache) {
+					tileImageCache.getOrPut(raster.rgba) { rgbaImageBitmap(raster.width, raster.height, raster.rgba) }
+				}
+			}.toMap()
+		}
+	}
+	return value
+}
+
+private val tileImageCache = java.util.WeakHashMap<ByteArray, ImageBitmap>()
+
+/** The cells of a tile arranged by its meshes, in page pixels: the only part of its rectangle it shows. */
+private fun maskPath(shape: io.github.psd2live.core.AtlasArrange.Shape): Path = Path().apply {
+	val cell = io.github.psd2live.core.AtlasArrange.CELL.toFloat()
+	for (r in 0 until shape.height) {
+		val run = shape.runs[r]
+		for (k in run.indices step 2) addRect(Rect((shape.column + run[k]) * cell, (shape.row + r) * cell,
+			(shape.column + run[k + 1]) * cell, (shape.row + r + 1) * cell))
 	}
 }
 
@@ -720,9 +775,10 @@ private fun rememberMeshPaths(state: PSD2LiveState, snapshot: TextureSnapshot, p
  * version's atlas, otherwise the page PNG of the captured version.
  */
 @Composable
-private fun rememberPageImage(state: PSD2LiveState, snapshot: TextureSnapshot, page: Int): ImageBitmap? {
+private fun rememberPageImage(state: PSD2LiveState, snapshot: TextureSnapshot, page: Int, enabled: Boolean): ImageBitmap? {
 	val atlas = state.previewModel?.atlas
-	val value by produceState<ImageBitmap?>(null, snapshot, atlas, page) {
+	val value by produceState<ImageBitmap?>(null, snapshot, atlas, page, enabled) {
+		if (!enabled) { value = null; return@produceState }
 		value = withContext(Dispatchers.Default) {
 			runCatching {
 				val live = atlas?.takeIf { snapshot.matches(it) }?.pages?.getOrNull(page)?.image

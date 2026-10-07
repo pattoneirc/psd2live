@@ -401,8 +401,9 @@ data class RigPreviewModel(
 	val runtimeBundle: CubismRuntimeBundle,
 	val baseRig: BuiltRig = rig,
 	/**
-	 * The atlas [baseRig] is bound to when it is not [atlas]: after a deferred layer deletion the replay binds
-	 * every layer, while [atlas] packs only the kept ones ([RigLayerDeletion.compact]).
+	 * The atlas [baseRig] is bound to when it is not [atlas]: the generation packs deleted layers (after a
+	 * deferred deletion) and superseded ones (the originals of a split) too, while [atlas] packs only the layers
+	 * the model shows ([RigLayerDeletion.compact]).
 	 */
 	val generationAtlas: PackedAtlas? = null,
 ) {

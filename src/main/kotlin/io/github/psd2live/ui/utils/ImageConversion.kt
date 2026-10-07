@@ -51,6 +51,13 @@ internal fun BufferedImage.toSkiaImage(): Image = Image.makeFromBitmap(toSkiaBit
  */
 internal fun BufferedImage.toImageBitmapFast(): ImageBitmap = toSkiaBitmap().asComposeImageBitmap()
 
+/** Straight RGBA pixels as a Compose image, copied once. */
+internal fun rgbaImageBitmap(width: Int, height: Int, rgba: ByteArray): ImageBitmap = Bitmap().apply {
+	allocPixels(ImageInfo(width, height, ColorType.RGBA_8888, ColorAlphaType.UNPREMUL))
+	installPixels(rgba)
+	setImmutable()
+}.asComposeImageBitmap()
+
 /** The pixels of an integer raster that is exactly this image, or null for any other layout (a sub-image view). */
 private fun BufferedImage.wholeRaster(): IntArray? {
 	val raster = raster

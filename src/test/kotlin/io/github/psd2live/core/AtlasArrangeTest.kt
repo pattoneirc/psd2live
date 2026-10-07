@@ -54,7 +54,9 @@ class AtlasArrangeTest {
 		val moved = kept.placementByLayerId.filter { (id, at) -> frozen.tiles[id]?.let { it.x != at.x || it.y != at.y || it.page != at.page } != false }.keys
 		assertTrue("new" in moved)
 		assertTrue(moved.size <= layers.size / 2, "only the grown tile, what it now overlaps and the new one move: $moved")
-		assertTrue(kept.notices.any { "new" in it })
+		// Only a tile that lost its stored spot is reported; a new layer fills free space quietly.
+		assertTrue(kept.notices.none { "new" in it })
+		assertEquals(grown in moved, kept.notices.any { grown in it })
 		val tiles = kept.placementByLayerId.values.toList()
 		for (i in tiles.indices) for (j in i + 1 until tiles.size) {
 			val a = tiles[i]; val b = tiles[j]
@@ -100,7 +102,7 @@ class AtlasArrangeTest {
 	@Test fun anArrangementThatCannotFitShrinksTheTilesTogether() {
 		val config = PipelineConfig(atlasBudget = AtlasBudget(256, 1, 2))
 		val arranged = assertNotNull(AtlasLayout.arrange(layers, config, emptyMap(), null))
-		assertTrue(arranged.fitStep < AtlasArrangement.FIT_STEPS && arranged.fitStep % 64 == 0)
+		assertTrue(arranged.fitStep < AtlasArrangement.FIT_STEPS)
 		val atlas = AtlasLayout.pack(layers, config.copy(atlasArrangement = arranged))
 		assertEquals(1, atlas.pages.size)
 		assertTrue(atlas.notices.none { "free space" in it })

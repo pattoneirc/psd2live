@@ -79,13 +79,15 @@ internal object RigLayerDeletion {
         val (atlas, rig) = compact(input.atlas, input.analysis, active, filtered, config, previousAtlas)
         val bundle = PSD2LivePipeline().buildRuntimeBundle("psd2live-preview", active, atlas, rig, config).first
         return input.copy(analysis = active, atlas = atlas, rig = rig, config = config, runtimeBundle = bundle,
-            generationAtlas = input.atlas.takeIf { atlas !== it })
+            // The base rig is bound to the atlas the generation packed, before any compaction.
+            generationAtlas = if (atlas === input.atlas) input.generationAtlas else input.generationAtlas ?: input.atlas)
     }
 
     /**
-     * The replay binds deleted layers too, so the full atlas still packs their tiles. The active model packs
-     * only the layers it keeps and moves every remaining mesh onto that atlas, so deleted art takes no page
-     * space in the preview, the texture workspace or exports. Imported CMO3 keeps its own layout, and so does a
+     * The replay binds deleted layers too, and the generation packs superseded ones (the originals of a split),
+     * so the full atlas still holds their tiles. The active model packs only the layers it keeps and moves every
+     * remaining mesh onto that atlas, so deleted or superseded art takes no page space in the preview, the
+     * texture workspace or exports. Imported CMO3 keeps its own layout, and so does a
      * rig with a mesh that no kept layer owns.
      */
     fun compact(full: PackedAtlas, fullAnalysis: PipelineAnalysis, active: PipelineAnalysis, rig: BuiltRig,

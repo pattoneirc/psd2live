@@ -9,8 +9,16 @@ import java.awt.image.BufferedImage
 
 object PreviewRenderer {
 	/** What a composite reads of one layer; the raster array counts by identity (arrays compare by reference). */
+	/**
+	 * One drawn layer. Rasters keep their identity across rebuilds, so the pixels count by identity: a data class
+	 * would hash every array's contents on each lookup, megabytes per rebuild.
+	 */
 	private data class LayerKey(val rgba: ByteArray, val width: Int, val left: Int, val top: Int, val opacity: Float,
-	                            val rect: io.github.psd2live.project.LayerCanvasRect? = null, val height: Int = 0)
+	                            val rect: io.github.psd2live.project.LayerCanvasRect? = null, val height: Int = 0) {
+		override fun equals(other: Any?) = other is LayerKey && rgba === other.rgba && width == other.width && left == other.left &&
+			top == other.top && opacity == other.opacity && rect == other.rect && height == other.height
+		override fun hashCode() = java.util.Objects.hash(System.identityHashCode(rgba), width, left, top, opacity, rect, height)
+	}
 	private data class CompositeKey(val width: Int, val height: Int, val layers: List<LayerKey>)
 
 	private val composites = object : LinkedHashMap<CompositeKey, java.lang.ref.SoftReference<BufferedImage>>(4, 0.75f, true) {

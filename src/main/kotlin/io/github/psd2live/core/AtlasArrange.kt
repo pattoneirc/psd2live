@@ -134,6 +134,42 @@ internal object AtlasArrange {
 		}
 
 		/**
+		 * The first column in 0..[lastColumn] at which a box of [span] cells - its [grow] margin included, so it
+		 * starts [grow] cells left of the column - is free over rows [top] until [top] + [height]; -1 when none.
+		 * Rows and columns off the page count as free. One pass merges the rows, so a rectangle tests each
+		 * row of the page once rather than every column of it.
+		 */
+		fun firstFreeSpan(top: Int, height: Int, span: Int, grow: Int, lastColumn: Int): Int {
+			val line = LongArray(words)
+			for (y in maxOf(top, 0) until minOf(top + height, rows)) {
+				val base = y * words
+				for (w in 0 until words) line[w] = line[w] or bits[base + w]
+			}
+			var column = 0
+			while (column <= lastColumn) {
+				val hit = lastSet(line, maxOf(column - grow, 0), minOf(column - grow + span, columns))
+				if (hit < 0) return column
+				column = hit + grow + 1
+			}
+			return -1
+		}
+
+		/** The last set bit of [line] in [from, to), or -1. */
+		private fun lastSet(line: LongArray, from: Int, to: Int): Int {
+			if (to <= from) return -1
+			var w = (to - 1) ushr 6
+			val first = from ushr 6
+			while (w >= first) {
+				var word = line[w]
+				if (w == (to - 1) ushr 6) { val keep = ((to - 1) and 63) + 1; if (keep < 64) word = word and ((1L shl keep) - 1) }
+				if (w == first) word = word and (-1L shl (from and 63))
+				if (word != 0L) return (w shl 6) + 63 - java.lang.Long.numberOfLeadingZeros(word)
+				w--
+			}
+			return -1
+		}
+
+		/**
 		 * Whether [probe] - a tile's shape grown by its padding, with its box moved so the tile's own box sits at
 		 * ([column], [row]) - is free; else the next column worth trying on this row. Cells off the page count as free.
 		 */
@@ -156,7 +192,8 @@ internal object AtlasArrange {
 	/** Cells of padding between tiles: the shapes keep at least the rectangle packer's `2 x padding` pixels apart. */
 	fun paddingCells(padding: Int): Int = ceilDiv(padding.coerceAtLeast(0) * 2, CELL)
 
-	class Kept(val spots: Map<String, Spot>, val shapes: Map<String, Shape>, val pageCount: Int, val moved: List<String>)
+	/** [displaced] names the tiles that had a stored spot it could not keep; tiles new to the arrangement are not listed. */
+	class Kept(val spots: Map<String, Spot>, val shapes: Map<String, Shape>, val pageCount: Int, val displaced: List<String>)
 
 	/**
 	 * The stored spots of [requests] that still hold - on a page of the budget, inside it, clear of the tiles
@@ -176,7 +213,7 @@ internal object AtlasArrange {
 			val shape = shape(stored.x, stored.y, request.width, request.height, request.rasterWidth, request.rasterHeight, request.footprint)
 			val clear = fits && placed[stored.page].orEmpty().none { (other, otherShape) ->
 				val a = spots.getValue(other.id)
-				// The shelf packer leaves `padding` between rows and twice that between neighbours; either holds.
+				// Rectangle packs leave at least `padding` between tiles; a frozen automatic layout always holds.
 				if (other.footprint == null && request.footprint == null)
 					stored.x < a.x + other.width + padding && a.x < stored.x + request.width + padding &&
 						stored.y < a.y + other.height + padding && a.y < stored.y + request.height + padding
@@ -205,7 +242,7 @@ internal object AtlasArrange {
 			spots[request.id] = spot; shapes[request.id] = shape
 			pageCount = maxOf(pageCount, page + 1)
 		}
-		return Kept(spots, shapes, maxOf(pageCount, 1), pending.map { it.name })
+		return Kept(spots, shapes, maxOf(pageCount, 1), pending.filter { it.stored != null }.map { it.name })
 	}
 
 	/** The first free cell-aligned spot for [request] on a page, scanning rows top to bottom; null when none. */
@@ -215,6 +252,17 @@ internal object AtlasArrange {
 		val probe = dilate(origin, grow)
 		val lastRow = (pageSize - request.height) / CELL
 		val lastColumn = (pageSize - request.width) / CELL
+		if (request.footprint == null) {
+			// A rectangle grown by its padding is a rectangle: the same first fit, a row at a time.
+			for (row in 0..lastRow) {
+				val column = grid.firstFreeSpan(row - grow, probe.height, probe.width, grow, lastColumn)
+				if (column >= 0) {
+					val spot = Spot(page, column * CELL, row * CELL)
+					return spot to shape(spot.x, spot.y, request.width, request.height, request.rasterWidth, request.rasterHeight, null)
+				}
+			}
+			return null
+		}
 		for (row in 0..lastRow) {
 			var column = 0
 			while (column <= lastColumn) {
@@ -230,28 +278,51 @@ internal object AtlasArrange {
 	}
 
 	/**
-	 * A compact arrangement of [requests] within [maxPages] pages, largest footprint first, around the [fixed]
-	 * tiles (with their shapes); null when they do not all fit.
+	 * A compact arrangement of [requests] within [maxPages] pages around the [fixed] tiles (with their shapes);
+	 * null when they do not all fit. Tiles go in by footprint, by height and by the longer side, largest first;
+	 * the order that uses the fewest pages and then the fewest rows of its last page wins.
 	 */
 	fun arrange(requests: List<Request>, fixed: List<Pair<Spot, Shape>>, pageSize: Int, padding: Int, maxPages: Int): Map<String, Spot>? {
+		var best: Placed? = null
+		for (order in ORDERS) {
+			val placed = place(requests.sortedWith(order), fixed, pageSize, padding, maxPages) ?: continue
+			val current = best
+			if (current == null || placed.pages < current.pages || placed.pages == current.pages && placed.bottom < current.bottom) best = placed
+		}
+		return best?.spots
+	}
+
+	private val ORDERS: List<Comparator<Request>> = listOf(
+		compareByDescending<Request> { it.area }.thenByDescending { it.height }.thenBy { it.id },
+		compareByDescending<Request> { it.height }.thenByDescending { it.area }.thenBy { it.id },
+		compareByDescending<Request> { maxOf(it.width, it.height) }.thenByDescending { it.area }.thenBy { it.id },
+	)
+
+	private class Placed(val spots: Map<String, Spot>, val pages: Int, val bottom: Int)
+
+	private fun place(requests: List<Request>, fixed: List<Pair<Spot, Shape>>, pageSize: Int, padding: Int, maxPages: Int): Placed? {
 		val grow = paddingCells(padding)
 		val grids = HashMap<Int, Grid>()
 		fun grid(page: Int) = grids.getOrPut(page) {
 			Grid(pageSize / CELL, pageSize / CELL).also { grid -> fixed.filter { it.first.page == page }.forEach { grid.mark(it.second) } }
 		}
 		val spots = LinkedHashMap<String, Spot>()
-		for (request in requests.sortedWith(compareByDescending<Request> { it.area }.thenByDescending { it.height }.thenBy { it.id })) {
+		val bottoms = HashMap<Int, Int>()
+		for ((spot, shape) in fixed) bottoms.merge(spot.page, shape.row + shape.height, ::maxOf)
+		for (request in requests) {
 			var placed = false
 			for (page in 0 until maxPages) {
 				val found = search(grid(page), request, pageSize, grow, page) ?: continue
 				grid(page).mark(found.second)
 				spots[request.id] = found.first
+				bottoms.merge(page, found.second.row + found.second.height, ::maxOf)
 				placed = true
 				break
 			}
 			if (!placed) return null
 		}
-		return spots
+		val pages = (bottoms.keys.maxOrNull() ?: 0) + 1
+		return Placed(spots, pages, bottoms[pages - 1] ?: 0)
 	}
 
 	/**
