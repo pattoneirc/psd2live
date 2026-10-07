@@ -1,6 +1,7 @@
 package io.github.psd2live.core
 
 import kotlinx.serialization.json.*
+import org.umamo.render.eval.DrawableSpaceMapping
 import org.umamo.render.eval.drawableSpaceMapping
 import org.umamo.render.eval.warpApply
 import org.umamo.runtime.eval.*
@@ -188,10 +189,7 @@ internal object RigGenerationFrames {
         val vertices = (0 until mesh.vertexCount).toSet()
         fun map(values: FloatArray): FloatArray {
             checkpoint(); val world = old.localToWorld(values)
-            val local = next.worldToLocalLinearized(world, FloatArray(world.size) { 0.5f }, world, vertices)
-            val actual = next.localToWorld(local)
-            require(actual.indices.all { kotlin.math.abs(actual[it] - world[it]) < 0.01f }) { "Generation mesh neutral frame cannot be inverted" }
-            return local
+            return invert(next, world, FloatArray(world.size) { 0.5f }, vertices, 0.01f) ?: throw IllegalArgumentException("Generation mesh neutral frame cannot be inverted")
         }
         val base = map(mesh.positions)
         val delta: (FloatArray) -> FloatArray = { values ->
@@ -204,6 +202,40 @@ internal object RigGenerationFrames {
             blendShapes = original.blendShapes.map { binding -> binding.copy(forms = binding.forms.map { form -> form?.let {
                 MeshForm(delta(it.positionDeltas), it.drawOrder, it.opacity, it.multiplyColor, it.screenColor)
             } }) }) to delta
+    }
+
+    /**
+     * Local points [next] maps onto [world] within [tolerance], or null. The engine's warp inverse stops at a tolerance
+     * relative to the lattice, about a hundredth of a pixel on a whole-body warp chain. Points it leaves further off take
+     * Newton steps on the forward map, its Jacobian by finite differences. Points the plain inverse already places
+     * are unchanged.
+     */
+    private fun invert(next: DrawableSpaceMapping, world: FloatArray, seed: FloatArray, vertices: Set<Int>, tolerance: Float): FloatArray? {
+        val local = next.worldToLocalLinearized(world, seed, world, vertices)
+        fun misses(actual: FloatArray) = (0 until world.size / 2).filter { v ->
+            kotlin.math.abs(actual[2 * v] - world[2 * v]) >= tolerance || kotlin.math.abs(actual[2 * v + 1] - world[2 * v + 1]) >= tolerance
+        }
+        var actual = next.localToWorld(local)
+        var off = misses(actual)
+        repeat(4) {
+            if (off.isEmpty()) return local
+            // The step is small next to a deformer's extent and large next to float round-off of canvas coordinates.
+            val step = 1e-3f
+            val dx = next.localToWorld(FloatArray(local.size) { if (it % 2 == 0) local[it] + step else local[it] })
+            val dy = next.localToWorld(FloatArray(local.size) { if (it % 2 == 1) local[it] + step else local[it] })
+            for (v in off) {
+                val x = 2 * v; val y = x + 1
+                val a = (dx[x] - actual[x]) / step; val b = (dy[x] - actual[x]) / step
+                val c = (dx[y] - actual[y]) / step; val d = (dy[y] - actual[y]) / step
+                val det = a * d - b * c
+                if (!det.isFinite() || kotlin.math.abs(det) < 1e-12f) return null
+                val ex = world[x] - actual[x]; val ey = world[y] - actual[y]
+                local[x] += (d * ex - b * ey) / det; local[y] += (a * ey - c * ex) / det
+            }
+            actual = next.localToWorld(local)
+            off = misses(actual)
+        }
+        return local.takeIf { off.isEmpty() }
     }
 
     private fun commonParent(model: PuppetModel, ids: List<DrawableId>): DeformerId? {
@@ -311,10 +343,8 @@ internal object RigGenerationFrames {
         fun points(values: FloatArray): FloatArray {
             checkpoint()
             val world = oldMap.localToWorld(values)
-            val local = nextMap.worldToLocalLinearized(world, values, world, (0 until values.size / 2).toSet())
-            val verified = nextMap.localToWorld(local)
-            require(verified.indices.all { kotlin.math.abs(verified[it] - world[it]) <= 0.01f }) { "Generation parent neutral frame cannot be inverted" }
-            return local
+            return invert(nextMap, world, values, (0 until values.size / 2).toSet(), Math.nextUp(0.01f))
+                ?: throw IllegalArgumentException("Generation parent neutral frame cannot be inverted")
         }
         return when (original) {
             is Deformer.Warp -> original.copy(parent = newParent,

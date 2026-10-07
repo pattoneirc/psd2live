@@ -283,8 +283,11 @@ abstract class ArtPrimitiveV2Matrix {
 
 		changes(runtime, split, buildJsonObject { put("eyelashSquash", 40f) }, FACE) { label, before, now ->
 			if (label == "part classification") {
-				val reclassified = now.model.rig.puppet.drawables.single { it.id == split.parts.last() }
-				assertTrue(reclassified.geometryGrid?.axes.orEmpty().none { it.parameterId.raw == "ParamEyeLOpen" }, "an object part does not blink")
+				// The transition keeps the authored residual on its old axes, so the axis may stay; the blink motion goes.
+				val blink = maxDistance(world(now.model, emptyMap()).getValue(split.parts.last()), world(now.model, closed).getValue(split.parts.last()))
+				val was = maxDistance(world(before.model, emptyMap()).getValue(split.parts.last()), world(before.model, closed).getValue(split.parts.last()))
+				assertTrue(blink < 0.1f && was > 1f, "an object part does not blink: $blink px (was $was px)")
+				note("      the object part's blink: $was -> $blink px")
 			} else if (label != "other mesh settings") for (id in split.parts) assertTrue(
 				now.model.rig.puppet.drawables.single { it.id == id }.geometryGrid!!.axes.any { it.parameterId.raw == "ParamEyeLOpen" }, "$label: ${id.raw} lost its blink")
 			if (label == "face tuning") {
