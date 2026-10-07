@@ -90,6 +90,13 @@ class AgentOperationToolsTest {
             val detail = operations.registry.invoke("workspace_get_operation", buildJsonObject { put("id", id) }, context).data
             assertEquals(operations.registry.definition(id).requestSchema, detail.getValue("request_schema"))
             assertEquals(operations.registry.definition(id).kind.name.lowercase(), detail.getValue("kind").jsonPrimitive.content)
+            // A page carries the opening sentence; the detail keeps the whole description.
+            val listed = page.getValue("items").jsonArray.first().jsonObject.getValue("description").jsonPrimitive.content
+            assertTrue(listed.length < detail.getValue("description").jsonPrimitive.content.length)
+            val found = operations.registry.invoke("workspace_list_operations", buildJsonObject { put("query", "Set KEY motion") }, context).data
+            assertTrue("motion_set_key" in found.getValue("items").jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content })
+            assertEquals(0, operations.registry.invoke("workspace_list_operations", buildJsonObject { put("query", "no such words here") }, context)
+                .data.getValue("total").jsonPrimitive.int)
         }
     }
 

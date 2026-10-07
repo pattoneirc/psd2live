@@ -45,7 +45,7 @@
 
 | 工具 | 请求结构 | 用途 |
 | --- | --- | --- |
-| `workspace_list_operations` | 可选 `domain`、`kind`、`offset`、`limit` | 分页发现工具、业务类型和执行元数据 |
+| `workspace_list_operations` | 可选 `domain`、`kind`、`query`、`offset`、`limit` | 分页发现工具、业务类型和执行元数据；`query` 的各个词须全部出现在操作 ID 或说明中（不区分大小写）；列表项只带说明的第一句，完整说明见 `workspace_get_operation` |
 | `workspace_get_operation` | `id` | 读取单项 schema、字段说明与执行元数据 |
 | `workspace_apply_edits` | `state`、`edits`（1–128 项），可选 `summary` | 后台有序编辑同一候选文档，全部成功后提交一个历史节点；返回任务句柄，成员支持情况见 `batchable` |
 | `workspace_preview_edits` | `state`、`edits`（1–128 项），共用请求上下文 | 后台试运行几何作者编辑，返回候选 revision 与诊断；不发布文档、姿态、历史或资源 |

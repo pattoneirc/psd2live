@@ -68,18 +68,26 @@ internal class WorkspaceOperations(private val workspace: WorkspaceBackend,
                 }
             }
         }
-        register("workspace_list_operations", "Discover supported operations and their business kind. Filter by domain or kind and page before requesting a detailed schema.",
+        register("workspace_list_operations", "Discover supported operations and their business kind. Filter by domain, kind or query words and page; items carry the first sentence of each description, and workspace_get_operation returns the whole description with the exact schema.",
             schema(mapOf("domain" to string(), "kind" to buildJsonObject {
                 put("type", "string"); put("enum", JsonArray(WorkspaceOperationKind.entries.map { JsonPrimitive(it.name.lowercase()) }))
+            }, "query" to buildJsonObject {
+                put("type", "string"); put("minLength", 1)
+                put("description", "Words that must all occur in the operation ID or description, ignoring case.")
             }, "offset" to integer(0, Int.MAX_VALUE), "limit" to integer(1, 64))), WorkspaceOperationKind.QUERY) { request ->
             val domain = request["domain"]?.jsonPrimitive?.content
             val kind = request["kind"]?.jsonPrimitive?.content
+            val words = request["query"]?.jsonPrimitive?.content?.lowercase()?.split(Regex("[\\s_]+"))?.filter(String::isNotEmpty).orEmpty()
             val matching = registry.definitions().filter { (domain == null || it.id.startsWith("${domain}_")) &&
-                (kind == null || it.kind.name.lowercase() == kind) }
+                (kind == null || it.kind.name.lowercase() == kind) &&
+                words.all { word -> word in it.id.replace('_', ' ') || word in it.description.lowercase() } }
             val offset = request["offset"]?.jsonPrimitive?.int ?: 0
             val limit = request["limit"]?.jsonPrimitive?.int ?: 24
             WorkspaceOperationOutput(buildJsonObject {
-                put("items", JsonArray(matching.drop(offset).take(limit).map { it.toJson() }))
+                put("items", JsonArray(matching.drop(offset).take(limit).map { definition ->
+                    // Operations of one family share a long description; a page repeats only its opening.
+                    JsonObject(definition.toJson() + ("description" to JsonPrimitive(firstSentence(definition.description))))
+                }))
                 put("total", matching.size)
                 if (offset.toLong() + limit < matching.size) put("next", offset + limit)
             })
@@ -159,6 +167,10 @@ internal class WorkspaceOperations(private val workspace: WorkspaceBackend,
         require(it.isAbsolute) { "Provide an absolute local path" }
     }
     private fun output(job: WorkspaceJobSnapshot) = WorkspaceOperationOutput(job.toJson(), job.result?.images.orEmpty())
+    private fun firstSentence(text: String): String {
+        val end = Regex("\\. ").find(text)?.range?.first?.plus(1) ?: text.length
+        return text.take(minOf(end, 240)).trim()
+    }
     private fun JsonObject.text(key: String) = getValue(key).jsonPrimitive.content
     private fun string() = buildJsonObject { put("type", "string"); put("minLength", 1) }
     private fun integer(min: Int, max: Int) = buildJsonObject { put("type", "integer"); put("minimum", min); put("maximum", max) }
