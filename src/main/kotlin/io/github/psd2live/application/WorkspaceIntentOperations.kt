@@ -12,28 +12,44 @@ internal object WorkspaceIntentOperations {
     const val AXIS = "author_axis"
     const val PHYSICS = "author_physics"
     const val OVERVIEW = "workspace_overview"
+    const val COMPILE = "author_compile"
     val batches = setOf(AXIS, PHYSICS)
+}
+
+private val compileSchema: JsonObject by lazy {
+    val s = WorkspaceResultSchema
+    s.obj(linkedMapOf("project_id" to s.nullable(s.handle()), "state" to s.handle(), "intent" to s.choices(*WorkspaceIntentOperations.batches.toTypedArray()),
+        "summary" to s.string(),
+        "edits" to s.array(s.obj(mapOf("operation" to s.handle(), "request" to buildJsonObject { put("type", "object") })), 1, 128)))
 }
 
 internal fun registerIntentOperations(registry: WorkspaceOperationRegistry, port: WorkspaceDocumentPort,
                                       reads: WorkspaceReadPort, jobs: WorkspaceJobs) {
     val members = batchMemberSchemas(registry)
+    class Intent(val schema: JsonObject, val compile: (JsonObject, WorkspaceQueries) -> Pair<String, List<WorkspaceDocumentOperation>>)
+    val intents = linkedMapOf<String, Intent>()
+
+    /** Compiles [request] against the capture of the state it names, with every member checked against its own schema. */
+    fun compiled(id: String, request: JsonObject, queries: WorkspaceQueries): Pair<String, List<WorkspaceDocumentOperation>> {
+        val state = request.getValue("state").jsonPrimitive.content
+        val captured = queries.snapshot().state
+        // The compiled edits describe the captured model, so they must come from the version the request names.
+        if (captured != state) throw WorkspaceConflict(state, captured)
+        val (summary, edits) = intents.getValue(id).compile(request, queries)
+        edits.forEachIndexed { index, edit ->
+            validateOperationSchema(edit.request, members.getValue(edit.operation), "compiled[$index].${edit.operation}")
+        }
+        return (request["summary"]?.jsonPrimitive?.content ?: summary) to edits
+    }
 
     fun registerBatch(id: String, description: String, schema: JsonObject,
                       compile: (JsonObject, WorkspaceQueries) -> Pair<String, List<WorkspaceDocumentOperation>>) {
+        intents[id] = Intent(schema, compile)
         registry.register(WorkspaceOperationDefinition(id, description, schema, WorkspaceOperationKind.DOCUMENT, jobBacked = true,
             resultSchema = requireNotNull(WorkspaceJobResultSchemas.operationOutput(id)),
             jobResultSchema = WorkspaceJobResultSchemas.result(id))) { request, context ->
-            val state = request.getValue("state").jsonPrimitive.content
-            val queries = reads.captureQueries()
-            val captured = queries.snapshot().state
-            // The compiled edits describe the captured model, so they must come from the version the request names.
-            if (captured != state) throw WorkspaceConflict(state, captured)
-            val (summary, edits) = compile(request, queries)
-            edits.forEachIndexed { index, edit ->
-                validateOperationSchema(edit.request, members.getValue(edit.operation), "compiled[$index].${edit.operation}")
-            }
-            startDocumentBatch(port, reads, jobs, id, state, request["summary"]?.jsonPrimitive?.content ?: summary, edits, context.author)
+            val (summary, edits) = compiled(id, request, reads.captureQueries())
+            startDocumentBatch(port, reads, jobs, id, request.getValue("state").jsonPrimitive.content, summary, edits, context.author)
         }
     }
 
@@ -86,6 +102,33 @@ internal fun registerIntentOperations(registry: WorkspaceOperationRegistry, port
             WorkspaceDocumentOperation("physics_put", put).takeIf { put.keys != setOf("id") },
             fitting?.let { WorkspaceDocumentOperation("physics_fit", buildJsonObject { put("id", id); put("target", it) }) },
         )
+    }
+
+    registry.register(WorkspaceOperationDefinition(WorkspaceIntentOperations.COMPILE,
+        "Show the member edits an intent operation would commit, compiled against the state its request names, without " +
+            "running them. Check or adjust them, then dry-run geometry members with workspace_preview_edits or commit them with " +
+            "workspace_apply_edits; the intent itself commits the same edits.",
+        buildJsonObject {
+            put("type", "object"); put("additionalProperties", false)
+            putJsonObject("properties") {
+                putJsonObject("intent") { put("type", "string"); put("enum", JsonArray(intents.keys.map(::JsonPrimitive))) }
+                putJsonObject("request") {
+                    put("type", "object")
+                    put("description", "The intent's request, with state and without request_id or project_id.")
+                }
+            }
+            put("required", JsonArray(listOf(JsonPrimitive("intent"), JsonPrimitive("request"))))
+        }, WorkspaceOperationKind.QUERY, resultSchema = compileSchema)) { request, _ ->
+        val intent = request.getValue("intent").jsonPrimitive.content
+        val inner = request.getValue("request").jsonObject
+        validateOperationSchema(inner, intents.getValue(intent).schema, "request.request")
+        val queries = reads.captureQueries()
+        val (summary, edits) = compiled(intent, inner, queries)
+        WorkspaceOperationOutput(buildJsonObject {
+            put("project_id", queries.snapshot().projectId?.let(::JsonPrimitive) ?: JsonNull)
+            put("state", inner.getValue("state")); put("intent", intent); put("summary", summary)
+            putJsonArray("edits") { edits.forEach { add(buildJsonObject { put("operation", it.operation); put("request", it.request) }) } }
+        })
     }
 
     registry.register(WorkspaceOperationDefinition(WorkspaceIntentOperations.OVERVIEW,

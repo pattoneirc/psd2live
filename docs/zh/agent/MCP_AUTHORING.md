@@ -20,8 +20,8 @@
 
 工具集只决定 `tools/list` 发布哪些工具，所有操作在两种工具集下都能调用，执行与校验相同。
 
-- **精简（默认）**：24 个工具，直接覆盖 97 项操作（输入 schema 与说明约 6.9 万字符；完整工具集约 45 万字符，另有约 275 万字符的输出 schema）。
-  - 单项工具：`workspace_overview`、`workspace_inspect`、`workspace_list_operations`、`workspace_get_operation`、`workspace_apply_edits`、`workspace_preview_edits`、`rig_deform`、`keyform_apply`，以及意图工具 `author_axis`、`author_physics`（见[意图工具](#意图工具)）。
+- **精简（默认）**：25 个工具，直接覆盖 98 项操作（输入 schema 与说明约 7 万字符；完整工具集约 45 万字符，另有约 275 万字符的输出 schema）。
+  - 单项工具：`workspace_overview`、`workspace_inspect`、`workspace_list_operations`、`workspace_get_operation`、`workspace_apply_edits`、`workspace_preview_edits`、`rig_deform`、`keyform_apply`，以及意图工具 `author_axis`、`author_physics`、`author_compile`（见[意图工具](#意图工具)）。
   - 族工具：`view`、`parameter`、`motion`、`skeleton`、`path`、`physics`、`simulation`、`swing`、`source_paint`、`snapshot`、`history`、`project`、`job`。调用 `{"op":"set_key","request":{...},"wait_ms":20000}` 执行 `<族>_<op>`（此例为 `motion_set_key`），结果的 `operation` 为该操作 ID，`request` 按该操作的完整 schema 校验。成员取注册表中带该前缀的全部操作，私有草稿、试听与实时预览会话（`skeleton_draft_*`、`physics_audition*`、`*_preview*`）、历史注释和全局物理预设库除外。族工具发布各成员字段的扁平并集（不含 `oneOf`、`const`、`$ref`，形状因成员而异的字段只给说明），各 op 的必填字段列在工具说明中。
   - 其他操作经 `workspace_call` 调用：`{"operation":"layer_classify","request":{...}}`。操作 ID 同时是 `workspace_apply_edits` 成员名。
   - 不发布 `outputSchema`（结果仍以 `structuredContent` 返回，契约见 `workspace_get_operation`）；原子批量的 `edits` 成员只发布操作名枚举与 `request` 对象，成员字段执行时按单项 schema 严格校验。
@@ -38,8 +38,9 @@
 | `workspace_overview` | 只读查询 | 一次捕获返回画布、参数、图层、变形器层级（含父级与子对象数）、网格数、物理组（输入/输出参数）与动作片段；每个列表带 `total`，按 `limit`（1–500，默认 200）截取 |
 | `author_axis` | `parameter_create`（参数不存在时）→ `keyform_apply` seed → `rig_deform` | `parameter.id` 不存在时创建（`name` 缺省为 ID）；已存在时给出的 `min/max/default` 必须与现值一致。每个形状目标先在参数默认值处 seed，使当前形状成为中立形（该轴已在默认值有关键点且未给 `key` 时跳过）；再在 `value` 处执行 `rig_deform` 的 `operations/selection`。目标上直接绑定的其他轴取各自默认值，`key` 可指定组合角的取值。`value` 等于默认值时拒绝。新参数轴的关键点由引擎按 min/默认/max 建立 |
 | `author_physics` | `physics_put` → `physics_fit` | 字段同 `physics_put`，另加 `fit_target`（10–300，默认 100；`null` 跳过拟合）。只给 `id` 与 `fit_target` 时只重新拟合已有组；两者都不改时拒绝。输出参数需已有作者形状 |
+| `author_compile` | 只读查询 | 返回意图将提交的成员，见下文 |
 
-意图工具不提供试运行，也不返回编译出的成员；需要先检查几何时，自行组装同等成员交给 `workspace_preview_edits`。
+意图工具本身不试运行。`author_compile` 按请求的 `state` 编译同一意图并返回将提交的成员（`{"intent":"author_axis","request":{...}}`，`request` 带 `state`、不带 `request_id/project_id`），不改变工程；可检查或修改后交给 `workspace_preview_edits` 试运行其中的几何成员，或交给 `workspace_apply_edits` 提交，结果与直接调用意图相同。
 
 ## 公开工具速查
 
@@ -93,7 +94,7 @@
 
 表中列出业务字段；所有修改还须携带 `request_id`，工作区修改须携带 `project_id` 和 `state`（精简工具集可省略前两者，见[工具集](#工具集)）。只读后台采样 `physics_simulate/simulation_simulate/view_sample_motion` 同样要求这三个字段，用于去重并固定采样版本。各项操作字段不同，调用前读取当前服务提供的 JSON Schema。所有公开工具统一使用 `{"request": {...}}` 包装。发布与校验保留同一份 `oneOf`、`const`、字段约束及说明，外层和业务对象都拒绝未知字段。结果统一为 `{"ok":true,"operation":"...","data":{...}}`；错误包含 `ok:false` 和 `error.code/message`，字段校验错误还带 `field`。PNG 以 MCP 图片内容返回。
 
-全部 186 项公开操作（其中 69 项后台、87 项可批量）都必须声明完整 `outputSchema`，完整工具集发布它，能力详情中的 `output_schema` 与其一致；成功 data 和失败 error 严格互斥。注册表在执行及去重边界校验业务结果，MCP 校验完整返回包装，遗漏结果契约不能注册。后台操作必须另有终态 `job_result_schema`，非后台操作不允许该字段。能力详情通过本地 `$defs/$ref` 描述嵌套 schema，查询自己的 schema 也可校验；实际 HTTP 保留所有根约束。`output_contract` 表示服务实现的结果与声明不符，不能作为修改已回滚的证据。
+全部 187 项公开操作（其中 69 项后台、87 项可批量）都必须声明完整 `outputSchema`，完整工具集发布它，能力详情中的 `output_schema` 与其一致；成功 data 和失败 error 严格互斥。注册表在执行及去重边界校验业务结果，MCP 校验完整返回包装，遗漏结果契约不能注册。后台操作必须另有终态 `job_result_schema`，非后台操作不允许该字段。能力详情通过本地 `$defs/$ref` 描述嵌套 schema，查询自己的 schema 也可校验；实际 HTTP 保留所有根约束。`output_contract` 表示服务实现的结果与声明不符，不能作为修改已回滚的证据。
 
 图片追加使用 `layer_import_images`：必需 `state` 和 1–128 个绝对路径组成的 `paths`，可选 `parent_deformer_id` 指向已有父变形器；省略时绑定模型根。透明边缘裁剪后居中；栅格保持原分辨率，超过画布时只把画布矩形等比缩小到画布内（图层密度大于 1 像素/画布单位），网格按画布分辨率生成。单文件最多 64 MiB、16 百万像素，整批最多 32 百万像素。一次成功只追加一个历史节点，任意文件失败则整批不发布；它读取文件，不能作为原子文档批量成员。新增源图及网格句柄从任务终态 `affectedLayerIds/affectedObjectIds` 获取。原图像素写入工程，后续重开不依赖输入文件。
 

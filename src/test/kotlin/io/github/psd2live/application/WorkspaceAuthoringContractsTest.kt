@@ -11,7 +11,7 @@ class WorkspaceAuthoringContractsTest {
             definitions.forEach { definition ->
                 checkOperationSchema(definition.responseEnvelope())
             }
-            assertEquals(186, definitions.size)
+            assertEquals(187, definitions.size)
             assertEquals(69, definitions.count { it.jobBacked })
             assertEquals(87, definitions.count { it.batchable })
         }

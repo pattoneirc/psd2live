@@ -72,6 +72,30 @@ class WorkspaceIntentOperationsTest {
         }
     }
 
+    @Test fun compileShowsTheMembersThatCommitTheSameAsTheIntent() = runBlocking<Unit> {
+        val host = host()
+        WorkspaceOperations(host).use { operations ->
+            val mesh = "mesh:" + WorkspaceReadSession(host.runtime.read()).listRigObjects().first { it.kind == "mesh" }.id
+            val state = host.snapshot().state
+            val history = host.runtime.history().selections.size
+            val compiled = operations.call("author_compile", buildJsonObject {
+                put("intent", "author_axis"); put("request", JsonObject(axis(mesh) + ("state" to JsonPrimitive(state))))
+            })
+            val edits = compiled.getValue("edits").jsonArray
+            assertEquals(listOf("parameter_create", "keyform_apply", "rig_deform"), edits.map { it.jsonObject.getValue("operation").jsonPrimitive.content })
+            assertEquals(history, host.runtime.history().selections.size)
+            val applied = operations.run("workspace_apply_edits", host, buildJsonObject { put("edits", edits) })
+            assertEquals("completed", applied.getValue("status").jsonPrimitive.content, applied.toString())
+            assertTrue(host.snapshot().parameters.any { it.id == "ParamIntent" })
+            // A capture of another version cannot describe what the request's state would commit.
+            assertFailsWith<WorkspaceConflict> {
+                operations.call("author_compile", buildJsonObject {
+                    put("intent", "author_axis"); put("request", JsonObject(axis(mesh) + ("state" to JsonPrimitive(state))))
+                })
+            }
+        }
+    }
+
     @Test fun axisRefusesARangeThatDiffersFromTheExistingParameterAndAShapeAtTheDefault() = runBlocking {
         val host = host()
         WorkspaceOperations(host).use { operations ->

@@ -46,7 +46,7 @@ internal val AGENT_TOOL_FAMILIES = listOf(
 internal val CORE_OPERATIONS: Set<String> = linkedSetOf(
     "workspace_overview", "workspace_inspect", "workspace_list_operations", "workspace_get_operation",
     "workspace_apply_edits", "workspace_preview_edits", "rig_deform", "keyform_apply",
-    "author_axis", "author_physics",
+    "author_axis", "author_physics", "author_compile",
 )
 
 /** The core tools: single operations, families and workspace_call. */
