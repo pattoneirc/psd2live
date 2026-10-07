@@ -81,11 +81,18 @@ class DepthSplitWorkflowTest {
                 val back = split.rig.puppet.drawables.single { it.id == split.rig.puppet.glues.single().meshA }
                 val front = split.rig.puppet.drawables.single { split.rig.layerIdByDrawableId[it.id.raw] == frontId }
                 assertEquals(front.id, split.rig.puppet.glues.single().meshB)
+                // Version 2 slices take part in generation: the frames of the middles come from the slices' pinned
+                // meshes (canvas positions recorded through the parent) instead of the source's raster mesh, a float
+                // round trip that moves their local positions by a few ulps. Version 1 leaves them bit for bit.
+                val record = split.config.rigEdits.authoringJournal.single { it["op"]?.jsonPrimitive?.contentOrNull == io.github.psd2live.core.ArtPrimitiveJournal.OP }
+                val v2 = io.github.psd2live.core.ArtPrimitiveV2.isV2(record)
                 middleIds.forEach { id ->
                     val middle = split.rig.puppet.drawables.single { it.id.raw == id }
                     assertTrue(back.drawOrder < middle.drawOrder && middle.drawOrder < front.drawOrder)
                     assertEquals(before.rig.puppet.drawables.single { it.id.raw == id }.name, middle.name)
-                    assertContentEquals(before.rig.puppet.drawables.single { it.id.raw == id }.mesh!!.positions, middle.mesh!!.positions)
+                    val was = before.rig.puppet.drawables.single { it.id.raw == id }.mesh!!.positions
+                    if (!v2) assertContentEquals(was, middle.mesh!!.positions)
+                    else was.indices.forEach { assertEquals(was[it], middle.mesh!!.positions[it], 1e-5f, "middle $id coordinate $it") }
                 }
                 val splitHead = assertNotNull(vm.state.value.historySnapshot).headNodeId
                 workspace.checkoutHistory(created.historyNodeId, MutationAuthor.USER)

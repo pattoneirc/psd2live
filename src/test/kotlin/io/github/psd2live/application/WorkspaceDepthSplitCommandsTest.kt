@@ -1,6 +1,7 @@
 package io.github.psd2live.application
 
 import io.github.psd2live.core.*
+import io.github.psd2live.format.compile.document.ContentHash
 import io.github.psd2live.project.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
@@ -27,6 +28,20 @@ class WorkspaceDepthSplitCommandsTest {
         return WorkspaceRuntime(rebuild).also { it.install(it.state.value.state, "depth", document, builder.build(document)) }
     }
     private fun mesh(model: RigPreviewModel, layer: String) = model.rig.puppet.drawables.single { model.rig.layerIdByDrawableId[it.id.raw] == layer }
+
+    /** Whether [document]'s last split wrote a version 2 record (the suite may run with either writer). */
+    private fun v2(document: WorkspaceDocument) = ArtPrimitiveJournal.commands(document.rigEdits).lastOrNull()?.let(ArtPrimitiveV2::isV2) == true
+
+    /**
+     * A slice keeps the source's mesh. Version 1 copies the source's local positions; a version 2 slice is generated
+     * on its pinned mesh - the canvas positions recorded through the source's parent, normalised into the generated
+     * parent again - so the same positions come back within float round-off of that round trip.
+     */
+    private fun assertSliceMesh(document: WorkspaceDocument, expected: FloatArray, actual: FloatArray) {
+        if (!v2(document)) return assertContentEquals(expected, actual)
+        assertEquals(expected.size, actual.size)
+        expected.indices.forEach { assertEquals(expected[it], actual[it], 1e-5f, "slice coordinate $it") }
+    }
     private fun operation(runtime: WorkspaceRuntime<RigPreviewModel>) = WorkspaceDocumentOperation("source_split_depth", buildJsonObject {
         val model = runtime.capture().model
         put("source_id", mesh(model, "collar").id.raw)
@@ -122,7 +137,7 @@ class WorkspaceDepthSplitCommandsTest {
         val front = result.capture.document.source.layers.single { it.id.raw == "depth-front" }
         assertTrue(front.raster.rgba.indices.filter { it % 4 == 3 }.all { front.raster.rgba[it] == 0.toByte() })
         assertContentEquals(before.document.source.layers.first().raster.rgba, result.capture.document.source.layers.single { it.id.raw == "depth-back" }.raster.rgba)
-        assertContentEquals(mesh(before.model, "collar").mesh!!.positions, mesh(result.capture.model, "depth-back").mesh!!.positions)
+        assertSliceMesh(result.capture.document, mesh(before.model, "collar").mesh!!.positions, mesh(result.capture.model, "depth-back").mesh!!.positions)
         val replayed = builder.build(result.capture.document)
         assertContentEquals(mesh(result.capture.model, "depth-front").mesh!!.positions, mesh(replayed, "depth-front").mesh!!.positions)
         assertDepthGlues(result.capture.model.rig.puppet.glues, replayed.rig.puppet.glues)
@@ -140,7 +155,7 @@ class WorkspaceDepthSplitCommandsTest {
         assertEquals(before.document.generationSource, result.document.generationSource); assertEquals(before.document.meshSource, result.document.meshSource)
         assertEquals(before.document.meshOverrides.getValue("collar"), result.document.meshOverrides.getValue("depth-front"))
         assertEquals(before.document.meshOverrides.getValue("collar"), result.document.meshOverrides.getValue("depth-back"))
-        assertContentEquals(mesh(before.model, "collar").mesh!!.positions, mesh(result.model, "depth-back").mesh!!.positions)
+        assertSliceMesh(result.document, mesh(before.model, "collar").mesh!!.positions, mesh(result.model, "depth-back").mesh!!.positions)
     }
 
     @Test fun mouthOwnerAndDerivedLipDepthCopiesCreateOnlyTheSelectedMeshAndRetainMouthMotion() = runBlocking<Unit> {
@@ -158,6 +173,9 @@ class WorkspaceDepthSplitCommandsTest {
             val committed = WorkspacePartitionCommands(runtime).execute(before.projectId, before.state,
                 listOf(edit), "Mouth slices", MutationAuthor.USER).commit.capture
             val back = DrawableId("DepthBack")
+            // A version 2 slice of a lip ribbon keeps a zero grid plus the ribbon's keyforms as residual, moved into the
+            // slice's parent space and back: round-off below 0.001 px (4.5e-4 measured).
+            val slicesTolerance = if (!v2(committed.document)) 0.0001f else if (sourceLayerId == "collar") 0.25f else 0.001f
             for (model in listOf(committed.model, builder.build(committed.document))) {
                 assertEquals(before.model.rig.puppet.drawables.map { it.id }.toSet() - source.id + DrawableId("DepthFront") + back,
                     model.rig.puppet.drawables.map { it.id }.toSet())
@@ -168,13 +186,20 @@ class WorkspaceDepthSplitCommandsTest {
                     .associate { layer -> layer.source.id.raw to layer.source.raster.rgba.indices.count { it % 4 == 3 && layer.source.raster.rgba[it] != 0.toByte() } }
                 assertEquals(opaque(before.model.analysis), opaque(model.analysis))
                 val evaluator = CpuDeformationEvaluator()
+                // Version 1 slices copy the source's keyforms. Version 2 slices of the mouth are generated: the
+                // mouth's whole-shape keyforms on the pinned mesh, without the outline contour (which would re-mesh
+                // them), so their open shape departs from the outlined original by the contour's share (here 0.13 px).
                 for (open in listOf(0f, 0.5f, 1f)) {
                     val pose = mapOf(StandardParameters.MOUTH_OPEN to open)
                     val original = evaluator.evaluate(before.model.rig.puppet, pose)
                     val actual = evaluator.evaluate(model.rig.puppet, pose)
                     original.worldPositions.forEach { (id, positions) ->
                         val now = if (id == source.id) back else id
-                        positions.indices.forEach { assertEquals(positions[it], actual.worldPositions.getValue(now)[it], 0.0001f) }
+                        // The generated lips of a version 2 mouth are framed by the slices' pinned meshes - the outline
+                        // contour mesh - where the original framed them by its raster mesh: they settle 0.43 px apart.
+                        val lip = model.rig.layerIdByDrawableId[id.raw]?.let { layer -> model.analysis.layers.any { it.source.id.raw == layer && it.source is MouthLipLayer } } == true
+                        val tolerance = if (id == source.id) slicesTolerance else if (lip && slicesTolerance > 0.001f) 0.5f else 0.0001f
+                        positions.indices.forEach { assertEquals(positions[it], actual.worldPositions.getValue(now)[it], tolerance, "${id.raw} at open $open") }
                     }
                     assertContentEquals(actual.worldPositions.getValue(back), actual.worldPositions.getValue(DrawableId("DepthFront")))
                 }
@@ -185,7 +210,16 @@ class WorkspaceDepthSplitCommandsTest {
                 })), MutationAuthor.USER)
             val erased = builder.build(runtime.capture().document)
             assertEquals(committed.model.rig.puppet.drawables.map { it.id }.toSet(), erased.rig.puppet.drawables.map { it.id }.toSet())
-            assertContentEquals(source.mesh!!.positions, mesh(erased, "depth-back").mesh!!.positions)
+            // Erasing the front leaves the back slice's mesh. A version 2 mouth slice hangs in its own generated mouth
+            // space (local positions are not comparable), so it is compared where it shows at rest.
+            if (!v2(committed.document)) assertContentEquals(source.mesh!!.positions, mesh(erased, "depth-back").mesh!!.positions)
+            else {
+                val was = CpuDeformationEvaluator().evaluate(before.model.rig.puppet, emptyMap()).worldPositions.getValue(source.id)
+                val now = CpuDeformationEvaluator().evaluate(erased.rig.puppet, emptyMap()).worldPositions.getValue(back)
+                assertEquals(was.size, now.size)
+                was.indices.forEach { assertEquals(was[it], now[it], slicesTolerance, "back slice at rest, coordinate $it") }
+            }
+            assertEquals(ContentHash.of(RigIrCompiler.compile(committed.model)), ContentHash.of(RigIrCompiler.compile(builder.build(committed.document))))
         }
     }
 

@@ -259,11 +259,15 @@ class WorkspaceMaterializedSplitTest {
         assertTrue(puppet.atlas.tiles.none { it.source?.layerKey == "islands" })
         assertEquals(DrawableId("Back"), puppet.glues.single { it.id == "Weld" }.meshA)
         assertTrue(DepthSplit.isFrontLayer(result.model, "front")); assertFalse(DepthSplit.isFrontLayer(result.model, "back"))
+        // A version 2 slice is the generated slice plus the residual of the source's authored keyforms, moved into the
+        // slice's generated parent space and back (PrimitiveResidual.ParentSpace): the authored poses return within
+        // float round-off of that conversion (2e-4 px measured), where version 1 copies the keyforms themselves.
+        val tolerance = if (ArtPrimitiveV2.isV2(ArtPrimitiveJournal.commands(result.document.rigEdits).single())) 0.001f else 0.0001f
         for (pose in listOf(mapOf(ParameterId("Shape") to -1f), mapOf(ParameterId("Shape") to 1f), mapOf(ParameterId("Blend") to 1f))) {
             val old = CpuDeformationEvaluator().evaluate(before.model.rig.puppet, pose); val now = CpuDeformationEvaluator().evaluate(puppet, pose)
             for ((was, id) in listOf(source.id to DrawableId("Back"), middle.id to middle.id)) {
                 val xy = old.worldPositions.getValue(was)
-                xy.indices.forEach { assertEquals(xy[it], now.worldPositions.getValue(id)[it], 0.0001f) }
+                xy.indices.forEach { assertEquals(xy[it], now.worldPositions.getValue(id)[it], tolerance) }
                 assertEquals(old.opacity.getValue(was), now.opacity.getValue(id), 0.00001f)
             }
         }

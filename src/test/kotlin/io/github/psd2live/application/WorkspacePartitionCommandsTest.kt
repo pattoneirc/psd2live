@@ -244,7 +244,11 @@ class WorkspacePartitionCommandsTest {
         assertTrue(result.document.rigEdits.simEdits.single().glueRoles.values.all { it == GlueRole.PIN })
         val evaluation = org.umamo.render.eval.CpuDeformationEvaluator().evaluate(result.model.rig.puppet, emptyMap())
         val old = org.umamo.render.eval.CpuDeformationEvaluator().evaluate(before.model.rig.puppet, emptyMap())
-        assertContentEquals(old.worldPositions.getValue(other.id), evaluation.worldPositions.getValue(other.id))
+        // Version 2 parts feed the generated frames from their pinned meshes: the other mesh's frame, and with it its
+        // pose, comes back within float round-off of the canvas round trip (2e-6 px measured); version 1 exactly.
+        val v2 = ArtPrimitiveV2.isV2(ArtPrimitiveJournal.commands(result.document.rigEdits).single())
+        if (!v2) assertContentEquals(old.worldPositions.getValue(other.id), evaluation.worldPositions.getValue(other.id))
+        else old.worldPositions.getValue(other.id).let { xy -> xy.indices.forEach { assertEquals(xy[it], evaluation.worldPositions.getValue(other.id)[it], 1e-4f) } }
         // The same partition as a legacy record, replayed under its old rules on the generated original.
         val plan = WorkspacePartitionEdits.componentPlan(before.model, "islands")!!
         val geometry = SourcePartitionGeometry.components(source.mesh!!, Cmo3ModelImport.textureCanvas(before.model, source), plan.ownerByVertex, 2)
@@ -374,7 +378,8 @@ class WorkspacePartitionCommandsTest {
         assertEquals(emptySet(), result.commit.capture.document.deletedLayerIds)
         assertEquals(listOf("first", "second", "third", "fourth"), result.commit.capture.document.source.layers.map { it.id.raw })
         assertEquals(4, result.commit.capture.model.rig.puppet.drawables.size)
-        assertPartitionDeformers(before.model.baseRig.puppet.deformers, result.commit.capture.model.baseRig.puppet.deformers)
+        assertPartitionDeformers(before.model.baseRig.puppet.deformers, result.commit.capture.model.baseRig.puppet.deformers,
+            if (ArtPrimitiveJournal.commands(result.commit.capture.document.rigEdits).any(ArtPrimitiveV2::isV2)) 1e-4f else 0f)
         val rebuilt = builder.build(result.commit.capture.document)
         assertEquals(result.commit.capture.model.rig.puppet.drawables.map { it.id }, rebuilt.rig.puppet.drawables.map { it.id })
     }
@@ -497,7 +502,15 @@ class WorkspacePartitionCommandsTest {
     }
 }
 
-internal fun assertPartitionDeformers(before: List<org.umamo.runtime.model.Deformer>, after: List<org.umamo.runtime.model.Deformer>) {
+/**
+ * The generated deformers before and after a split. [tolerance] (canvas units) is for version 2 records: their parts
+ * take part in generation on pinned meshes whose canvas positions went through the parent and back, so the frames
+ * they feed come back within float round-off; 0 compares exactly (version 1, where the base never sees the parts).
+ */
+internal fun assertPartitionDeformers(before: List<org.umamo.runtime.model.Deformer>, after: List<org.umamo.runtime.model.Deformer>, tolerance: Float = 0f) {
+    fun same(expected: FloatArray, actual: FloatArray) = if (tolerance == 0f) assertContentEquals(expected, actual) else {
+        assertEquals(expected.size, actual.size); expected.indices.forEach { assertEquals(expected[it], actual[it], tolerance) }
+    }
     assertEquals(before.map { it.id }, after.map { it.id })
     before.zip(after).forEach { (first, second) ->
         when (first) {
@@ -508,7 +521,7 @@ internal fun assertPartitionDeformers(before: List<org.umamo.runtime.model.Defor
                 first.geometryGrid!!.axes.zip(actual.geometryGrid!!.axes).forEach { (expectedAxis, axis) -> assertContentEquals(expectedAxis.keys, axis.keys) }
                 assertEquals(first.geometryGrid!!.cells.size, actual.geometryGrid!!.cells.size)
                 first.geometryGrid!!.cells.zip(actual.geometryGrid!!.cells).forEach { (expectedCell, cell) ->
-                    assertContentEquals(expectedCell.coordinate, cell.coordinate); assertContentEquals(expectedCell.form.controlPoints, cell.form.controlPoints)
+                    assertContentEquals(expectedCell.coordinate, cell.coordinate); same(expectedCell.form.controlPoints, cell.form.controlPoints)
                 }
             }
             is org.umamo.runtime.model.Deformer.Rotation -> {
@@ -519,8 +532,8 @@ internal fun assertPartitionDeformers(before: List<org.umamo.runtime.model.Defor
                 assertEquals(first.geometryGrid!!.cells.size, actual.geometryGrid!!.cells.size)
                 first.geometryGrid!!.cells.zip(actual.geometryGrid!!.cells).forEach { (expectedCell, cell) ->
                     assertContentEquals(expectedCell.coordinate, cell.coordinate)
-                    assertEquals(expectedCell.form.originX, cell.form.originX); assertEquals(expectedCell.form.originY, cell.form.originY)
-                    assertEquals(expectedCell.form.angle, cell.form.angle); assertEquals(expectedCell.form.scale, cell.form.scale)
+                    same(floatArrayOf(expectedCell.form.originX, expectedCell.form.originY, expectedCell.form.angle, expectedCell.form.scale),
+                        floatArrayOf(cell.form.originX, cell.form.originY, cell.form.angle, cell.form.scale))
                 }
             }
         }
