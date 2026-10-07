@@ -137,10 +137,12 @@ class ArtPrimitiveV2Test {
 		assertNotEquals(resolved.contentKey, moved.contentKey)
 	}
 
-	@Test fun flagIsOffByDefault() {
+	@Test fun flagIsOnByDefaultAndTurnsOff() {
 		val previous = System.getProperty(ArtPrimitiveV2.FLAG_PROPERTY)
 		try {
 			System.clearProperty(ArtPrimitiveV2.FLAG_PROPERTY)
+			assertTrue(ArtPrimitiveV2.enabled)
+			System.setProperty(ArtPrimitiveV2.FLAG_PROPERTY, "false")
 			assertFalse(ArtPrimitiveV2.enabled)
 			System.setProperty(ArtPrimitiveV2.FLAG_PROPERTY, "true")
 			assertTrue(ArtPrimitiveV2.enabled)

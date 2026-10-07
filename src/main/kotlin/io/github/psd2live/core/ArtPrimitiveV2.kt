@@ -35,11 +35,11 @@ import org.umamo.runtime.model.ParameterId
 object ArtPrimitiveV2 {
 	const val VERSION_V2 = 2
 
-	/** System property that lets new splits write version 2 records. Off by default. */
+	/** System property that decides whether new splits write version 2 records. On by default; `false` turns it off. */
 	const val FLAG_PROPERTY = "psd2live.artPrimitiveV2"
 
 	/** Whether new splits write version 2 records ([FLAG_PROPERTY]); read on every call so tests can toggle it. */
-	val enabled: Boolean get() = System.getProperty(FLAG_PROPERTY)?.toBooleanStrictOrNull() ?: false
+	val enabled: Boolean get() = System.getProperty(FLAG_PROPERTY)?.toBooleanStrictOrNull() ?: true
 
 	// Record level.
 	const val OP = ArtPrimitiveJournal.OP
