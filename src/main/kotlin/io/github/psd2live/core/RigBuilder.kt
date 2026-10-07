@@ -113,6 +113,8 @@ data class BuiltRig(
 	val unbound: PuppetModel? = null,
 	/** What the document's generated overrides could not apply as recorded, from the last replay. */
 	val overrideIssues: List<GeneratedOverrideIssue> = emptyList(),
+	/** Split parts the skeleton skinned with this base rig, which their journal records place (see [PrimitiveSkins]). */
+	val primitiveSkins: PrimitiveSkins = PrimitiveSkins.None,
 )
 
 internal data class MeshData(
@@ -1085,14 +1087,18 @@ object RigBuilder {
 			val unbound = assembled.withDerivedRenderRoot().let { withoutLegacyHairSway(it, config) }
 			// The skeleton bakes the unbound rig: the joint rows it inserts interpolate layer offsets, which the
 			// binding then turns into page uvs like every other vertex. So the bake never reads the atlas, and
-			// moving, scaling or repacking tiles reuses it.
+			// moving, scaling or repacking tiles reuses it. Split parts its bones bind are skinned with it and handed
+			// to their journal records (see [PrimitiveSkins]); they texture in canvas units, which interpolate alike.
+			val parts = skeleton?.let { skinnablePrimitives(unbound, it, config) }.orEmpty()
 			val skeletal = skeleton
 				?.let { RigBuildProfile.stage("skeleton") {
 					SkeletonRig.takeLastKey()
-					SkeletonRig.generate(unbound, it, context.bodyFrame, handEditedTopology(config), context.stance).also { skeletonKey = SkeletonRig.takeLastKey() }
+					SkeletonRig.generate(unbound.copy(drawables = unbound.drawables + parts), it, context.bodyFrame, handEditedTopology(config),
+						context.stance).also { skeletonKey = SkeletonRig.takeLastKey() }
 				} } ?: unbound
+			val (skinnedBase, skins) = withoutSkinnedPrimitives(skeletal, parts.mapTo(HashSet()) { it.id })
 			val skeletonPuppet = RigBuildProfile.stage("binding: UvBinding.bind") {
-				UvBinding.bind(skeletal, inputAnalysis, atlas) { classifiedByDrawable[it.id] }.puppet
+				UvBinding.bind(skinnedBase, inputAnalysis, atlas) { classifiedByDrawable[it.id] }.puppet
 			}
 			return BuiltRig(
 				skeletonPuppet,
@@ -1106,6 +1112,7 @@ object RigBuilder {
 				warnings,
 				faceRig.initialAngleZ,
 				unbound,
+				primitiveSkins = skins,
 			)
 		}
 		if (stages == null) return finish()
@@ -1114,7 +1121,8 @@ object RigBuilder {
 		val key = BoundKey(assembled, config.hairSimulationFront, config.hairSimulationBack, atlas.placementByLayerId,
 			atlas.pages.map { it.image.width to it.image.height }, inputAnalysis.layers.map(::bindingMeta),
 			classifiedByDrawable.entries.associate { it.key.raw to it.value.source.id.raw },
-			skeleton?.let { listOf(it, handEditedTopology(config), context.bodyFrame, context.stance.contentKey, SkeletonRig.clears) },
+			skeleton?.let { listOf(it, handEditedTopology(config), context.bodyFrame, context.stance.contentKey, SkeletonRig.clears,
+				skinnedRecords(it, config)) },
 			listOf(pageByDrawable, sourceBoundsByDrawable, layerIdByDrawable, warnings.toList(), faceCenterCanvas,
 				faceRig.radiusX, faceRig.radiusY, faceRig.initialAngleZ),
 			io.github.psd2live.i18n.I18n.currentLanguage.tag)
@@ -1197,6 +1205,37 @@ object RigBuilder {
 	}
 
 	/** Drawables whose topology the user edited by hand; the skeleton must not renumber their vertices. */
+	/** The `art_primitive` records with a part a bone of [skeleton] binds: what [skinnablePrimitives] reads of the journal. */
+	private fun skinnedRecords(skeleton: SkeletonSpec, config: PipelineConfig): List<kotlinx.serialization.json.JsonObject> {
+		val bound = skeleton.bones.flatMapTo(HashSet()) { it.drawableIds }
+		return ArtPrimitiveJournal.commands(config.rigEdits).filter { command ->
+			ArtPrimitiveJournal.primitives(command).any { it["id"]?.jsonPrimitive?.contentOrNull in bound }
+		}
+	}
+
+	/**
+	 * The split parts [skeleton] binds that are not in the base rig [model]: a split makes its parts in the journal,
+	 * after the bake, so they are decoded from their records for the bake to skin.
+	 */
+	private fun skinnablePrimitives(model: PuppetModel, skeleton: SkeletonSpec, config: PipelineConfig): List<Drawable> {
+		val bound = skeleton.bones.flatMapTo(HashSet()) { it.drawableIds }
+		val parts = ArrayList<Drawable>()
+		for (command in skinnedRecords(skeleton, config)) {
+			for (part in ArtPrimitiveJournal.skinnable(model, command, bound)) if (parts.none { it.id == part.id }) parts += part
+		}
+		return parts
+	}
+
+	/** [model] without the skinned split [parts], and those parts with the welds the bake gave them. */
+	private fun withoutSkinnedPrimitives(model: PuppetModel, parts: Set<DrawableId>): Pair<PuppetModel, PrimitiveSkins> {
+		if (parts.isEmpty()) return model to PrimitiveSkins.None
+		val (welds, glues) = model.glues.partition { it.meshA in parts || it.meshB in parts }
+		val skins = PrimitiveSkins(model.drawables.filter { it.id in parts }.associateBy { it.id }, welds)
+		return model.copy(drawables = model.drawables.filterNot { it.id in parts }, glues = glues,
+			deformPaths = model.deformPaths.filterNot { it.drawableId in parts },
+			vertexGroups = model.vertexGroups.filterNot { it.drawableId in parts }).withDerivedRenderRoot() to skins
+	}
+
 	private fun handEditedTopology(config: PipelineConfig): Set<String> =
 		config.rigEdits.authoringJournal
 			.filter { it["op"]?.jsonPrimitive?.contentOrNull == "canvas_topology" }

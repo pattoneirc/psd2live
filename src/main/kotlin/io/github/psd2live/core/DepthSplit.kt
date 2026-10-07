@@ -99,7 +99,7 @@ internal object DepthSplit {
         val backOrder = placedOrders.values.min() - 1f
         val frontOrder = placedOrders.values.max() + 1f
         // The authored state, before swings and simulations write their keyforms: those follow the back slice.
-        val authored = config.rigEdits.authored(current.baseRig.puppet)
+        val authored = config.rigEdits.authored(current.baseRig)
         val original = authored.drawables.single { it.id == source.id }
         val mesh = requireNotNull(original.mesh)
         val canvas = RasterMeshJournal.TextureCoordinates(authored, original).toCanvas(mesh.uvs)

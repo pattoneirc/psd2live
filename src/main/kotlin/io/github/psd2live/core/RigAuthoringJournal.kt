@@ -5,10 +5,11 @@ import org.umamo.runtime.model.*
 
 /** Materialized edits: no point arrays cross the MCP boundary, but replay never reinterprets a brush. */
 internal object RigAuthoringJournal {
-    fun replay(model: PuppetModel, edit: JsonObject): PuppetModel =
+    /** Replays [edit] on [model]; an `art_primitive` record places the parts in [skins] as the skeleton skinned them. */
+    fun replay(model: PuppetModel, edit: JsonObject, skins: PrimitiveSkins = PrimitiveSkins.None): PuppetModel =
         if (edit["op"]?.jsonPrimitive?.contentOrNull == "structure")
             RigStructureEdits.replay(model, edit.getValue("edits").jsonArray.map { it.jsonObject })
-        else apply(model, edit)
+        else apply(model, edit, skins)
 
     fun target(text: String): RigTargetRef {
         val pair = text.split(':', limit = 2)
@@ -32,7 +33,7 @@ internal object RigAuthoringJournal {
         }
     }
 
-    fun apply(model: PuppetModel, edit: JsonObject): PuppetModel {
+    fun apply(model: PuppetModel, edit: JsonObject, skins: PrimitiveSkins = PrimitiveSkins.None): PuppetModel {
         validateGlueBindings(model, edit)
         return when (edit.getValue("op").jsonPrimitive.content) {
         RigLayerDeletion.OP -> RigLayerDeletion.replay(model, edit)
@@ -47,7 +48,7 @@ internal object RigAuthoringJournal {
         RigBezierJournal.OP -> RigBezierJournal.replay(model, edit)
         DepthSplit.OP -> DepthSplit.apply(model, edit)
         SourcePartitionJournal.OP -> SourcePartitionJournal.apply(model, edit)
-        ArtPrimitiveJournal.OP -> ArtPrimitiveJournal.replay(model, edit)
+        ArtPrimitiveJournal.OP -> ArtPrimitiveJournal.replay(model, edit, skins)
         RasterMeshJournal.OP -> RasterMeshJournal.replay(model, edit)
         RasterMeshCreation.OP -> RasterMeshCreation.replay(model, edit)
         "canvas_geometry", "canvas_topology", "canvas_create_warp", "canvas_create_rotation", "canvas_create_glue", "canvas_glue_edit" -> CanvasEdits.apply(model, edit)

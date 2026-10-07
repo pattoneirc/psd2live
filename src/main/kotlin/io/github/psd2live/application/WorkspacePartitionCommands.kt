@@ -125,7 +125,7 @@ internal object WorkspacePartitionEdits {
         val frozen = WorkspaceLayerInsertionEdits.freeze(document, model)
         val pieceIds = WorkspaceArtPrimitives.allocate(frozen, model, pieces)
         work.checkpoint()
-        val authored = model.config.rigEdits.authored(model.baseRig.puppet)
+        val authored = model.config.rigEdits.authored(model.baseRig)
         val legacy = SourcePartitionJournal.encode(authored, drawable.id, pieces.map { it.id.raw }, pieceIds, names, geometry,
             followCutVertices = componentPlan == null)
         val partitioned = SourcePartitionJournal.partition(authored, legacy) { clone, canvas -> clone to canvas }

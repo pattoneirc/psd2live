@@ -270,6 +270,8 @@
 
 **部件之后的编辑**：部件是普通源图层，可绘画、删除/恢复、再拆分（被拆分的部件同样被取代）。修改部件的网格设置时由 `MaterializedMeshRebuild` 追加 `canvas_mesh_rebuild`，迁移关键形与绑定。部件不再随生成规则自动重新生成。
 
+**骨架蒙皮**：骨架在日志之前烘焙基础 Rig，而部件要到记录重放才出现，单看基础 Rig 时骨骼绑定的部件并不存在（左右合画后拆分的腿、鞋因此不会被蒙皮，腿骨只剩没有关键形的参数）。所以骨架阶段（`RigBuilder`）先从记录解码骨骼绑定的部件（`ArtPrimitiveJournal.skinnable`：画布单位纹理坐标、不带图块与遮罩），与基础 Rig 一起烘焙，再把蒙皮后的部件及烘焙给它们加的 Glue 从基础 Rig 中取出，存入 `BuiltRig.primitiveSkins`。基础 Rig 仍只含被取代的原网格，记录之前的日志照常重放；记录重放时用蒙皮结果代替自行解码（父级为骨骼变形器，纹理坐标经当前纹理集换算，遮罩取自记录），两端都已就位的 Glue 随后加入。以下部件仍由记录自行解码：父级或关键形参数要由更早的日志条目创建、带路径或顶点组（烘焙不会把它们迁移到新增顶点上）。重放检查点以 `primitiveSkins` 的实例为键的一部分；`RigEditOverlay.applyTo` / `authored` 与模拟烘焙都要传入它（`authored(BuiltRig)`）。`SkeletonSplitPartsTest` 覆盖 tml 拆分腿、鞋后自动骨架的蒙皮、静止位置与从零构建一致。
+
 **拥有关系**：部件属于编辑日志节点（`journal` 拥有的 `rig:authored`），不在生成器依赖图中单列；摆动与模拟照常读取它们。被取代网格上原有的 `generated_override` 失去目标后按孤立报告。
 
 **引用被取代的 ID**：文档操作中引用字段（`layer_id`、`target`、`source_id`、`middle_ids`、`meshes` 等）指向被取代的图层或网格时，返回错误并列出取代它的当前 ID（跨多次拆分逐级展开）；`source_get_components` 同样。`layer_restore` 不能带回原图层（它不在 `deletedLayerIds` 中）。

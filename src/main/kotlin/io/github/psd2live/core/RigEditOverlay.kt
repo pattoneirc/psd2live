@@ -245,18 +245,27 @@ data class RigEditOverlay(
 		}
 	}
 
-	fun applyTo(base: PuppetModel): PuppetModel = replay(base, authoredOnly = false).model
+	/**
+	 * Replays the overlay on [base]. [skins] are the split parts the skeleton skinned with that base rig
+	 * ([BuiltRig.primitiveSkins]); their records place them as skinned.
+	 */
+	fun applyTo(base: PuppetModel, skins: PrimitiveSkins = PrimitiveSkins.None): PuppetModel =
+		replay(base, authoredOnly = false, skins).model
 
 	/** [applyTo], with what the generated overrides could not apply as recorded. */
-	internal fun applyToReporting(base: PuppetModel): GeneratedOverrides.Outcome = replay(base, authoredOnly = false)
+	internal fun applyToReporting(base: PuppetModel, skins: PrimitiveSkins = PrimitiveSkins.None): GeneratedOverrides.Outcome =
+		replay(base, authoredOnly = false, skins)
 
 	/**
 	 * The rig after the legacy edits and the whole journal, before any swing or simulation writes its
 	 * keyforms: the authored state a split materializes into its parts.
 	 */
-	fun authored(base: PuppetModel): PuppetModel = replay(base, authoredOnly = true).model
+	fun authored(base: PuppetModel, skins: PrimitiveSkins = PrimitiveSkins.None): PuppetModel = replay(base, authoredOnly = true, skins).model
 
-	private fun replay(base: PuppetModel, authoredOnly: Boolean): GeneratedOverrides.Outcome {
+	/** [authored] on [rig]'s base, with the parts its skeleton skinned. */
+	fun authored(rig: BuiltRig): PuppetModel = authored(rig.puppet, rig.primitiveSkins)
+
+	private fun replay(base: PuppetModel, authoredOnly: Boolean, skins: PrimitiveSkins): GeneratedOverrides.Outcome {
 		// Generated axes do not exist until swing/simulation materialization. Replay their panel
 		// placement and links afterwards, including moves of another parameter relative to them.
 		val generatedIds = swingEdits.flatMap { it.parameterIds }.toSet() +
@@ -273,7 +282,7 @@ data class RigEditOverlay(
 			deferredJournalEdits += command.getValue("edits").jsonArray.map { it.jsonObject }.filter(::generatedPanelEdit)
 		// Everything the legacy stage reads, and what decides how the journal's structure edits split.
 		val legacy = ReplayCheckpoints.Legacy(listOf(deletedParameterIds, parameterEdits, warpEdits, structureEdits,
-			keyformSetEdits, keyformCopyEdits, keyformDeleteEdits, generatedIds, io.github.psd2live.i18n.I18n.currentLanguage.tag))
+			keyformSetEdits, keyformCopyEdits, keyformDeleteEdits, generatedIds, io.github.psd2live.i18n.I18n.currentLanguage.tag, skins))
 		var model = ReplayCheckpoints.replay(base, legacy, authoringJournal, start = {
 			var model = base
 			// 1. Delete removed parameters
@@ -308,7 +317,7 @@ data class RigEditOverlay(
 			when (command["op"]?.jsonPrimitive?.contentOrNull) {
 				"structure" -> RigStructureEdits.replay(model, command.getValue("edits").jsonArray.map { it.jsonObject }.filterNot(::generatedPanelEdit))
 				GeneratedOverrides.OP -> model
-				else -> RigAuthoringJournal.replay(model, command)
+				else -> RigAuthoringJournal.replay(model, command, skins)
 			}
 		}
 		if (authoredOnly) return GeneratedOverrides.Outcome(model, emptyList())
@@ -375,7 +384,7 @@ data class RigEditOverlay(
 internal fun BuiltRig.withRigEdits(overlay: RigEditOverlay, layerVisibility: Map<String, Boolean> = emptyMap(),
                                  drawOrderOverrides: Map<String, Float> = emptyMap()): BuiltRig {
 	if (overlay == RigEditOverlay.Empty) return withDrawOrderOverrides(drawOrderOverrides)
-	val replayed = overlay.applyToReporting(puppet)
+	val replayed = overlay.applyToReporting(puppet, primitiveSkins)
 	var model = replayed.model
 	val bounds = sourceBoundsByDrawableId.toMutableMap()
 	val layers = layerIdByDrawableId.toMutableMap()

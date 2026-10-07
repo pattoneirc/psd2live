@@ -51,7 +51,7 @@ internal object WorkspaceSimulationEdits {
             "simulation_clear_bake" -> WorkspaceSimulationCandidate(withBakes(document, mapOf(request.text("id") to null)))
             "simulation_bake" -> {
                 val id = request.text("id")
-                val bake = work.run(id) { progress, cancelled -> SimAuthoring.bake(document.rigEdits, preview.baseRig.puppet, id, progress, cancelled) }
+                val bake = work.run(id) { progress, cancelled -> SimAuthoring.bake(document.rigEdits, preview.baseRig.puppet, id, progress, cancelled, preview.baseRig.primitiveSkins) }
                 WorkspaceSimulationCandidate(withBakes(document, mapOf(id to bake)), bake.summary())
             }
             "model_apply_preset" -> when (val name = request.text("preset")) {
@@ -70,7 +70,7 @@ internal object WorkspaceSimulationEdits {
         val id = arguments.text("id")
         val put = SimAuthoring.put(document.rigEdits, preview.rig.puppet, arguments)
         val (overlay, failure) = work.run(id) { progress, cancelled ->
-            SimAuthoring.rebaked(put, preview.baseRig.puppet, id, progress, cancelled, autoBake)
+            SimAuthoring.rebaked(put, preview.baseRig.puppet, id, progress, cancelled, autoBake, preview.baseRig.primitiveSkins)
         }
         val bake = overlay.simEdits.single { it.id == id }.bake
         val report = buildJsonObject {
@@ -96,7 +96,7 @@ internal object WorkspaceSimulationEdits {
         var overlay = applied.overlay
         val failures = LinkedHashMap<String, String>()
         for (id in applied.simulationIds) {
-            val (rebaked, failure) = work.run(id) { progress, cancelled -> SimAuthoring.rebaked(overlay, base.puppet, id, progress, cancelled) }
+            val (rebaked, failure) = work.run(id) { progress, cancelled -> SimAuthoring.rebaked(overlay, base.puppet, id, progress, cancelled, skins = base.primitiveSkins) }
             if (failure != null) failures[id] = failure
             overlay = rebaked
         }

@@ -439,6 +439,7 @@ class PSD2LiveViewModel : AutoCloseable {
                     io.github.psd2live.core.sim.SimAuthoring.bake(current.rigEdits, model.baseRig.puppet, id,
                         progress = { _simulationBaking.value = SimulationBaking(id, it) },
                         cancelled = { job?.isCancelled == true },
+                        skins = model.baseRig.primitiveSkins,
                     )
                 }
                 check(!_state.value.workspaceEditBusy) { "Workspace has another edit in progress" }
@@ -486,6 +487,7 @@ class PSD2LiveViewModel : AutoCloseable {
                             val bake = io.github.psd2live.core.sim.SimAuthoring.bake(overlay, model.baseRig.puppet, id,
                                 progress = { _simulationBaking.value = SimulationBaking(id, it, index, ids.size) },
                                 cancelled = { job?.isCancelled == true },
+                                skins = model.baseRig.primitiveSkins,
                             )
                             overlay = io.github.psd2live.core.sim.SimAuthoring.withBake(overlay, id, bake)
                             bakes[id] = bake

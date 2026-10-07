@@ -203,7 +203,11 @@ internal object ArtPrimitiveJournal {
 		}
 	}
 
-	fun replay(input: PuppetModel, command: JsonObject): PuppetModel {
+	/**
+	 * Replaces the superseded drawables of [command] in [input] by its primitives. A primitive in [skins] - one the
+	 * skeleton skinned with the base rig - is placed as skinned, with the welds the bake gave it.
+	 */
+	fun replay(input: PuppetModel, command: JsonObject, skins: PrimitiveSkins = PrimitiveSkins.None): PuppetModel {
 		require(command["v"]?.jsonPrimitive?.intOrNull == VERSION) { "Unsupported art primitive record version" }
 		val superseded = command.getValue("supersedes").jsonArray.mapTo(LinkedHashSet()) { DrawableId(it.jsonPrimitive.content) }
 		val records = primitives(command)
@@ -230,7 +234,9 @@ internal object ArtPrimitiveJournal {
 			}))
 		}
 		val textureSource = command.text("texture_source_id")
-		val built = records.map { decodePrimitive(model, it, textureSource) }
+		val built = records.map { record ->
+			skins.drawables[DrawableId(record.text("id"))]?.let { adopt(model, it, record, textureSource) } ?: decodePrimitive(model, record, textureSource)
+		}
 		val byId = built.associateBy { it.id }
 		fun replacing(id: DrawableId) = replace[id].orEmpty()
 		val placed = HashSet<DrawableId>()
@@ -263,10 +269,12 @@ internal object ArtPrimitiveJournal {
 		val rewired = if (touching == replaced.size) model.glues.flatMap { glue ->
 			if (glue.meshA in superseded || glue.meshB in superseded) replaced[next++] else listOf(glue)
 		} else model.glues.filterNot { it.meshA in superseded || it.meshB in superseded } + replaced.flatten()
-		var result = model.copy(drawables = drawables, parts = parts, rootChildren = roots, glues = rewired + appended,
+		val counts = drawables.associate { it.id to (it.mesh?.vertexCount ?: 0) }
+		// A skinned primitive's welds join it once both its meshes are in place: with the later of the two records.
+		val welds = skins.glues.filter { glue -> (glue.meshA in ids || glue.meshB in ids) && glue.meshA in counts && glue.meshB in counts }
+		var result = model.copy(drawables = drawables, parts = parts, rootChildren = roots, glues = rewired + appended + welds,
 			deformPaths = model.deformPaths.filterNot { it.drawableId in superseded },
 			vertexGroups = model.vertexGroups.filterNot { it.drawableId in superseded })
-		val counts = drawables.associate { it.id to (it.mesh?.vertexCount ?: 0) }
 		result.glues.forEach { glue ->
 			require(glue.meshA in counts && glue.meshB in counts && glue.pairs.all { it.indexA in 0 until counts.getValue(glue.meshA) &&
 				it.indexB in 0 until counts.getValue(glue.meshB) }) { "Art primitive Glue does not match its meshes" }
@@ -290,24 +298,60 @@ internal object ArtPrimitiveJournal {
 		return result.withDerivedRenderRoot()
 	}
 
-	private fun decodePrimitive(model: PuppetModel, record: JsonObject, textureSource: String): Drawable {
+	/**
+	 * The primitives of [command] that the skeleton bake of [model] - a base rig, before the journal - can skin
+	 * among [ids]: their mesh with canvas-unit texture coordinates and no tile, on their recorded parent. A
+	 * primitive whose parent or keyform parameters the base lacks (they come from earlier journal entries), or that
+	 * carries paths or vertex groups (the bake would not carry them onto new vertices), is left to its record.
+	 */
+	fun skinnable(model: PuppetModel, command: JsonObject, ids: Set<String>): List<Drawable> {
+		if (command["v"]?.jsonPrimitive?.intOrNull != VERSION) return emptyList()
+		return primitives(command).filter { it.text("id") in ids && model.drawables.none { d -> d.id.raw == it.text("id") } &&
+			it.getValue("paths").jsonArray.isEmpty() && it.getValue("vertex_groups").jsonArray.isEmpty() }
+			.mapNotNull { record ->
+				try {
+					// Masks name drawables of the replayed rig; the record gives them back when it places the part.
+					decodePrimitive(model, record, command.text("texture_source_id"), textured = false).copy(maskedBy = emptyList())
+				} catch (_: IllegalArgumentException) {
+					null
+				}
+			}
+	}
+
+	/** [skinned], decoded from [record] and skinned with the base rig, textured from [model]'s atlas like a decoded one. */
+	private fun adopt(model: PuppetModel, skinned: Drawable, record: JsonObject, textureSource: String): Drawable {
+		val layer = record.text("layer_id")
+		require(skinned.parentDeformerId == null || model.deformers.any { it.id == skinned.parentDeformerId }) {
+			"Art primitive parent is missing: ${skinned.id.raw}"
+		}
+		val tile = model.atlas.tiles.singleOrNull { it.source?.let { source ->
+			source.sourceId.raw == textureSource && source.layerKey == layer } == true }
+			?: throw IllegalArgumentException("Art primitive artwork is missing: $layer")
+		val placed = skinned.copy(atlasTileId = tile.id, texturePage = tile.placement?.pageIndex ?: -1,
+			maskedBy = record.getValue("masks").jsonArray.map { DrawableId(it.jsonPrimitive.content) })
+		val mesh = requireNotNull(skinned.mesh)
+		return placed.copy(mesh = DrawableMesh(mesh.positions, RasterMeshJournal.TextureCoordinates(model, placed).toUvs(mesh.uvs), mesh.indices))
+	}
+
+	/** One primitive of [record]: textured from [model]'s atlas, or with its canvas texture coordinates and no tile. */
+	private fun decodePrimitive(model: PuppetModel, record: JsonObject, textureSource: String, textured: Boolean = true): Drawable {
 		val id = DrawableId(record.text("id"))
 		val layer = record.text("layer_id")
 		require(layer.isNotBlank()) { "Art primitive layer is missing" }
 		RasterMeshCreation.sourceBounds(record)
 		val parent = record["parent"]?.jsonPrimitive?.contentOrNull?.let(::DeformerId)
 		require(parent == null || model.deformers.any { it.id == parent }) { "Art primitive parent is missing: ${id.raw}" }
-		val tile = model.atlas.tiles.singleOrNull { it.source?.let { source ->
+		val tile = if (!textured) null else model.atlas.tiles.singleOrNull { it.source?.let { source ->
 			source.sourceId.raw == textureSource && source.layerKey == layer } == true }
 			?: throw IllegalArgumentException("Art primitive artwork is missing: $layer")
 		val shell = Drawable(id, record.text("name"), parent, BlendMode.valueOf(record.text("blend")),
-			record.getValue("masks").jsonArray.map { DrawableId(it.jsonPrimitive.content) }, null, null, atlasTileId = tile.id,
-			texturePage = tile.placement?.pageIndex ?: -1)
-		val texture = RasterMeshJournal.TextureCoordinates(model, shell)
+			record.getValue("masks").jsonArray.map { DrawableId(it.jsonPrimitive.content) }, null, null, atlasTileId = tile?.id,
+			texturePage = tile?.placement?.pageIndex ?: -1)
 		val positions = record.floats("positions")
 		val canvasUvs = record.floats("canvas_uvs")
 		require(canvasUvs.size == positions.size && canvasUvs.size % 2 == 0) { "Invalid art primitive texture coordinates" }
-		val mesh = DrawableMesh(positions, texture.toUvs(canvasUvs), record.getValue("triangles").jsonArray.map { it.jsonPrimitive.int }.toIntArray())
+		val uvs = if (tile == null) canvasUvs else RasterMeshJournal.TextureCoordinates(model, shell).toUvs(canvasUvs)
+		val mesh = DrawableMesh(positions, uvs, record.getValue("triangles").jsonArray.map { it.jsonPrimitive.int }.toIntArray())
 		RasterMeshJournal.validateMesh(mesh)
 		val geometry = record["geometry"]?.takeIf { it != JsonNull }?.jsonObject?.let { data ->
 			RasterMeshCreation.decodeGrid(data, model) { value -> MeshDeltaForm(value.jsonArray.map { it.jsonPrimitive.float }.toFloatArray().also {
