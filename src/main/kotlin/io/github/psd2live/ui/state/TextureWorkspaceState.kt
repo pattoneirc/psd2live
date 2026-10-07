@@ -120,32 +120,33 @@ class TextureSnapshot(private val view: WorkspaceTextureView) {
 		shapeOf(tile, x, y, view.footprint(tile.layerId))
 
 	/**
-	 * The cells [tile]'s meshes use if it stood at ([x], [y]) at its size: what a drag or a resize collides by. These
-	 * are the very cells the commit keeps tiles apart by, so a spot the view allows is the spot that lands.
+	 * Whether [tile], standing at ([x], [y]) at its size and turn, would meet any of [others] or leave the page: the
+	 * rule the commit keeps tiles by ([io.github.psd2live.application.WorkspaceAtlasPlacements]), the same the
+	 * atlas_check_placement query answers, so a spot the view allows is the spot that lands.
 	 */
-	internal fun collisionShape(tile: WorkspaceAtlasTile, x: Int, y: Int): io.github.psd2live.core.AtlasArrange.Shape {
-		// A drag asks for the standing tiles' shapes on every pointer move; they are the same each time.
-		val key = CollisionKey(tile.layerId, x, y, tile.width, tile.height, tile.rotation)
-		collisionShapes[key]?.let { return it }
-		if (collisionShapes.size > 4096) collisionShapes.clear()
-		return shapeOf(tile, x, y, view.meshFootprint(tile.layerId)).also { collisionShapes[key] = it }
+	internal fun collides(tile: WorkspaceAtlasTile, x: Int, y: Int, others: List<WorkspaceAtlasTile>): Boolean {
+		val rules = io.github.psd2live.application.WorkspaceAtlasPlacements
+		val moved = view.placed(tile.copy(x = x, y = y))
+		val pageSize = atlas.pages.firstOrNull()?.width ?: atlas.budget.pageSize
+		if (rules.outside(moved, pageSize, atlas.budget.maxPages)) return true
+		return others.any { other -> rules.meet(moved, view.placed(other), atlas.budget.padding, ::cachedShape) }
 	}
 
-	private data class CollisionKey(val layerId: String, val x: Int, val y: Int, val width: Int, val height: Int, val rotation: Float)
-	private val collisionShapes = ConcurrentHashMap<CollisionKey, io.github.psd2live.core.AtlasArrange.Shape>()
+	// A drag asks for the standing tiles' shapes on every pointer move; they are the same each time.
+	private data class ShapeKey(val layerId: String, val x: Int, val y: Int, val width: Int, val height: Int, val rotation: Float)
+	private val collisionShapes = ConcurrentHashMap<ShapeKey, io.github.psd2live.core.AtlasArrange.Shape>()
+
+	private fun cachedShape(tile: io.github.psd2live.application.WorkspaceAtlasPlacements.Placed): io.github.psd2live.core.AtlasArrange.Shape {
+		val key = ShapeKey(tile.layerId, tile.x, tile.y, tile.width, tile.height, tile.rotation)
+		collisionShapes[key]?.let { return it }
+		if (collisionShapes.size > 4096) collisionShapes.clear()
+		return io.github.psd2live.application.WorkspaceAtlasPlacements.shape(tile).also { collisionShapes[key] = it }
+	}
 
 	private fun shapeOf(tile: WorkspaceAtlasTile, x: Int, y: Int, footprint: io.github.psd2live.project.TextureFootprint?): io.github.psd2live.core.AtlasArrange.Shape {
 		val layer = layer(tile.layerId)
 		val rasterWidth = layer?.rasterWidth ?: tile.width; val rasterHeight = layer?.rasterHeight ?: tile.height
 		return io.github.psd2live.core.AtlasArrange.shape(x, y, tile.width, tile.height, rasterWidth, rasterHeight, footprint, tile.rotation)
-	}
-
-	/** Whether [tile], standing at ([x], [y]) at its size, would share a cell (with the padding) with any of [others]. */
-	internal fun collides(tile: WorkspaceAtlasTile, x: Int, y: Int, others: List<WorkspaceAtlasTile>): Boolean {
-		val grown = io.github.psd2live.core.AtlasArrange.dilate(collisionShape(tile, x, y),
-			io.github.psd2live.core.AtlasArrange.paddingCells(atlas.budget.padding))
-		return others.any { other -> other.layerId != tile.layerId && other.page == tile.page &&
-			io.github.psd2live.core.AtlasArrange.overlaps(grown, collisionShape(other, other.x, other.y)) }
 	}
 
 	/** The raster [layerId]'s tile shows (at its tile size); the views draw tiles from it while the pages are not [upscaled]. */

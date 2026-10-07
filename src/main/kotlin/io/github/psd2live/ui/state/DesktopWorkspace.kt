@@ -1682,12 +1682,12 @@ class DesktopWorkspace(
         val current = viewModel.state.value
         if (current.isAnalyzing || current.isGenerating) throw WorkspaceBusy()
         val result = documentCommands.executeCandidate(before.projectId, before.state, summary, mutationAuthor(author),
-            taskId, mutation) { _, document, model ->
+            taskId, mutation, beforeCommit = { _, document, model ->
             if (document.rigEdits.assetLayers != before.document.rigEdits.assetLayers ||
                 document.rigEdits.calibrationLayerIds != before.document.rigEdits.calibrationLayerIds)
                 validateRegisteredNeutral(model, document.rigEdits.assetLayers.filter { (id, record) -> before.document.rigEdits.assetLayers[id] != record }.keys)
             applyPreviewOrThrow(model, documentFrom(current), document, summary, current)
-        }
+        })
         if (result.applied) {
             scheduleHistoryPersistence(before.projectId)
             viewModel.updateHistorySnapshot(history())

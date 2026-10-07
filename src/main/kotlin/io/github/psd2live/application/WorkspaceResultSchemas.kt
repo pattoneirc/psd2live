@@ -43,6 +43,7 @@ internal object WorkspaceResultSchema {
             branch(constant("invalid_request"), mapOf("field" to string())),
             branch(constant("output_contract"), mapOf("field" to string(), "operation" to handle())),
             branch(constant("invalid_edit"), mapOf("edit_index" to integer(0), "edit_operation" to handle())),
+            branch(constant("tile_collides"), mapOf("layer_ids" to array(handle()))),
             branch(constant("state_conflict"), mapOf("expected_state" to string(), "actual_state" to string())),
             branch(constant("project_conflict"), mapOf("expected_project" to nullable(string()), "actual_project" to nullable(string()))),
             branch(choices("request_id_reused", "unsaved_changes", "workspace_busy", "permission_denied", "io_error",

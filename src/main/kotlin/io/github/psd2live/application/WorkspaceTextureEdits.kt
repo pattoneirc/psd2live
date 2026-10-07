@@ -209,6 +209,83 @@ class WorkspaceTextureView internal constructor(private val capture: WorkspaceCa
 
     /** The layer ids of the tiles on [page]. */
     fun pageLayers(page: Int): List<String> = model.atlas.placementByLayerId.filterValues { it.page == page }.keys.sorted()
+
+    /** [tile] at its spot, size and turn as the placement rule sees it ([WorkspaceAtlasPlacements]). */
+    internal fun placed(tile: WorkspaceAtlasTile): WorkspaceAtlasPlacements.Placed {
+        val raster = tileRasters[tile.layerId]
+        return WorkspaceAtlasPlacements.Placed(tile.layerId, tile.page, tile.x, tile.y, tile.width, tile.height, tile.rotation,
+            raster?.width ?: tile.width, raster?.height ?: tile.height, meshFootprint(tile.layerId))
+    }
+
+    /**
+     * Where [placements] - tiles by layer at the spots, sizes and turns an edit would give them - would go wrong
+     * against every other tile as committed: past the page, or meeting other tiles' meshes.
+     */
+    internal fun conflicts(placements: Map<String, WorkspaceAtlasTile>): List<WorkspaceAtlasPlacements.Conflict> {
+        val atlas = atlas()
+        val pageSize = atlas.pages.firstOrNull()?.width ?: atlas.budget.pageSize
+        val live = atlas.tiles.filter { it.layerId !in document.deletedLayerIds }
+        return WorkspaceAtlasPlacements.conflicts(placements.values.map(::placed), live.map(::placed), atlas.budget.padding, pageSize, atlas.budget.maxPages)
+    }
+}
+
+/**
+ * A tile edit that would push tiles off the spots the arrangement gives them - past the page, or where their meshes
+ * meet another tile's - so the commit would place them somewhere the request never asked for. Refused, as the
+ * atlas view refuses the same gesture; [layerIds] are the tiles that would be pushed: the edited tile, or the
+ * neighbour a grown or moved tile would take the room of.
+ */
+internal class WorkspaceTileCollision(val layerIds: List<String>) : IllegalArgumentException(
+    "This placement would push tiles ${layerIds.joinToString()} off their spots (past the page, or where tiles' meshes meet); " +
+        "nothing was changed. Check placements with atlas_check_placement first")
+
+/**
+ * Whether tiles may stand where an edit would put them: the one rule the atlas view tests while dragging, the
+ * atlas_check_placement query answers and the commit keeps ([AtlasArrange.keep]) - a tile's turned box stays on its
+ * page, and two tiles on a page meet where their meshes' cells, grown by the padding, share a cell (two upright
+ * tiles without footprints by their rectangles and the padding).
+ */
+internal object WorkspaceAtlasPlacements {
+    /** A tile as the rule sees it: its upright rectangle and turn on a page, its raster and the cells its meshes use. */
+    class Placed(val layerId: String, val page: Int, val x: Int, val y: Int, val width: Int, val height: Int, val rotation: Float,
+                 val rasterWidth: Int, val rasterHeight: Int, val footprint: TextureFootprint?)
+
+    /** Where [layerId] would go wrong: [outsidePage], and the tiles whose meshes it would meet. */
+    class Conflict(val layerId: String, val outsidePage: Boolean, val overlaps: List<String>)
+
+    fun shape(tile: Placed): AtlasArrange.Shape =
+        AtlasArrange.shape(tile.x, tile.y, tile.width, tile.height, tile.rasterWidth, tile.rasterHeight, tile.footprint, tile.rotation)
+
+    fun outside(tile: Placed, pageSize: Int, maxPages: Int): Boolean {
+        if (tile.page !in 0 until maxPages) return true
+        val box = TileTurn.bounds(tile.x.toFloat(), tile.y.toFloat(), tile.width.toFloat(), tile.height.toFloat(), tile.rotation)
+        return box[0] < -1e-3f || box[1] < -1e-3f || box[2] > pageSize + 1e-3f || box[3] > pageSize + 1e-3f
+    }
+
+    fun meet(a: Placed, b: Placed, padding: Int, shapeOf: (Placed) -> AtlasArrange.Shape = ::shape): Boolean {
+        if (a.page != b.page || a.layerId == b.layerId) return false
+        // The commit's own pairwise rule; the shapes are only built when the boxes come close.
+        val near = TileTurn.bounds(a.x.toFloat(), a.y.toFloat(), a.width.toFloat(), a.height.toFloat(), a.rotation).let { ab ->
+            TileTurn.bounds(b.x.toFloat(), b.y.toFloat(), b.width.toFloat(), b.height.toFloat(), b.rotation).let { bb ->
+                ab[0] < bb[2] + padding && bb[0] < ab[2] + padding && ab[1] < bb[3] + padding && bb[1] < ab[3] + padding
+            }
+        }
+        if (!near) return false
+        return AtlasArrange.meet(a.x, a.y, a.width, a.height, a.rotation, a.footprint == null, shapeOf(a),
+            b.x, b.y, b.width, b.height, b.rotation, b.footprint == null, shapeOf(b), padding)
+    }
+
+    /** Each of [moved] against [standing] and the other moved tiles. */
+    fun conflicts(moved: List<Placed>, standing: List<Placed>, padding: Int, pageSize: Int, maxPages: Int): List<Conflict> {
+        val movedIds = moved.mapTo(HashSet()) { it.layerId }
+        val others = standing.filter { it.layerId !in movedIds } + moved
+        val shapes = HashMap<String, AtlasArrange.Shape>()
+        fun shapeOf(tile: Placed) = shapes.getOrPut(tile.layerId + "@" + tile.page + "," + tile.x + "," + tile.y + "," + tile.width + "," +
+            tile.height + "," + tile.rotation) { shape(tile) }
+        return moved.map { tile ->
+            Conflict(tile.layerId, outside(tile, pageSize, maxPages), others.filter { meet(tile, it, padding, ::shapeOf) }.map { it.layerId }.sorted())
+        }
+    }
 }
 
 /** Pure texture candidates: no files, jobs, projection or history. */
@@ -274,6 +351,26 @@ internal object WorkspaceTextureEdits {
             is WorkspaceTextureEdit.Pack -> pack(document, model, edit)
         }
     }
+
+    /**
+     * Refuses a candidate whose build would push a tile off the spot its arrangement gives it, where that tile kept
+     * its spot before - the commit's own placement rule, so a request lands exactly where it asked or not at all.
+     */
+    fun requireKept(before: WorkspaceDocument, beforeModel: RigPreviewModel, after: WorkspaceDocument, afterModel: RigPreviewModel) {
+        fun displaced(document: WorkspaceDocument, model: RigPreviewModel): Set<String> {
+            val arrangement = AtlasArrangementCodec.decode(document.settings) ?: return emptySet()
+            return arrangement.tiles.filter { (id, tile) ->
+                val at = model.atlas.placementByLayerId[id] ?: return@filter false
+                at.page != tile.page || at.x != tile.x || at.y != tile.y || at.rotation != tile.rotation
+            }.keys
+        }
+        val pushed = displaced(after, afterModel) - displaced(before, beforeModel)
+        if (pushed.isNotEmpty()) throw WorkspaceTileCollision(pushed.sorted())
+    }
+
+    /** Edits whose results must keep every tile on its spot; budget, packing and pixel edits lay tiles out anew by design. */
+    val placementEdits = setOf("atlas_set_tile", "layer_set_pixel_density")
+    val relayoutEdits = setOf("atlas_set_budget", "atlas_pack", "layer_replace_image", "layer_set_canvas_rect")
 
     /** The layers whose texture [edit] changed between [before] and [after]. */
     fun changedLayers(edit: WorkspaceTextureEdit, before: WorkspaceDocument, after: WorkspaceDocument): List<String> = when (edit) {

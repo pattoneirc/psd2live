@@ -44,6 +44,8 @@
 | 8 | 源图绘画：`RasterPaintEngine` / `WorkspaceRasterCommands` / `WorkspaceRasterEdits` | 画笔、铅笔、橡皮、油漆桶、形状、清空 | `source_paint_brush / source_paint_pencil / source_paint_eraser / source_paint_bucket / source_paint_shape / source_paint_clear` 六种后台任务 | GUI 冻结像素与 MCP 手势共用应用命令和候选；默认保留网格和绑定，首次可见绘制创建网格，任务终态返回句柄；显式重建迁移拓扑，清空保留最后一层及绑定；准备可取消，CAS 后迟到取消仍保持成功 |
 | 9 | 全局与单层网格：`MeshSettings` / `WorkspaceGenerationCommands` | 项目设置、图层菜单网格设置 | `settings_update`、`layer_mesh_update` | 直接操作及生成字段草稿共用纯候选；单层预览不推进状态，确认/重置进入正式应用命令；`workspace_inspect scope=layers` 可读有效值 |
 | 10 | 图集与高清化：`PipelineConfig` / `TextureUpscale` | 项目设置与导出选项 | `settings_update textureUpscale` 等字段 | 2/4 倍输出需要本机高清化模型配置 |
+| 10a | 纹理集图块：`WorkspaceTextureEdits` / `WorkspaceAtlasPlacements` | 纹理集页面拖动、角点缩放、旋转手柄、密度滑块，调整会话的“应用” | `atlas_check_placement`、`atlas_set_tile`（`pin.rotation`）、`layer_set_pixel_density`，组合时用 `workspace_apply_edits` | 视图的碰撞判断、`atlas_check_placement` 与提交（`requireKept`）是同一规则：按网格单元格、外扩间距、旋转外接框不出页；超出或相交时 GUI 标红不应用，MCP 返回 `tile_collides`，均不修改。会话“应用”即一个批量（先密度后位置），只检查最终布局，一个历史节点 |
+| 10b | 纹理集排布与预算：`AtlasLayout.arrange` / `AtlasBudget` | 排布按钮与选项、自动排布开关、预算菜单 | `atlas_pack`、`atlas_set_budget`、`atlas_get`、`atlas_render_page` | 重新排布与改预算按自身规则重新布局，不受挤离检查；GUI 在调整会话未应用时禁用这些命令 |
 | 11 | 参数定义 CRUD：有序 `RigAuthoringJournal` | 参数面板 | `parameter_create / parameter_update / parameter_delete` | 定义、文件夹及关键点可原子提交；删除在此前关键形之后按最后默认值最近的关键点折叠轴 |
 | 12 | 参数文件夹 / XY 关联：持久结构编辑 | 参数树操作 | `rig_edit_structure` 中 param_group / link | 结构关系可保存、可历史恢复 |
 | 13 | 当前预览值 / 锁定：`WorkspacePreviewCommands` / `WorkspacePreviewPort` | 参数滑杆、锁定、重置及工作区复制 | `workspace_inspect scope=preview`、`preview_set/reset`、`snapshot_apply` | 查询、合并与保存使用已提交姿态/锁；逻辑无变化保留版本及历史但可校正界面；GUI 冻结当前工作区姿态，不覆盖其他工作区；姿态/自动打键及播放/跟踪已使用中立命令和会话；GUI 修改先本地生效、按队列提交，失败回到已提交姿态 |

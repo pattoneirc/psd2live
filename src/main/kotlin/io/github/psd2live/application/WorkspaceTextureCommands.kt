@@ -37,6 +37,9 @@ internal class WorkspaceTextureCommands(private val runtime: WorkspaceRuntime<Ri
         }, beforeCommit = { captured, document, model ->
             context.ensureActive(); progress?.progress(0.95f, "Committing ${edit.operation}")
             beforeCommit(captured, document, model)
+        }, validate = { beforeDocument, beforeModel, afterDocument, afterModel ->
+            // A moved tile or a new density lands on its spot or not at all.
+            if (edit.operation in WorkspaceTextureEdits.placementEdits) WorkspaceTextureEdits.requireKept(beforeDocument, beforeModel, afterDocument, afterModel)
         })
         val layers = if (result.applied) WorkspaceTextureEdits.changedLayers(resolved, before.document, result.capture.document) else emptyList()
         val mutation = WorkspaceMutationResult(result.capture.historyHead, result.capture.revision, layers, summary,

@@ -248,6 +248,21 @@ internal object AtlasArrange {
 		}
 	}
 
+	/**
+	 * Whether two kept tiles meet: only where their boxes (turned, grown by [padding]) overlap at all - so tiles a pixel
+	 * pack leaves apart never meet by their cells' rounding - and then, for two upright tiles without footprints, by
+	 * their rectangles, else by their shapes, the first grown by the padding. The one rule a stored arrangement is kept
+	 * by and a placement is checked by.
+	 */
+	fun meet(ax: Int, ay: Int, aw: Int, ah: Int, ar: Float, aWhole: Boolean, aShape: Shape,
+	         bx: Int, by: Int, bw: Int, bh: Int, br: Float, bWhole: Boolean, bShape: Shape, padding: Int): Boolean {
+		val a = io.github.psd2live.core.TileTurn.bounds(ax.toFloat(), ay.toFloat(), aw.toFloat(), ah.toFloat(), ar)
+		val b = io.github.psd2live.core.TileTurn.bounds(bx.toFloat(), by.toFloat(), bw.toFloat(), bh.toFloat(), br)
+		if (a[0] >= b[2] + padding || b[0] >= a[2] + padding || a[1] >= b[3] + padding || b[1] >= a[3] + padding) return false
+		if (aWhole && bWhole && ar == 0f && br == 0f) return true
+		return overlaps(dilate(aShape, paddingCells(padding)), bShape)
+	}
+
 	/** Cells of padding between tiles: the shapes keep at least the rectangle packer's `2 x padding` pixels apart. */
 	fun paddingCells(padding: Int): Int = ceilDiv(padding.coerceAtLeast(0) * 2, CELL)
 
@@ -273,11 +288,8 @@ internal object AtlasArrange {
 			val shape = shape(stored.x, stored.y, request.width, request.height, request.rasterWidth, request.rasterHeight, request.footprint, stored.rotation)
 			val clear = fits && placed[stored.page].orEmpty().none { (other, otherShape) ->
 				val a = spots.getValue(other.id)
-				// Rectangle packs leave at least `padding` between tiles; a frozen automatic layout always holds.
-				if (other.footprint == null && request.footprint == null && stored.rotation == 0f && a.rotation == 0f)
-					stored.x < a.x + other.width + padding && a.x < stored.x + request.width + padding &&
-						stored.y < a.y + other.height + padding && a.y < stored.y + request.height + padding
-				else overlaps(dilate(shape, grow), otherShape)
+				meet(stored.x, stored.y, request.width, request.height, stored.rotation, request.footprint == null, shape,
+					a.x, a.y, other.width, other.height, a.rotation, other.footprint == null, otherShape, padding)
 			}
 			if (!clear) { pending += request; continue }
 			spots[request.id] = Spot(stored.page, stored.x, stored.y, stored.rotation)

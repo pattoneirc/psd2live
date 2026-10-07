@@ -4385,7 +4385,9 @@ class PSD2LiveViewModel : AutoCloseable {
 			}
 		} catch (failure: Exception) {
 			if (failure is kotlinx.coroutines.CancellationException) throw failure
-			updateTextureWorkspace { it.copy(error = failure.message ?: tr("texture.failed")) }
+			val message = if (failure is io.github.psd2live.application.WorkspaceTileCollision) tr("texture.apply.collides", failure.layerIds.size)
+				else failure.message ?: tr("texture.failed")
+			updateTextureWorkspace { it.copy(error = message) }
 		} finally {
 			val left = texturesQueued.decrementAndGet()
 			// A later job's tiles keep showing their own result; this job's show what landed (or fall back).

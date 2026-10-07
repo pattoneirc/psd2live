@@ -83,6 +83,15 @@ internal object WorkspaceTextureSchemas {
             "tile_count" to s.integer(0), "occupancy" to s.number(0, 1)))),
         "tiles" to s.array(listedTile)))
 
+    /** One tile to test: where it would stand, at what turn and density; omitted fields keep the tile's committed ones. */
+    val checkRequest: JsonObject = s.obj(mapOf("placements" to s.array(s.obj(mapOf("layer_id" to s.handle(), "page" to s.integer(0, 63),
+        "x" to s.integer(0, 16383), "y" to s.integer(0, 16383), "rotation" to s.number(-360, 360),
+        "density" to s.number(WorkspaceTextureEdits.MIN_DENSITY, WorkspaceTextureEdits.MAX_DENSITY)), setOf("layer_id")), 1, 128)))
+
+    val check: JsonObject = s.obj(read + linkedMapOf("clear" to s.boolean(), "tiles" to s.array(s.obj(linkedMapOf(
+        "layer_id" to s.handle(), "page" to s.integer(0), "x" to s.integer(), "y" to s.integer(), "width" to s.integer(1), "height" to s.integer(1),
+        "rotation" to s.number(-180, 180), "outside_page" to s.boolean(), "overlaps" to s.array(s.handle()))))))
+
     val render: JsonObject = s.obj(read + linkedMapOf("page" to s.integer(0), "width" to s.integer(1), "height" to s.integer(1),
         "rendered_width" to s.integer(1), "rendered_height" to s.integer(1), "mime_type" to s.constant("image/png"),
         "png_bytes" to s.integer(1), "sha256" to s.handle(), "layers" to s.array(s.handle())))
@@ -134,6 +143,38 @@ internal fun WorkspaceTextureView.atlasJson(page: Int?): JsonObject {
     }
 }
 
+/**
+ * Whether [request]'s placements may stand: each tile at the page, spot, turn and density it names (the committed ones
+ * otherwise), against every other tile as committed and each other - by the rule atlas_set_tile and
+ * layer_set_pixel_density commit by, so a clear answer is a placement that lands exactly, and a conflict one they refuse.
+ */
+internal fun WorkspaceTextureView.checkPlacement(request: JsonObject): JsonObject {
+    val atlas = atlas()
+    val tiles = atlas.tiles.associateBy { it.layerId }
+    val placements = request.getValue("placements").jsonArray.map { it.jsonObject }
+    require(placements.map { it.getValue("layer_id").jsonPrimitive.content }.let { it.distinct().size == it.size }) { "Give each layer once" }
+    val placed = placements.associate { entry ->
+        val id = entry.getValue("layer_id").jsonPrimitive.content
+        val tile = tiles[id] ?: throw IllegalArgumentException("Layer $id has no atlas tile")
+        val ratio = entry["density"]?.jsonPrimitive?.float?.let { it / tile.density } ?: 1f
+        id to tile.copy(page = entry["page"]?.jsonPrimitive?.int ?: tile.page, x = entry["x"]?.jsonPrimitive?.int ?: tile.x,
+            y = entry["y"]?.jsonPrimitive?.int ?: tile.y,
+            rotation = entry["rotation"]?.jsonPrimitive?.float?.let { io.github.psd2live.project.normalizedRotation(it) } ?: tile.rotation,
+            width = Math.round(tile.width * ratio).coerceAtLeast(1), height = Math.round(tile.height * ratio).coerceAtLeast(1))
+    }
+    val conflicts = conflicts(placed).associateBy { it.layerId }
+    return buildJsonObject {
+        put("project_id", projectId); put("state", state); put("revision", revision)
+        put("clear", conflicts.values.none { it.outsidePage || it.overlaps.isNotEmpty() })
+        put("tiles", JsonArray(placed.values.map { tile -> buildJsonObject {
+            val conflict = conflicts.getValue(tile.layerId)
+            put("layer_id", tile.layerId); put("page", tile.page); put("x", tile.x); put("y", tile.y)
+            put("width", tile.width); put("height", tile.height); put("rotation", tile.rotation)
+            put("outside_page", conflict.outsidePage); put("overlaps", JsonArray(conflict.overlaps.map(::JsonPrimitive)))
+        } }))
+    }
+}
+
 /** The page's PNG, scaled down to [maxSize] on its long edge when larger. */
 internal fun WorkspaceTextureView.renderPage(page: Int, maxSize: Int, checkpoint: () -> Unit): Pair<JsonObject, ByteArray> {
     val canonical = pagePng(page)
@@ -176,6 +217,11 @@ internal fun registerTextureOperations(registry: WorkspaceOperationRegistry, por
         s.obj(mapOf("page" to s.integer(0, 63)), emptySet()), WorkspaceOperationKind.QUERY, resultSchema = WorkspaceTextureSchemas.atlas)) { request, _ ->
         WorkspaceOperationOutput(port.captureTextures().atlasJson(request["page"]?.jsonPrimitive?.int))
     }
+    registry.register(WorkspaceOperationDefinition("atlas_check_placement",
+        "Test tile placements before moving, scaling or turning tiles: for each layer, the page, upright top left (x, y), turn in degrees about the tile's centre and density to try (omitted fields keep the committed ones). Answers per tile whether its turned box would leave the page and which tiles' meshes it would meet - by the cells the meshes use, grown by the padding, not the rectangles - against every other tile as committed and the other tested tiles. This is the rule atlas_set_tile and layer_set_pixel_density commit by: clear placements land exactly, conflicting ones are refused with tile_collides.",
+        WorkspaceTextureSchemas.checkRequest, WorkspaceOperationKind.QUERY, resultSchema = WorkspaceTextureSchemas.check)) { request, _ ->
+        WorkspaceOperationOutput(port.captureTextures().checkPlacement(request))
+    }
     registry.register(WorkspaceOperationDefinition(WorkspaceTextureSchemas.RENDER,
         "Render one committed atlas page as PNG, scaled down to max_size (default 2048) on its long edge. Read-only job: the page, revision and tile list come from the version captured when the job started; job_get/job_wait return the image again.",
         s.obj(mapOf("page" to s.integer(0, 63), "max_size" to s.integer(64, 16384)), setOf("page")), WorkspaceOperationKind.QUERY,
@@ -203,8 +249,8 @@ internal fun registerTextureOperations(registry: WorkspaceOperationRegistry, por
     val descriptions = mapOf(
         "layer_set_canvas_rect" to "Move or resize a source layer to a canvas rectangle in canvas units (fractional allowed); its raster stretches over it and its integer bounds become the enclosing box. The generator places the layer's mesh by the new rectangle. Rejects layers whose meshes carry authored edits, skeleton/swing/simulation bindings or materialized geometry (split, created or rebuilt meshes; use layer_set_bounds for file-imported layers) and imported CMO3 models. The same rectangle is a no-op.",
         "layer_replace_image" to "Replace a source layer's pixels with an image of any resolution, keeping its canvas rectangle: give an absolute path (PNG, WebP, TIFF or BMP; single operation only) or png_base64. fit=stretch (default) fills the rectangle; contain keeps the aspect ratio, centred on transparency. The rig keeps its generation input, so meshes, keyforms and bindings stay; rebuild_mesh=true instead regenerates the layer's mesh from the new pixels and is rejected for authored or materialized layers. At most 16 megapixels; identical pixels are a no-op.",
-        "layer_set_pixel_density" to "Set the texture density of 1..128 layers: texture pixels per raster pixel (1/64..16; null resets to 1). lock=true keeps the density when the atlas budget forces unlocked tiles smaller; omitted lock keeps its value. Only the atlas and bound uvs change, never geometry.",
-        "atlas_set_tile" to "Move a layer's atlas tile to texture pixel (x, y) on page, or pass pin=null to release it into free space. The spot is stored in the atlas arrangement; an automatically arranged atlas first keeps its current layout (auto becomes false), so no other tile moves. A tile whose spot no longer fits or overlaps is placed into free space with a notice in atlas_get.",
+        "layer_set_pixel_density" to "Set the texture density of 1..128 layers: texture pixels per raster pixel (1/64..16, continuous; null resets to 1). lock=true keeps the density when the atlas budget forces unlocked tiles smaller; omitted lock keeps its value. Only the atlas and bound uvs change, never geometry. With a stored arrangement each tile keeps its top left; a tile that would then leave the page or meet another tile's meshes is refused with tile_collides (test first with atlas_check_placement).",
+        "atlas_set_tile" to "Move a layer's atlas tile: pin gives the page, the top left (x, y) of its upright rectangle in texture pixels and an optional turn in degrees about its centre (any angle); pin=null releases it into free space. The spot is stored in the atlas arrangement; an automatically arranged atlas first keeps its current layout (auto becomes false), so no other tile moves. A spot where the turned tile would leave the page or meet another tile's meshes (by the cells the meshes use, not the rectangles) is refused with tile_collides and nothing changes; test with atlas_check_placement first. To move and resize tiles together, send atlas_set_tile and layer_set_pixel_density in one workspace_apply_edits batch: only its final layout is checked.",
         "atlas_set_budget" to "Set the atlas budget: page_size (power of two 256..16384), max_pages (1..64) and padding (0..32 texture pixels); omitted values keep the current effective budget's. auto=true arranges the atlas automatically on every build again (rectangle MaxRects pack; the stored arrangement is dropped); auto=false keeps the current layout. When automatic textures do not fit, every unlocked tile is scaled by one common fit.",
         "atlas_pack" to "Arrange the atlas once and keep the result (auto becomes false): shape=mesh (default) places tiles by their meshes' footprint, so tiles nest wherever their meshes leave room and each writes only its own cells; shape=rect by tile rectangles. Largest first, at the largest fit that keeps the budget's pages. layer_ids moves only those tiles; the others keep their spots. Drops pins and texture overrides of layers that no longer exist. Later mesh edits that leave a footprint are reported in atlas_get notices.",
     )

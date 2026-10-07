@@ -95,6 +95,10 @@ class AtlasRealtimeEditTest {
 					vm.applyTextureSession()
 					vm.awaitTextureEdits()
 					settle()
+					// The two squares were packed side by side, a padding apart: giving them their meshes' cells to keep must
+					// not make them meet by the cells' rounding and push one away.
+					assertNull(vm.state.value.textureWorkspace.error)
+					assertEquals(0.5f, requireNotNull(vm.textureSnapshot()).layer(red.layerId)?.override?.density)
 					val nodes = vm.state.value.historySnapshot?.nodes?.size
 					val tile = requireNotNull(vm.textureSnapshot()).tilesByLayer.getValue(red.layerId)
 					val pageSize = requireNotNull(vm.textureSnapshot()).atlas.pages[tile.page].width

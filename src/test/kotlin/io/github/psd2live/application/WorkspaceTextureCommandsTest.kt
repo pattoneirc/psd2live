@@ -222,6 +222,72 @@ class WorkspaceTextureCommandsTest {
     }
 
     /**
+     * MCP places tiles by the rule the atlas view drags by: atlas_check_placement answers it, atlas_set_tile and
+     * layer_set_pixel_density refuse with tile_collides what would leave the page or meet another tile's meshes - nothing
+     * changes, no history node - and a batch that moves and grows tiles together is judged by its final layout only.
+     */
+    @Test fun tilePlacementsAreRefusedWhereTheyWouldNotLand() = runBlocking<Unit> {
+        val runtime = fixture()
+        WorkspaceOperations(Host(runtime)).use { operations ->
+            fun pin(id: String, x: Int, y: Int, rotation: Float? = null) = input(runtime, "pin-$id-$x-$y-$rotation", buildJsonObject {
+                put("layer_id", id); putJsonObject("pin") { put("page", 0); put("x", x); put("y", y); rotation?.let { put("rotation", it) } }
+            })
+            operations.completed("atlas_set_tile", pin("body", 200, 200))
+            operations.completed("atlas_set_tile", pin("pupil", 150, 200))
+            val placed = runtime.capture().model.atlas.placementByLayerId
+            assertEquals(150 to 200, placed.getValue("pupil").let { it.x to it.y })
+            suspend fun check(vararg entries: JsonObject) = operations.call("atlas_check_placement", buildJsonObject {
+                putJsonArray("placements") { entries.forEach { add(it) } }
+            }).data
+            fun entry(id: String, x: Int? = null, y: Int? = null, rotation: Float? = null, density: Float? = null) = buildJsonObject {
+                put("layer_id", id); x?.let { put("x", it) }; y?.let { put("y", it) }; rotation?.let { put("rotation", it) }; density?.let { put("density", it) }
+            }
+            fun tile(answer: JsonObject, id: String) = answer.getValue("tiles").jsonArray.map { it.jsonObject }.single { it.getValue("layer_id").jsonPrimitive.content == id }
+
+            // Onto the body: the meshes meet. Into free space: clear.
+            val onto = check(entry("pupil", 204, 210))
+            assertFalse(onto.getValue("clear").jsonPrimitive.boolean)
+            assertEquals(listOf("body"), tile(onto, "pupil").getValue("overlaps").jsonArray.map { it.jsonPrimitive.content })
+            assertTrue(check(entry("pupil", 600, 600)).getValue("clear").jsonPrimitive.boolean)
+            // Turned near the page edge, the corners leave the page.
+            val edge = runtime.capture().model.atlas.pages[0].image.width - 34
+            val turned = tile(check(entry("pupil", edge, 600, rotation = 45f)), "pupil")
+            assertTrue(turned.getValue("outside_page").jsonPrimitive.boolean)
+            // Doubled in place, the pupil's disc reaches into the body; the answer gives the size it would have.
+            val grown = check(entry("pupil", density = 2f))
+            assertFalse(grown.getValue("clear").jsonPrimitive.boolean)
+            assertEquals(64, tile(grown, "pupil").getValue("width").jsonPrimitive.int)
+
+            // The commands refuse the same placements and change nothing.
+            val before = runtime.capture(); val nodes = runtime.history().selections.size
+            for ((id, request) in listOf("atlas_set_tile" to pin("pupil", 204, 210), "atlas_set_tile" to pin("pupil", edge, 600, 45f),
+                "layer_set_pixel_density" to input(runtime, "grow", buildJsonObject { putJsonArray("layer_ids") { add("pupil") }; put("density", 2) }))) {
+                val failed = operations.job(id, request)
+                val error = failed.getValue("error").jsonObject
+                assertEquals("tile_collides", error.getValue("code").jsonPrimitive.content, failed.toString())
+                // The tiles that would be pushed: the moved pupil, or the body a grown pupil would take the room of.
+                val pushed = error.getValue("layer_ids").jsonArray.map { it.jsonPrimitive.content }
+                assertTrue(pushed.isNotEmpty() && setOf("pupil", "body").containsAll(pushed), pushed.toString())
+                assertEquals(before.revision, runtime.capture().revision)
+                assertEquals(nodes, runtime.history().selections.size)
+            }
+
+            // Moved clear and doubled in one batch: only the final layout counts, and it lands exactly.
+            fun op(id: String, request: JsonObject) = buildJsonObject { put("operation", id); put("request", request) }
+            operations.completed("workspace_apply_edits", input(runtime, "batch", buildJsonObject {
+                putJsonArray("edits") {
+                    add(op("layer_set_pixel_density", buildJsonObject { putJsonArray("layer_ids") { add("pupil") }; put("density", 2) }))
+                    add(op("atlas_set_tile", buildJsonObject { put("layer_id", "pupil"); putJsonObject("pin") { put("page", 0); put("x", 600); put("y", 600); put("rotation", 30) } }))
+                }
+            }))
+            val landed = runtime.capture().model.atlas.placementByLayerId.getValue("pupil")
+            assertEquals(listOf(600, 600, 64), listOf(landed.x, landed.y, landed.width))
+            assertEquals(30f, landed.rotation)
+            assertEquals(nodes + 1, runtime.history().selections.size)
+        }
+    }
+
+    /**
      * A tile turned on its page: its pixels are written turned, its meshes' texture coordinates follow the turn so
      * each vertex samples the raster point it did upright, the stored arrangement keeps the angle, and atlas_get reports it.
      */

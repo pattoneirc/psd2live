@@ -105,6 +105,11 @@ internal class WorkspaceDocumentCommands(private val runtime: WorkspaceRuntime<R
         runInterruptible(Dispatchers.Default) {
             WorkspaceAssetLayerEdits.validate(prepared.before.document, prepared.draft.document, prepared.model)
             validateRegisteredNeutral(prepared.model, edits.filter { it.operation == "layer_set_bounds" }.mapTo(HashSet()) { it.request.getValue("layer_id").jsonPrimitive.content })
+            // Tile moves and densities land on their spots or not at all, as the same single commands do; a batch that
+            // also lays the atlas out anew (budget, packing, new pixels) places tiles by its own rule.
+            val operations = edits.mapTo(HashSet()) { it.operation }
+            if (operations.any { it in WorkspaceTextureEdits.placementEdits } && operations.none { it in WorkspaceTextureEdits.relayoutEdits })
+                WorkspaceTextureEdits.requireKept(prepared.before.document, prepared.before.model, prepared.draft.document, prepared.model)
         }
         return prepared
     }
@@ -128,11 +133,14 @@ internal class WorkspaceDocumentCommands(private val runtime: WorkspaceRuntime<R
     suspend fun executeCandidate(projectId: String, state: String, summary: String, author: MutationAuthor,
                                  taskId: String? = null,
                                  mutation: (WorkspaceDocument, RigPreviewModel) -> WorkspaceDocument,
-                                 beforeCommit: (WorkspaceCapture<RigPreviewModel>, WorkspaceDocument, RigPreviewModel) -> Unit = { _, _, _ -> }): WorkspaceCommit<RigPreviewModel> {
+                                 beforeCommit: (WorkspaceCapture<RigPreviewModel>, WorkspaceDocument, RigPreviewModel) -> Unit = { _, _, _ -> },
+                                 validate: (WorkspaceDocument, RigPreviewModel, WorkspaceDocument, RigPreviewModel) -> Unit = { _, _, _, _ -> }): WorkspaceCommit<RigPreviewModel> {
         val prepared = runtime.prepareDraft(projectId, state, listOf(WorkspaceDraftEdit { draft, model ->
             val candidate = runInterruptible(Dispatchers.Default) { mutation(draft.document, model) }
             draft.copy(document = previews.normalizeMeshEdits(candidate, model))
         }))
+        // The candidate's own build, checked before anything is published.
+        runInterruptible(Dispatchers.Default) { validate(prepared.before.document, prepared.before.model, prepared.draft.document, prepared.model) }
         val geometry = checkGeometry(prepared)
         if (!geometry.safe) throw GeometrySafetyRejectedException(geometry)
         val diagnostics = geometry.takeIf { it.affectedTargets.isNotEmpty() }?.toJson()

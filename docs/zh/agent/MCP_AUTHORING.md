@@ -66,7 +66,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 
 表中列出业务字段；所有修改还须携带 `request_id`，工作区修改须携带 `project_id` 和 `state`。只读后台采样 `physics_simulate/simulation_simulate/view_sample_motion` 同样要求这三个字段，用于去重并固定采样版本。各项操作字段不同，调用前读取当前服务提供的 JSON Schema。所有公开工具统一使用 `{"request": {...}}` 包装。发布与校验保留同一份 `oneOf`、`const`、字段约束及说明，外层和业务对象都拒绝未知字段。结果统一为 `{"ok":true,"operation":"...","data":{...}}`；错误包含 `ok:false` 和 `error.code/message`，字段校验错误还带 `field`。PNG 以 MCP 图片内容返回。
 
-全部 181 项公开操作（其中 67 项后台、86 项可批量）都必须声明并发布完整 `outputSchema`，能力详情中的 `output_schema` 与其一致；成功 data 和失败 error 严格互斥。注册表在执行及去重边界校验业务结果，MCP 校验完整返回包装，遗漏结果契约不能注册。后台操作必须另有终态 `job_result_schema`，非后台操作不允许该字段。能力详情通过本地 `$defs/$ref` 描述嵌套 schema，查询自己的 schema 也可校验；实际 HTTP 保留所有根约束。`output_contract` 表示服务实现的结果与声明不符，不能作为修改已回滚的证据。
+全部 183 项公开操作（其中 67 项后台、86 项可批量）都必须声明并发布完整 `outputSchema`，能力详情中的 `output_schema` 与其一致；成功 data 和失败 error 严格互斥。注册表在执行及去重边界校验业务结果，MCP 校验完整返回包装，遗漏结果契约不能注册。后台操作必须另有终态 `job_result_schema`，非后台操作不允许该字段。能力详情通过本地 `$defs/$ref` 描述嵌套 schema，查询自己的 schema 也可校验；实际 HTTP 保留所有根约束。`output_contract` 表示服务实现的结果与声明不符，不能作为修改已回滚的证据。
 
 图片追加使用 `layer_import_images`：必需 `state` 和 1–128 个绝对路径组成的 `paths`，可选 `parent_deformer_id` 指向已有父变形器；省略时绑定模型根。透明边缘裁剪后居中；栅格保持原分辨率，超过画布时只把画布矩形等比缩小到画布内（图层密度大于 1 像素/画布单位），网格按画布分辨率生成。单文件最多 64 MiB、16 百万像素，整批最多 32 百万像素。一次成功只追加一个历史节点，任意文件失败则整批不发布；它读取文件，不能作为原子文档批量成员。新增源图及网格句柄从任务终态 `affectedLayerIds/affectedObjectIds` 获取。原图像素写入工程，后续重开不依赖输入文件。
 
@@ -81,8 +81,9 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 - `atlas_render_page`（只读后台任务，要求 `request_id/project_id/state`）：`page`，可选 `max_size`（64–16384，默认 2048，按长边缩小）；终态含 `revision`、原尺寸与渲染尺寸、`sha256`、该页图层，PNG 以图片内容返回，`job_get/job_wait` 可重复取图。
 - `layer_set_canvas_rect`：`layer_id`、`rect{left,top,width,height}`；栅格拉伸到新矩形，整数 bounds 取外包框，生成输入同步移动，由生成器按新矩形放置网格。网格带作者编辑（关键形、路径、Glue 等日志引用）、骨架/摆动/模拟绑定、物化几何（拆分、新建或重建网格；文件导入图层改用 `layer_set_bounds`）或导入 CMO3 时拒绝（`invalid_argument`）。相同矩形无变化。
 - `layer_replace_image`：`layer_id` 与 `path`（绝对路径，PNG/WebP/TIFF/BMP，仅单项）或 `png_base64` 二选一，可选 `fit`（`stretch` 默认铺满，`contain` 保持比例居中补透明）与 `rebuild_mesh`（默认 false）。画布矩形不变，生成输入冻结在首次替换前的像素，网格、关键形与绑定保留，仅图块和 UV 改变；`rebuild_mesh=true` 改由新像素重新生成该层网格，带作者编辑或物化几何时拒绝。单项先核对状态再读取文件；批量成员只接受 `png_base64`，给出 `path` 时整批以 `invalid_edit` 失败。最多 16MP，像素相同为无变化。
-- `layer_set_pixel_density`：1–128 个唯一 `layer_ids`、必需的 `density`（1/64–16，`null` 恢复为 1），可选 `lock`（省略保持原值）。已有排布时同样先按当前位置保存各图块，变大后放不下原位置的图块才会被放入空闲区域。
-- `atlas_set_tile`：`layer_id` 与 `pin{page,x,y,rotation?}`（纹理像素；`x`、`y` 为未旋转矩形的左上角，`rotation` 为绕图块中心旋转的度数，缺省 0）或 `null` 放入空闲区域；页号须在预算内。位置保存在排布（`atlasArrangement` 设置）中；自动排布的纹理集先按当前布局保存（`auto` 变为 false）；已有排布时，先前被放入空闲区域、尚无保存位置的图块也按当前位置写入排布，因此其他图块不动，也不会挤进移走后空出的位置。放不下或与其他图块重叠的位置会被放入空闲区域并在 `atlas_get` 的 `notices` 中说明。
+- `atlas_check_placement`（查询）：`placements` 为 1–128 项 `{layer_id, page?, x?, y?, rotation?, density?}`，省略字段沿用已提交值；返回 `clear` 与每个图块的目标 `page/x/y/width/height/rotation`、`outside_page`（旋转后的外接框是否超出页面或页号超出预算）和 `overlaps`（网格会与之相交的图块）。与其他已提交图块及本次一并检查的图块比较，规则与提交时完全相同：两图块按间距外扩后的外接框相交时，才按网格实际使用的单元格（外扩间距）判断，两个都无网格且未旋转时按矩形判断。纹理集视图拖动、缩放、旋转时用的也是这一规则，`clear` 的放置一定原样落地，有冲突的放置会被下面的命令拒绝。
+- `layer_set_pixel_density`：1–128 个唯一 `layer_ids`、必需的 `density`（1/64–16 连续取值，`null` 恢复为 1），可选 `lock`（省略保持原值）。已有排布时各图块保持左上角，若变大后会超出页面或与其他图块的网格相交，以 `tile_collides` 拒绝且不做任何修改。
+- `atlas_set_tile`：`layer_id` 与 `pin{page,x,y,rotation?}`（纹理像素；`x`、`y` 为未旋转矩形的左上角，`rotation` 为绕图块中心旋转的任意度数，缺省 0）或 `null` 放入空闲区域；页号须在预算内。位置保存在排布（`atlasArrangement` 设置）中；自动排布的纹理集先按当前布局保存（`auto` 变为 false），已有排布时先按当前位置保存各图块并补上网格覆盖区域，因此其他图块不动，也不会挤进移走后空出的位置。旋转后会超出页面或与其他图块的网格相交的位置以 `tile_collides` 拒绝，不做任何修改；先用 `atlas_check_placement` 检查。要同时移动和缩放（例如保持对角不动的缩放，或互换两个图块的位置），把 `layer_set_pixel_density` 与 `atlas_set_tile` 放进同一个 `workspace_apply_edits`：只检查整批之后的布局，与纹理集视图“应用”调整会话完全相同。
 - `atlas_set_budget`：`page_size`（256–16384 的 2 的幂）、`max_pages`（1–64）、`padding`（0–32）与 `auto`，至少给一项，省略项沿用当前值；预算写入 `atlas` 设置。`auto=true` 删除保存的排布，此后每次重建按矩形自动排布（MaxRects）；`auto=false` 保存当前布局。
 - `atlas_pack`：一次性排布并保存结果（`auto` 变为 false）。可选 `shape`：`mesh`（默认）按各图层最终网格的纹理坐标覆盖区域（每格 4 栅格像素、外加间距）排布，矩形可以相互嵌套，各图块只写入自己的单元格；`rect` 按矩形。按占用面积从大到小放置，放不下预算页数时所有未锁定图块按 1/64 步长共同缩小。可选 `layer_ids` 只移动这些图块，其余保持原位与原 fit。同时清除自动排布的固定位置及已不存在图层的覆盖；相同输入再次排布无变化。之后若网格编辑超出排布时的覆盖区域，`atlas_get` 的 `notices` 会提示重新排布。图块 `shaped` 表示按网格覆盖区域排布。
 
@@ -151,6 +152,7 @@ CMO3 导入共用独立应用层导入器，GUI 入口确认后携带可信用�
 | `invalid_request` | 读取当前 schema；`field` 定位字段 |
 | `output_contract` | 服务实现返回了不符合声明的结果；`operation/field` 定位契约问题。先查询工程或任务的实际状态，不能据此假定修改已回滚或直接重做 |
 | `invalid_argument` / `invalid_edit` | 修正参数或编辑；批量错误另带 `edit_index` 和 `edit_operation` |
+| `tile_collides` | 移动、旋转或改密度后，`layer_ids` 中的图块会被挤离排布位置（超出页面或与其他图块的网格相交），整次修改未提交；用 `atlas_check_placement` 换一个位置，或把相关移动放进同一批量 |
 | `state_conflict` | 重读工程；错误带 `expected_state` 和 `actual_state` |
 | `project_conflict` | 确认目标工程；错误带可空的 `expected_project` 和 `actual_project` |
 | `request_id_reused` | 同一 ID 被用于不同操作、参数或作者；使用新的请求 ID |

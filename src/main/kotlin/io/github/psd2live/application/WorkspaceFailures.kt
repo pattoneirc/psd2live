@@ -25,6 +25,7 @@ internal data class WorkspaceFailure private constructor(
             val code = when (failure) {
                 is io.github.psd2live.core.GeometrySafetyRejectedException -> "geometry_unsafe"
                 is WorkspaceBatchEditException -> "invalid_edit"
+                is WorkspaceTileCollision -> "tile_collides"
                 is WorkspaceValidationException -> "invalid_request"
                 is WorkspaceOutputContractFailure -> "output_contract"
                 is WorkspaceConflict -> "state_conflict"
@@ -48,6 +49,7 @@ internal data class WorkspaceFailure private constructor(
                     is WorkspaceBatchEditException -> {
                         put("edit_index", failure.index); put("edit_operation", failure.editOperation)
                     }
+                    is WorkspaceTileCollision -> put("layer_ids", JsonArray(failure.layerIds.map(::JsonPrimitive)))
                     is WorkspaceProjectConflict -> {
                         put("expected_project", failure.expectedProject?.let(::JsonPrimitive) ?: JsonNull)
                         put("actual_project", failure.actualProject?.let(::JsonPrimitive) ?: JsonNull)
