@@ -11,6 +11,7 @@ import org.umamo.format.art.LayerRaster
 import org.umamo.format.art.SourceLayer
 import org.umamo.runtime.model.*
 import java.awt.image.BufferedImage
+import kotlin.math.abs
 
 /**
  * The painted layer's box in canvas pixels, as the float box the rig math works in. The two are
@@ -268,12 +269,12 @@ internal object RasterPaintCommit {
                     // frames those deformers were built on - the context of the analysis the rig came
                     // from - and not against frames derived from the freshly painted bounds, which
                     // would rescale the drawable against every sibling that kept the old frames.
-                    // A rotation's children live in its pixel space, which no frame describes: a mesh
-                    // the skeleton re-homed under a bone is in that bone's rest space. Such a mesh is
-                    // built on the canvas and placed through the parent's actual neutral transform.
-                    val rotationParent = drawable.parentDeformerId?.let { id ->
-                        currentPreview.rig.puppet.deformers.firstOrNull { it.id == id }
-                    } is Deformer.Rotation
+                    // Those frames only describe a parent the generator laid out and nobody moved since. A
+                    // bone's rotation or stance warp, an edited lattice or an imported deformer is described
+                    // by its own neutral transform alone, so every rebuilt vertex goes where its texel lies
+                    // on the canvas, through that transform; the frame result stays only where the parent
+                    // cannot place it.
+                    val puppet = currentPreview.rig.puppet
                     val rebuilt = RigBuilder.rebuildDrawableMesh(
                         layer = targetClassifiedLayer,
                         context = rigContext,
@@ -281,23 +282,28 @@ internal object RasterPaintCommit {
                         pageWidth = targetPageWidth,
                         pageHeight = targetPageHeight,
                         config = currentPreview.config,
-                        parentId = drawable.parentDeformerId.takeUnless { rotationParent },
+                        parentId = drawable.parentDeformerId,
                         owner = drawable,
                         atlas = newAtlas,
                         generatedLips = regeneratedLips,
-                        previous = drawable.mesh?.takeUnless { rotationParent }
-                            ?.let { replacedMesh(it, oldAtlas, drawable.id.raw, layerId, oldLayer ?: newLayer) },
+                        previous = drawable.mesh?.let { replacedMesh(it, oldAtlas, drawable.id.raw, layerId, oldLayer ?: newLayer) },
                     )
-                    for (lip in rebuilt.mouthLips) rebuiltLips[lip.drawable.id.raw] = lip
+                    for (lip in rebuilt.mouthLips) {
+                        val unplaced = requireNotNull(lip.drawable.mesh)
+                        val placed = lip.canvas?.let { RasterMeshPlacement.underParent(puppet, lip.drawable, it) }
+                        rebuiltLips[lip.drawable.id.raw] = if (placed == null) lip else RigBuilder.MouthLip(
+                            lip.drawable.copy(mesh = DrawableMesh(placed, unplaced.uvs, unplaced.indices)),
+                            lip.ownerId, lip.layer, lip.path, lip.neutralBounds, lip.canvas)
+                    }
 
-                    val mesh = if (!rotationParent) rebuilt.mesh else DrawableMesh(
-                        RasterMeshPlacement.underParent(currentPreview.rig.puppet, drawable.id, rebuilt.mesh.positions),
-                        rebuilt.mesh.uvs, rebuilt.mesh.indices)
+                    val placed = RasterMeshPlacement.underParent(puppet, drawable, rebuilt.canvas)
+                    // The generated grid moves the frame's mesh; it fits the placed one only where the frame
+                    // is the parent's actual space.
+                    val framed = placed == null || placed.indices.all { abs(placed[it] - rebuilt.mesh.positions[it]) <= 1e-3f }
                     drawable.copy(
-                        mesh = mesh,
+                        mesh = DrawableMesh(placed ?: rebuilt.mesh.positions, rebuilt.mesh.uvs, rebuilt.mesh.indices),
                         texturePage = targetPlacement.page,
-                        // A canvas grid would not move a mesh in its parent's pixel space.
-                        geometryGrid = drawable.geometryGrid ?: rebuilt.geometryGrid.takeUnless { rotationParent },
+                        geometryGrid = drawable.geometryGrid ?: rebuilt.geometryGrid.takeIf { framed },
                     )
                 } else {
                     val oldMesh = requireNotNull(drawable.mesh)

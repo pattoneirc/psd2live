@@ -1570,10 +1570,15 @@ object RigBuilder {
 		val lips = unboundLips.map { lip ->
 			val lipPlacement = atlas.placementByLayerId.getValue(lip.layer.source.id.raw)
 			val lipPage = atlas.pages[lipPlacement.page].image
-			val mesh = UvBinding.bindMesh(requireNotNull(lip.drawable.mesh), lip.layer, lipPlacement, lipPage.width, lipPage.height)
-			MouthLip(lip.drawable.copy(mesh = mesh, texturePage = lipPlacement.page), lip.ownerId, lip.layer, lip.path, lip.neutralBounds)
+			val texture = LayerTexture.packed(lip.layer, lipPlacement, lipPage.width, lipPage.height)
+			val unbound = requireNotNull(lip.drawable.mesh)
+			val mesh = DrawableMesh(unbound.positions, texture.bind(unbound.uvs), unbound.indices)
+			MouthLip(lip.drawable.copy(mesh = mesh, texturePage = lipPlacement.page), lip.ownerId, lip.layer, lip.path, lip.neutralBounds,
+				texture.toCanvas(mesh.uvs))
 		}
-		return RebuiltDrawable(UvBinding.bindMesh(parts.mesh, layer, placement, pageWidth, pageHeight), parts.geometryGrid, lips)
+		val texture = LayerTexture.packed(layer, placement, pageWidth, pageHeight)
+		val mesh = DrawableMesh(parts.mesh.positions, texture.bind(parts.mesh.uvs), parts.mesh.indices)
+		return RebuiltDrawable(mesh, parts.geometryGrid, lips, texture.toCanvas(mesh.uvs))
 	}
 
 	/**
@@ -1585,6 +1590,8 @@ object RigBuilder {
 		val geometryGrid: KeyformGrid<MeshDeltaForm>,
 		/** Ribbons to swap in, empty for a layer that has none. */
 		val mouthLips: List<MouthLip>,
+		/** Where each vertex's texel lies on the canvas: where the vertex belongs at rest, whatever its parent. */
+		val canvas: FloatArray,
 	)
 
 	/** One generated mouth-outline ribbon: the drawable, the layer it samples, and its deform path. */
@@ -1595,6 +1602,8 @@ object RigBuilder {
 		val layer: ClassifiedLayer,
 		val path: DeformPath?,
 		val neutralBounds: Bounds,
+		/** A rebuilt ribbon's texels on the canvas (see [RebuiltDrawable.canvas]); null for a generated one. */
+		val canvas: FloatArray? = null,
 	)
 
 	/**
