@@ -191,6 +191,7 @@ class CanvasModeMenuTest {
             assertTrue(editor.press(start, viewport, shift = false, alt = false))
             editor.move(start + Offset(20f, 0f), viewport, shift = false)
             assertNotNull(editor.preview)
+            assertEquals("Δ 1.0, 0.0", editor.transformReadout(viewport))
             val after = assertNotNull(editor.target()).geometry.points
             for (i in before.indices step 2) {
                 assertEquals(before[i] + 1f, after[i], 0.001f)
@@ -215,6 +216,7 @@ class CanvasModeMenuTest {
             val rotationStart = rotationFrame.bounds.rotateHandlePos
             editor.press(rotationStart, viewport, shift = false, alt = false)
             editor.move(rotationStart.rotateAbout(rotationFrame.pivot, 90f), viewport, shift = false)
+            assertEquals("+90.0°", editor.transformReadout(viewport))
             val rotatedTarget = assertNotNull(editor.target())
             val rotated = editor.screen(rotatedTarget.geometry.points, rotatedTarget, viewport)
             scalePoints.forEachIndexed { i, point ->

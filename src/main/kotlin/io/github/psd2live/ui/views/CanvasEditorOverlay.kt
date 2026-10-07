@@ -600,7 +600,20 @@ internal fun BoxScope.CanvasEditorOverlay(
         // 3. Transform box (shared by TRANSFORM tool and points)
         if (editor.drawsTransformBox) {
             editor.transformFrame(viewport)?.let { frame ->
-                drawTransformBox(frame, editor.hoveredHandle, colors, axis = editor.axis.takeIf { editor.inGesture }, pointer = editor.cursor)
+                drawTransformBox(frame, editor.hoveredHandle, colors, axis = editor.axis.takeIf { editor.inGesture }, pointer = editor.cursor,
+                    active = editor.inGesture)
+                // The drag's numbers beside the pointer, in the brush readout's pill.
+                val readout = editor.transformReadout(viewport)
+                val cur = editor.cursor
+                if (readout != null && cur != null) {
+                    val layout = textMeasurer.measure(readout, TextStyle(color = colors.textPrimary, fontSize = 11.sp, fontFamily = FontFamily.Monospace))
+                    val origin = Offset(cur.x + 18f, cur.y + 14f)
+                    val extent = Size(layout.size.width + 14f, layout.size.height + 6f)
+                    drawRoundRect(Color.Black.copy(alpha = 0.3f), origin + Offset(0f, 1f), extent, CornerRadius(5f))
+                    drawRoundRect(colors.panelElevated.copy(alpha = 0.94f), origin, extent, CornerRadius(5f))
+                    drawRoundRect(colors.divider, origin, extent, CornerRadius(5f), style = Stroke(1f))
+                    drawText(layout, topLeft = Offset(origin.x + 7f, origin.y + 3f))
+                }
             }
         }
 
@@ -845,7 +858,7 @@ internal fun BoxScope.CanvasEditorOverlay(
                     }
                     // The same box the Transform tool draws; a ghost is an upright rectangle, so it has no turn.
                     editor.placementFrame(viewport)?.let { frame ->
-                        drawTransformBox(frame, editor.placementHover, colors, PLACEMENT_HANDLES, outline = false)
+                        drawTransformBox(frame, editor.placementHover, colors, PLACEMENT_HANDLES, outline = false, active = editor.inGesture)
                     }
                 }
                 CreatePlacementKind.ROTATION -> {

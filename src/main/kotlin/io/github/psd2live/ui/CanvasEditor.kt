@@ -3212,6 +3212,32 @@ internal class CanvasEditor(
     }
 
     /**
+     * What a live box drag is doing, for the readout beside the pointer: how far it has turned, how much it has
+     * scaled each side by, or how far it has moved in canvas pixels. Null outside a box drag that has moved.
+     */
+    fun transformReadout(viewport: CanvasViewport): String? {
+        if (!boxDrag || !moved || tool != CanvasTool.TRANSFORM) return null
+        val b0 = initialBounds ?: return null
+        val b = currentDragBounds ?: return null
+        return when {
+            activeHandle == BoundingHandle.ROTATE -> {
+                val turned = ((frameAngle - frameAngleAtPress) % 360f + 540f) % 360f - 180f
+                String.format(java.util.Locale.ROOT, "%+.1f°", turned)
+            }
+            activeHandle.scales -> {
+                fun percent(now: Float, was: Float) = if (was <= 1e-3f) 100f else now / was * 100f
+                String.format(java.util.Locale.ROOT, "%.0f%% × %.0f%%", percent(b.width, b0.width), percent(b.height, b0.height))
+            }
+            activeHandle == BoundingHandle.BODY -> {
+                // The box travels in the frame; turned back out of it, that is the screen move the points made.
+                val travel = Offset(b.minX - b0.minX, b.minY - b0.minY).rotateVector(frameAngleAtPress) / viewport.scale.toFloat()
+                String.format(java.util.Locale.ROOT, "Δ %.1f, %.1f", travel.x, travel.y)
+            }
+            else -> null
+        }
+    }
+
+    /**
      * The frame the transform box lives in: the box itself, in frame coordinates, and the screen pivot
      * the frame turns about.
      *
