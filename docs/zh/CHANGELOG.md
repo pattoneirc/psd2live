@@ -4,7 +4,7 @@
 
 只记录使用者能感知到的变化。v1.4.2 及更早的版本见 [Releases](https://github.com/tsunehimatoi/psd2live/releases)。
 
-## 未发布
+## v3.0.0 · 2026-10-08
 
 距 v2.0.4 改动较大：新增多种导出格式和独立运行时，纹理可以逐层调整，MCP 接口重新设计。旧工程照常打开。
 
