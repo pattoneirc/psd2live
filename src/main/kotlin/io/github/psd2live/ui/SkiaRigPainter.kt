@@ -17,14 +17,16 @@ import io.github.psd2live.render.HOVER_TINT_STRENGTH
 import org.umamo.runtime.model.DrawableId
 
 
-/** Draw the editing texture channel on Compose's Skia canvas, without per-triangle Java2D clips. */
-internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
-    private val images = atlas.pages.map { page ->
-        page.image.toSkiaImage()
-    }
-    private val shaders = images.map {
-        it.makeShader(FilterTileMode.CLAMP, FilterTileMode.CLAMP, SamplingMode.LINEAR, null)
-    }
+/**
+ * Draw the editing texture channel on Compose's Skia canvas, without per-triangle Java2D clips.
+ * The pages are converted on the first paint: a canvas the GPU draws makes one per atlas and never paints with it.
+ */
+internal class SkiaRigPainter(private val atlas: PackedAtlas) : AutoCloseable {
+    private class Pages(val images: List<Image>, val shaders: List<Shader>)
+    private var pages: Pages? = null
+    private fun pages(): Pages = pages ?: atlas.pages.map { it.image.toSkiaImage() }.let { images ->
+        Pages(images, images.map { it.makeShader(FilterTileMode.CLAMP, FilterTileMode.CLAMP, SamplingMode.LINEAR, null) })
+    }.also { pages = it }
 
     fun paint(
         canvas: Canvas,
@@ -52,6 +54,9 @@ internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
      */
     fun paint(canvas: Canvas, model: RigPreviewModel, geometry: DeformedGeometry, viewport: CanvasViewport, draws: List<ArtworkDraw>,
               sources: SourcePixelImages? = null) {
+        val pages = pages()
+        val images = pages.images
+        val shaders = pages.shaders
         val byId = model.rig.puppet.drawables.associateBy { it.id }
         val masks = mutableMapOf<List<DrawableId>, Path?>()
         Paint().use { paint ->
@@ -128,8 +133,10 @@ internal class SkiaRigPainter(atlas: PackedAtlas) : AutoCloseable {
     }
 
     override fun close() {
-        shaders.forEach { it.close() }
-        images.forEach { it.close() }
+        val pages = pages ?: return
+        this.pages = null
+        pages.shaders.forEach { it.close() }
+        pages.images.forEach { it.close() }
     }
 }
 

@@ -14,7 +14,7 @@
 - 平移和缩放只改一个矩阵 uniform，不重新上传任何数据。
 - 结果经 PBO 异步回读成一张 Skia 图交给 Compose 显示，与目前流畅的 Cubism 预览路径相同。
 - Compose 侧先按新镜头变换上一帧，所以平移、缩放即时跟手。
-- 现有 `SkiaRigPainter` 保留为没有 GL 时的兜底。
+- 现有 `SkiaRigPainter` 保留为没有 GL 时的兜底；它在第一次绘制时才转换图集页，GPU 绘制的画布不为它付出转换和内存。
 
 不使用 `org.umamo.render` 下的任何渲染代码（`PuppetRenderer`、`RenderDevice`、`GlRenderDevice`、其着色器、回读与渲染目标类）。渲染器只读取模型数据：`PuppetModel` / `Drawable` / `DrawableMesh` 和 `RigCanvasSupport.evaluate` 给出的形变结果。这是全应用共用的数据模型，不属于渲染代码。
 
