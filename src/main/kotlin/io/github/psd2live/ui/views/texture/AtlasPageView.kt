@@ -43,7 +43,10 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerButton
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.areAnyPressed
 import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
@@ -174,6 +177,10 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	LaunchedEffect(texture.busy) { if (!texture.busy && densityDrag?.committing == true) densityDrag = null }
 	var space by remember { mutableStateOf(false) }
 	var menu by remember { mutableStateOf<AtlasMenu?>(null) }
+	/** Where the pointer was at the last step of a pan, while one is in progress. */
+	var panFrom by remember { mutableStateOf<Offset?>(null) }
+	/** The pointer over the view, for the cursor; null once it leaves. */
+	var pointer by remember { mutableStateOf<Offset?>(null) }
 	val focusRequester = remember { FocusRequester() }
 
 	val margin = 24f
@@ -271,34 +278,51 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 				pan = Offset(change.position.x - left - before.x * nextScale, change.position.y - top - before.y * nextScale)
 				change.consume()
 			}
-			.onPointerEvent(PointerEventType.Move) { event ->
-				hovered = event.changes.firstOrNull()?.let { hit(it.position)?.layerId }
+			// The middle button (or Space with the primary one) pans and the right one opens the menu. Like the
+			// edit canvas, these are read from the raw press, move and release events: a gesture's awaitFirstDown
+			// does not see a press of another button than the primary one.
+			.onPointerEvent(PointerEventType.Press) { event ->
+				val change = event.changes.firstOrNull() ?: return@onPointerEvent
+				focusRequester.requestFocus()
+				if (CanvasNavigation.pans(event.button, currentSpace)) {
+					panFrom = change.position
+					change.consume()
+				} else if (event.button == PointerButton.Secondary) {
+					val tile = hit(change.position)
+					if (tile != null && tile.layerId !in currentSelected) vm.selectLayer(tile.layerId)
+					menu = AtlasMenu(change.position, tile?.layerId)
+					change.consume()
+				}
 			}
-			.onPointerEvent(PointerEventType.Exit) { hovered = null }
+			.onPointerEvent(PointerEventType.Move) { event ->
+				val change = event.changes.firstOrNull() ?: return@onPointerEvent
+				pointer = change.position
+				val from = panFrom
+				if (from != null) {
+					pan += change.position - from
+					panFrom = change.position
+					change.consume()
+					return@onPointerEvent
+				}
+				hovered = hit(change.position)?.layerId
+			}
+			.onPointerEvent(PointerEventType.Release) { event ->
+				if (panFrom != null && (event.button == PointerButton.Tertiary || event.button == PointerButton.Primary || !event.buttons.areAnyPressed)) panFrom = null
+			}
+			.onPointerEvent(PointerEventType.Exit) { hovered = null; pointer = null }
+			.pointerHoverIcon(PointerIcon(atlasCursor(
+				panning = panFrom != null, space = space, moving = texture.dragDraft != null, boxing = marquee != null,
+				scaling = densityDrag?.takeIf { !it.committing }?.let { it.corner to it.anchor },
+				corner = pointer?.takeIf { !busy }?.let { at -> hitCorner(at)?.let { it.second to it.third } },
+				overTile = pointer?.let { hit(it) } != null,
+			)))
 			.pointerInput(page, pageInfo.width, pageInfo.height) {
 				awaitEachGesture {
 					val down = awaitFirstDown(requireUnconsumed = false)
 					val event = currentEvent
 					focusRequester.requestFocus()
-					// Middle button, or Space with the primary one, pans - as on the edit canvas.
-					if (CanvasNavigation.pans(event.button, currentSpace)) {
-						var last = down.position
-						while (true) {
-							val move = awaitPointerEvent()
-							val change = move.changes.firstOrNull { it.id == down.id } ?: break
-							if (!change.pressed) break
-							pan += change.position - last
-							last = change.position
-							change.consume()
-						}
-						return@awaitEachGesture
-					}
-					if (event.button == PointerButton.Secondary) {
-						val tile = hit(down.position)
-						if (tile != null && tile.layerId !in currentSelected) vm.selectLayer(tile.layerId)
-						menu = AtlasMenu(down.position, tile?.layerId)
-						return@awaitEachGesture
-					}
+					// Panning and the menu belong to the press handler above.
+					if (panFrom != null || CanvasNavigation.pans(event.button, currentSpace) || event.button == PointerButton.Secondary) return@awaitEachGesture
 					if (event.button != null && event.button != PointerButton.Primary) return@awaitEachGesture
 					val select = CanvasNavigation.selectMode(event.keyboardModifiers)
 					val snapshotAtStart = currentSnapshot
@@ -606,6 +630,31 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 		)
 
 		AtlasContextMenu(menu, { menu = null }, state, vm, snapshot, selection, busy, onFrame = ::frameSelection, onReset = ::resetView)
+	}
+}
+
+/**
+ * The pointer the atlas page shows, as the edit canvas picks its own ([io.github.psd2live.ui.CanvasEditor.activeCursor]):
+ * move while panning or dragging a tile, the open hand while Space is held, a crosshair for a selection box,
+ * diagonal arrows on a density grip ([scaling] or the hovered [corner], each with its opposite corner) and a hand
+ * over a tile that can be picked or dragged.
+ */
+private fun atlasCursor(panning: Boolean, space: Boolean, moving: Boolean, boxing: Boolean, scaling: Pair<Offset, Offset>?,
+                        corner: Pair<Offset, Offset>?, overTile: Boolean): java.awt.Cursor {
+	fun cursor(type: Int) = java.awt.Cursor.getPredefinedCursor(type)
+	fun diagonal(grip: Pair<Offset, Offset>): java.awt.Cursor {
+		val (at, opposite) = grip
+		// Top left and bottom right share one diagonal, top right and bottom left the other.
+		return cursor(if ((at.x - opposite.x) * (at.y - opposite.y) > 0f) java.awt.Cursor.NW_RESIZE_CURSOR else java.awt.Cursor.NE_RESIZE_CURSOR)
+	}
+	return when {
+		panning || moving -> cursor(java.awt.Cursor.MOVE_CURSOR)
+		space -> cursor(java.awt.Cursor.HAND_CURSOR)
+		scaling != null -> diagonal(scaling)
+		boxing -> cursor(java.awt.Cursor.CROSSHAIR_CURSOR)
+		corner != null -> diagonal(corner)
+		overTile -> cursor(java.awt.Cursor.HAND_CURSOR)
+		else -> java.awt.Cursor.getDefaultCursor()
 	}
 }
 
