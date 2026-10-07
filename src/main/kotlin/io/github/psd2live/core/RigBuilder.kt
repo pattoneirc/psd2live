@@ -1097,6 +1097,15 @@ object RigBuilder {
 		val deferredParts = LinkedHashSet<DrawableId>()
 		val partLayerById = LinkedHashMap<DrawableId, String>()
 		val partNeutralBounds = LinkedHashMap<DrawableId, Bounds>()
+		// The mouth parts of one split open and smile as the one mouth they were: each takes the aperture of all of
+		// them, not its own bounds (a half would otherwise shape itself as a whole mouth and tear at the cut).
+		val mouthTags = setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN)
+		val mouthApertures = if (!v2) emptyMap() else resolution.parts.mapNotNull { part ->
+			if (part.drawableId in resolution.ribbonParts) return@mapNotNull null
+			partLayers[part.layerId]?.let { context.rigLayer(it) }?.takeIf { it.semantic.tag in mouthTags }?.let { part.recordIndex to it.bounds }
+		}.groupBy({ it.first }, { it.second }).mapValues { (_, bounds) ->
+			Bounds(bounds.minOf { it.left }, bounds.minOf { it.top }, bounds.maxOf { it.right }, bounds.maxOf { it.bottom })
+		}
 		if (v2) for (part in resolution.parts) {
 			val layer = partLayers[part.layerId] ?: continue
 			if (atlas.placementByLayerId[part.layerId] == null || partDrawables.any { it.id == part.drawableId } ||
@@ -1107,7 +1116,7 @@ object RigBuilder {
 				?: (drawables.firstOrNull { it.id == standIn } ?: partDrawables.firstOrNull { it.id == standIn })?.drawOrder
 				?: org.umamo.runtime.model.DEFAULT_DRAW_ORDER.toFloat()
 			val built = pinnedPart(part, layer, context, config, shouldBuildDeformers, switchParamKeys, stages, order,
-				atlas.placementByLayerId.getValue(part.layerId).page)
+				atlas.placementByLayerId.getValue(part.layerId).page, mouthApertures[part.recordIndex], part.drawableId in resolution.ribbonParts)
 			partDrawables += built.first
 			if (part.parent != null) deferredParts += part.drawableId
 			classifiedByDrawable[part.drawableId] = layer
@@ -1686,7 +1695,8 @@ object RigBuilder {
 	 */
 	private fun pinnedPart(
 		part: ResolvedPart, layer: ClassifiedLayer, context: RigContext, config: PipelineConfig, deformersEnabled: Boolean,
-		switchParamKeys: Map<String, FloatArray>, stages: RigStageCache?, drawOrder: Float, page: Int,
+		switchParamKeys: Map<String, FloatArray>, stages: RigStageCache?, drawOrder: Float, page: Int, mouthAperture: Bounds? = null,
+		ribbon: Boolean = false,
 	): Pair<Drawable, Bounds> {
 		val rigLayer = context.rigLayer(layer)
 		val deferred = part.parent != null
@@ -1708,8 +1718,9 @@ object RigBuilder {
 			parentId != null -> data.mesh
 			else -> DrawableMesh(rig, uvs, part.triangles.copyOf())
 		}
-		val aperture = mouthApertureFor(rigLayer)
-		val generated = if (config.meshOnly || deferred) zeroMeshGrid(canvas.size)
+		val aperture = mouthApertureFor(rigLayer)?.let { mouthAperture ?: it }
+		// A part of a lip ribbon keeps a zero grid: its record carries the ribbon's motion as residual.
+		val generated = if (config.meshOnly || deferred || ribbon) zeroMeshGrid(canvas.size)
 			else buildDrawableGeometry(rigLayer, data, parentFrame, context.faceRig, matchingEyeWhiteBounds(rigLayer, context.eyeWhiteLayers),
 				aperture, config, emptyList())
 		val geometry = if (generated.axes.any { it.parameterId in part.frozenAxes }) zeroMeshGrid(canvas.size) else generated

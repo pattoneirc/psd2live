@@ -462,7 +462,15 @@ internal object ArtPrimitiveJournal {
 			"The split original's mesh was edited by hand"
 		}
 		// Rest positions through the parent at the default pose, without the part's own keyforms (those are the residual's).
-		val world = requireNotNull(org.umamo.render.eval.drawableSpaceMapping(authoredModel, emptyMap(), authoredPart.id)) {
+		// Under its generated parent the part is placed through the generated deformers: the base normalises these
+		// positions into that parent, and the journal's own edits of the parent chain (a moved rest lattice) replay on
+		// top, so taking them from the authored rig would apply those edits twice. A parent a journal edit chose is
+		// held in canvas units and placed into the authored parent on replay, so it maps through the authored rig.
+		val generatedParent = authoredPart.parentDeformerId == generatedPart.parentDeformerId &&
+			(authoredPart.parentDeformerId == null || ghostGenerated.deformers.any { it.id == authoredPart.parentDeformerId })
+		val placement = if (generatedParent) ghostGenerated.copy(drawables = ghostGenerated.drawables.filterNot { it.id == authoredPart.id } +
+			authoredPart.copy(geometryGrid = null, blendShapes = emptyList())) else authoredModel
+		val world = requireNotNull(org.umamo.render.eval.drawableSpaceMapping(placement, emptyMap(), authoredPart.id)) {
 			"Art primitive parent cannot be evaluated: ${authoredPart.id.raw}"
 		}.localToWorld(mesh.positions)
 		val canvasPositions = FloatArray(world.size) { if (it % 2 == 0) world[it] else -world[it] }
@@ -487,7 +495,12 @@ internal object ArtPrimitiveJournal {
 			val map = partMap(parked, mesh.uvs, mesh.indices)
 			val seed = if (map == null) parkedMesh.positions else FloatArray(mesh.positions.size) { 0.5f }
 			val space = PrimitiveResidual.ParentSpace(authoredModel, a, parkedModel, parked, seed)
-			PrimitiveResidual.geometry(parameters, delta, mesh.positions.size, parked, space::convert,
+			// A part the base generates no keyforms for (a zero grid: a split lip ribbon, a part under a parent a journal
+			// edit made) has nothing to add back the original's generated motion: its residual is the whole authored form.
+			val unkeyed = parked.geometryGrid?.axes.isNullOrEmpty() && generatedPart.geometryGrid?.axes?.isNotEmpty() == true
+			val residualDelta = if (!unkeyed) delta else PrimitiveResidual.delta(ghostAuthored, authoredGhost, ghostGenerated,
+				generatedPart.copy(geometryGrid = null), sources, checkpoint)
+			PrimitiveResidual.geometry(parameters, residualDelta, mesh.positions.size, parked, space::convert,
 				{ values -> map?.let { PrimitiveResidual.transfer(values, it.sources) } ?: values }, { skins.owner(parked.id, it) }, checkpoint)
 		}
 		// Channels belong to the drawable, not its vertices: the part's own (a depth slice drops its draw order grid) over the original's.

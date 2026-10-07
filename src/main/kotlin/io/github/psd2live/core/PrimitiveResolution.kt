@@ -29,6 +29,8 @@ internal class PrimitiveResolution private constructor(
 	val replaces: Map<DrawableId, DrawableId>,
 	/** Layers of version 1 records: never generated, as before. */
 	val legacyOwnedLayers: Set<String>,
+	/** Parts of a split lip ribbon: a ribbon's motion comes from the lip generator of its mouth, which a part does not get. */
+	val ribbonParts: Set<DrawableId> = emptySet(),
 ) {
 	val active: Boolean get() = !resolved.isEmpty()
 	val parts: List<ResolvedPart> get() = resolved.parts
@@ -84,19 +86,22 @@ internal class PrimitiveResolution private constructor(
 			if (resolved.isEmpty()) return Inactive
 			val replaces = LinkedHashMap<DrawableId, DrawableId>()
 			val legacy = LinkedHashSet<String>()
+			val ribbons = LinkedHashSet<DrawableId>()
 			for (command in journal) {
 				if (!ArtPrimitiveJournal.isRecord(command)) continue
 				if (!ArtPrimitiveV2.isV2(command)) {
 					ArtPrimitiveJournal.primitives(command).forEach { legacy += it.getValue(ArtPrimitiveV2.LAYER_ID).jsonPrimitive.content }
 					continue
 				}
+				if (command[ArtPrimitiveV2.SUPERSEDES_LAYERS]?.jsonArray.orEmpty().any { MouthLipLayer.isLipId(it.jsonPrimitive.content) })
+					ArtPrimitiveJournal.primitives(command).forEach { ribbons += DrawableId(it.getValue(ArtPrimitiveV2.ID).jsonPrimitive.content) }
 				command[ArtPrimitiveV2.REPLACE]?.jsonObject?.forEach { (superseded, parts) ->
 					parts.jsonArray.forEach { replaces[DrawableId(it.jsonPrimitive.content)] = DrawableId(superseded) }
 				}
 			}
 			val byLayer = LinkedHashMap<String, ResolvedPart>()
 			for (part in resolved.parts) byLayer[part.layerId] = part
-			return PrimitiveResolution(resolved, byLayer, replaces, legacy)
+			return PrimitiveResolution(resolved, byLayer, replaces, legacy, ribbons)
 		}
 	}
 }

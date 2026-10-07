@@ -25,6 +25,11 @@ internal class MouthLipLayer(
 
     companion object {
         fun idFor(ownerId: String, side: Int) = "$ownerId::mouth-lip-$side"
+
+        /** Whether [id] names a generated lip ribbon ([idFor]). */
+        fun isLipId(id: String) = LIP_ID.matches(id)
+
+        private val LIP_ID = Regex(".+::mouth-lip-\\d+")
     }
 }
 
