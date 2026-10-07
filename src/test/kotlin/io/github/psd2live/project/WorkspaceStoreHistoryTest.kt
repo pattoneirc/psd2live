@@ -83,6 +83,33 @@ class WorkspaceStoreHistoryTest {
 		assertEquals(journal, loaded.head().snapshot.rigEdits.authoringJournal)
 	}
 
+	@Test fun persistingAgainWritesOnlyNewNodesAndRecoversARemovedHistory() {
+		val store = WorkspaceStore(temporary.resolve("store"))
+		var current = document()
+		val first = WorkspaceRevisions.of(current)
+		val tree = WorkspaceHistoryTree(current, first, first)
+		store.persistHistory("project", tree.state())
+		val project = store.projectRoot("project")
+		val nodes = project.resolve("history/nodes")
+		val firstNode = Files.list(nodes).use { it.toList().single() }
+		val written = Files.getLastModifiedTime(firstNode)
+		repeat(5) { i ->
+			current = document(List(i + 1) { entry(it, points = 8) })
+			val revision = WorkspaceRevisions.of(current)
+			tree.commit(tree.head().node.id, current, revision, revision, "Edit $i", "user")
+			store.persistHistory("project", tree.state())
+		}
+		assertEquals(6, Files.list(nodes).use { it.count() })
+		assertEquals(written, Files.getLastModifiedTime(firstNode), "stored nodes are not written again")
+
+		// A history removed behind the store's back is written again in full on the next commit.
+		Files.walk(project.resolve("history")).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::delete) }
+		store.persistHistory("project", tree.state())
+		val loaded = assertNotNull(WorkspaceStore(temporary.resolve("store")).loadHistory("project"))
+		assertEquals(6, loaded.selections().size)
+		assertEquals(current.rigEdits.authoringJournal, loaded.head().snapshot.rigEdits.authoringJournal)
+	}
+
 	@Test fun theDesktopProjectionKeepsTextureFields() {
 		val codec = io.github.psd2live.ui.state.WorkspaceStateCodec
 		val plain = io.github.psd2live.ui.state.PSD2LiveState()

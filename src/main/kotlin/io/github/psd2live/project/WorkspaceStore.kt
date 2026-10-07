@@ -68,6 +68,13 @@ internal class WorkspaceStore(
 	private val root: Path = defaultRoot(),
 ) : WorkspaceAssetRepository {
 	private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
+	/**
+	 * Content-addressed files (snapshots, nodes, journal chunks, payloads, rasters) this store wrote or found. They
+	 * never change or go away, so a commit stats only the files new to it instead of every node of the history.
+	 */
+	private val stored = HashSet<Path>()
+
+	private fun isStored(path: Path): Boolean = path in stored || Files.isRegularFile(path).also { if (it) stored.add(path) }
 
     @Synchronized
     internal fun copyAuxiliary(projectId: String, target: Path, catalog: WorkspaceAssetCatalog? = null, targetProjectId: String = projectId) {
@@ -229,6 +236,7 @@ internal class WorkspaceStore(
             checkCancelled()
             beforePublished()
         } catch (failure: Throwable) {
+            stored.removeAll(created.toSet())
             created.asReversed().forEach { file ->
                 try { Files.deleteIfExists(file) } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
             }
@@ -239,16 +247,20 @@ internal class WorkspaceStore(
 	@Synchronized
 	fun persistHistory(projectId: String, state: WorkspaceHistoryState<WorkspaceDocument>) {
 		val project = projectRoot(projectId)
+		// A history removed behind the store's back is written again in full.
+		if (!Files.isDirectory(project.resolve("history"))) stored.removeIf { it.startsWith(project) }
 		for (selection in state.selections) {
+			val nodePath = project.resolve("history/nodes/${fileKey(selection.node.id)}.json")
+			// A node is written after its snapshot, so a stored node has its snapshot too.
+			if (nodePath in stored) continue
 			val snapshotPath = project.resolve("history/snapshots/${fileKey(selection.node.snapshotHash)}.json")
-			if (!Files.isRegularFile(snapshotPath)) {
+			if (!isStored(snapshotPath)) {
 				val snapshotBytes = shareContent(encodeDocument(selection.snapshot, project), selection.snapshot, project).toString().encodeToByteArray()
 				writeAtomic(snapshotPath, snapshotBytes, replace = false, pretty = false)
+				stored.add(snapshotPath)
 			}
-			val nodePath = project.resolve("history/nodes/${fileKey(selection.node.id)}.json")
-			if (!Files.isRegularFile(nodePath)) {
-				writeImmutable(nodePath, encodeNode(selection.node).toString().encodeToByteArray())
-			}
+			if (!isStored(nodePath)) writeImmutable(nodePath, encodeNode(selection.node).toString().encodeToByteArray())
+			stored.add(nodePath)
 		}
 		writeAtomic(
 			project.resolve("HEAD.json"),
@@ -905,10 +917,11 @@ internal class WorkspaceStore(
 	private fun persistRaster(project: Path, rgba: ByteArray, width: Int, height: Int): String {
 		val hash = WorkspaceRevisions.rasterDigest(rgba)
         val path = project.resolve("blobs/${fileKey(hash)}-${width}x${height}.png")
-        if (Files.isRegularFile(path)) return hash
+        if (isStored(path)) return hash
         val image = io.github.psd2live.core.PreviewRenderer.rasterImage(width, height, rgba)
         val bytes = ByteArrayOutputStream().use { out -> javax.imageio.ImageIO.write(image, "png", out); out.toByteArray() }
         writeImmutable(path, bytes)
+		stored.add(path)
 		return hash
 	}
 
@@ -974,7 +987,7 @@ internal class WorkspaceStore(
 		document.rigEdits.importedCmo3?.takeIf { it.length >= PAYLOAD_MIN_CHARS }?.let { text ->
 			val hash = payloadDigests.getOrPut(text) { sha256(text.encodeToByteArray()) }
 			val path = project.resolve("history/payloads/$hash.txt")
-			if (!Files.isRegularFile(path)) writeAtomic(path, text.encodeToByteArray(), replace = false, pretty = false)
+			if (!isStored(path)) { writeAtomic(path, text.encodeToByteArray(), replace = false, pretty = false); stored.add(path) }
 			changes[IMPORTED_CMO3] = buildJsonObject { put("payload", hash) }
 		}
 		if (changes.isEmpty()) return value
@@ -984,7 +997,7 @@ internal class WorkspaceStore(
 	private fun writeJournalChunk(project: Path, entries: List<JsonObject>): String {
 		val key = journalChunkKey(entries)
 		val path = project.resolve("history/journal/$key.json")
-		if (!Files.isRegularFile(path)) writeAtomic(path, JsonArray(entries).toString().encodeToByteArray(), replace = false, pretty = false)
+		if (!isStored(path)) { writeAtomic(path, JsonArray(entries).toString().encodeToByteArray(), replace = false, pretty = false); stored.add(path) }
 		return key
 	}
 
