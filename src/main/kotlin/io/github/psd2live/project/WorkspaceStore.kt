@@ -255,7 +255,7 @@ internal class WorkspaceStore(
 			if (nodePath in stored) continue
 			val snapshotPath = project.resolve("history/snapshots/${fileKey(selection.node.snapshotHash)}.json")
 			if (!isStored(snapshotPath)) {
-				val snapshotBytes = shareContent(encodeDocument(selection.snapshot, project), selection.snapshot, project).toString().encodeToByteArray()
+				val snapshotBytes = shareContent(encodeDocument(selection.snapshot, project), project).toString().encodeToByteArray()
 				writeAtomic(snapshotPath, snapshotBytes, replace = false, pretty = false)
 				stored.add(snapshotPath)
 			}
@@ -968,37 +968,10 @@ internal class WorkspaceStore(
 		writeAtomic(path, bytes, replace = false)
 	}
 
-	/**
-	 * Replaces the parts of an encoded snapshot that later revisions mostly repeat with references to shared,
-	 * content-addressed files: the authoring journal becomes chunks under `history/journal/`, and a large embedded
-	 * CMO3 baseline a payload under `history/payloads/`. A revision then adds only its changed chunks instead of
-	 * a full copy of the journal. [expandSnapshot] restores the original snapshot exactly. The reference shapes
-	 * (an object where v1 has an array or string) make builds without this support fail to read the snapshot
-	 * instead of silently dropping the journal.
-	 */
-	private fun shareContent(value: JsonObject, document: WorkspaceDocument, project: Path): JsonObject {
-		val rig = value["rigEdits"]?.jsonObject ?: return value
-		val changes = LinkedHashMap<String, JsonElement>()
-		val journal = document.rigEdits.authoringJournal
-		if (journal.isNotEmpty()) changes[JOURNAL] = buildJsonObject {
-			put("count", journal.size)
-			putJsonArray("chunks") { journalChunks(journal).forEach { add(JsonPrimitive(writeJournalChunk(project, it))) } }
-		}
-		document.rigEdits.importedCmo3?.takeIf { it.length >= PAYLOAD_MIN_CHARS }?.let { text ->
-			val hash = payloadDigests.getOrPut(text) { sha256(text.encodeToByteArray()) }
-			val path = project.resolve("history/payloads/$hash.txt")
-			if (!isStored(path)) { writeAtomic(path, text.encodeToByteArray(), replace = false, pretty = false); stored.add(path) }
-			changes[IMPORTED_CMO3] = buildJsonObject { put("payload", hash) }
-		}
-		if (changes.isEmpty()) return value
-		return JsonObject(value + ("rigEdits" to JsonObject(rig + changes)))
-	}
-
-	private fun writeJournalChunk(project: Path, entries: List<JsonObject>): String {
-		val key = journalChunkKey(entries)
-		val path = project.resolve("history/journal/$key.json")
-		if (!isStored(path)) { writeAtomic(path, JsonArray(entries).toString().encodeToByteArray(), replace = false, pretty = false); stored.add(path) }
-		return key
+	/** [WorkspaceStore.shareContent] into [project], writing each shared file this store does not have yet. */
+	private fun shareContent(value: JsonObject, project: Path): JsonObject = shareContent(value) { relative, bytes ->
+		val path = project.resolve(relative)
+		if (!isStored(path)) { writeAtomic(path, bytes(), replace = false, pretty = false); stored.add(path) }
 	}
 
 	private fun writeAtomic(path: Path, bytes: ByteArray, replace: Boolean = true, pretty: Boolean = true) {
@@ -1055,6 +1028,11 @@ internal class WorkspaceStore(
 	internal class SharedContent {
 		val chunks = HashMap<String, List<JsonObject>>()
 		val payloads = HashMap<String, String>()
+		/**
+		 * One object per distinct entry: a journal's last chunk ends at its end, so a revision and the next one
+		 * hold the same trailing entries in different chunks.
+		 */
+		val entries = HashMap<JsonObject, JsonObject>()
 	}
 
 	companion object {
@@ -1097,6 +1075,38 @@ internal class WorkspaceStore(
 		internal fun journalChunkKey(entries: List<JsonObject>): String =
 			WorkspaceRevisions.sha256(entries.joinToString("\n") { JournalEntryDigests.of(it).sha256 }.encodeToByteArray())
 
+		/**
+		 * Replaces the parts of an encoded snapshot that later revisions mostly repeat with references to shared,
+		 * content-addressed files: the authoring journal becomes chunks under `history/journal/`, and a large embedded
+		 * CMO3 baseline a payload under `history/payloads/`. A revision then adds only its changed chunks instead of
+		 * a full copy of the journal. [expandSnapshot] restores the original snapshot exactly. The reference shapes
+		 * (an object where v1 has an array or string) make builds without this support fail to read the snapshot
+		 * instead of silently dropping the journal. [write] receives each shared file's path under the project and
+		 * its bytes, and writes those not already there.
+		 */
+		internal fun shareContent(value: JsonObject, write: (String, () -> ByteArray) -> Unit): JsonObject {
+			val rig = value["rigEdits"]?.jsonObject ?: return value
+			val changes = LinkedHashMap<String, JsonElement>()
+			val journal = (rig[JOURNAL] as? JsonArray)?.map { it.jsonObject }.orEmpty()
+			if (journal.isNotEmpty()) changes[JOURNAL] = buildJsonObject {
+				put("count", journal.size)
+				putJsonArray("chunks") {
+					for (chunk in journalChunks(journal)) {
+						val key = journalChunkKey(chunk)
+						write("history/journal/$key.json") { JsonArray(chunk).toString().encodeToByteArray() }
+						add(JsonPrimitive(key))
+					}
+				}
+			}
+			(rig[IMPORTED_CMO3] as? JsonPrimitive)?.takeIf { it.isString && it.content.length >= PAYLOAD_MIN_CHARS }?.content?.let { text ->
+				val hash = payloadDigests.getOrPut(text) { WorkspaceRevisions.sha256(text.encodeToByteArray()) }
+				write("history/payloads/$hash.txt") { text.encodeToByteArray() }
+				changes[IMPORTED_CMO3] = buildJsonObject { put("payload", hash) }
+			}
+			if (changes.isEmpty()) return value
+			return JsonObject(value + ("rigEdits" to JsonObject(rig + changes)))
+		}
+
 		/** The self-contained v1 snapshot that [snapshot] stands for, resolving shared journal chunks and payloads. */
 		internal fun expandSnapshot(project: Path, snapshot: JsonObject, shared: SharedContent = SharedContent()): JsonObject {
 			val rig = snapshot["rigEdits"] as? JsonObject ?: return snapshot
@@ -1110,7 +1120,7 @@ internal class WorkspaceStore(
 						require(Files.isRegularFile(file)) { "Journal chunk is missing: $key" }
 						val chunk = Json.parseToJsonElement(Files.readString(file)).jsonArray.map { it.jsonObject }
 						require(journalChunkKey(chunk) == key) { "Journal chunk checksum mismatch: $key" }
-						chunk
+						chunk.map { entry -> shared.entries.getOrPut(entry) { entry } }
 					}
 				}
 				require(entries.size == reference["count"]?.jsonPrimitive?.intOrNull) { "Journal entry count mismatch" }

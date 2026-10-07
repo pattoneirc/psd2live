@@ -279,4 +279,56 @@ class ProjectFormatV2Test {
 			assertEquals(revision, WorkspaceRevisions.of(opened.history.selections().single { it.node.parentId == null }.snapshot))
 		}
 	}
+	@Test fun longJournalsSaveAsPayloadsAndReopenSharingEntries() = runBlocking<Unit> {
+		val raster = org.umamo.format.art.LayerRaster(2, 2, ByteArray(16) { 255.toByte() })
+		val layer = WorkspaceSourceLayer(org.umamo.format.art.LayerId("art"), "Artwork", "", org.umamo.format.art.SourceLayerKind.Raster, true,
+			0, org.umamo.format.art.LayerBounds(1, 1, 3, 3), 1f, false, org.umamo.format.art.LayerBlend.Normal, org.umamo.format.art.ChannelMask.ALL, raster,
+			null, null, false)
+		// The atlas budget is a schema-2 settings field, as every newly imported project has one.
+		val settings = buildJsonObject {
+			put("atlasSize", 2048)
+			put(WorkspaceSettingsCodec.ATLAS, WorkspaceSettingsCodec.encodeAtlasBudget(io.github.psd2live.core.AtlasBudget(pageSize = 2048)))
+		}
+		fun document(journal: List<JsonObject>) = WorkspaceDocument(WorkspaceSourceArt(8, 8, listOf(layer), emptyList()), emptyMap(), emptySet(),
+			emptyMap(), emptyMap(), io.github.psd2live.core.RigEditOverlay.Empty.copy(authoringJournal = journal), settings = settings)
+		fun entry(n: Int) = buildJsonObject {
+			put("op", "canvas_geometry"); put("n", n)
+			putJsonArray("points") { repeat(300) { add(n * 1000 + it) } }
+		}
+		val journal = ArrayList<JsonObject>()
+		var current = document(journal.toList())
+		val root = WorkspaceRevisions.of(current)
+		val tree = io.github.psd2live.history.WorkspaceHistoryTree(current, root, root)
+		repeat(40) { i ->
+			journal.add(entry(i))
+			current = document(journal.toList())
+			val revision = WorkspaceRevisions.of(current)
+			tree.commit(tree.head().node.id, current, revision, revision, "Edit $i", "user")
+		}
+		val target = temporary.resolve("long.psd2live")
+		val repository = ProjectRepository(writeHeadCache = false)
+		repository.save(ProjectSaveCapture("project", tree.state(), JsonObject(emptyMap()), null, WorkspaceStore(temporary.resolve("workspace"))), target)
+		ZipFile(target.toFile()).use { zip ->
+			val names = zip.entries().asSequence().map { it.name }.toList()
+			assertEquals(40, names.count { it.startsWith("document/nodes/payload/") }, "each long entry is stored once")
+			val journalBytes = names.filter { it.startsWith("document/nodes/journal/") }.sumOf { zip.getEntry(it).size }
+			val entryChars = JsonArray(journal).toString().length.toLong()
+			assertTrue(journalBytes < entryChars, "journal nodes name the entries instead of repeating them: $journalBytes vs one journal of $entryChars")
+		}
+		repository.open(target).use { opened ->
+			val selections = opened.history.selections()
+			for (selection in selections) assertEquals(selection.node.revisionId, WorkspaceRevisions.of(selection.snapshot))
+			val head = opened.history.head().snapshot.rigEdits.authoringJournal
+			assertEquals(journal, head)
+			val parent = selections.single { it.node.id == opened.history.head().node.parentId }.snapshot.rigEdits.authoringJournal
+			assertTrue(parent.indices.all { parent[it] === head[it] }, "revisions share the entries they have in common")
+			// Saving the reopened history writes the same revision indexes again.
+			val again = temporary.resolve("again.psd2live")
+			repository.save(ProjectSaveCapture("project", opened.history.state(), JsonObject(emptyMap()), null, opened.store), again)
+			fun revisions(file: Path) = ZipFile(file.toFile()).use { zip ->
+				zip.entries().asSequence().filter { it.name.startsWith("history/revisions/") }.associate { it.name to zip.getInputStream(it).readBytes().decodeToString() }
+			}
+			assertEquals(revisions(target), revisions(again))
+		}
+	}
 }

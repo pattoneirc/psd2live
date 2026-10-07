@@ -47,6 +47,11 @@ internal object ProjectFormatV2 {
 	const val PAYLOAD = "payload"
 	/** Key of a journal entry that stands for a payload node: `{"$payload": "<sha256>"}`. */
 	const val PAYLOAD_REF = "\$payload"
+	/**
+	 * Saved journal entries at least this long (in characters) become payload nodes, in revisions that already
+	 * need schema 2: the reference is under 80 characters, so each revision's journal node stays small.
+	 */
+	const val PAYLOAD_MIN_CHARS = 512
 
 	private val json = Json { ignoreUnknownKeys = true }
 
@@ -68,9 +73,11 @@ internal object ProjectFormatV2 {
 		moveTree(store.resolve("history/nodes"), history.resolve("nodes"))
 		val snapshots = store.resolve("history/snapshots")
 		val shared = WorkspaceStore.SharedContent()
+		val payloads = PayloadHashes()
 		if (Files.isDirectory(snapshots)) Files.list(snapshots).use { paths -> paths.sorted().toList() }.forEach { file ->
 			val snapshot = WorkspaceStore.expandSnapshot(store, json.parseToJsonElement(Files.readString(file)).jsonObject, shared)
-			val index = split(root, snapshot)
+			// Revisions shared chunks, so their entries are the same objects: each payload is written and hashed once.
+			val index = split(root, snapshot, PAYLOAD_MIN_CHARS.takeIf { needsNewerSchema(snapshot) }, payloads)
 			write(history.resolve("revisions").resolve(file.fileName.toString()), index.toString().encodeToByteArray())
 			Files.delete(file)
 		}
@@ -92,9 +99,13 @@ internal object ProjectFormatV2 {
 		require(!Files.exists(store)) { "Project store entries in a v2 archive" }
 		val revisions = history.resolve("revisions")
 		val cache = HashMap<String, JsonObject>()
+		val written = HashSet<String>()
 		if (Files.isDirectory(revisions)) Files.list(revisions).use { paths -> paths.sorted().toList() }.forEach { file ->
 			val snapshot = join(root, json.parseToJsonElement(Files.readString(file)).jsonObject, cache)
-			write(store.resolve("history/snapshots").resolve(file.fileName.toString()), snapshot.toString().encodeToByteArray())
+			// Written as the working store writes a commit: revisions share journal chunks, so opening reads each
+			// entry once and every revision holds the same entry objects instead of its own copy of the journal.
+			val stored = WorkspaceStore.shareContent(snapshot) { relative, bytes -> if (written.add(relative)) write(store.resolve(relative), bytes()) }
+			write(store.resolve("history/snapshots").resolve(file.fileName.toString()), stored.toString().encodeToByteArray())
 		}
 		move(history.resolve("HEAD.json"), store.resolve("HEAD.json"))
 		moveTree(history.resolve("nodes"), store.resolve("history/nodes"))
@@ -109,18 +120,14 @@ internal object ProjectFormatV2 {
 	 *
 	 * With [payloadMinChars], authored journal entries whose text is at least that long are stored once each as
 	 * `payload` nodes and the journal node names them (`{"$PAYLOAD_REF": sha}`); such a revision has schema 2.
-	 * Saves do not pass it yet, so every revision they write stays readable by schema-1 builds.
+	 * [payloadHashes] remembers the payloads already written, by entry identity, across the revisions of a save.
 	 */
-	internal fun split(root: Path, snapshot: JsonObject, payloadMinChars: Int? = null): JsonObject {
+	internal fun split(root: Path, snapshot: JsonObject, payloadMinChars: Int? = null, payloadHashes: PayloadHashes = PayloadHashes()): JsonObject {
 		val nodes = LinkedHashMap<String, String>()
 		var overrides: String? = null
 		var clips: String? = null
 		val payloads = LinkedHashSet<String>()
-		fun subset(keys: List<String>) = JsonObject(snapshot.filterKeys { it in keys })
-		subset(sourceKeys).takeIf { it.isNotEmpty() }?.let { nodes["source"] = node(root, "source", it) }
-		subset(layerKeys).takeIf { it.isNotEmpty() }?.let { nodes["layers"] = node(root, "layers", it) }
-		subset(listOf("settings")).takeIf { it.isNotEmpty() }?.let { nodes["settings"] = node(root, "settings", it) }
-		for ((key, kind) in sourceParts) snapshot[key]?.let { nodes[kind] = node(root, kind, JsonObject(mapOf(key to it))) }
+		for ((kind, value) in plainParts(snapshot)) nodes[kind] = node(root, kind, value)
 		snapshot["rigEdits"]?.jsonObject?.let { rig ->
 			nodes["rig"] = node(root, "rig", JsonObject(mapOf("rigEdits" to JsonObject(rig.filterKeys { it != JOURNAL && it !in clipKeys }))))
 			rig[JOURNAL]?.jsonArray?.let { journal ->
@@ -128,8 +135,8 @@ internal object ProjectFormatV2 {
 					(command as? JsonObject)?.get("op")?.jsonPrimitive?.contentOrNull == OVERRIDE
 				}
 				val entries = authored.map { (_, command) ->
-					if (payloadMinChars == null || command.toString().length < payloadMinChars) command
-					else buildJsonObject { put(PAYLOAD_REF, payload(root, command).also(payloads::add)) }
+					if (payloadMinChars == null || command !is JsonObject || JournalEntryDigests.of(command).length < payloadMinChars) command
+					else buildJsonObject { put(PAYLOAD_REF, payloadHashes.getOrPut(command) { payload(root, command) }.also(payloads::add)) }
 				}
 				nodes["journal"] = node(root, "journal", buildJsonObject { put("entries", JsonArray(entries)) })
 				if (generated.isNotEmpty()) overrides = content(root, "document/overrides", buildJsonObject {
@@ -150,6 +157,27 @@ internal object ProjectFormatV2 {
 			clips?.let { put("clips", it) }
 			if (payloads.isNotEmpty()) putJsonArray("payloads") { payloads.forEach { add(JsonPrimitive(it)) } }
 		}
+	}
+
+	/** The source, layer, settings and extra source nodes of [snapshot], in index order, before they are written. */
+	private fun plainParts(snapshot: JsonObject): List<Pair<String, JsonObject>> = buildList {
+		fun subset(keys: List<String>) = JsonObject(snapshot.filterKeys { it in keys })
+		subset(sourceKeys).takeIf { it.isNotEmpty() }?.let { add("source" to it) }
+		subset(layerKeys).takeIf { it.isNotEmpty() }?.let { add("layers" to it) }
+		subset(listOf("settings")).takeIf { it.isNotEmpty() }?.let { add("settings" to it) }
+		for ((key, kind) in sourceParts) snapshot[key]?.let { add(kind to JsonObject(mapOf(key to it))) }
+	}
+
+	/**
+	 * Whether [snapshot] already has a schema-2 node. Only such a revision names payloads when saved: readers that
+	 * can open it read payloads too, and a document without newer fields keeps its schema-1 nodes and index.
+	 */
+	internal fun needsNewerSchema(snapshot: JsonObject): Boolean = plainParts(snapshot).any { (kind, value) -> schemaOf(kind, value) != NODE_SCHEMA }
+
+	/** Payload node hashes by journal entry identity. */
+	internal class PayloadHashes {
+		private val hashes = java.util.IdentityHashMap<JsonObject, String>()
+		fun getOrPut(entry: JsonObject, write: () -> String): String = hashes.getOrPut(entry, write)
 	}
 
 	/** Stores [value] once as a content-addressed `payload` node and returns its hash. */
