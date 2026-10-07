@@ -63,6 +63,7 @@ import io.github.psd2live.ui.theme.frostedGlass
 import java.awt.Cursor
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import kotlinx.coroutines.delay
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -74,6 +75,14 @@ private const val CANVAS_PADDING_DP = 24f
 private const val MIN_SCALE = 0.25f
 private const val MAX_SCALE = 2.5f
 private const val ZOOM_STEP = 1.15f
+private const val VIEW_SAVE_DELAY_MS = 300L
+
+/** The camera and filters of the history view, as the project opened as [generation] saves them. */
+private data class HistoryViewState(val scale: Float, val pan: Offset, val search: String, val showHidden: Boolean, val generation: Long) {
+	fun save(viewModel: PSD2LiveViewModel) {
+		if (viewModel.state.value.projectOpenGeneration == generation) viewModel.setHistoryView(scale, pan.x, pan.y, search, showHidden)
+	}
+}
 
 internal class TreeNodeLayout(
 	val node: WorkspaceHistoryNodeSnapshot,
@@ -106,7 +115,10 @@ fun HistoryTreeView(
 		while (cursor != null) { hidden.remove(cursor); cursor = byId[cursor]?.parentId }
 		hidden
 	}
-	val historySnapshot = fullHistory?.copy(nodes = fullHistory.nodes.filterNot { it.id in hiddenIds })
+	// Kept across recompositions: the remembers below key on it, and a new copy would compare every node each time.
+	val historySnapshot = remember(fullHistory, hiddenIds) {
+		if (hiddenIds.isEmpty()) fullHistory else fullHistory?.copy(nodes = fullHistory.nodes.filterNot { it.id in hiddenIds })
+	}
 	var searchQuery by remember(state.projectOpenGeneration) { mutableStateOf(state.historySearch) }
 	var scale by remember(state.projectOpenGeneration) { mutableStateOf(state.historyZoom.coerceIn(MIN_SCALE, MAX_SCALE)) }
 	var panOffset by remember(state.projectOpenGeneration) { mutableStateOf(Offset(state.historyPanX, state.historyPanY)) }
@@ -115,9 +127,13 @@ fun HistoryTreeView(
 	var isInspectionPanelOpen by remember { mutableStateOf(true) }
 	var isOperationListOpen by remember { mutableStateOf(true) }
 
+	// The view is saved once it settles: each step of a pan or zoom would update the whole app state.
+	val savedView by rememberUpdatedState(HistoryViewState(scale, panOffset, searchQuery, showHidden, state.projectOpenGeneration))
 	LaunchedEffect(scale, panOffset, searchQuery, showHidden) {
-		viewModel.setHistoryView(scale, panOffset.x, panOffset.y, searchQuery, showHidden)
+		delay(VIEW_SAVE_DELAY_MS)
+		savedView.save(viewModel)
 	}
+	DisposableEffect(Unit) { onDispose { savedView.save(viewModel) } }
 
 	val selectedNodeId = state.selectedHistoryNodeId ?: historySnapshot?.headNodeId
 	val selectedNode = remember(historySnapshot, selectedNodeId) {
@@ -297,6 +313,8 @@ fun HistoryTreeView(
 							for (child in parent.children) {
 								val cx = worldToScreenX(child.x + NODE_WIDTH_DP / 2f)
 								val cy = worldToScreenY(child.y)
+								// The curve stays inside the box of its ends.
+								if (maxOf(px, cx) < 0f || minOf(px, cx) > size.width || maxOf(py, cy) < 0f || minOf(py, cy) > size.height) continue
 								val path = Path().apply {
 									moveTo(px, py)
 									cubicTo(px, py + (cy - py) * 0.5f, cx, cy - (cy - py) * 0.5f, cx, cy)
