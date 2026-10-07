@@ -41,8 +41,8 @@ internal fun ParameterKeysEditor(
         if (parameter.kind == ParameterKind.BLEND_SHAPE) marks?.blendKeys.orEmpty() else marks?.gridKeys.orEmpty()
     }
     var selected by remember(parameter.id) { mutableStateOf<Float?>(null) }
-    var snapStep by remember { mutableStateOf<Float?>(5f) }
-    var stepDraft by remember { mutableStateOf(formatAxisValue(5f)) }
+    var snapStep by remember { mutableStateOf<Float?>(null) }
+    var stepDraft by remember { mutableStateOf("") }
     val colors = LocalToolColors.current
     val typography = LocalToolTypography.current
     val writable = enabled
