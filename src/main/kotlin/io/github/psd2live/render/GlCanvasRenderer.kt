@@ -26,6 +26,9 @@ import java.util.IdentityHashMap
  * with static UVs and indices and a dynamic position buffer, re-uploaded only when the scene hands over a
  * different array; the atlas pages as premultiplied textures; masks through the stencil buffer. The camera is a
  * uniform, so pan and zoom upload nothing.
+ *
+ * The texture atlas page ([AtlasScene]) goes through the same guide pass: its tiles are textured rectangles of
+ * their layers' rasters, uploaded once per raster, and its wireframes line batches.
  */
 internal class GlCanvasRenderer(
 	/**
@@ -63,6 +66,9 @@ internal class GlCanvasRenderer(
 		var paintSession: Any? = null
 		var paintWidth = 0
 		var paintHeight = 0
+		/** Layer rasters the atlas page draws, by array; those a frame no longer draws are freed after it. */
+		val rasters = IdentityHashMap<ByteArray, Int>()
+		val rastersDrawn: MutableSet<ByteArray> = java.util.Collections.newSetFromMap(IdentityHashMap())
 	}
 
 	private val artwork = program(Shaders.ARTWORK_VERTEX, Shaders.ARTWORK_FRAGMENT)
@@ -80,6 +86,10 @@ internal class GlCanvasRenderer(
 	private val quadVao: Int = GL30.glGenVertexArrays()
 	private val quadPositions: Int = GL15.glGenBuffers()
 	private val quadUvs: Int = GL15.glGenBuffers()
+	/** One textured quad with its own texture corners, for the atlas page's tiles. */
+	private val tileVao: Int = GL30.glGenVertexArrays()
+	private val tilePositions: Int = GL15.glGenBuffers()
+	private val tileUvs: Int = GL15.glGenBuffers()
 	private val worldUniform = FloatArray(4)
 
 	init {
@@ -113,6 +123,13 @@ internal class GlCanvasRenderer(
 		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f), GL15.GL_STATIC_DRAW)
 		GL20.glEnableVertexAttribArray(1)
 		GL20.glVertexAttribPointer(1, 2, GL11.GL_FLOAT, false, 0, 0L)
+		GL30.glBindVertexArray(tileVao)
+		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, tilePositions)
+		GL20.glEnableVertexAttribArray(0)
+		GL20.glVertexAttribPointer(0, 2, GL11.GL_FLOAT, false, 0, 0L)
+		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, tileUvs)
+		GL20.glEnableVertexAttribArray(1)
+		GL20.glVertexAttribPointer(1, 2, GL11.GL_FLOAT, false, 0, 0L)
 		GL30.glBindVertexArray(0)
 	}
 
@@ -120,7 +137,7 @@ internal class GlCanvasRenderer(
 	 * Draws [scene] for [viewId] and reads it back as a premultiplied RGBA bitmap, top row first. The bitmap is
 	 * new each frame and owned by the caller.
 	 */
-	fun render(viewId: String, scene: CanvasScene): Bitmap {
+	fun render(viewId: String, scene: GpuScene): Bitmap {
 		val width = scene.width.coerceAtLeast(1)
 		val height = scene.height.coerceAtLeast(1)
 		val view = views.getOrPut(viewId) { View() }
@@ -139,9 +156,25 @@ internal class GlCanvasRenderer(
 		GL11.glBlendFunc(GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA)
 		worldTransform(scene.viewport, width, height)
 
-		drawArtwork(view, scene)
-		drawOverlay(scene.overlay, width, height)
-		drawPaint(view, scene.paint)
+		when (scene) {
+			is CanvasScene -> {
+				drawArtwork(view, scene)
+				drawOverlay(view, scene.overlay, width, height)
+				drawPaint(view, scene.paint)
+			}
+			is AtlasScene -> {
+				view.rastersDrawn.clear()
+				drawOverlay(view, scene.overlay, width, height)
+				// Rasters the page no longer shows (another page, a replaced image, the pixels hidden) give their textures back.
+				if (view.rasters.size > view.rastersDrawn.size) {
+					val iterator = view.rasters.entries.iterator()
+					while (iterator.hasNext()) {
+						val (rgba, texture) = iterator.next()
+						if (rgba !in view.rastersDrawn) { GL11.glDeleteTextures(texture); iterator.remove() }
+					}
+				}
+			}
+		}
 
 		// Straight into the bitmap's own memory: no direct buffer, no heap array, no second copy into Skia.
 		val bitmap = Bitmap()
@@ -169,6 +202,7 @@ internal class GlCanvasRenderer(
 		if (view.color != 0) GL30.glDeleteRenderbuffers(view.color)
 		if (view.depthStencil != 0) GL30.glDeleteRenderbuffers(view.depthStencil)
 		if (view.paintTexture != 0) GL11.glDeleteTextures(view.paintTexture)
+		view.rasters.values.forEach(GL11::glDeleteTextures)
 	}
 
 	/** Drops atlas pages no longer in [live]; called when a model's atlas is replaced. */
@@ -187,9 +221,10 @@ internal class GlCanvasRenderer(
 		textures.clear()
 		GL20.glDeleteProgram(artwork.id); GL20.glDeleteProgram(lines.id); GL20.glDeleteProgram(points.id)
 		GL30.glDeleteVertexArrays(lineVao); GL30.glDeleteVertexArrays(pointVao); GL30.glDeleteVertexArrays(fillVao)
-		GL30.glDeleteVertexArrays(quadVao)
+		GL30.glDeleteVertexArrays(quadVao); GL30.glDeleteVertexArrays(tileVao)
 		GL15.glDeleteBuffers(lineInstances); GL15.glDeleteBuffers(pointInstances); GL15.glDeleteBuffers(fillVertices)
 		GL15.glDeleteBuffers(quadPositions); GL15.glDeleteBuffers(quadUvs)
+		GL15.glDeleteBuffers(tilePositions); GL15.glDeleteBuffers(tileUvs)
 	}
 
 	private fun worldTransform(viewport: CanvasViewport, width: Int, height: Int) {
@@ -269,7 +304,7 @@ internal class GlCanvasRenderer(
 		GL11.glDrawElements(GL11.GL_TRIANGLES, buffers.indexCount, GL11.GL_UNSIGNED_INT, 0L)
 	}
 
-	private fun drawOverlay(overlay: OverlayScene, width: Int, height: Int) {
+	private fun drawOverlay(view: View, overlay: OverlayScene, width: Int, height: Int) {
 		if (overlay.items.isEmpty()) return
 		// The artwork's masks leave their references behind; the fills count from a clean stencil.
 		GL11.glClear(GL11.GL_STENCIL_BUFFER_BIT)
@@ -304,6 +339,7 @@ internal class GlCanvasRenderer(
 				GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_STRIP, 0, 4, item.centers.size / 2)
 			}
 			is FillBatch -> drawFill(item)
+			is TextureQuad -> drawQuad(view, item)
 		}
 		GL30.glBindVertexArray(0)
 	}
@@ -362,6 +398,93 @@ internal class GlCanvasRenderer(
 		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, floatArrayOf(l, -t, r, -t, l, -b, r, -b), GL15.GL_STREAM_DRAW)
 		GL11.glDrawArrays(GL11.GL_TRIANGLE_STRIP, 0, 4)
 		GL30.glBindVertexArray(0)
+	}
+
+	/**
+	 * A textured rectangle, inside its clip rectangles when it has them: they are written to the stencil first and
+	 * the texels drawn only where it is set.
+	 */
+	private fun drawQuad(view: View, quad: TextureQuad) {
+		val texture = when (val source = quad.texture) {
+			is ImageTexture -> texture(source.image)
+			is RasterTexture -> rasterTexture(view, source) ?: return
+		}
+		val clip = quad.clip
+		if (clip != null) {
+			if (clip.size < 4) return
+			val vertices = FloatArray(clip.size / 4 * 12)
+			for (r in 0 until clip.size / 4) {
+				val x0 = clip[r * 4]; val y0 = clip[r * 4 + 1]; val x1 = clip[r * 4 + 2]; val y1 = clip[r * 4 + 3]
+				floatArrayOf(x0, y0, x1, y0, x0, y1, x1, y0, x1, y1, x0, y1).copyInto(vertices, r * 12)
+			}
+			GL20.glUseProgram(artwork.id)
+			GL20.glUniform4fv(artwork.uniform("u_world"), worldUniform)
+			GL20.glUniform4f(artwork.uniform("u_solid"), 0f, 0f, 0f, 1f)
+			GL30.glBindVertexArray(fillVao)
+			GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, fillVertices)
+			GL15.glBufferData(GL15.GL_ARRAY_BUFFER, vertices, GL15.GL_STREAM_DRAW)
+			GL11.glClear(GL11.GL_STENCIL_BUFFER_BIT)
+			GL11.glEnable(GL11.GL_STENCIL_TEST)
+			GL11.glColorMask(false, false, false, false)
+			GL11.glStencilFunc(GL11.GL_ALWAYS, 1, 0xff)
+			GL11.glStencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_REPLACE)
+			GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, vertices.size / 2)
+			GL11.glColorMask(true, true, true, true)
+			GL11.glStencilFunc(GL11.GL_EQUAL, 1, 0xff)
+			GL11.glStencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_KEEP)
+		}
+		GL20.glUseProgram(artwork.id)
+		GL20.glUniform4fv(artwork.uniform("u_world"), worldUniform)
+		GL20.glUniform1i(artwork.uniform("u_texture"), 0)
+		GL20.glUniform1f(artwork.uniform("u_opacity"), quad.alpha)
+		GL20.glUniform4f(artwork.uniform("u_solid"), 0f, 0f, 0f, -1f)
+		GL13.glActiveTexture(GL13.GL_TEXTURE0)
+		GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture)
+		GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, if (quad.nearest) GL11.GL_NEAREST else GL11.GL_LINEAR)
+		GL30.glBindVertexArray(tileVao)
+		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, tilePositions)
+		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, floatArrayOf(quad.x0, quad.y0, quad.x1, quad.y0, quad.x0, quad.y1, quad.x1, quad.y1), GL15.GL_STREAM_DRAW)
+		GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, tileUvs)
+		GL15.glBufferData(GL15.GL_ARRAY_BUFFER, floatArrayOf(quad.u0, quad.v0, quad.u1, quad.v0, quad.u0, quad.v1, quad.u1, quad.v1), GL15.GL_STREAM_DRAW)
+		GL11.glDrawArrays(GL11.GL_TRIANGLE_STRIP, 0, 4)
+		if (clip != null) GL11.glDisable(GL11.GL_STENCIL_TEST)
+		GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR)
+	}
+
+	/** [raster] as a premultiplied, mipmapped texture of [view], uploaded once per pixel array; null when it is empty. */
+	private fun rasterTexture(view: View, raster: RasterTexture): Int? {
+		val width = raster.width
+		val height = raster.height
+		if (width <= 0 || height <= 0 || raster.rgba.size < width * height * 4) return null
+		view.rastersDrawn += raster.rgba
+		return view.rasters.getOrPut(raster.rgba) {
+			val rgba = raster.rgba
+			val pixels = MemoryUtil.memAlloc(width * height * 4)
+			try {
+				for (i in 0 until width * height) {
+					val o = i * 4
+					val a = rgba[o + 3].toInt() and 0xff
+					// Rounded like Skia's own premultiply, as the atlas pages are.
+					if (a == 255) pixels.put(rgba[o]).put(rgba[o + 1]).put(rgba[o + 2]).put(rgba[o + 3])
+					else pixels.put((((rgba[o].toInt() and 0xff) * a + 127) / 255).toByte())
+						.put((((rgba[o + 1].toInt() and 0xff) * a + 127) / 255).toByte())
+						.put((((rgba[o + 2].toInt() and 0xff) * a + 127) / 255).toByte()).put(a.toByte())
+				}
+				pixels.flip()
+				val texture = GL11.glGenTextures()
+				GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture)
+				GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 1)
+				GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, width, height, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixels)
+				if (mipmaps) GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D)
+				GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, if (mipmaps) GL11.GL_LINEAR_MIPMAP_LINEAR else GL11.GL_LINEAR)
+				GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR)
+				GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE)
+				GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE)
+				texture
+			} finally {
+				MemoryUtil.memFree(pixels)
+			}
+		}
 	}
 
 	/**

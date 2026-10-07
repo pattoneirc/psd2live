@@ -7,7 +7,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * The editing canvases' GPU renderer, shared by every canvas of the application.
+ * The editing canvases' GPU renderer, shared by every canvas of the application and the texture atlas page.
  *
  * Each canvas hands it scenes through [submit] and watches [frames]. Scenes go into a one-slot mailbox per
  * canvas: the GL thread always draws the newest and drops any it never got to, so a fast drag cannot queue up
@@ -29,7 +29,7 @@ internal object CanvasRenderService {
 	private val started = AtomicBoolean(false)
 	@Volatile private var host: GlHost? = null
 	@Volatile private var renderer: GlCanvasRenderer? = null
-	private val pending = ConcurrentHashMap<String, CanvasScene>()
+	private val pending = ConcurrentHashMap<String, GpuScene>()
 	private val frameFlows = ConcurrentHashMap<String, MutableStateFlow<RenderedFrame?>>()
 	private val drainScheduled = AtomicBoolean(false)
 	/**
@@ -64,7 +64,7 @@ internal object CanvasRenderService {
 	fun frames(viewId: String): StateFlow<RenderedFrame?> = frameFlows.getOrPut(viewId) { MutableStateFlow(null) }
 
 	/** Queues [scene] for [viewId], replacing one not yet drawn. */
-	fun submit(viewId: String, scene: CanvasScene) {
+	fun submit(viewId: String, scene: GpuScene) {
 		if (status.value !is Status.Ready) return
 		// A scene that replaces one the GL thread never drew must keep its paint uploads, or the texture would miss them.
 		pending.merge(viewId, scene) { earlier, next -> next.after(earlier) }

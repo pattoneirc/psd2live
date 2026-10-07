@@ -80,7 +80,7 @@ fun TextureInspectorPanel(state: PSD2LiveState, vm: PSD2LiveViewModel, modifier:
 			style = typography.body.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
 			color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis,
 		)
-		if (layers.size == 1) SizeChain(snapshot, primary)
+		if (layers.size == 1) SizeChain(snapshot, primary, texture.densityPreview[primary.layerId])
 		DensitySection(vm, snapshot, layers, busy)
 		if (layers.size == 1) {
 			PixelsSection(state, vm, snapshot, primary, busy)
@@ -91,13 +91,16 @@ fun TextureInspectorPanel(state: PSD2LiveState, vm: PSD2LiveViewModel, modifier:
 
 /**
  * The three sizes that decide a layer's texture, left to right: its rectangle on the canvas, its raster and its
- * atlas tile, with the effective density marked on the heat scale under them.
+ * atlas tile, with the effective density marked on the heat scale under them. While the density slider is dragged,
+ * [preview] scales the tile to the size it would get.
  */
 @Composable
-private fun SizeChain(snapshot: TextureSnapshot, layer: WorkspaceLayerTexture) {
+private fun SizeChain(snapshot: TextureSnapshot, layer: WorkspaceLayerTexture, preview: Float? = null) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
-	val tile = layer.tile
+	val factor = preview ?: 1f
+	val tile = layer.tile?.let { it.copy(width = Math.round(it.width * factor), height = Math.round(it.height * factor),
+		scaleX = it.scaleX * factor, scaleY = it.scaleY * factor) }
 	Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
 		SizeCard(tr("texture.inspector.canvas"), "%.0f × %.0f".format(layer.canvasRect.width, layer.canvasRect.height), tr("texture.inspector.units"), Modifier.weight(1f))
 		Text("→", style = typography.caption, color = colors.textMuted)
@@ -145,10 +148,16 @@ private fun DensitySection(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, lay
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
 		CompactSlider(
 			value = draft,
-			onValueChange = { draft = Math.round(it * 4f) / 4f },
+			onValueChange = {
+				draft = Math.round(it * 4f) / 4f
+				// The atlas shows every selected tile at the size the slider's value gives it, before it is committed.
+				val next = TextureDensity.snap(TextureDensity.pow2(draft))
+				vm.previewTextureDensity(layers.associate { it.layerId to next / (it.override.density ?: 1f) })
+			},
 			onValueChangeFinished = {
 				val next = TextureDensity.snap(TextureDensity.pow2(draft))
 				if (mixed || next != density) vm.setTextureDensity(snapshot, ids, next.takeUnless { it == 1f })
+				else vm.previewTextureDensity(emptyMap())
 			},
 			valueRange = TextureDensity.log2(TextureDensity.MIN)..TextureDensity.log2(TextureDensity.MAX),
 			enabled = !busy,

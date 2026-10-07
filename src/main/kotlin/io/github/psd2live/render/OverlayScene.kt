@@ -48,3 +48,32 @@ class FillBatch(val argb: Int, val contours: List<FloatArray>) : OverlayItem
  * @property points x, y per vertex, world units.
  */
 class PolylineBatch(val argb: Int, val width: Float, val points: FloatArray, val closed: Boolean) : OverlayItem
+
+/** Pixels a [TextureQuad] samples. */
+sealed interface QuadTexture
+
+/**
+ * A layer raster: straight (unpremultiplied) RGBA, top row first. The renderer uploads it once per [rgba] instance
+ * while the view keeps drawing it.
+ */
+class RasterTexture(val width: Int, val height: Int, val rgba: ByteArray) : QuadTexture
+
+/** An atlas page image, uploaded once per instance like the artwork pass's pages. */
+class ImageTexture(val image: java.awt.image.BufferedImage) : QuadTexture
+
+/**
+ * [texture]'s area [u0]..[u1] x [v0]..[v1] (0..1, v down the image) stretched over the world rectangle from
+ * ([x0], [y0]) to ([x1], [y1]), where ([x0], [y0]) takes (u0, v0).
+ *
+ * @property alpha   Opacity the texels are drawn with.
+ * @property nearest Magnify texel by texel instead of smoothly, for a close look at single pixels.
+ * @property clip    World rectangles (x0, y0, x1, y1 each) outside which nothing is drawn; null draws all of it.
+ */
+class TextureQuad(
+	val texture: QuadTexture,
+	val x0: Float, val y0: Float, val x1: Float, val y1: Float,
+	val u0: Float = 0f, val v0: Float = 0f, val u1: Float = 1f, val v1: Float = 1f,
+	val alpha: Float = 1f,
+	val nearest: Boolean = false,
+	val clip: FloatArray? = null,
+) : OverlayItem

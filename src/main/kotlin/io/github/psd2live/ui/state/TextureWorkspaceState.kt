@@ -32,8 +32,11 @@ data class TextureWorkspaceState(
 	/** How "Replace image" lays an image of another aspect ratio on the layer, and whether it rebuilds the mesh. */
 	val replaceFit: WorkspaceImageFit = WorkspaceImageFit.STRETCH,
 	val replaceRebuildMesh: Boolean = false,
-	/** The tile under the pointer while it is dragged; committed once when the gesture ends. */
-	val dragDraft: TileDragDraft? = null,
+	/**
+	 * Density ratios (layer id to factor) the atlas shows while the inspector's slider is dragged, before they are
+	 * committed. A dragged tile or corner is the atlas view's own state and never comes here.
+	 */
+	val densityPreview: Map<String, Float> = emptyMap(),
 	/** A texture command is running. */
 	val busy: Boolean = false,
 	/** Why the last texture command was refused, shown in the panel until the next command. */
@@ -44,7 +47,7 @@ data class TextureWorkspaceState(
 	val revision: Int = 0,
 )
 
-/** A tile dragged to ([x], [y]) on [page], in texture pixels. [collides] when it overlaps another pinned tile. */
+/** A tile dragged to ([x], [y]) on [page], in texture pixels. [collides] when it overlaps another tile. */
 @Immutable
 data class TileDragDraft(
 	val layerId: String,

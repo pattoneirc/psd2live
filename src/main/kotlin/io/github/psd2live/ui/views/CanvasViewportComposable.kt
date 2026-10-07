@@ -1286,7 +1286,7 @@ fun CanvasViewportComposable(
 						}
 						val latest = gpuFrame
 						val latestImage = gpuImage
-						if (latest != null && latestImage != null && latest.scene.geometry !== ghostGeometry[0]) {
+						if (latest != null && latestImage != null && (latest.scene as? CanvasScene)?.geometry !== ghostGeometry[0]) {
 							lastArtwork[0] = latest to latestImage
 						}
 						// A ghost frame still in flight: keep the last regular one, unless the service has released it.
@@ -1540,7 +1540,7 @@ fun CanvasViewportComposable(
 				}
 				val frame = gpuFrame
 				val image = gpuImage
-				if (frame != null && image != null && frame.scene.geometry === snapshotGeometry) {
+				if (frame != null && image != null && (frame.scene as? CanvasScene)?.geometry === snapshotGeometry) {
 					val k = (viewport.scale / frame.viewport.scale).toFloat()
 					withTransform({
 						translate((viewport.offsetX - frame.viewport.offsetX * k).toFloat(), (viewport.offsetY - frame.viewport.offsetY * k).toFloat())

@@ -108,7 +108,8 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `ExportGoldenTool` | `tml` と `ds` の、スケルトンなし・自動スケルトン・作成したモーションの 3 種での全書き出しファイルのダイジェスト（cmo3 は読み戻して moc3 に下げたもの）。リファクタリング前後の書き出しをバイト単位で比較する。`PSD2LIVE_GOLDEN_LABEL` で出力名を指定 | `export-golden/<名前>.txt` |
 | `SafetyGoldenTool` | 自動スケルトン Rig 上の、シード付きランダムなジオメトリ編集 24 件の完全なジオメトリ安全性レポート（`coverage` を除く）。検査器の変更前後で分類をバイト単位で比較する。`PSD2LIVE_GOLDEN_LABEL` で出力名を指定 | `safety-golden/<名前>.txt` |
 | `BundleProfileTool` | moc3 プレビューバンドルの段階別時間（IR コンパイル、IR からの復元、静止メッシュのキャンバス空間への変換、physics3/motion3、moc の変換と書き出し、cdi3）とジオメトリ安全性検査の時間。`PSD2LIVE_SAMPLER=1` でスタックサンプラーのホットスポットも出力 | 標準出力のみ |
-| `TextureWorkspaceTool` | `tml` にいくつかの密度、ロック、固定を設定し、アトラスのページとテクスチャパネル（中国語と英語、単一・複数・未選択、ヒートマップのオン／オフ）、および編集キャンバスのアトラスと元画像のピクセルの比較を描画 | `texture-workspace/*.png` |
+| `TextureWorkspaceTool` | `tml` にいくつかの密度、ロック、固定を設定し、アトラスのページとテクスチャパネル（中国語と英語、単一・複数・未選択、ヒートマップのオン／オフ、密度スライダーのプレビュー）、および編集キャンバスのアトラスと元画像のピクセルの比較を描画 | `texture-workspace/*.png` |
+| `AtlasFramePerfTool` | `tml` のアトラスページとテクスチャパネルのフレームコストをヘッドレスで計測：`ImageComposeScene` に待機、ホバー、角（密度）のドラッグ、ホイールズーム、タイルのドラッグ、ワイヤーフレームなしのホバーのポインター入力を送り、各描画の時間（中央値、p90、最大）を記録。まずソフトウェア、OpenGL が使えれば次に GPU で計測し、モードごとに角のドラッグ中・静止したページ・拡大のフレームを保存 | `atlas-frame-perf/report.txt`、`software-*.png`、`gpu-*.png` |
 | `ExportDialogTool` | 「インポート」と「形式を指定して書き出し」サブメニューを開いた「ファイル」メニューと、各ターゲットの書き出しダイアログ（中国語と英語、ダークテーマ）。メニューの分類、ラベルとレイアウトの確認用 | `export-dialog/<言語>-<ターゲットまたはメニュー>.png` |
 | `SimBakeBenchmark` | `tml` の後ろ髪をいくつかの設定で焼き込み、フィットに使わなかった動きでシミュレーションと書き出し結果を比較 | 標準出力 |
 | `CommitPerfTool.profile` / `.desktop` | 1 回の編集コミットにかかる時間。`profile` はアプリケーション層のコマンド境界を通し、段階別（リビジョン、設定のデコード、再構築、ジオメトリ検査）に分けて計測。`desktop` はデスクトップのビューモデルとアダプタを通してメッシュ頂点編集とブラシのストロークを続けてコミットし、コミット時間と UI スレッドの最長停止を報告。`JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` と併用してサンプリング可能 | `commit-perf/report.txt`、`desktop.txt` |

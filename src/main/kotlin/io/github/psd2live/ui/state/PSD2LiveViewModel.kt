@@ -4099,7 +4099,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		updateState { it.copy(textureWorkspace = transform(it.textureWorkspace)) }
 	}
 
-	fun setTexturePage(page: Int) = updateTextureWorkspace { it.copy(selectedPage = page.coerceAtLeast(0), dragDraft = null) }
+	fun setTexturePage(page: Int) = updateTextureWorkspace { it.copy(selectedPage = page.coerceAtLeast(0)) }
 	fun setTextureHeatmap(on: Boolean) = updateTextureWorkspace { it.copy(heatmap = on) }
 	fun setTextureOutlines(on: Boolean) = updateTextureWorkspace { it.copy(showOutlines = on) }
 	fun setTextureShowPage(on: Boolean) = updateTextureWorkspace { it.copy(showPage = on) }
@@ -4110,31 +4110,39 @@ class PSD2LiveViewModel : AutoCloseable {
 		updateTextureWorkspace { it.copy(replaceFit = fit, replaceRebuildMesh = rebuildMesh) }
 	fun clearTextureError() = updateTextureWorkspace { it.copy(error = null) }
 
-	/** Moves the dragged tile's draft; nothing is committed until [endTextureTileDrag]. */
-	fun dragTextureTile(snapshot: TextureSnapshot, layerId: String, x: Float, y: Float, snap: Float) {
-		val tile = snapshot.tilesByLayer[layerId] ?: return
-		val page = snapshot.atlas.pages.getOrNull(tile.page) ?: return
-		val draft = placeDraggedTile(tile, x, y, page.width, page.height, snapshot.tiles(tile.page), snapshot.atlas.budget.padding, snap,
-			snapshot::shape)
-		updateTextureWorkspace { it.copy(dragDraft = draft) }
+	/**
+	 * Where [layerId]'s tile lands when dragged to ([x], [y]) on its page; the atlas view keeps it while the pointer
+	 * moves, so a drag touches no application state until [moveTextureTile].
+	 */
+	fun draggedTextureTile(snapshot: TextureSnapshot, layerId: String, x: Float, y: Float, snap: Float): TileDragDraft? {
+		val tile = snapshot.tilesByLayer[layerId] ?: return null
+		val page = snapshot.atlas.pages.getOrNull(tile.page) ?: return null
+		return placeDraggedTile(tile, x, y, page.width, page.height, snapshot.tiles(tile.page), snapshot.atlas.budget.padding, snap, snapshot::shape)
 	}
-
-	fun cancelTextureTileDrag() = updateTextureWorkspace { it.copy(dragDraft = null) }
 
 	/**
 	 * Ends a tile drag: moves the tile once to where it was dropped, unless it collides or did not move. The spot is
-	 * stored; an automatically arranged atlas keeps its current layout from then on, so no other tile moves.
+	 * stored; an automatically arranged atlas keeps its current layout from then on, so no other tile moves. True
+	 * when a commit started.
 	 */
-	fun endTextureTileDrag(snapshot: TextureSnapshot) {
-		val draft = _state.value.textureWorkspace.dragDraft ?: return
+	fun moveTextureTile(snapshot: TextureSnapshot, draft: TileDragDraft): Boolean {
 		val tile = snapshot.tilesByLayer[draft.layerId]
-		if (tile == null || (tile.x == draft.x && tile.y == draft.y && tile.page == draft.page)) { cancelTextureTileDrag(); return }
+		if (tile == null || (tile.x == draft.x && tile.y == draft.y && tile.page == draft.page)) return false
 		if (draft.collides) {
-			updateTextureWorkspace { it.copy(dragDraft = null, error = tr("texture.drag.collides")) }
-			return
+			updateTextureWorkspace { it.copy(error = tr("texture.drag.collides")) }
+			return false
 		}
 		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetTile(draft.layerId,
 			io.github.psd2live.project.TexturePin(draft.page, draft.x, draft.y)))
+		return _state.value.textureWorkspace.busy
+	}
+
+	/**
+	 * Shows the atlas as if [factors] (layer id to density ratio) were applied, while the density slider is dragged;
+	 * empty clears it. The next texture commit clears it too, once its result shows.
+	 */
+	fun previewTextureDensity(factors: Map<String, Float>) {
+		if (_state.value.textureWorkspace.densityPreview != factors) updateTextureWorkspace { it.copy(densityPreview = factors) }
 	}
 
 
@@ -4221,7 +4229,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	private fun commitTextureEdits(state: String, edits: List<io.github.psd2live.application.WorkspaceTextureEdit>) {
 		val current = _state.value
 		if (current.textureWorkspace.busy || current.workspaceEditBusy || current.editorDraftBusy) {
-			updateTextureWorkspace { it.copy(dragDraft = null, error = tr("texture.busy")) }
+			updateTextureWorkspace { it.copy(densityPreview = emptyMap(), error = tr("texture.busy")) }
 			return
 		}
 		updateState { it.copy(canvasEditBusy = true, textureWorkspace = it.textureWorkspace.copy(busy = true, error = null)) }
@@ -4233,7 +4241,7 @@ class PSD2LiveViewModel : AutoCloseable {
 				if (failure is kotlinx.coroutines.CancellationException) throw failure
 				updateTextureWorkspace { it.copy(error = failure.message ?: tr("texture.failed")) }
 			} finally {
-				updateState { it.copy(canvasEditBusy = false, textureWorkspace = it.textureWorkspace.copy(busy = false, dragDraft = null)) }
+				updateState { it.copy(canvasEditBusy = false, textureWorkspace = it.textureWorkspace.copy(busy = false, densityPreview = emptyMap())) }
 			}
 		}
 	}

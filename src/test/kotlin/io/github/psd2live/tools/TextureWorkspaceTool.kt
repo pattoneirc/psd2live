@@ -87,13 +87,15 @@ class TextureWorkspaceTool {
 					vm.setTextureHeatmap(true)
 					write("en-atlas-heatmap", 620, 760) { AtlasPageView(vm.state.value, vm) }
 					vm.setTextureHeatmap(false)
-					// A tile mid-drag shows its pixels where the pointer puts it.
-					requireNotNull(vm.textureSnapshot()).let { snapshot ->
-						val tile = snapshot.tilesByLayer.getValue(selected)
-						vm.dragTextureTile(snapshot, selected, tile.x + 300f, tile.y + 120f, snap = 0f)
+					// The inspector's density slider mid-drag shows the tile at the size it would get.
+					vm.previewTextureDensity(mapOf(selected to 2f))
+					write("en-atlas-density-preview", 1100, 760) {
+						Row(Modifier.fillMaxSize().background(ToolColors.Dark.windowBackground)) {
+							Box(Modifier.width(620.dp).fillMaxHeight()) { AtlasPageView(vm.state.value, vm) }
+							Box(Modifier.width(480.dp).fillMaxHeight()) { TextureInspectorPanel(vm.state.value, vm) }
+						}
 					}
-					write("en-atlas-dragging", 620, 760) { AtlasPageView(vm.state.value, vm) }
-					vm.cancelTextureTileDrag()
+					vm.previewTextureDensity(emptyMap())
 					vm.selectLayer(large.first()); vm.selectLayer(small.last(), additive = true)
 					write("en-inspector-multi", 360, 640) { TextureInspectorPanel(vm.state.value, vm) }
 					vm.selectLayer(null)

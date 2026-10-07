@@ -112,8 +112,7 @@ class TexturePerfTool {
 			val t = System.nanoTime()
 			javax.swing.SwingUtilities.invokeAndWait {
 				if (round % 2 == 0) {
-					viewModel.dragTextureTile(snapshot, tile.layerId, 2000f + round * 8, 3000f, snap = 0f)
-					viewModel.endTextureTileDrag(snapshot)
+					viewModel.draggedTextureTile(snapshot, tile.layerId, 2000f + round * 8, 3000f, snap = 0f)?.let { viewModel.moveTextureTile(snapshot, it) }
 				} else viewModel.setTextureDensity(snapshot, listOf(tile.layerId), if (round % 4 == 1) 2f else null)
 			}
 			waitFor(60, "commit") { viewModel.state.value.textureWorkspace.revision != revision && !viewModel.state.value.textureWorkspace.busy }
