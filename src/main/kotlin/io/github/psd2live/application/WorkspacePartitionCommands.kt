@@ -141,8 +141,29 @@ internal object WorkspacePartitionEdits {
         val overlay = SourcePartitionJournal.migrateSimulations(MeshGenerationBaseline.preserve(frozen.rigEdits, model.config),
             authored, drawable.id.raw, pieceIds, geometry)
         val placed = WorkspaceArtPrimitives.replaceLayer(frozen, model, id, pieces, sides)
-        return placed.copy(rigEdits = overlay.copy(authoringJournal = overlay.authoringJournal + record,
+        val v1 = placed.copy(rigEdits = overlay.copy(authoringJournal = overlay.authoringJournal + record,
             splitDrawableIds = overlay.splitDrawableIds + pieces.map { it.id.raw }.zip(pieceIds)))
+        return WorkspaceArtPrimitives.decide(v1, record, model, capture = {
+            // Version 2 captures the authored rig with the overrides of earlier v2 parts, and the base beside it.
+            val captured = WorkspaceArtPrimitives.capturedAuthored(model)
+            val split = SourcePartitionJournal.partition(captured, legacy) { clone, canvas -> clone to canvas }
+            val layers = pieces.map { it.id.raw }
+            val classification = document.layerOverrides[id] ?: model.analysis.layers.firstOrNull { it.source.id.raw == id }?.semantic?.let {
+                LayerClassificationOverride(it.type, it.tag, it.side, it.parameter, it.switchId)
+            } ?: LayerClassificationOverride()
+            WorkspaceArtPrimitives.SplitCapture("split", PuppetSourceAtlas.SOURCE_ID_RAW, drawable.id, id, captured, model.baseRig.puppet,
+                split.model, split.ids, layers, geometry.pieces.map { it.sources },
+                split.ids.mapIndexed { index, part -> ArtPrimitiveJournal.coverage(pieces[index].bounds, requireNotNull(split.model.drawables.single { it.id == part }.mesh).uvs) },
+                split.ids.map { part -> ArtPrimitiveJournal.canvasBounds(requireNotNull(split.model.drawables.single { it.id == part }.mesh).uvs) },
+                sides.map { side -> classification.copy(side = side.takeUnless { it == Side.NONE } ?: classification.side) },
+                mapOf(drawable.id to split.ids), mapOf(drawable.id to split.ids), split.glueGroups, split.followers)
+        }, v2Document = { v2Record, overrides ->
+            val moved = SourcePartitionJournal.migrateBones(SourcePartitionJournal.migrateSimulations(
+                MeshGenerationBaseline.preserve(frozen.rigEdits, model.config), authored, drawable.id.raw, pieceIds, geometry), drawable.id.raw, pieceIds)
+            WorkspaceArtPrimitives.replaceLayer(frozen, model, id, pieces, sides, explicitParentOnly = true).copy(rigEdits = moved.copy(
+                authoringJournal = moved.authoringJournal + v2Record + overrides,
+                splitDrawableIds = moved.splitDrawableIds + pieces.map { it.id.raw }.zip(pieceIds)))
+        }, checkpoint = work::checkpoint)
     }
 
     private fun install(document: WorkspaceDocument, model: RigPreviewModel, id: String,
@@ -219,7 +240,8 @@ internal class WorkspacePartitionCommands(private val runtime: WorkspaceRuntime<
             result.capture.document.source.layers.map { it.id.raw }.filterNot { it in oldIds }, summary,
             affectedObjectIds = WorkspaceDocumentCommands.createdObjectIds(before.model.rig.puppet, result.capture.model.rig.puppet),
             applied = result.applied, state = result.capture.state, projectId = result.capture.projectId)
-        job?.committed(mutation.sourceResult())
+        job?.committed(JsonObject(mutation.sourceResult() +
+            WorkspaceArtPrimitives.recordVersion(before.document.rigEdits, result.capture.document.rigEdits)))
         return WorkspacePartitionCommit(result, mutation)
     }
 }

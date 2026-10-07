@@ -209,6 +209,19 @@ internal object SourcePartitionJournal {
         })
     }
 
+    /**
+     * Bones bound to [source] bind its parts [ids] instead, in its place in each bone's list, so the base skins the
+     * parts of a version 2 split rather than its stub. Manual weights painted on the source stay with it.
+     */
+    fun migrateBones(overlay: RigEditOverlay, source: String, ids: List<String>): RigEditOverlay {
+        val skeleton = overlay.skeleton ?: return overlay
+        if (skeleton.bones.none { source in it.drawableIds }) return overlay
+        return overlay.copy(skeleton = skeleton.copy(bones = skeleton.bones.map { bone ->
+            if (source !in bone.drawableIds) bone
+            else bone.copy(drawableIds = bone.drawableIds.flatMap { if (it == source) ids else listOf(it) }.distinct())
+        }))
+    }
+
     /** Preserve sequential evaluation when component owners alternate within an existing Glue. */
     private fun glueGroups(glue: Glue, source: DrawableId, owners: List<Int>): List<Pair<Pair<Int, Int>, List<GluePair>>> {
         val groups = ArrayList<Pair<Pair<Int, Int>, MutableList<GluePair>>>()

@@ -34,7 +34,11 @@ internal object DepthSplit {
     /** The two slices of a materialized depth split, as new source layers, and the document settings they need. */
     data class Slices(val back: WorkspaceSourceLayer, val front: WorkspaceSourceLayer, val sourceLayerId: String,
                       val record: JsonObject, val drawOrderOverrides: Map<String, Float>, val classification: LayerClassificationOverride,
-                      val parent: String?, val visible: Boolean, val simulations: RigEditOverlay)
+                      val parent: String?, val visible: Boolean, val simulations: RigEditOverlay,
+                      /** For a version 2 record: the authored rig, the slices staged in it (back, front), and their Glues. */
+                      val authored: PuppetModel? = null, val staged: PuppetModel? = null, val sliceIds: List<DrawableId> = emptyList(),
+                      val replacedGlues: List<List<Glue>> = emptyList(), val weld: Glue? = null,
+                      val coverage: org.umamo.format.art.LayerBounds? = null, val neutral: Bounds? = null, val source: DrawableId? = null)
 
     /**
      * A depth split whose slices are both document-owned primitives: the source mesh and its layer are superseded,
@@ -149,7 +153,8 @@ internal object DepthSplit {
         val identity = SourcePartitionGeometry.Plan(listOf(SourcePartitionGeometry.Piece(mesh,
             List(mesh.vertexCount) { org.umamo.edit.VertexSource.FromOld(it) }, IntArray(mesh.vertexCount) { it })), IntArray(mesh.vertexCount))
         val simulations = SourcePartitionJournal.migrateSimulations(config.rigEdits, authored, source.id.raw, listOf(backDrawableId), identity)
-        return Slices(back, front, layerId, record, orders, inherited, source.parentDeformerId?.raw, source.isVisible, simulations)
+        return Slices(back, front, layerId, record, orders, inherited, source.parentDeformerId?.raw, source.isVisible, simulations,
+            authored, staged, slices, replaced, weld, coverage, neutral, source.id)
     }
 
     fun build(pipeline: PSD2LivePipeline, current: RigPreviewModel, config: PipelineConfig,

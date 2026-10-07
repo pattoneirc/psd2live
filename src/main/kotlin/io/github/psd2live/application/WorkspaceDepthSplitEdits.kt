@@ -36,15 +36,33 @@ internal object WorkspaceDepthSplitEdits {
             val placed = WorkspaceArtPrimitives.replaceLayer(frozen, model, slices.sourceLayerId, listOf(slices.front, slices.back),
                 listOf(Side.NONE, Side.NONE))
             val overlay = MeshGenerationBaseline.preserve(frozen.rigEdits.copy(simEdits = slices.simulations.simEdits), model.config)
-            return placed.copy(
-                layerOverrides = placed.layerOverrides + listOf(slices.back.id.raw, slices.front.id.raw).associateWith { slices.classification },
-                layerVisibility = placed.layerVisibility + listOf(slices.back.id.raw, slices.front.id.raw).associateWith {
+            val layers = listOf(slices.back.id.raw, slices.front.id.raw)
+            fun documentWith(placed: WorkspaceDocument, rigEdits: RigEditOverlay, parents: Map<String, String?>) = placed.copy(
+                layerOverrides = placed.layerOverrides + layers.associateWith { slices.classification },
+                layerVisibility = placed.layerVisibility + layers.associateWith {
                     document.layerVisibility[slices.sourceLayerId] ?: slices.visible
                 },
-                parentOverrides = placed.parentOverrides + listOf(slices.back.id.raw, slices.front.id.raw).associateWith { slices.parent },
+                parentOverrides = placed.parentOverrides + parents,
                 settings = JsonObject(placed.settings + ("drawOrderOverrides" to JsonObject(slices.drawOrderOverrides.mapValues { JsonPrimitive(it.value) }))),
-                rigEdits = overlay.copy(authoringJournal = overlay.authoringJournal + slices.record,
-                    splitDrawableIds = overlay.splitDrawableIds + mapOf(slices.back.id.raw to backMeshId, slices.front.id.raw to frontMeshId)))
+                rigEdits = rigEdits.copy(splitDrawableIds = rigEdits.splitDrawableIds + mapOf(slices.back.id.raw to backMeshId, slices.front.id.raw to frontMeshId)))
+            val v1 = documentWith(placed, overlay.copy(authoringJournal = overlay.authoringJournal + slices.record), layers.associateWith { slices.parent })
+            return WorkspaceArtPrimitives.decide(v1, slices.record, model, capture = {
+                val staged = requireNotNull(slices.staged); val authored = requireNotNull(slices.authored); val source = requireNotNull(slices.source)
+                val count = requireNotNull(authored.drawables.single { it.id == source }.mesh).vertexCount
+                val identity = List(count) { org.umamo.edit.VertexSource.FromOld(it) }
+                WorkspaceArtPrimitives.SplitCapture("depth", PuppetSourceAtlas.SOURCE_ID_RAW, source, slices.sourceLayerId, authored,
+                    model.baseRig.puppet, staged, slices.sliceIds, layers, listOf(identity, identity),
+                    listOf(requireNotNull(slices.coverage), slices.coverage), listOf(requireNotNull(slices.neutral), slices.neutral),
+                    listOf(slices.classification, slices.classification), mapOf(source to slices.sliceIds), mapOf(source to listOf(slices.sliceIds.first())),
+                    slices.replacedGlues, listOfNotNull(slices.weld), JsonObject(mapOf("depth" to slices.record.getValue("depth"))))
+            }, v2Document = { record, overrides ->
+                val parent = model.config.parentOverrides.takeIf { slices.sourceLayerId in it }?.get(slices.sourceLayerId)
+                val explicit = if (slices.sourceLayerId in model.config.parentOverrides) layers.associateWith { parent } else emptyMap()
+                val v2Placed = WorkspaceArtPrimitives.replaceLayer(frozen, model, slices.sourceLayerId, listOf(slices.front, slices.back),
+                    listOf(Side.NONE, Side.NONE), explicitParentOnly = true)
+                val moved = SourcePartitionJournal.migrateBones(overlay, requireNotNull(slices.source).raw, slices.sliceIds.take(1).map { it.raw })
+                documentWith(v2Placed, moved.copy(authoringJournal = moved.authoringJournal + record + overrides), explicit)
+            }, checkpoint = work::checkpoint)
         }
         val prepared = DepthSplit.prepare(model, config, sourceId, middleIds, frontId, frontMeshId, glueId, names, work::checkpoint)
         work.progress(0.75f, "Preserving depth slice bindings")

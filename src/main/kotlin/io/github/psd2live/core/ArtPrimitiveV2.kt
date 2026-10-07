@@ -79,6 +79,9 @@ object ArtPrimitiveV2 {
 	const val POSITIONS = "positions"
 	const val TRIANGLES = "triangles"
 	const val CANVAS_UVS = "canvas_uvs"
+	/** The pinned mesh: `{canvas_positions, triangles, canvas_uvs}`, positions in canvas units at rest (default pose). */
+	const val MESH = "mesh"
+	const val CANVAS_POSITIONS = "canvas_positions"
 	const val FIXED_TOPOLOGY = "fixed_topology"
 	const val FROZEN_AXES = "frozen_axes"
 
@@ -102,6 +105,26 @@ object ArtPrimitiveV2 {
 	const val BLENDS = "blends"
 	const val PATHS = "paths"
 	const val VERTEX_GROUPS = "vertex_groups"
+	/**
+	 * Geometry the user added on top of the generated part on the user-axis plane (every generator axis at its
+	 * default): a sparse keyform grid holding only plane cells (`{axes: [{id, keys}], cells: [[coordinate, deltas]]}`,
+	 * the version 1 `geometry` encoding), deltas per recorded vertex in the part's generated parent space; null when
+	 * there is none. A cell with a generator axis away from its default is a `generated_override` entry after the
+	 * record instead.
+	 */
+	const val GEOMETRY_RESIDUAL = "geometry_residual"
+	/**
+	 * Channel values the user added on top of the generated part, per channel a grid over every axis (the version 1
+	 * `channels` encoding); replay adds them cell by cell to the generated channels.
+	 */
+	const val CHANNELS_RESIDUAL = "channels_residual"
+
+	/** On a version 1 record written while version 2 was enabled: `{reason, detail}`, why version 2 was not safe. */
+	const val FALLBACK = "v2_fallback"
+	const val FALLBACK_REASON = "reason"
+	const val FALLBACK_DETAIL = "detail"
+	/** Result field of split commands beside [RECORD_VERSION]: the fallback reason code of a version 1 record. */
+	const val RECORD_VERSION_REASON = "record_version_reason"
 
 	/** Whether [command] is an `art_primitive` record of version 2. */
 	fun isV2(command: JsonObject): Boolean =
@@ -149,9 +172,16 @@ object ArtPrimitiveV2 {
 			null, JsonNull -> null
 			else -> DeformerId(requireText(value, PARENT))
 		}
-		val positions = floats(primitive, POSITIONS)
-		val canvasUvs = floats(primitive, CANVAS_UVS)
-		val triangles = requireArray(primitive, TRIANGLES).map {
+		// Revision 2 records pin the mesh in canvas units under `mesh`; the flat form holds parent-space positions.
+		val mesh = when (val value = primitive[MESH]) {
+			null -> null
+			is JsonObject -> value
+			else -> throw IllegalArgumentException("Invalid art primitive $MESH")
+		}
+		val geometry = mesh ?: primitive
+		val positions = floats(geometry, if (mesh != null) CANVAS_POSITIONS else POSITIONS)
+		val canvasUvs = floats(geometry, CANVAS_UVS)
+		val triangles = requireArray(geometry, TRIANGLES).map {
 			(it as? JsonPrimitive)?.intOrNull ?: throw IllegalArgumentException("Invalid art primitive $TRIANGLES")
 		}.toIntArray()
 		RasterMeshJournal.validateMesh(DrawableMesh(positions, canvasUvs, triangles))
@@ -161,7 +191,7 @@ object ArtPrimitiveV2 {
 		require(primitive[AUTHORED] is JsonObject) { "Art primitive $AUTHORED is missing" }
 		return ResolvedPart(recordIndex, DrawableId(id), layer, sourceId, name, parent, positions, triangles, canvasUvs,
 			decodeClassification(primitive[CLASSIFICATION]), frozenAxes, fixedTopology, sourceBounds,
-			Bounds(neutral[0], neutral[1], neutral[2], neutral[3]))
+			Bounds(neutral[0], neutral[1], neutral[2], neutral[3]), canvasPositions = mesh != null)
 	}
 
 	/** The `classification` object of a primitive: `{type, tag, side, parameter, switch}`, enum names as stored in layer overrides. */
@@ -205,6 +235,53 @@ object ArtPrimitiveV2 {
 }
 
 /**
+ * Journal entries before a version 2 split that address only drawables the split supersedes. The base builds those
+ * as stubs - meshed from frozen pixels, outside every aggregate stage - so such an entry may no longer apply as it
+ * did. Replay then treats it as a no-op and notes it ([GeneratedOverrides.Outcome.notes]); any entry that touches
+ * a non-stub, or fails anywhere else, still fails the replay.
+ */
+internal object StubTolerance {
+	/** Per entry (by identity) before at least one v2 record: every drawable those later records supersede. */
+	fun of(journal: List<JsonObject>): java.util.IdentityHashMap<JsonObject, Set<String>> {
+		val result = java.util.IdentityHashMap<JsonObject, Set<String>>()
+		var later = emptySet<String>()
+		for (index in journal.indices.reversed()) {
+			val entry = journal[index]
+			if (later.isNotEmpty()) result[entry] = later
+			if (ArtPrimitiveV2.isV2(entry)) later = later + ((entry[ArtPrimitiveV2.SUPERSEDES] as? JsonArray)
+				?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty())
+		}
+		return result
+	}
+
+	/** The drawables and deformers of [model] and the [stubs] that [entry] names, alone or as `kind:id` (a Glue as `glue:a:b`). */
+	fun targets(model: org.umamo.runtime.model.PuppetModel, entry: JsonObject, stubs: Set<String>): Set<String> {
+		val known = HashSet<String>(stubs)
+		model.drawables.forEach { known += it.id.raw }; model.deformers.forEach { known += it.id.raw }
+		val found = LinkedHashSet<String>()
+		fun visit(value: JsonElement) {
+			when (value) {
+				is JsonObject -> value.values.forEach(::visit)
+				is JsonArray -> value.forEach(::visit)
+				is JsonPrimitive -> if (value.isString) {
+					val text = value.content
+					for (candidate in listOf(text) + text.split(':').drop(1)) if (candidate in known) found += candidate
+				}
+				else -> Unit
+			}
+		}
+		visit(entry)
+		return found
+	}
+
+	/** Whether every drawable or deformer [entry] names is one of [stubs] (and it names at least one). */
+	fun onlyStubs(model: org.umamo.runtime.model.PuppetModel, entry: JsonObject, stubs: Set<String>): Boolean {
+		val targets = targets(model, entry, stubs)
+		return targets.isNotEmpty() && targets.all { it in stubs }
+	}
+}
+
+/**
  * One part of a version 2 `art_primitive` record, as the base build reads it. Arrays compare and hash by content.
  */
 class ResolvedPart(
@@ -218,9 +295,16 @@ class ResolvedPart(
 	val sourceId: String,
 	/** The drawable's name (`name`). */
 	val name: String,
-	/** The recorded parent deformer (`parent`), null for the root. */
+	/**
+	 * The recorded parent deformer (`parent`). Null: with [canvasPositions] the generated parent (no journal edit
+	 * had reparented the original), else the root.
+	 */
 	val parent: DeformerId?,
-	/** Parent-space vertex positions (`positions`), x/y pairs; the base never re-meshes a part. */
+	/**
+	 * Vertex positions, x/y pairs; the base never re-meshes a part. With [canvasPositions] canvas units at rest
+	 * (`mesh.canvas_positions`, normalised into the generated parent frame by the base), else parent-space
+	 * positions (`positions`, the flat form).
+	 */
 	val positions: FloatArray,
 	/** Triangle vertex indices (`triangles`). */
 	val triangles: IntArray,
@@ -236,22 +320,24 @@ class ResolvedPart(
 	val sourceBounds: LayerBounds,
 	/** The part's neutral extent (`neutral_bounds`). */
 	val neutralBounds: Bounds,
+	/** Whether [positions] are canvas units from the record's `mesh` object (revision 2 records). */
+	val canvasPositions: Boolean = false,
 ) {
 	/** Canonical text of every field; [ResolvedLayers.contentKey] hashes it. */
 	internal fun canonical(): String = listOf(recordIndex, drawableId.raw, layerId, sourceId, name, parent?.raw,
 		positions.contentToString(), triangles.contentToString(), canvasUvs.contentToString(), classification,
-		frozenAxes.map { it.raw }.sorted(), fixedTopology, sourceBounds, neutralBounds).joinToString("|")
+		frozenAxes.map { it.raw }.sorted(), fixedTopology, sourceBounds, neutralBounds, canvasPositions).joinToString("|")
 
 	override fun equals(other: Any?): Boolean = this === other || other is ResolvedPart &&
 		recordIndex == other.recordIndex && drawableId == other.drawableId && layerId == other.layerId && sourceId == other.sourceId &&
 		name == other.name && parent == other.parent && positions.contentEquals(other.positions) &&
 		triangles.contentEquals(other.triangles) && canvasUvs.contentEquals(other.canvasUvs) &&
 		classification == other.classification && frozenAxes == other.frozenAxes && fixedTopology == other.fixedTopology &&
-		sourceBounds == other.sourceBounds && neutralBounds == other.neutralBounds
+		sourceBounds == other.sourceBounds && neutralBounds == other.neutralBounds && canvasPositions == other.canvasPositions
 
 	override fun hashCode(): Int {
 		var result = recordIndex
-		for (value in listOf(drawableId, layerId, sourceId, name, parent, classification, frozenAxes, fixedTopology, sourceBounds, neutralBounds))
+		for (value in listOf(drawableId, layerId, sourceId, name, parent, classification, frozenAxes, fixedTopology, sourceBounds, neutralBounds, canvasPositions))
 			result = 31 * result + value.hashCode()
 		result = 31 * result + positions.contentHashCode()
 		result = 31 * result + triangles.contentHashCode()

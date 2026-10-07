@@ -56,10 +56,12 @@ internal object GeneratedOverrides {
 
 	/** The generator that owns the cell at [key] of [kind] [id]: one of its parameters is keyed away from its default. */
 	private fun owner(graph: io.github.psd2live.format.compile.document.GeneratorGraph, model: PuppetModel, kind: String, id: String,
-					  key: Map<String, Float>): String? = key.entries.firstNotNullOfOrNull { (parameterId, value) ->
+					  key: Map<String, Float>, skins: PrimitiveSkins = PrimitiveSkins.None): String? = key.entries.firstNotNullOfOrNull { (parameterId, value) ->
 		val parameter = model.parameters.firstOrNull { it.id.raw == parameterId } ?: return@firstNotNullOfOrNull null
 		if (abs(value - parameter.default) <= org.umamo.runtime.eval.EPS_KEY) return@firstNotNullOfOrNull null
-		DocumentGenerators.owner(graph, DocumentGenerators.keyform(kind, id, parameterId))?.id
+		// A version 2 part's generated keyforms belong to the generators the base names in its side channel.
+		(if (kind == "mesh") skins.owner(DrawableId(id), parameter.id) else null)
+			?: DocumentGenerators.owner(graph, DocumentGenerators.keyform(kind, id, parameterId))?.id
 	}
 
 	/** The edited target's kind as the graph names it: `warp` or `mesh`; null for anything else. */
@@ -71,10 +73,11 @@ internal object GeneratedOverrides {
 
 	/**
 	 * [commands] with each keyed geometry edit of a generated cell recorded as an override against what
-	 * [model] (the generated rig) holds there now. Other commands pass through unchanged.
+	 * [model] (the generated rig) holds there now. Other commands pass through unchanged. [skins] is the base's side
+	 * channel: the generators owning each version 2 part's keyforms ([PrimitiveSkins.owner]).
 	 */
-	fun capture(model: PuppetModel, overlay: RigEditOverlay, commands: JsonArray): JsonArray {
-		val graph by lazy { DocumentGenerators.graph(overlay) }
+	fun capture(model: PuppetModel, overlay: RigEditOverlay, commands: JsonArray, skins: PrimitiveSkins = PrimitiveSkins.None): JsonArray {
+		val graph by lazy { DocumentGenerators.graph(overlay, primitives = skins) }
 		return JsonArray(commands.map { element ->
 			val command = element.jsonObject
 			if (command["op"]?.jsonPrimitive?.contentOrNull != "canvas_geometry" || command["preserve_children"]?.jsonPrimitive?.booleanOrNull == true)
@@ -83,7 +86,7 @@ internal object GeneratedOverrides {
 			val id = command.getValue("id").jsonPrimitive.content
 			val key = command.getValue("key").jsonObject.mapValues { it.value.jsonPrimitive.float }
 			if (key.isEmpty()) return@map command
-			val generator = owner(graph, model, kind, id, key) ?: return@map command
+			val generator = owner(graph, model, kind, id, key, skins) ?: return@map command
 			val (base, points) = when (kind) {
 				"warp" -> {
 					val cell = warpCell(model, id, key) ?: return@map command
@@ -130,7 +133,12 @@ internal object GeneratedOverrides {
 		return grid.cells.firstOrNull { it.coordinate.contentEquals(coordinate) }
 	}
 
-	class Outcome(val model: PuppetModel, val issues: List<GeneratedOverrideIssue>) {
+	/**
+	 * A replay's model with what its overrides could not apply as recorded. [notes]: journal entries before a
+	 * version 2 split that failed only on the drawables that split supersedes and replayed as no-ops (from the
+	 * entries this replay ran; a checkpoint hit skips the ones before it).
+	 */
+	class Outcome(val model: PuppetModel, val issues: List<GeneratedOverrideIssue>, val notes: List<String> = emptyList()) {
 		val conflicts: List<String> get() = issues.map(GeneratedOverrideIssue::describe)
 	}
 

@@ -8,6 +8,9 @@ internal object WorkspaceJobResultSchemas {
     private val lifecycleFields = s.identity + mapOf("revision" to s.handle(), "applied" to s.boolean())
     private val lifecycle = s.obj(lifecycleFields)
     private val source = s.obj(lifecycleFields + ("layers" to s.array(s.handle())))
+    /** A split: a source result, with the `art_primitive` record version it wrote while version 2 is enabled. */
+    val split = s.obj(lifecycleFields + mapOf("layers" to s.array(s.handle()), "record_version" to s.integer(1, 2),
+        "record_version_reason" to s.handle()), lifecycleFields.keys + "layers")
     private val batch = s.obj(lifecycleFields + mapOf("edit_count" to s.integer(1, 128), "changed" to s.array(s.handle()),
         "geometry_diagnostics" to WorkspaceGeometrySafetySchemas.report), lifecycleFields.keys + setOf("edit_count", "changed"))
     private val modelExport = s.obj(mapOf("state" to s.handle(), "revision" to s.handle(),
@@ -30,7 +33,7 @@ internal object WorkspaceJobResultSchemas {
         for (id in WorkspaceTextureSchemas.jobs) put(id, WorkspaceTextureSchemas.result(id))
         for (id in WorkspaceSimulationEdits.supported + WorkspacePhysicsEdits.supported + WorkspaceRasterCommands.supported + WorkspaceLayerEdits.supported + WorkspaceAssetLayerEdits.supported + WorkspaceImagePlacementEdits.supported + WorkspaceImageLayerCommands.OP + WorkspaceGenerationCommands.supported + WorkspaceWarpEdits.supported)
             put(id, requireNotNull(WorkspaceAuthoringResultSchemas.forOperation(id)))
-        for (id in WorkspacePartitionCommands.supported) put(id, source)
+        for (id in WorkspacePartitionCommands.supported) put(id, split)
         for (id in WorkspaceAssetSessions.supported) put(id, requireNotNull(WorkspaceAssetResultSchemas.forOperation(id)))
         for (id in WorkspaceSamplingJobs.supported + WorkspaceObservationJobs.motion) {
             val schema = requireNotNull(WorkspaceAuthoringResultSchemas.forOperation(id) ?: WorkspaceObservationResultSchemas.forOperation(id))

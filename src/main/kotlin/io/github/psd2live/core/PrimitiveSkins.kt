@@ -65,6 +65,13 @@ class PrimitiveSkins internal constructor(
 	/** The held-back v2 parts, in record order. */
 	val parts: List<Drawable> get() = partLayers.keys.mapNotNull { drawables[it] }
 
+	/** The generator node owning [part]'s keyforms along [parameter], or null when no generator claims them. */
+	fun owner(part: DrawableId, parameter: ParameterId): String? =
+		ownership[part]?.get(parameter) ?: generatedAxes[part]?.takeIf { parameter in it }?.let { DocumentGenerators.RIG_MESHES }
+
+	/** Whether [part] is held back here. */
+	fun holds(part: DrawableId): Boolean = part in drawables
+
 	companion object {
 		val None = PrimitiveSkins(emptyMap(), emptyList())
 	}

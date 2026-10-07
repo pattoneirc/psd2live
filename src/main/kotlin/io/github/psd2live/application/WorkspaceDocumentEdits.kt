@@ -188,7 +188,7 @@ internal object WorkspaceDocumentEdits {
 
     fun journal(document: WorkspaceDocument, model: RigPreviewModel, edits: JsonArray): WorkspaceDocument {
         val (_, journal) = RigAuthoringJournal.compile(model.rig.puppet,
-            GeneratedOverrides.capture(model.rig.puppet, document.rigEdits, edits))
+            GeneratedOverrides.capture(model.rig.puppet, document.rigEdits, edits, model.baseRig.primitiveSkins))
         return document.copy(rigEdits = document.rigEdits.copy(authoringJournal = document.rigEdits.authoringJournal + journal))
     }
 

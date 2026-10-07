@@ -281,6 +281,7 @@ data class RigEditOverlay(
 		for (command in authoringJournal) if (command["op"]?.jsonPrimitive?.contentOrNull == "structure")
 			deferredJournalEdits += command.getValue("edits").jsonArray.map { it.jsonObject }.filter(::generatedPanelEdit)
 		// Everything the legacy stage reads, and what decides how the journal's structure edits split.
+		val notes = ArrayList<String>()
 		val legacy = ReplayCheckpoints.Legacy(listOf(deletedParameterIds, parameterEdits, warpEdits, structureEdits,
 			keyformSetEdits, keyformCopyEdits, keyformDeleteEdits, generatedIds, io.github.psd2live.i18n.I18n.currentLanguage.tag, skins))
 		var model = ReplayCheckpoints.replay(base, legacy, authoringJournal, start = {
@@ -314,21 +315,31 @@ data class RigEditOverlay(
 			}
 			model
 		}) { model, command ->
-			when (command["op"]?.jsonPrimitive?.contentOrNull) {
-				"structure" -> RigStructureEdits.replay(model, command.getValue("edits").jsonArray.map { it.jsonObject }.filterNot(::generatedPanelEdit))
-				GeneratedOverrides.OP -> model
-				else -> RigAuthoringJournal.replay(model, command, skins)
+			try {
+				when (command["op"]?.jsonPrimitive?.contentOrNull) {
+					"structure" -> RigStructureEdits.replay(model, command.getValue("edits").jsonArray.map { it.jsonObject }.filterNot(::generatedPanelEdit))
+					GeneratedOverrides.OP -> model
+					else -> RigAuthoringJournal.replay(model, command, skins)
+				}
+			} catch (failure: RuntimeException) {
+				val stubs = stubTolerance[command] ?: throw failure
+				if (!StubTolerance.onlyStubs(model, command, stubs)) throw failure
+				notes += "Skipped ${command["op"]?.jsonPrimitive?.contentOrNull}: it addresses only ${StubTolerance.targets(model, command, stubs).sorted().joinToString()}, superseded by a later split (${failure.message})"
+				model
 			}
 		}
-		if (authoredOnly) return GeneratedOverrides.Outcome(model, emptyList())
+		if (authoredOnly) return GeneratedOverrides.Outcome(model, emptyList(), notes)
 		// Swings and simulations write their keyforms onto the replayed rig, in the document graph's order.
 		model = DocumentGenerators.generate(model, this)
 		// Edits of generated keyforms merge with what the generators produce now.
 		val overrides = if (authoringJournal.none(GeneratedOverrides::isOverride)) GeneratedOverrides.Outcome(model, emptyList())
 			else GeneratedOverrides.applyAll(model, authoringJournal, ArtPrimitiveJournal.replacementDrawables(this).keys)
 		model = overrides.model
-		return GeneratedOverrides.Outcome(RigStructureEdits.replay(model, generatedPanelEdits + deferredJournalEdits).withParametersSyncedFromTree(), overrides.issues)
+		return GeneratedOverrides.Outcome(RigStructureEdits.replay(model, generatedPanelEdits + deferredJournalEdits).withParametersSyncedFromTree(), overrides.issues, notes)
 	}
+
+	/** Per journal entry (by identity) before a version 2 split, the drawables later v2 records supersede ([StubTolerance]). */
+	private val stubTolerance: java.util.IdentityHashMap<kotlinx.serialization.json.JsonObject, Set<String>> by lazy { StubTolerance.of(authoringJournal) }
 
 	fun upsert(edit: RigParameterEdit): RigEditOverlay {
 		val index = parameterEdits.indexOfFirst { it.id == edit.id }

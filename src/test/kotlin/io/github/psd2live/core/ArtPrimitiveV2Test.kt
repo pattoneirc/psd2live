@@ -62,6 +62,24 @@ class ArtPrimitiveV2Test {
 		assertNotEquals(part, ArtPrimitiveV2.decodePrimitive(primitive { with("positions", Json.parseToJsonElement("[0,0,2,0,0,1,1,1]")) }, 3))
 	}
 
+	@Test fun decodesTheMeshForm() {
+		val flat = primitive()
+		val meshed = JsonObject(flat - "positions" - "triangles" - "canvas_uvs" + (ArtPrimitiveV2.MESH to buildJsonObject {
+			put(ArtPrimitiveV2.CANVAS_POSITIONS, flat.getValue("positions")); put(ArtPrimitiveV2.TRIANGLES, flat.getValue("triangles"))
+			put(ArtPrimitiveV2.CANVAS_UVS, flat.getValue("canvas_uvs"))
+		}))
+		val part = ArtPrimitiveV2.decodePrimitive(meshed, 3)
+		assertTrue(part.canvasPositions)
+		assertFalse(ArtPrimitiveV2.decodePrimitive(flat, 3).canvasPositions)
+		assertContentEquals(floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f), part.positions)
+		assertContentEquals(intArrayOf(0, 1, 2, 1, 3, 2), part.triangles)
+		assertNotEquals(ArtPrimitiveV2.decodePrimitive(flat, 3), part)
+		assertFailsWith<IllegalArgumentException> { ArtPrimitiveV2.decodePrimitive(meshed.with(ArtPrimitiveV2.MESH, JsonPrimitive(1)), 0) }
+		assertFailsWith<IllegalArgumentException> {
+			ArtPrimitiveV2.decodePrimitive(meshed.with(ArtPrimitiveV2.MESH, JsonObject(meshed.getValue(ArtPrimitiveV2.MESH).jsonObject - ArtPrimitiveV2.CANVAS_POSITIONS)), 0)
+		}
+	}
+
 	@Test fun rejectsInvalidPrimitives() {
 		val broken = listOf<JsonObject.() -> JsonObject>(
 			{ with("id", null) },
