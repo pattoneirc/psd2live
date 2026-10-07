@@ -53,6 +53,17 @@ class WorkspaceStoreHistoryTest {
 		assertEquals(WorkspaceRevisions.of(document(journal)), WorkspaceRevisions.of(copy))
 	}
 
+	@Test fun cachedEntryTextKeepsLengthsAndRevisions() {
+		val named = buildJsonObject { put("op", "rename"); put("name", "前髪 \uD83C\uDF38 é"); put("n", 1) }
+		assertEquals(named.toString().length, JournalEntryDigests.of(named).length, "lengths count UTF-16 units, as chunking always did")
+		val journal = listOf(named) + List(5) { entry(it, points = 20) }
+		// The overlay around the journal changes, so the whole journal is hashed again from the cached text.
+		for (physicsFps in listOf(60, 120, 30)) {
+			val document = document(journal).let { it.copy(rigEdits = it.rigEdits.copy(physicsFps = physicsFps)) }
+			assertEquals(WorkspaceRevisions.reference(document), WorkspaceRevisions.of(document))
+		}
+	}
+
 	@Test fun appendedJournalEntriesShareStoredChunks() {
 		val store = WorkspaceStore(temporary.resolve("store"))
 		val journal = ArrayList<JsonObject>()

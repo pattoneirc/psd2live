@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import org.umamo.format.art.SourceArt
 import java.lang.ref.ReferenceQueue
+import java.lang.ref.SoftReference
 import java.lang.ref.WeakReference
 import java.lang.reflect.Field
 import java.lang.reflect.Modifier
@@ -126,7 +127,7 @@ internal object WorkspaceRevisions {
 			val digest = (if (shared == 0) base else states[shared - 1]).clone() as MessageDigest
 			for (i in shared until journal.size) {
 				if (i > 0) digest.update(SEPARATOR)
-				digest.update(journal[i].toString().encodeToByteArray())
+				digest.update(JournalEntryText.bytes(journal[i]))
 				states.add(digest.clone() as MessageDigest)
 			}
 			val chain = Chain(settings, parts.before, base, ArrayList(journal), states)
@@ -185,8 +186,32 @@ internal object JournalEntryDigests {
 	private val cache = IdentityWeakCache<JsonObject, Digest>()
 
 	fun of(entry: JsonObject): Digest = cache.getOrPut(entry) {
-		val text = entry.toString()
-		Digest(WorkspaceRevisions.sha256(text.encodeToByteArray()), text.length)
+		val text = JournalEntryText.bytes(entry)
+		Digest(WorkspaceRevisions.sha256(text), utf16Length(text))
+	}
+
+	/** The length of the string [utf8] encodes, in UTF-16 units: a four-byte sequence is a surrogate pair. */
+	private fun utf16Length(utf8: ByteArray): Int {
+		var length = 0
+		for (byte in utf8) {
+			val b = byte.toInt() and 0xff
+			if (b and 0xc0 != 0x80) length += if (b and 0xf8 == 0xf0) 2 else 1
+		}
+		return length
+	}
+}
+
+/**
+ * The UTF-8 text of authoring-journal commands, cached by entry identity. Writing an entry's numbers out costs
+ * several times what hashing the text does, and a revision whose overlay or settings changed hashes the whole
+ * journal again. Held softly: the text comes back from the entry when memory runs low.
+ */
+internal object JournalEntryText {
+	private val cache = IdentityWeakCache<JsonObject, SoftReference<ByteArray>>()
+
+	fun bytes(entry: JsonObject): ByteArray {
+		cache.getOrPut(entry) { SoftReference(entry.toString().encodeToByteArray()) }.get()?.let { return it }
+		return entry.toString().encodeToByteArray().also { cache.put(entry, SoftReference(it)) }
 	}
 }
 
@@ -205,6 +230,10 @@ internal class IdentityWeakCache<K : Any, V : Any> {
 
 	private val queue = ReferenceQueue<Any>()
 	private val map = HashMap<Key, V>()
+
+	fun put(key: K, value: V) {
+		synchronized(this) { purge(); map[Key(key, queue)] = value }
+	}
 
 	fun getOrPut(key: K, compute: () -> V): V {
 		synchronized(this) { purge(); map[Key(key, null)]?.let { return it } }
