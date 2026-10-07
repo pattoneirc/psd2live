@@ -12,6 +12,7 @@ import androidx.compose.ui.input.pointer.PointerButton
 import androidx.compose.ui.input.pointer.PointerButtons
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.unit.Density
+import io.github.psd2live.ui.rotateAbout
 import io.github.psd2live.ui.state.AppSettings
 import io.github.psd2live.ui.state.DesktopWorkspace
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -141,6 +142,22 @@ class AtlasRealtimeEditTest {
 					assertTrue(!isRed(render(), leftBehind), "the shrinking tile shows at its new size while the corner moves")
 					assertTrue(isRed(render(), anchor + (grip - anchor) * 0.3f))
 					scene.sendPointerEvent(PointerEventType.Release, outward, button = PointerButton.Primary)
+
+					// Just outside a corner the pointer turns the tile, about its anchor - its centre, while the anchor is not moved.
+					val small = requireNotNull(vm.textureSnapshot()).let { s -> s.shownTiles(tile.page, vm.state.value.textureWorkspace.shown).single { it.layerId == red.layerId } }
+					settle()
+					val middle = view(small.x + small.width / 2f, small.y + small.height / 2f)
+					val bottomRight = view((small.x + small.width).toFloat(), (small.y + small.height).toFloat())
+					val outside = bottomRight + Offset(8f, 8f)
+					val turnTo = outside.rotateAbout(middle, 30f)
+					scene.sendPointerEvent(PointerEventType.Move, outside)
+					scene.sendPointerEvent(PointerEventType.Press, outside, buttons = primary, button = PointerButton.Primary)
+					for (i in 1..10) { scene.sendPointerEvent(PointerEventType.Move, outside.rotateAbout(middle, 3f * i), buttons = primary); render() }
+					scene.sendPointerEvent(PointerEventType.Release, turnTo, button = PointerButton.Primary)
+					val corneredTurn = vm.state.value.textureWorkspace.session.getValue(red.layerId)
+					assertEquals(30f, corneredTurn.rotation, 0.5f, "turned from outside the corner")
+					assertEquals(small.x + small.width / 2f, corneredTurn.x + corneredTurn.width / 2f, 1f, "about its centre")
+					assertEquals(small.y + small.height / 2f, corneredTurn.y + corneredTurn.height / 2f, 1f)
 
 					// Half a quarter turn: the turned square leaves its upright corners empty.
 					assertTrue(vm.rotateTextureTile(requireNotNull(vm.textureSnapshot()), red.layerId, 45f))

@@ -51,6 +51,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.areAnyPressed
+import androidx.compose.ui.input.pointer.isAltPressed
 import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -76,6 +77,14 @@ import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.core.CanvasViewport
 import io.github.psd2live.core.TileTurn
 import io.github.psd2live.render.CanvasRenderService
+import io.github.psd2live.ui.BoundingBox
+import io.github.psd2live.ui.BoundingHandle
+import io.github.psd2live.ui.CanvasCursors
+import io.github.psd2live.ui.TransformFrame
+import io.github.psd2live.ui.TransformHandles
+import io.github.psd2live.ui.drawTransformBox
+import io.github.psd2live.ui.rotateAbout
+import io.github.psd2live.ui.turnDegrees
 import io.github.psd2live.ui.state.AppSettings
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -169,28 +178,28 @@ private data class PageTransform(val left: Float, val top: Float, val scale: Flo
 }
 
 /**
- * A corner-handle drag in flight: [factor] scales every selected tile's density about the grabbed tile's opposite
- * corner, tile point [anchor] of [primary]; [collides] when a tile would then meet another by their meshes (or leave
- * the page), so the release changes nothing.
+ * A corner-handle drag in flight: [factor] scales every selected tile's density about tile point [anchor] of [primary] -
+ * the grabbed [handle]'s opposite corner, or with Alt the tile's anchor; [collides] when a tile would then meet another
+ * by their meshes (or leave the page), so the release changes nothing.
  */
-private data class DensityDrag(val layerIds: List<String>, val primary: String, val anchor: Offset, val grip: Offset, val factor: Float,
+private data class DensityDrag(val layerIds: List<String>, val primary: String, val anchor: Offset, val handle: BoundingHandle, val factor: Float,
                                val collides: Boolean = false)
 
-/** A turn in flight: [layerId]'s tile at [rotation] degrees; [collides] as for a [DensityDrag]. */
-private data class TurnDrag(val layerId: String, val rotation: Float, val collides: Boolean = false)
+/** A turn in flight: [layerId]'s tile at [rotation] degrees with its top left at [x], [y]; [collides] as for a [DensityDrag]. */
+private data class TurnDrag(val layerId: String, val rotation: Float, val x: Int, val y: Int, val collides: Boolean = false)
 
 /**
- * Where a corner drag puts [tile] (as the atlas shows it), in whole texture pixels: the grabbed tile keeps its opposite
- * corner where it is, through its turn; the others keep their top left. The preview, the overlap test and the session
- * all take this one placement.
+ * Where a corner drag puts [tile] (as the atlas shows it), in whole texture pixels: the grabbed tile keeps its tile point
+ * [DensityDrag.anchor] where it is, through its turn; the others keep their top left. The preview, the overlap test and
+ * the session all take this one placement.
  */
 private fun scaledTile(tile: WorkspaceAtlasTile, drag: DensityDrag): WorkspaceAtlasTile {
 	val width = Math.round(tile.width * drag.factor).coerceAtLeast(1); val height = Math.round(tile.height * drag.factor).coerceAtLeast(1)
 	if (tile.layerId != drag.primary) return tile.copy(width = width, height = height)
 	val frame = TileFrame.of(tile)
 	val fixed = frame.toPage(drag.anchor.x, drag.anchor.y)
-	// The same corner of the new size, sitting where the old one was.
-	val corner = Offset(if (drag.anchor.x > 0f) width.toFloat() else 0f, if (drag.anchor.y > 0f) height.toFloat() else 0f)
+	// The same point of the new size, sitting where the old one was.
+	val corner = Offset(drag.anchor.x * width / tile.width, drag.anchor.y * height / tile.height)
 	val r = Math.toRadians(tile.rotation.toDouble()); val c = kotlin.math.cos(r).toFloat(); val s = kotlin.math.sin(r).toFloat()
 	val dx = corner.x - width / 2f; val dy = corner.y - height / 2f
 	val cx = fixed[0] - (c * dx - s * dy); val cy = fixed[1] - (s * dx + c * dy)
@@ -200,25 +209,28 @@ private fun scaledTile(tile: WorkspaceAtlasTile, drag: DensityDrag): WorkspaceAt
 /** What a right-click opened its menu on: a tile's layer, or the page itself. */
 private data class AtlasMenu(val at: Offset, val layerId: String?)
 
-/** A handle of a selected tile: where it shows, and either a corner with its opposite (tile points) or the turn grip. */
-private class Grip(val at: Offset, val corner: Offset?, val opposite: Offset?) {
-	val turns: Boolean get() = corner == null
+/**
+ * [frame] as the edit canvas's transform box, in the view: upright inside a frame turned with the tile about its centre,
+ * its anchor at [anchor] of the tile (null: the centre).
+ */
+private fun boxOf(frame: TileFrame, transform: PageTransform, anchor: Offset?): TransformFrame {
+	val c = transform.toView(frame.centre.x, frame.centre.y)
+	val hw = frame.width * transform.scale / 2f; val hh = frame.height * transform.scale / 2f
+	return TransformFrame(BoundingBox(c.x - hw, c.y - hh, c.x + hw, c.y + hh), c, frame.rotation).withAnchor(anchor)
 }
 
-/**
- * [tile]'s handles, through its turn: a density grip at each corner - or, while the tile shows too small for four
- * apart, one just outside its bottom right corner - and the turn grip off the middle of its top edge.
- */
-private fun grips(tile: WorkspaceAtlasTile, frame: TileFrame, transform: PageTransform, handle: Float): List<Grip> {
-	val w = frame.width; val h = frame.height
-	fun view(tx: Float, ty: Float) = frame.toPage(tx, ty).let { transform.toView(it[0], it[1]) }
-	val corners = listOf(Offset(0f, 0f) to Offset(w, h), Offset(w, 0f) to Offset(0f, h), Offset(w, h) to Offset(0f, 0f), Offset(0f, h) to Offset(w, 0f))
-	val r = Math.toRadians(frame.rotation.toDouble()); val up = Offset(kotlin.math.sin(r).toFloat(), -kotlin.math.cos(r).toFloat())
-	val turn = Grip(view(w / 2f, 0f) + up * (handle * 3.2f), null, null)
-	val big = w * transform.scale >= handle * 3 && h * transform.scale >= handle * 3
-	if (big) return corners.map { (corner, opposite) -> Grip(view(corner.x, corner.y), corner, opposite) } + turn
-	val outward = (view(w, h) - view(0f, 0f)).let { it / it.getDistance().coerceAtLeast(1e-3f) }
-	return listOf(Grip(view(w, h) + outward * (handle * 1.4f), Offset(w, h), Offset(0f, 0f)), turn)
+/** The tile point a corner [handle] sits on, in a [width] x [height] tile, and the one opposite it. */
+private fun cornerPoints(handle: BoundingHandle, width: Float, height: Float): Pair<Offset, Offset> = when (handle) {
+	BoundingHandle.TOP_LEFT -> Offset(0f, 0f) to Offset(width, height)
+	BoundingHandle.TOP_RIGHT -> Offset(width, 0f) to Offset(0f, height)
+	BoundingHandle.BOTTOM_LEFT -> Offset(0f, height) to Offset(width, 0f)
+	else -> Offset(width, height) to Offset(0f, 0f)
+}
+
+/** [tile] turned to [rotation] degrees about the page point [anchor], in whole texture pixels. */
+private fun turnedTile(tile: WorkspaceAtlasTile, anchor: Offset, rotation: Float): WorkspaceAtlasTile {
+	val centre = TileFrame.of(tile).centre.rotateAbout(anchor, rotation - tile.rotation)
+	return tile.copy(x = Math.round(centre.x - tile.width / 2f), y = Math.round(centre.y - tile.height / 2f), rotation = rotation)
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -271,6 +283,10 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	// per snapshot would leave every gesture after the first commit drawing nothing. Released, it goes to the session.
 	var densityDrag by remember { mutableStateOf<DensityDrag?>(null) }
 	var turnDrag by remember { mutableStateOf<TurnDrag?>(null) }
+	/** The tile whose anchor is being dragged. */
+	var anchorDrag by remember { mutableStateOf<String?>(null) }
+	/** Each tile's anchor, as a point of its box (see [TransformFrame.anchorUv]); a tile not here turns about its centre. */
+	var anchors by remember { mutableStateOf(emptyMap<String, Offset>()) }
 	var tileDrag by remember { mutableStateOf<TileDragDraft?>(null) }
 	var space by remember { mutableStateOf(false) }
 	var menu by remember { mutableStateOf<AtlasMenu?>(null) }
@@ -292,7 +308,8 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	val currentSelection by rememberUpdatedState(selection)
 	val currentBusy by rememberUpdatedState(busy)
 	val currentSpace by rememberUpdatedState(space)
-	val handleRadius = with(androidx.compose.ui.platform.LocalDensity.current) { 6.dp.toPx() }
+	// The edit canvas's transform box, in dp: corners scale the density, the grip and the corners' outsides turn the tile.
+	val handles = TransformHandles(edges = false, unit = androidx.compose.ui.platform.LocalDensity.current.density)
 
 	fun hit(point: Offset): WorkspaceAtlasTile? {
 		val at = currentTransform.toPage(point)
@@ -301,11 +318,10 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	}
 
 	/** The selected tile whose handle is under [point], with that handle. */
-	fun hitGrip(point: Offset): Pair<WorkspaceAtlasTile, Grip>? {
+	fun hitGrip(point: Offset): Pair<WorkspaceAtlasTile, BoundingHandle>? {
 		for (tile in currentTiles.filter { it.layerId in currentSelected }) {
-			for (grip in grips(tile, TileFrame.of(tile), currentTransform, handleRadius)) {
-				if ((grip.at - point).getDistance() <= handleRadius * 1.6f) return tile to grip
-			}
+			val handle = io.github.psd2live.ui.transformRingAt(point, boxOf(TileFrame.of(tile), currentTransform, anchors[tile.layerId]), handles)
+			if (handle != BoundingHandle.NONE) return tile to handle
 		}
 		return null
 	}
@@ -345,8 +361,8 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 				if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
 				if (event.key == Key.Escape) {
 					when {
-						tileDrag != null || densityDrag != null || turnDrag != null || marquee != null -> {
-							tileDrag = null; densityDrag = null; turnDrag = null; marquee = null
+						tileDrag != null || densityDrag != null || turnDrag != null || anchorDrag != null || marquee != null -> {
+							tileDrag = null; densityDrag = null; turnDrag = null; anchorDrag = null; marquee = null
 						}
 						else -> vm.selectLayer(null)
 					}
@@ -410,10 +426,10 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 			.onPointerEvent(PointerEventType.Exit) { hovered = null; pointer = null }
 			.pointerHoverIcon(PointerIcon(atlasCursor(
 				panning = panFrom != null, space = space, moving = tileDrag != null, boxing = marquee != null,
-				grip = (densityDrag?.let { d -> currentTiles.firstOrNull { it.layerId == d.primary }?.let { t ->
-					Grip(Offset.Zero, d.grip, d.anchor) to TileFrame.of(t) } })
-					?: turnDrag?.let { Grip(Offset.Zero, null, null) to null }
-					?: pointer?.takeIf { !busy }?.let { at -> hitGrip(at)?.let { (tile, grip) -> grip to TileFrame.of(tile) } },
+				grip = (densityDrag?.let { d -> d.handle to (currentTiles.firstOrNull { it.layerId == d.primary }?.rotation ?: 0f) })
+					?: turnDrag?.let { BoundingHandle.ROTATE to 0f }
+					?: anchorDrag?.let { BoundingHandle.ANCHOR to 0f }
+					?: pointer?.takeIf { !busy }?.let { at -> hitGrip(at)?.let { (tile, handle) -> handle to tile.rotation } },
 				overTile = pointer?.let { hit(it) } != null,
 			)))
 			.pointerInput(page, pageInfo.width, pageInfo.height) {
@@ -428,47 +444,72 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 					val snapshotAtStart = currentSnapshot
 
 					val handle = if (select == CanvasNavigation.SelectMode.REPLACE && !currentBusy) hitGrip(down.position) else null
-					// The turn grip: the tile turns about its centre with the pointer, freely; Shift steps by 15 degrees.
-					if (handle != null && handle.second.turns) {
+					// The anchor: dragged, it moves, snapping to the centre, the corners and the edges' middles.
+					if (handle != null && handle.second == BoundingHandle.ANCHOR) {
 						val tile = handle.first
-						val centre = TileFrame.of(tile).centre
-						fun angle(at: Offset) = currentTransform.toPage(at).let { p ->
-							Math.toDegrees(kotlin.math.atan2((p.y - centre.y).toDouble(), (p.x - centre.x).toDouble())).toFloat()
+						val box = boxOf(TileFrame.of(tile), currentTransform, anchors[tile.layerId])
+						anchorDrag = tile.layerId
+						while (true) {
+							val move = awaitPointerEvent()
+							val change = move.changes.firstOrNull { it.id == down.id } ?: break
+							if (!change.pressed || !move.buttons.isPrimaryPressed) break
+							val uv = box.anchorDraggedTo(change.position, handles.unit)
+							anchors = if (uv == null) anchors - tile.layerId else anchors + (tile.layerId to uv)
+							change.consume()
 						}
-						val startAngle = angle(down.position)
-						var drag = TurnDrag(tile.layerId, tile.rotation)
+						anchorDrag = null
+						return@awaitEachGesture
+					}
+					// The turn grip, or just outside a corner: the tile turns about its anchor with the pointer, freely;
+					// Shift steps by 15 degrees.
+					if (handle != null && handle.second == BoundingHandle.ROTATE) {
+						val tile = handle.first
+						val frame = TileFrame.of(tile)
+						val uv = anchors[tile.layerId] ?: Offset(0.5f, 0.5f)
+						val anchor = frame.toPage(uv.x * frame.width, uv.y * frame.height).let { Offset(it[0], it[1]) }
+						val pressed = currentTransform.toPage(down.position)
+						var drag = TurnDrag(tile.layerId, tile.rotation, tile.x, tile.y)
 						turnDrag = drag
 						while (true) {
 							val move = awaitPointerEvent()
 							val change = move.changes.firstOrNull { it.id == down.id } ?: break
 							if (!change.pressed || !move.buttons.isPrimaryPressed) break
-							var rotation = io.github.psd2live.project.normalizedRotation(tile.rotation + angle(change.position) - startAngle)
+							var rotation = io.github.psd2live.project.normalizedRotation(tile.rotation + turnDegrees(anchor, pressed, currentTransform.toPage(change.position), false))
 							if (move.keyboardModifiers.isShiftPressed) rotation = io.github.psd2live.project.normalizedRotation(Math.round(rotation / 15f) * 15f)
-							drag = drag.copy(rotation = rotation,
-								collides = vm.texturePlacementCollides(snapshotAtStart, mapOf(tile.layerId to tile.copy(rotation = rotation))))
+							val turned = turnedTile(tile, anchor, rotation)
+							drag = drag.copy(rotation = rotation, x = turned.x, y = turned.y,
+								collides = vm.texturePlacementCollides(snapshotAtStart, mapOf(tile.layerId to turned)))
 							turnDrag = drag
 							change.consume()
 						}
 						turnDrag = null
-						if (drag.rotation != tile.rotation) vm.rotateTextureTile(snapshotAtStart, tile.layerId, drag.rotation)
+						if (drag.rotation != tile.rotation || drag.x != tile.x || drag.y != tile.y) {
+							vm.placeTextureTiles(snapshotAtStart, mapOf(tile.layerId to tile.copy(x = drag.x, y = drag.y, rotation = drag.rotation)), "texture.rotate.collides")
+						}
 						return@awaitEachGesture
 					}
-					// A selected tile's corner: scale the selection's density, the grabbed tile about its opposite corner.
+					// A selected tile's corner: scale the selection's density, the grabbed tile about its opposite corner -
+					// or with Alt about its anchor.
 					if (handle != null) {
-						val (tile, grip) = handle
+						val (tile, corner) = handle
 						val frameAtStart = TileFrame.of(tile)
-						val anchor = frameAtStart.toPage(grip.opposite!!.x, grip.opposite.y).let { Offset(it[0], it[1]) }
-						val start = frameAtStart.toPage(grip.corner!!.x, grip.corner.y).let { (Offset(it[0], it[1]) - anchor).getDistance() }
+						val (grip, opposite) = cornerPoints(corner, frameAtStart.width, frameAtStart.height)
+						val uv = anchors[tile.layerId] ?: Offset(0.5f, 0.5f)
+						val anchorPoint = Offset(uv.x * frameAtStart.width, uv.y * frameAtStart.height)
+						fun page(point: Offset) = frameAtStart.toPage(point.x, point.y).let { Offset(it[0], it[1]) }
 						val primaryDensity = vm.shownTextureDensity(snapshotAtStart, tile.layerId)
-						var drag = DensityDrag(currentSelection, tile.layerId, grip.opposite, grip.corner, 1f)
+						var drag = DensityDrag(currentSelection, tile.layerId, opposite, corner, 1f)
 						densityDrag = drag
 						while (true) {
 							val move = awaitPointerEvent()
 							val change = move.changes.firstOrNull { it.id == down.id } ?: break
 							if (!change.pressed || !move.buttons.isPrimaryPressed) break
-							val distance = (currentTransform.toPage(change.position) - anchor).getDistance()
+							// The point that stays; an anchor on the grabbed corner itself leaves nothing to scale from.
+							val fixed = if (move.keyboardModifiers.isAltPressed && (page(anchorPoint) - page(grip)).getDistance() > 1e-3f) anchorPoint else opposite
+							val start = (page(grip) - page(fixed)).getDistance()
+							val distance = (currentTransform.toPage(change.position) - page(fixed)).getDistance()
 							val density = TextureDensity.dragged(primaryDensity, start, distance)
-							drag = drag.copy(factor = density / primaryDensity)
+							drag = drag.copy(anchor = fixed, factor = density / primaryDensity)
 							val placed = currentTiles.filter { it.layerId in drag.layerIds }.associate { it.layerId to scaledTile(it, drag) }
 							drag = drag.copy(collides = vm.texturePlacementCollides(snapshotAtStart, placed))
 							densityDrag = drag
@@ -563,7 +604,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 			/** Where [tile] shows while a gesture moves, scales or turns it; null where it stands. */
 			fun moved(tile: WorkspaceAtlasTile): TileFrame? {
 				if (draft?.layerId == tile.layerId) return TileFrame.of(tile.copy(x = draft.x, y = draft.y))
-				if (turning?.layerId == tile.layerId) return TileFrame.of(tile.copy(rotation = turning.rotation))
+				if (turning?.layerId == tile.layerId) return TileFrame.of(tile.copy(x = turning.x, y = turning.y, rotation = turning.rotation))
 				// The inspector's density slider: each tile grows or shrinks from its top left.
 				previewed[tile.layerId]?.takeIf { it != 1f && scaling == null }?.let { factor ->
 					return TileFrame(tile.x.toFloat(), tile.y.toFloat(), tile.width * factor, tile.height * factor, tile.rotation)
@@ -672,22 +713,12 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 						drawRoundRect(colors.highlight, Offset(rect.right - badge * 1.25f, rect.top + badge * 0.25f), Size(badge, badge),
 							androidx.compose.ui.geometry.CornerRadius(badge / 4f))
 					}
-					// The handles of a selected tile, as the edit canvas draws its transform box: density grips at the
-					// corners and the turn grip off the top edge, all through the tile's turn.
+					// The handles of a selected tile, the edit canvas's own transform box: density grips at the corners,
+					// the turn grip off the top edge and the anchor, all through the tile's turn.
 					if (isSelected && draft == null && scaling == null && turning == null && !busy) {
-						val frame = TileFrame.of(tile)
-						for (grip in grips(tile, frame, transform, handleRadius)) {
-							val at = grip.at
-							if (grip.turns) {
-								val top = frame.toPage(frame.width / 2f, 0f).let { transform.toView(it[0], it[1]) }
-								drawLine(colors.accent.copy(alpha = 0.7f), top, at, 1f)
-								drawCircle(colors.panelBackground, handleRadius / 2f + 1.5f, at)
-								drawCircle(colors.accent, handleRadius / 2f + 0.5f, at)
-							} else {
-								drawRect(colors.panelBackground, at - Offset(handleRadius / 2f + 1f, handleRadius / 2f + 1f), Size(handleRadius + 2f, handleRadius + 2f))
-								drawRect(colors.accent, at - Offset(handleRadius / 2f, handleRadius / 2f), Size(handleRadius, handleRadius))
-							}
-						}
+						val over = pointer?.let { hitGrip(it) }?.takeIf { it.first.layerId == tile.layerId }?.second
+						drawTransformBox(boxOf(TileFrame.of(tile), transform, anchors[tile.layerId]),
+							if (anchorDrag == tile.layerId) BoundingHandle.ANCHOR else over ?: BoundingHandle.NONE, colors, handles, outline = false)
 					}
 				}
 				if (texture.showMeshes && meshes != null && !gpuReady) {
@@ -852,26 +883,18 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 
 /**
  * The pointer the atlas page shows, as the edit canvas picks its own ([io.github.psd2live.ui.CanvasEditor.activeCursor]):
- * move while panning or dragging a tile, the open hand while Space is held, a crosshair for a selection box,
- * diagonal arrows on a density grip (through the tile's turn), a hand on the turn grip and over a tile that can be
- * picked or dragged.
+ * move while panning or dragging a tile, the open hand while Space is held, a crosshair for a selection box, the
+ * transform box's own pointer over a handle of a selected tile ([grip], with the tile's turn), and a hand over a tile
+ * that can be picked or dragged.
  */
-private fun atlasCursor(panning: Boolean, space: Boolean, moving: Boolean, boxing: Boolean, grip: Pair<Grip, TileFrame?>?,
+private fun atlasCursor(panning: Boolean, space: Boolean, moving: Boolean, boxing: Boolean, grip: Pair<BoundingHandle, Float>?,
                         overTile: Boolean): java.awt.Cursor {
 	fun cursor(type: Int) = java.awt.Cursor.getPredefinedCursor(type)
-	fun diagonal(grip: Grip, frame: TileFrame?): java.awt.Cursor {
-		val corner = grip.corner ?: return cursor(java.awt.Cursor.HAND_CURSOR)
-		val opposite = grip.opposite ?: return cursor(java.awt.Cursor.HAND_CURSOR)
-		val a = frame?.toPage(corner.x, corner.y) ?: floatArrayOf(corner.x, corner.y)
-		val b = frame?.toPage(opposite.x, opposite.y) ?: floatArrayOf(opposite.x, opposite.y)
-		// Top left and bottom right share one diagonal, top right and bottom left the other.
-		return cursor(if ((a[0] - b[0]) * (a[1] - b[1]) > 0f) java.awt.Cursor.NW_RESIZE_CURSOR else java.awt.Cursor.NE_RESIZE_CURSOR)
-	}
 	return when {
 		panning || moving -> cursor(java.awt.Cursor.MOVE_CURSOR)
 		space -> cursor(java.awt.Cursor.HAND_CURSOR)
 		boxing -> cursor(java.awt.Cursor.CROSSHAIR_CURSOR)
-		grip != null -> diagonal(grip.first, grip.second)
+		grip != null -> CanvasCursors.transform(grip.first, grip.second)
 		overTile -> cursor(java.awt.Cursor.HAND_CURSOR)
 		else -> java.awt.Cursor.getDefaultCursor()
 	}

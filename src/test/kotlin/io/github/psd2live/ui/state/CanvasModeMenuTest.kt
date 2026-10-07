@@ -6,11 +6,13 @@ import io.github.psd2live.project.WorkspaceSourceLayer
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.PipelineConfig
 import io.github.psd2live.core.RigPreviewModel
+import io.github.psd2live.ui.BoundingHandle
 import io.github.psd2live.ui.CanvasTool
 import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.WeightPaint
 import io.github.psd2live.ui.WeightPaintMode
 import io.github.psd2live.ui.rotateAbout
+import io.github.psd2live.ui.transformHandleAt
 import io.github.psd2live.ui.views.CanvasModeChoice
 import io.github.psd2live.ui.views.chooseCanvasMode
 import kotlinx.coroutines.delay
@@ -181,7 +183,10 @@ class CanvasModeMenuTest {
             assertEquals(EditHierarchyMode.SELECT, editor.hierarchyMode)
             assertTrue(editor.drawsTransformBox)
             val frame = assertNotNull(editor.transformFrame(viewport))
-            val start = Offset(frame.bounds.centerX, frame.bounds.centerY)
+            // The centre holds the anchor; the body moves from anywhere else inside the box.
+            assertEquals(BoundingHandle.ANCHOR, transformHandleAt(frame.anchor, frame))
+            val start = Offset(frame.bounds.centerX + frame.bounds.width / 4f, frame.bounds.centerY)
+            assertEquals(BoundingHandle.BODY, transformHandleAt(start, frame))
             val before = assertNotNull(editor.target()).geometry.points.copyOf()
             assertTrue(editor.press(start, viewport, shift = false, alt = false))
             editor.move(start + Offset(20f, 0f), viewport, shift = false)
@@ -216,6 +221,29 @@ class CanvasModeMenuTest {
                 assertTrue((rotated[i] - point.rotateAbout(rotationFrame.pivot, 90f)).getDistance() < 0.01f)
             }
             editor.cancel()
+            // Drag the anchor onto the top left corner, then turn from just outside the bottom right one: the
+            // layer turns about that corner.
+            val anchorFrame = assertNotNull(editor.transformFrame(viewport))
+            val topLeft = Offset(anchorFrame.bounds.minX, anchorFrame.bounds.minY)
+            editor.press(anchorFrame.anchor, viewport, shift = false, alt = false)
+            editor.move(topLeft + Offset(3f, 2f), viewport, shift = false)
+            editor.release()
+            assertNull(editor.preview)
+            val anchoredFrame = assertNotNull(editor.transformFrame(viewport))
+            assertTrue((anchoredFrame.anchor - topLeft).getDistance() < 0.01f)
+            val outside = Offset(anchoredFrame.bounds.maxX + 12f, anchoredFrame.bounds.maxY + 12f)
+            assertEquals(BoundingHandle.ROTATE, transformHandleAt(outside, anchoredFrame))
+            editor.press(outside, viewport, shift = false, alt = false)
+            editor.move(outside.rotateAbout(topLeft, 90f), viewport, shift = false)
+            val cornerTarget = assertNotNull(editor.target())
+            val cornerTurned = editor.screen(cornerTarget.geometry.points, cornerTarget, viewport)
+            scalePoints.forEachIndexed { i, point ->
+                assertTrue((cornerTurned[i] - point.rotateAbout(topLeft, 90f)).getDistance() < 0.01f)
+            }
+            editor.cancel()
+            // Cancelling ends the tool session: the anchor is back on the pivot.
+            val reset = assertNotNull(editor.transformFrame(viewport))
+            assertTrue((reset.anchor - reset.pivot).getDistance() < 0.01f)
             editor.activateTool(CanvasTool.SELECT)
             assertNull(editor.transformFrame(viewport))
             assertNull(editor.preview)

@@ -7,6 +7,7 @@ import java.awt.Graphics2D
 import java.awt.Point
 import java.awt.RenderingHints
 import java.awt.Toolkit
+import java.awt.geom.Arc2D
 import java.awt.geom.Path2D
 import java.awt.image.BufferedImage
 
@@ -57,6 +58,62 @@ internal object CanvasCursors {
             g.stroke = BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
             g.draw(collar)
         }
+    }
+
+    /** A turn: three quarters of a circle with an arrowhead at each end. The hotspot is its centre. */
+    val rotate: Cursor by lazy {
+        cursor("psd2live-rotate", 16, 16) { g ->
+            val arc = Arc2D.Float(7f, 7f, 18f, 18f, 120f, 270f, Arc2D.OPEN)
+            // Arrowheads at both ends of the arc, pointing on along it: back past 120°, and on past 30°.
+            fun head(deg: Double, along: Double): Path2D.Float {
+                val r = Math.toRadians(deg)
+                val x = 16.0 + 9.0 * Math.cos(r)
+                val y = 16.0 - 9.0 * Math.sin(r)
+                val a = Math.toRadians(along)
+                val dx = Math.cos(a); val dy = -Math.sin(a)
+                return Path2D.Float().apply {
+                    moveTo(x + dx * 4.5, y + dy * 4.5)
+                    lineTo(x - dy * 4.0 - dx * 1.5, y + dx * 4.0 - dy * 1.5)
+                    lineTo(x + dy * 4.0 - dx * 1.5, y - dx * 4.0 - dy * 1.5)
+                    closePath()
+                }
+            }
+            val heads = listOf(head(120.0, 30.0), head(30.0, 120.0))
+            g.color = WHITE_HALO
+            g.stroke = BasicStroke(4.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+            g.draw(arc)
+            heads.forEach { g.draw(it); g.fill(it) }
+            g.color = DARK_CORE
+            g.stroke = BasicStroke(1.8f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND)
+            g.draw(arc)
+            heads.forEach { g.fill(it) }
+        }
+    }
+
+    /**
+     * The pointer a transform box handle shows: resize arrows along the handle's own direction through the
+     * box's turn [angleDeg], the turn cursor on the rotate grip and the turn zones, a cross on the anchor.
+     */
+    fun transform(handle: BoundingHandle, angleDeg: Float): Cursor {
+        fun stock(type: Int) = Cursor.getPredefinedCursor(type)
+        val base = when (handle) {
+            BoundingHandle.RIGHT, BoundingHandle.LEFT -> 0f
+            BoundingHandle.BOTTOM_RIGHT, BoundingHandle.TOP_LEFT -> 45f
+            BoundingHandle.BOTTOM, BoundingHandle.TOP -> 90f
+            BoundingHandle.BOTTOM_LEFT, BoundingHandle.TOP_RIGHT -> 135f
+            BoundingHandle.BODY -> return stock(Cursor.MOVE_CURSOR)
+            BoundingHandle.ROTATE -> return rotate
+            BoundingHandle.ANCHOR -> return stock(Cursor.CROSSHAIR_CURSOR)
+            BoundingHandle.NONE -> return Cursor.getDefaultCursor()
+        }
+        // AWT has four resize axes; the handle's axis, turned with the box, picks the nearest one.
+        val axis = Math.floorMod(Math.round((base + angleDeg) / 45f), 4)
+        return stock(when (axis) {
+            0 -> Cursor.E_RESIZE_CURSOR
+            1 -> Cursor.NW_RESIZE_CURSOR
+            2 -> Cursor.N_RESIZE_CURSOR
+            else -> Cursor.NE_RESIZE_CURSOR
+        })
     }
 
     private fun cursor(name: String, hotX: Int, hotY: Int, paint: (Graphics2D) -> Unit): Cursor {

@@ -4,7 +4,8 @@ import androidx.compose.ui.geometry.Offset
 import kotlin.math.*
 
 /**
- * The transform box, shared by every tool that edits a selection by framing it.
+ * The transform box, shared by every control that edits something by framing it: the Transform tool's box
+ * on the edit canvas, the create ghost of a Warp or an imported layer, and the selected tiles of the atlas.
  *
  * Nothing here touches the editor, the viewport or Compose state — a box is a value and a drag is a
  * function of the pointer, so the whole thing is testable without a running canvas.
@@ -12,17 +13,60 @@ import kotlin.math.*
 
 internal enum class BoundingHandle {
     NONE, BODY, TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT,
-    TOP, BOTTOM, LEFT, RIGHT, ROTATE
+    TOP, BOTTOM, LEFT, RIGHT, ROTATE,
+    /** The anchor a rotation turns about and an Alt scale grows from; dragging it moves only the anchor. */
+    ANCHOR,
 }
+
+internal val BoundingHandle.isCorner get() = this == BoundingHandle.TOP_LEFT || this == BoundingHandle.TOP_RIGHT ||
+    this == BoundingHandle.BOTTOM_LEFT || this == BoundingHandle.BOTTOM_RIGHT
+
+internal val BoundingHandle.scales get() = isCorner || this == BoundingHandle.TOP || this == BoundingHandle.BOTTOM ||
+    this == BoundingHandle.LEFT || this == BoundingHandle.RIGHT
 
 internal data class BoundingBox(val minX: Float, val minY: Float, val maxX: Float, val maxY: Float) {
     val centerX get() = (minX + maxX) * 0.5f
     val centerY get() = (minY + maxY) * 0.5f
     val width get() = maxX - minX
     val height get() = maxY - minY
-    val rotateHandlePos get() = Offset(centerX, minY - 24f)
+    val rotateHandlePos get() = rotateGrip(1f)
+
+    /** The rotate grip off the middle of the top edge, [unit] scaling its reach as it scales every handle. */
+    fun rotateGrip(unit: Float) = Offset(centerX, minY - 24f * unit)
+
+    /** The point at ([uv].x, [uv].y) of the box, 0 at its min edge and 1 at its max one. */
+    fun at(uv: Offset) = Offset(minX + uv.x * width, minY + uv.y * height)
+
+    /** Where [p] sits in the box, as [at] reads it; an axis the box has no extent along reads as its middle. */
+    fun uvOf(p: Offset) = Offset(
+        if (width > 1e-4f) (p.x - minX) / width else 0.5f,
+        if (height > 1e-4f) (p.y - minY) / height else 0.5f,
+    )
+
+    /** The four corners in TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT order, then the four edge midpoints. */
+    fun handlePoints(): List<Pair<BoundingHandle, Offset>> = listOf(
+        BoundingHandle.TOP_LEFT to Offset(minX, minY),
+        BoundingHandle.TOP_RIGHT to Offset(maxX, minY),
+        BoundingHandle.BOTTOM_LEFT to Offset(minX, maxY),
+        BoundingHandle.BOTTOM_RIGHT to Offset(maxX, maxY),
+        BoundingHandle.TOP to Offset(centerX, minY),
+        BoundingHandle.BOTTOM to Offset(centerX, maxY),
+        BoundingHandle.LEFT to Offset(minX, centerY),
+        BoundingHandle.RIGHT to Offset(maxX, centerY),
+    )
 
     fun contains(p: Offset) = p.x in minX..maxX && p.y in minY..maxY
+}
+
+/**
+ * Which handles a control offers. Every box has its corners, its body and its anchor; [edges] adds the four
+ * one-axis scale handles and [rotates] the rotate grip and the turn zones just outside each corner. [unit]
+ * scales every radius, so a view sized in dp draws and grabs the same box the edit canvas does in pixels.
+ */
+internal data class TransformHandles(val edges: Boolean = true, val rotates: Boolean = true, val unit: Float = 1f) {
+    companion object {
+        val ALL = TransformHandles()
+    }
 }
 
 /**
@@ -54,12 +98,40 @@ internal fun Offset.rotateAbout(pivot: Offset, angleDeg: Float): Offset {
 }
 
 /**
- * The transform frame: its box, the screen point it is oriented about, and that orientation.
+ * The transform frame: its box, the screen point it is oriented about, that orientation, and the anchor.
  *
  * [bounds] is in frame coordinates — axis-aligned *inside* the frame — so every consumer of a box (the
  * overlay, the handle hit test, the drag math) needs no oriented-rectangle case at all.
+ *
+ * [anchor] is a screen point, the one a rotation turns about and an Alt scale grows from. It starts on
+ * [pivot]; a control that lets the anchor be moved keeps it as a point *of the box* ([anchorUv]), so it rides
+ * along through every move, scale and turn of the box instead of staying behind on the screen.
  */
-internal data class TransformFrame(val bounds: BoundingBox, val pivot: Offset, val angleDeg: Float)
+internal data class TransformFrame(val bounds: BoundingBox, val pivot: Offset, val angleDeg: Float, val anchor: Offset = pivot) {
+    /** [anchor] as a point of the box, for [withAnchor]. */
+    val anchorUv: Offset get() = bounds.uvOf(anchor.intoTransformFrame(pivot, angleDeg))
+
+    /** This frame with its anchor at [uv] of its box; null leaves it on the pivot. */
+    fun withAnchor(uv: Offset?): TransformFrame =
+        if (uv == null) copy(anchor = pivot) else copy(anchor = bounds.at(uv).outOfTransformFrame(pivot, angleDeg))
+
+    /**
+     * Where an anchor dragged to the screen point [pointer] lands, as a point of the box: on the centre, a corner or
+     * an edge's middle when it comes within reach of one, and back on the pivot (null) within reach of that.
+     */
+    fun anchorDraggedTo(pointer: Offset, unit: Float = 1f): Offset? {
+        val local = pointer.intoTransformFrame(pivot, angleDeg)
+        val reach = ANCHOR_SNAP * unit
+        if ((local - pivot).getDistance() <= reach) return null
+        val snaps = bounds.handlePoints().map { it.second } + Offset(bounds.centerX, bounds.centerY)
+        val near = snaps.minBy { (it - local).getDistance() }
+        return bounds.uvOf(if ((near - local).getDistance() <= reach) near else local)
+    }
+
+    private companion object {
+        const val ANCHOR_SNAP = 8f
+    }
+}
 
 /**
  * The centroid a selection is framed and turned about.
@@ -91,19 +163,40 @@ internal fun frameOf(points: List<Offset>, indices: Set<Int>, angleDeg: Float): 
     return TransformFrame(box, pivot, angleDeg)
 }
 
-private fun hitBoundingHandle(pos: Offset, bounds: BoundingBox): BoundingHandle {
-    if ((pos - bounds.rotateHandlePos).getDistance() <= 9f) return BoundingHandle.ROTATE
-    if ((pos - Offset(bounds.minX, bounds.minY)).getDistance() <= 8f) return BoundingHandle.TOP_LEFT
-    if ((pos - Offset(bounds.maxX, bounds.minY)).getDistance() <= 8f) return BoundingHandle.TOP_RIGHT
-    if ((pos - Offset(bounds.minX, bounds.maxY)).getDistance() <= 8f) return BoundingHandle.BOTTOM_LEFT
-    if ((pos - Offset(bounds.maxX, bounds.maxY)).getDistance() <= 8f) return BoundingHandle.BOTTOM_RIGHT
-    if (bounds.width >= 20f) {
-        if ((pos - Offset(bounds.centerX, bounds.minY)).getDistance() <= 7f) return BoundingHandle.TOP
-        if ((pos - Offset(bounds.centerX, bounds.maxY)).getDistance() <= 7f) return BoundingHandle.BOTTOM
+/** Whether the box shows the edge handle [handle]: a box too short to hold one between its corners does not. */
+internal fun TransformHandles.showsEdge(bounds: BoundingBox, handle: BoundingHandle) = edges && when (handle) {
+    BoundingHandle.TOP, BoundingHandle.BOTTOM -> bounds.width >= 20f * unit
+    BoundingHandle.LEFT, BoundingHandle.RIGHT -> bounds.height >= 20f * unit
+    else -> false
+}
+
+/**
+ * Whether the anchor can be grabbed: on a box too small for it to sit apart from the body, a press on the middle
+ * has to move the box, so the anchor stays where it is until the view is zoomed in.
+ */
+internal fun TransformHandles.reachesAnchor(bounds: BoundingBox) = bounds.width >= 40f * unit && bounds.height >= 40f * unit
+
+/** How far outside a corner a press still turns the box. */
+private const val ROTATE_REACH = 24f
+
+/**
+ * The handle under [pos], a point in frame coordinates: the anchor, the rotate grip, a corner, an edge, and last
+ * the turn zone just outside a corner - outside the box only, so it never takes a press that could scale or move.
+ */
+private fun hitBoundingHandle(pos: Offset, frame: TransformFrame, handles: TransformHandles): BoundingHandle {
+    val bounds = frame.bounds
+    val u = handles.unit
+    // The anchor first: it sits on the pivot by default, and once it is dragged onto a handle it has to be
+    // possible to drag it off again. The ring of the handle around it still reaches the handle.
+    if (handles.reachesAnchor(bounds) && (pos - frame.anchor.intoTransformFrame(frame.pivot, frame.angleDeg)).getDistance() <= 6f * u) {
+        return BoundingHandle.ANCHOR
     }
-    if (bounds.height >= 20f) {
-        if ((pos - Offset(bounds.minX, bounds.centerY)).getDistance() <= 7f) return BoundingHandle.LEFT
-        if ((pos - Offset(bounds.maxX, bounds.centerY)).getDistance() <= 7f) return BoundingHandle.RIGHT
+    if (handles.rotates && (pos - bounds.rotateGrip(u)).getDistance() <= 9f * u) return BoundingHandle.ROTATE
+    val points = bounds.handlePoints()
+    for ((handle, at) in points.take(4)) if ((pos - at).getDistance() <= 8f * u) return handle
+    for ((handle, at) in points.drop(4)) if (handles.showsEdge(bounds, handle) && (pos - at).getDistance() <= 7f * u) return handle
+    if (handles.rotates && !bounds.contains(pos) && points.take(4).any { (_, at) -> (pos - at).getDistance() <= ROTATE_REACH * u }) {
+        return BoundingHandle.ROTATE
     }
     return BoundingHandle.NONE
 }
@@ -114,8 +207,8 @@ private fun hitBoundingHandle(pos: Offset, bounds: BoundingBox): BoundingHandle 
  * The point tools need the ring *before* their element pick and the box body *after* it, so the two
  * cannot be one call there.
  */
-internal fun transformRingAt(pos: Offset, frame: TransformFrame): BoundingHandle =
-    hitBoundingHandle(pos.intoTransformFrame(frame.pivot, frame.angleDeg), frame.bounds)
+internal fun transformRingAt(pos: Offset, frame: TransformFrame, handles: TransformHandles = TransformHandles.ALL): BoundingHandle =
+    hitBoundingHandle(pos.intoTransformFrame(frame.pivot, frame.angleDeg), frame, handles)
 
 /**
  * The ring, then BODY for a point anywhere inside the rectangle.
@@ -125,9 +218,9 @@ internal fun transformRingAt(pos: Offset, frame: TransformFrame): BoundingHandle
  * want them *before* any artwork hit test: a multi-object selection has holes in its box, and a click
  * in one of them is a move, not a re-pick.
  */
-internal fun transformHandleAt(pos: Offset, frame: TransformFrame): BoundingHandle {
+internal fun transformHandleAt(pos: Offset, frame: TransformFrame, handles: TransformHandles = TransformHandles.ALL): BoundingHandle {
     val local = pos.intoTransformFrame(frame.pivot, frame.angleDeg)
-    val handle = hitBoundingHandle(local, frame.bounds)
+    val handle = hitBoundingHandle(local, frame, handles)
     if (handle != BoundingHandle.NONE) return handle
     return if (frame.bounds.contains(local)) BoundingHandle.BODY else BoundingHandle.NONE
 }
@@ -154,8 +247,9 @@ internal data class TranslateDrag(
 }
 
 /**
- * A rotation. [bounds] is untouched: the frame carries the orientation, so the box inside it never
- * changes shape and the box turns with the pointer without resizing.
+ * A rotation about [pivot] (the frame's anchor). The frame carries the orientation, so the box inside it
+ * never changes shape and turns with the pointer without resizing; it only slides when the anchor is off
+ * the frame's own pivot.
  */
 internal data class RotateDrag(
     override val bounds: BoundingBox,
@@ -195,7 +289,8 @@ internal data class ScaleDrag(
  * One live box drag.
  *
  * Everything it needs is frozen at press, so it is a pure value: the pointer and the live modifiers
- * are the only inputs, and the same instance can be re-applied on every move.
+ * are the only inputs, and the same instance can be re-applied on every move. A rotation turns about
+ * [anchor], and so does an Alt scale; a plain scale keeps the side opposite the grabbed handle.
  */
 internal class TransformDrag(
     val handle: BoundingHandle,
@@ -203,11 +298,12 @@ internal class TransformDrag(
     val pivot: Offset,
     val angleDeg: Float,
     val press: Offset,
+    val anchor: Offset = pivot,
 ) {
     fun apply(pointer: Offset, axis: String?, shift: Boolean, alt: Boolean): TransformDragResult = when (handle) {
         // The axis lock is a screen-space promise — "move horizontally" has to mean the screen's
         // horizontal whatever the frame is turned to — so it constrains the pointer delta before that
-        // delta is rotated into the frame. A rotation is measured about the pivot and never sees a
+        // delta is rotated into the frame. A rotation is measured about the anchor and never sees a
         // delta at all, so the lock cannot reach it.
         BoundingHandle.ROTATE -> rotate(pointer, shift)
         BoundingHandle.BODY -> translate(axisLocked(pointer, axis))
@@ -232,95 +328,50 @@ internal class TransformDrag(
     }
 
     private fun rotate(pointer: Offset, shift: Boolean): TransformDragResult {
-        // Measured about the frame pivot in screen space, and accumulated onto the angle the frame
-        // already had.
-        val angle0 = atan2(press.y - pivot.y, press.x - pivot.x)
-        val angle1 = atan2(pointer.y - pivot.y, pointer.x - pivot.x)
-        var deltaAngle = angle1 - angle0
-        if (shift) deltaAngle = (deltaAngle / (PI.toFloat() / 12)).roundToInt() * (PI.toFloat() / 12)
-        val deltaDeg = Math.toDegrees(deltaAngle.toDouble()).toFloat()
-        return RotateDrag(bounds, angleDeg + deltaDeg, pivot, deltaDeg)
+        // Measured about the anchor in screen space, and accumulated onto the angle the frame already had.
+        val deltaDeg = turnDegrees(anchor, press, pointer, shift)
+        val angle = angleDeg + deltaDeg
+        // The frame stays oriented about the pivot it was pressed with, so a turn about any other point moves
+        // the box inside it: by how much the anchor's offset from the pivot reads differently in the new frame.
+        val arm = anchor - pivot
+        val slide = arm.rotateVector(-angle) - arm.rotateVector(-angleDeg)
+        return RotateDrag(
+            BoundingBox(bounds.minX + slide.x, bounds.minY + slide.y, bounds.maxX + slide.x, bounds.maxY + slide.y),
+            angle, anchor, deltaDeg,
+        )
     }
 
     private fun scale(screenDelta: Offset, shift: Boolean, alt: Boolean): TransformDragResult {
         val d = screenDelta.rotateVector(-angleDeg)
-        val dx = d.x
-        val dy = d.y
-
-        var newMinX = bounds.minX
-        var newMaxX = bounds.maxX
-        var newMinY = bounds.minY
-        var newMaxY = bounds.maxY
-
-        when (handle) {
-            BoundingHandle.RIGHT -> {
-                newMaxX = bounds.maxX + dx
-                if (alt) newMinX = bounds.minX - dx
-            }
-            BoundingHandle.LEFT -> {
-                newMinX = bounds.minX + dx
-                if (alt) newMaxX = bounds.maxX - dx
-            }
-            BoundingHandle.BOTTOM -> {
-                newMaxY = bounds.maxY + dy
-                if (alt) newMinY = bounds.minY - dy
-            }
-            BoundingHandle.TOP -> {
-                newMinY = bounds.minY + dy
-                if (alt) newMaxY = bounds.maxY - dy
-            }
-            BoundingHandle.BOTTOM_RIGHT -> {
-                newMaxX = bounds.maxX + dx
-                newMaxY = bounds.maxY + dy
-                if (alt) { newMinX = bounds.minX - dx; newMinY = bounds.minY - dy }
-            }
-            BoundingHandle.BOTTOM_LEFT -> {
-                newMinX = bounds.minX + dx
-                newMaxY = bounds.maxY + dy
-                if (alt) { newMaxX = bounds.maxX - dx; newMinY = bounds.minY - dy }
-            }
-            BoundingHandle.TOP_RIGHT -> {
-                newMaxX = bounds.maxX + dx
-                newMinY = bounds.minY + dy
-                if (alt) { newMinX = bounds.minX - dx; newMaxY = bounds.maxY - dy }
-            }
-            BoundingHandle.TOP_LEFT -> {
-                newMinX = bounds.minX + dx
-                newMinY = bounds.minY + dy
-                if (alt) { newMaxX = bounds.maxX - dx; newMaxY = bounds.maxY - dy }
-            }
-            else -> Unit
+        // Which side of the box the handle moves along each axis: -1 the min side, 1 the max one, 0 neither.
+        val sideX = when (handle) {
+            BoundingHandle.LEFT, BoundingHandle.TOP_LEFT, BoundingHandle.BOTTOM_LEFT -> -1
+            BoundingHandle.RIGHT, BoundingHandle.TOP_RIGHT, BoundingHandle.BOTTOM_RIGHT -> 1
+            else -> 0
         }
-
-        val w0 = bounds.width.coerceAtLeast(1f)
-        val h0 = bounds.height.coerceAtLeast(1f)
-        if (shift && handle.isCorner) {
-            val factor = maxOf(abs(newMaxX - newMinX) / w0, abs(newMaxY - newMinY) / h0)
-            val targetW = w0 * factor
-            val targetH = h0 * factor
-            when (handle) {
-                BoundingHandle.BOTTOM_RIGHT -> { newMaxX = newMinX + targetW; newMaxY = newMinY + targetH }
-                BoundingHandle.BOTTOM_LEFT -> { newMinX = newMaxX - targetW; newMaxY = newMinY + targetH }
-                BoundingHandle.TOP_RIGHT -> { newMaxX = newMinX + targetW; newMinY = newMaxY - targetH }
-                BoundingHandle.TOP_LEFT -> { newMinX = newMaxX - targetW; newMinY = newMaxY - targetH }
-                else -> Unit
-            }
+        val sideY = when (handle) {
+            BoundingHandle.TOP, BoundingHandle.TOP_LEFT, BoundingHandle.TOP_RIGHT -> -1
+            BoundingHandle.BOTTOM, BoundingHandle.BOTTOM_LEFT, BoundingHandle.BOTTOM_RIGHT -> 1
+            else -> 0
         }
-
+        // The point that stays: the opposite side, or with Alt the anchor.
+        val fixed = anchor.intoTransformFrame(pivot, angleDeg)
+        val fixX = if (alt) fixed.x else if (sideX > 0) bounds.minX else bounds.maxX
+        val fixY = if (alt) fixed.y else if (sideY > 0) bounds.minY else bounds.maxY
+        fun factor(edge: Float, delta: Float, fix: Float) = if (abs(edge - fix) < 1e-3f) 1f else (edge + delta - fix) / (edge - fix)
+        var sx = if (sideX == 0) 1f else factor(if (sideX > 0) bounds.maxX else bounds.minX, d.x, fixX)
+        var sy = if (sideY == 0) 1f else factor(if (sideY > 0) bounds.maxY else bounds.minY, d.y, fixY)
+        if (shift && handle.isCorner) { sx = maxOf(sx, sy); sy = sx }
         // A drag that crosses its own anchor would otherwise hand the box a negative extent, which the
         // scale below turns into mirrored artwork. Clamping to a few pixels keeps the flip out of the
         // drag entirely.
-        if (newMaxX - newMinX < MIN_SIZE) {
-            if (handle in setOf(BoundingHandle.LEFT, BoundingHandle.TOP_LEFT, BoundingHandle.BOTTOM_LEFT)) newMinX = newMaxX - MIN_SIZE
-            else newMaxX = newMinX + MIN_SIZE
-        }
-        if (newMaxY - newMinY < MIN_SIZE) {
-            if (handle in setOf(BoundingHandle.TOP, BoundingHandle.TOP_LEFT, BoundingHandle.TOP_RIGHT)) newMinY = newMaxY - MIN_SIZE
-            else newMaxY = newMinY + MIN_SIZE
-        }
-
+        if (sideX != 0) sx = sx.coerceAtLeast(MIN_SIZE / bounds.width.coerceAtLeast(1e-3f))
+        if (sideY != 0) sy = sy.coerceAtLeast(MIN_SIZE / bounds.height.coerceAtLeast(1e-3f))
         return ScaleDrag(
-            BoundingBox(newMinX, newMinY, newMaxX, newMaxY),
+            BoundingBox(
+                fixX + (bounds.minX - fixX) * sx, fixY + (bounds.minY - fixY) * sy,
+                fixX + (bounds.maxX - fixX) * sx, fixY + (bounds.maxY - fixY) * sy,
+            ),
             angleDeg,
             bounds,
             pivot,
@@ -328,12 +379,19 @@ internal class TransformDrag(
         )
     }
 
-    private val BoundingHandle.isCorner get() = this in setOf(
-        BoundingHandle.TOP_LEFT, BoundingHandle.TOP_RIGHT,
-        BoundingHandle.BOTTOM_LEFT, BoundingHandle.BOTTOM_RIGHT,
-    )
-
     private companion object {
         const val MIN_SIZE = 4f
     }
+}
+
+/**
+ * How far the pointer has turned about [centre] since [press], in degrees: measured from the press, so
+ * grabbing a grip anywhere never jumps. With [snap] the turn steps by 15°.
+ */
+internal fun turnDegrees(centre: Offset, press: Offset, pointer: Offset, snap: Boolean): Float {
+    val angle0 = atan2(press.y - centre.y, press.x - centre.x)
+    val angle1 = atan2(pointer.y - centre.y, pointer.x - centre.x)
+    var delta = angle1 - angle0
+    if (snap) delta = (delta / (PI.toFloat() / 12)).roundToInt() * (PI.toFloat() / 12)
+    return Math.toDegrees(delta.toDouble()).toFloat()
 }

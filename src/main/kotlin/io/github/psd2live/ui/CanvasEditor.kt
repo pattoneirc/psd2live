@@ -216,12 +216,14 @@ internal enum class CreateRelation {
 
 internal enum class CreatePlacementKind { WARP, ROTATION, PATH, LAYER }
 
-/** Which handle is being dragged while placing. */
-internal enum class PlacementHandle {
-    NONE, BODY,
-    N, S, E, W, NE, NW, SE, SW,
-    PIVOT, TIP,
-}
+/** Which handle is being dragged while placing: the ghost box (see [CanvasEditor.placementBoxHandle]), or a Rotation's pivot or tip. */
+internal enum class PlacementHandle { NONE, BOX, PIVOT, TIP }
+
+/**
+ * The handles of a Warp or Layer ghost: the Transform tool's box without the turn - a Warp is created from an
+ * upright rectangle of its parent and an imported layer from an upright canvas rectangle, so neither can stand turned.
+ */
+internal val PLACEMENT_HANDLES = TransformHandles(rotates = false)
 
 /**
  * An in-progress create: target and relation are fixed from the tree/toolbar; the artist places and
@@ -270,6 +272,8 @@ internal data class CreatePlacement(
      */
     val cancelLayerIds: List<String> = emptyList(),
     val imagePlacement: io.github.psd2live.application.WorkspaceImagePlacement? = null,
+    /** The ghost box's anchor as a point of the box (see [TransformFrame.anchorUv]); null on its centre. */
+    val anchor: Offset? = null,
 )
 
 internal val PAINT_TOOLS = setOf(
@@ -1252,6 +1256,11 @@ internal class CanvasEditor(
         private set
     var placementHandle by mutableStateOf(PlacementHandle.NONE)
         private set
+    /** The box handle a [PlacementHandle.BOX] drag holds. */
+    private var placementBoxHandle = BoundingHandle.NONE
+    /** The ghost box handle under the pointer, or the one a drag holds. */
+    var placementHover by mutableStateOf(BoundingHandle.NONE)
+        private set
     private var placementDragStart: Offset? = null
     private var placementDragSnapshot: CreatePlacement? = null
     var glueDistance by mutableStateOf(6f)
@@ -1475,6 +1484,23 @@ internal class CanvasEditor(
     /** The frame orientation and pivot frozen at press, so a drag is measured against one frame. */
     private var frameAngleAtPress = 0f
     private var framePivotAtPress = Offset.Zero
+
+    /**
+     * The anchor the box turns about and an Alt scale grows from, as a point of the box ([TransformFrame.anchorUv]),
+     * with the selection it was placed on. Null, or another selection, leaves it on the pivot. Like [frameAngle] it
+     * lasts for the tool session; being a point of the box, it rides along through every gesture.
+     */
+    private var transformAnchor by mutableStateOf<Pair<Any, Offset>?>(null)
+    /** The anchor as a point of the box at press, and where it was on the screen, so a drag's box carries it along. */
+    private var anchorUvAtPress = Offset(0.5f, 0.5f)
+    private var frameAnchorAtPress = Offset.Zero
+    /** True while the live gesture drags the anchor. */
+    private var anchorDragging = false
+
+    /** What the anchor belongs to: a different selection drops it back on the pivot. */
+    private fun anchorKey(): Any = listOf(objectMode, objects, state.selectedLayerId, state.selectedDeformerId, selection, vertices)
+
+    private fun currentAnchor(): Offset? = transformAnchor?.takeIf { it.first == anchorKey() }?.second
 
     /**
      * The layer SELECT picked on press. A marquee started on top of an object is still a marquee, so a
@@ -2048,8 +2074,11 @@ internal class CanvasEditor(
         initialBounds = null
         boxDrag = false; dragIndices = emptyList()
         endTransformBox()
-        isPainting = false; isSampling = false; paintStrokeStart = null; paintStrokeCurrent = null;        // The frame belongs to the tool session, so cancelling is the only thing that drops it.
+        anchorDragging = false
+        isPainting = false; isSampling = false; paintStrokeStart = null; paintStrokeCurrent = null
+        // The frame belongs to the tool session, so cancelling is the only thing that drops it, anchor and all.
         frameAngle = 0f
+        transformAnchor = null
         initialScreenPoints = emptyList()
     }
 
@@ -2697,23 +2726,21 @@ internal class CanvasEditor(
             projection.toScreen(Offset(p.tipX, p.tipY))
     }
 
+    /** The Warp or Layer ghost as a transform box: upright, centred on its rectangle, with its anchor. */
+    fun placementFrame(viewport: CanvasViewport): TransformFrame? = placement?.let { placementFrameOf(it, viewport) }
+
+    private fun placementFrameOf(p: CreatePlacement, viewport: CanvasViewport): TransformFrame? {
+        val r = placementScreenRectOf(p, viewport) ?: return null
+        return TransformFrame(BoundingBox(r.left, r.top, r.right, r.bottom), r.center, 0f).withAnchor(p.anchor)
+    }
+
     private fun hitPlacementHandle(pos: Offset, viewport: CanvasViewport): PlacementHandle {
         val p = placement ?: return PlacementHandle.NONE
         when (p.kind) {
             CreatePlacementKind.WARP, CreatePlacementKind.LAYER -> {
-                val r = placementScreenRect(viewport) ?: return PlacementHandle.NONE
-                val hs = 8f
-                fun near(x: Float, y: Float) = (pos - Offset(x, y)).getDistance() <= hs
-                if (near(r.left, r.top)) return PlacementHandle.NW
-                if (near(r.right, r.top)) return PlacementHandle.NE
-                if (near(r.left, r.bottom)) return PlacementHandle.SW
-                if (near(r.right, r.bottom)) return PlacementHandle.SE
-                if (near(r.center.x, r.top)) return PlacementHandle.N
-                if (near(r.center.x, r.bottom)) return PlacementHandle.S
-                if (near(r.left, r.center.y)) return PlacementHandle.W
-                if (near(r.right, r.center.y)) return PlacementHandle.E
-                if (r.contains(pos)) return PlacementHandle.BODY
-                return PlacementHandle.NONE
+                val frame = placementFrameOf(p, viewport) ?: return PlacementHandle.NONE
+                placementBoxHandle = transformHandleAt(pos, frame, PLACEMENT_HANDLES)
+                return if (placementBoxHandle == BoundingHandle.NONE) PlacementHandle.NONE else PlacementHandle.BOX
             }
             CreatePlacementKind.ROTATION -> {
                 val pivots = placementPivotScreen(viewport) ?: return PlacementHandle.NONE
@@ -2727,122 +2754,58 @@ internal class CanvasEditor(
     }
 
     /**
-     * Drag edits parent-local state. Warp resize is done on the screen AABB then inverted with
-     * corner-matched seeds (same reach-uncapped inverse as [local]); body/tip move via local deltas.
+     * Drag edits parent-local state. The ghost box drags as the Transform tool's box does - its corners and edges
+     * scale (Shift keeps the aspect, Alt grows from the anchor) and its anchor moves - on the screen rectangle, which
+     * a Warp then inverts with corner-matched seeds (same reach-uncapped inverse as [local]); body/tip move via
+     * local deltas.
      */
-    private fun applyPlacementDrag(pos: Offset, viewport: CanvasViewport, shift: Boolean) {
+    private fun applyPlacementDrag(pos: Offset, viewport: CanvasViewport, shift: Boolean, alt: Boolean) {
         val start = placementDragStart ?: return
         val snap = placementDragSnapshot ?: return
         val p = placement ?: return
         val mapping = placementMapping(snap.spaceParentId)
+        if (placementHandle == PlacementHandle.BOX && placementBoxHandle != BoundingHandle.BODY) {
+            val frame = placementFrameOf(snap, viewport) ?: return
+            if (placementBoxHandle == BoundingHandle.ANCHOR) {
+                placement = p.copy(anchor = frame.anchorDraggedTo(pos))
+                return
+            }
+            val box = TransformDrag(placementBoxHandle, frame.bounds, frame.pivot, 0f, start, frame.anchor)
+                .apply(pos, null, shift, alt).bounds
+            when (p.kind) {
+                CreatePlacementKind.WARP -> {
+                    val local = screenAabbToLocalBounds(Rect(box.minX, box.minY, box.maxX, box.maxY), viewport, snap, mapping)
+                    placement = p.copy(localX = local[0], localY = local[1], localW = local[2], localH = local[3])
+                }
+                CreatePlacementKind.LAYER -> {
+                    val left = viewport.canvasX(box.minX); val top = viewport.canvasY(box.minY)
+                    placement = p.copy(
+                        localX = left, localY = top,
+                        localW = (viewport.canvasX(box.maxX) - left).coerceAtLeast(1f),
+                        localH = (viewport.canvasY(box.maxY) - top).coerceAtLeast(1f),
+                    )
+                }
+                else -> {}
+            }
+            relocatePlacedLayer()
+            return
+        }
         when (p.kind) {
             CreatePlacementKind.WARP -> {
-                when (placementHandle) {
-                    PlacementHandle.BODY -> {
-                        val seed = (snap.localX + snap.localW / 2f) to (snap.localY + snap.localH / 2f)
-                        val a = placementScreenToLocal(start, viewport, mapping, seed)
-                        val b = placementScreenToLocal(pos, viewport, mapping, seed)
-                        placement = p.copy(
-                            localX = snap.localX + (b.first - a.first),
-                            localY = snap.localY + (b.second - a.second),
-                        )
-                    }
-                    PlacementHandle.NONE, PlacementHandle.PIVOT, PlacementHandle.TIP -> {}
-                    else -> {
-                        val r0 = placementScreenRectOf(snap, viewport) ?: return
-                        val dx = pos.x - start.x
-                        val dy = pos.y - start.y
-                        var left = r0.left
-                        var top = r0.top
-                        var right = r0.right
-                        var bottom = r0.bottom
-                        val minPx = 8f
-                        when (placementHandle) {
-                            PlacementHandle.E -> right = (r0.right + dx).coerceAtLeast(left + minPx)
-                            PlacementHandle.W -> left = (r0.left + dx).coerceAtMost(right - minPx)
-                            PlacementHandle.N -> top = (r0.top + dy).coerceAtMost(bottom - minPx)
-                            PlacementHandle.S -> bottom = (r0.bottom + dy).coerceAtLeast(top + minPx)
-                            PlacementHandle.NE -> {
-                                right = (r0.right + dx).coerceAtLeast(left + minPx)
-                                top = (r0.top + dy).coerceAtMost(bottom - minPx)
-                            }
-                            PlacementHandle.NW -> {
-                                left = (r0.left + dx).coerceAtMost(right - minPx)
-                                top = (r0.top + dy).coerceAtMost(bottom - minPx)
-                            }
-                            PlacementHandle.SE -> {
-                                right = (r0.right + dx).coerceAtLeast(left + minPx)
-                                bottom = (r0.bottom + dy).coerceAtLeast(top + minPx)
-                            }
-                            PlacementHandle.SW -> {
-                                left = (r0.left + dx).coerceAtMost(right - minPx)
-                                bottom = (r0.bottom + dy).coerceAtLeast(top + minPx)
-                            }
-                            else -> {}
-                        }
-                        val local = screenAabbToLocalBounds(Rect(left, top, right, bottom), viewport, snap, mapping)
-                        placement = p.copy(
-                            localX = local[0], localY = local[1], localW = local[2], localH = local[3],
-                        )
-                    }
-                }
+                val seed = (snap.localX + snap.localW / 2f) to (snap.localY + snap.localH / 2f)
+                val a = placementScreenToLocal(start, viewport, mapping, seed)
+                val b = placementScreenToLocal(pos, viewport, mapping, seed)
+                placement = p.copy(
+                    localX = snap.localX + (b.first - a.first),
+                    localY = snap.localY + (b.second - a.second),
+                )
             }
             CreatePlacementKind.LAYER -> {
-                val aX = viewport.canvasX(start.x)
-                val aY = viewport.canvasY(start.y)
-                val bX = viewport.canvasX(pos.x)
-                val bY = viewport.canvasY(pos.y)
-                val ddx = bX - aX
-                val ddy = bY - aY
-                when (placementHandle) {
-                    PlacementHandle.BODY -> {
-                        placement = p.copy(
-                            localX = snap.localX + ddx,
-                            localY = snap.localY + ddy,
-                        )
-                    }
-                    PlacementHandle.NONE, PlacementHandle.PIVOT, PlacementHandle.TIP -> {}
-                    else -> {
-                        var left = snap.localX
-                        var top = snap.localY
-                        var right = snap.localX + snap.localW
-                        var bottom = snap.localY + snap.localH
-                        val minSize = 1f
-                        when (placementHandle) {
-                            PlacementHandle.E -> right = (snap.localX + snap.localW + ddx).coerceAtLeast(left + minSize)
-                            PlacementHandle.W -> left = (snap.localX + ddx).coerceAtMost(right - minSize)
-                            PlacementHandle.N -> top = (snap.localY + ddy).coerceAtMost(bottom - minSize)
-                            PlacementHandle.S -> bottom = (snap.localY + snap.localH + ddy).coerceAtLeast(top + minSize)
-                            PlacementHandle.NE -> {
-                                right = (snap.localX + snap.localW + ddx).coerceAtLeast(left + minSize)
-                                top = (snap.localY + ddy).coerceAtMost(bottom - minSize)
-                            }
-                            PlacementHandle.NW -> {
-                                left = (snap.localX + ddx).coerceAtMost(right - minSize)
-                                top = (snap.localY + ddy).coerceAtMost(bottom - minSize)
-                            }
-                            PlacementHandle.SE -> {
-                                right = (snap.localX + snap.localW + ddx).coerceAtLeast(left + minSize)
-                                bottom = (snap.localY + snap.localH + ddy).coerceAtLeast(top + minSize)
-                            }
-                            PlacementHandle.SW -> {
-                                left = (snap.localX + ddx).coerceAtMost(right - minSize)
-                                bottom = (snap.localY + snap.localH + ddy).coerceAtLeast(top + minSize)
-                            }
-                            else -> {}
-                        }
-                        placement = p.copy(
-                            localX = left,
-                            localY = top,
-                            localW = (right - left).coerceAtLeast(minSize),
-                            localH = (bottom - top).coerceAtLeast(minSize),
-                        )
-                    }
-                }
-                placement?.let { updated ->
-                    viewModel.relocateImportedLayer(requireNotNull(updated.imagePlacement), updated.anchorId, updated.name,
-                        updated.localX, updated.localY, updated.localW, updated.localH, commitHistory = false)
-                }
+                placement = p.copy(
+                    localX = snap.localX + viewport.canvasX(pos.x) - viewport.canvasX(start.x),
+                    localY = snap.localY + viewport.canvasY(pos.y) - viewport.canvasY(start.y),
+                )
+                relocatePlacedLayer()
             }
             CreatePlacementKind.ROTATION -> {
                 when (placementHandle) {
@@ -2875,6 +2838,13 @@ internal class CanvasEditor(
             }
             CreatePlacementKind.PATH -> {}
         }
+    }
+
+    /** Shows a Layer ghost's rectangle on its imported layer, without a history step. */
+    private fun relocatePlacedLayer() {
+        val updated = placement?.takeIf { it.kind == CreatePlacementKind.LAYER } ?: return
+        viewModel.relocateImportedLayer(requireNotNull(updated.imagePlacement), updated.anchorId, updated.name,
+            updated.localX, updated.localY, updated.localW, updated.localH, commitHistory = false)
     }
 
     /** Invert a screen AABB into parent-local bounds, seeding each corner from the nearest snap corner. */
@@ -3229,6 +3199,7 @@ internal class CanvasEditor(
         hoveredVertex = null; hoveredMeshVertex = null
         hoveredPathPoint = null
         hoveredHandle = BoundingHandle.NONE
+        placementHover = BoundingHandle.NONE
         hoveredBezierAnchor = null
         hoveredBezierHandle = null
         poseHover = null
@@ -3253,8 +3224,8 @@ internal class CanvasEditor(
     fun transformFrame(viewport: CanvasViewport): TransformFrame? {
         if (tool != CanvasTool.TRANSFORM) return null
         val bounds = currentDragBounds
-        if (bounds != null) return TransformFrame(bounds, framePivotAtPress, frameAngle)
-        return selectionFrame(viewport)
+        if (bounds != null) return TransformFrame(bounds, framePivotAtPress, frameAngle).withAnchor(anchorUvAtPress)
+        return selectionFrame(viewport)?.withAnchor(currentAnchor())
     }
 
     /**
@@ -3466,6 +3437,13 @@ internal class CanvasEditor(
         }
         swingHover = null
 
+        // A Warp or Layer ghost owns the canvas while it is placed, as its press does.
+        placementHover = BoundingHandle.NONE
+        placement?.takeIf { it.kind == CreatePlacementKind.WARP || it.kind == CreatePlacementKind.LAYER }?.let { p ->
+            placementHover = placementFrameOf(p, viewport)?.let { transformHandleAt(pos, it, PLACEMENT_HANDLES) } ?: BoundingHandle.NONE
+            return
+        }
+
         if (tool in CREATION_TOOLS) {
             if (tool == CanvasTool.GLUE) {
                 // The glue brush works on the edit set; hovering it must not advertise object picks.
@@ -3620,13 +3598,15 @@ internal class CanvasEditor(
         if (viewModel.swingSession != null) return if (swingHandle != null || swingHover != null) hand else arrow
         if (eyedropperArmed) return CanvasCursors.eyedropper
         if (dragging) {
+            if (placementHandle == PlacementHandle.BOX) return CanvasCursors.transform(placementBoxHandle, 0f)
             if (isCreatingWarp || isCreatingRotation) return cross
             if (marquee.isNotEmpty()) return cross
             if (tool in DEFORM_BRUSH_TOOLS || tool == CanvasTool.BRUSH_SELECT || tool == CanvasTool.SUBDIVIDE || tool == CanvasTool.KNIFE) return cross
-            if (boxDrag) return handleCursor(activeHandle)
+            if (boxDrag || anchorDragging) return CanvasCursors.transform(activeHandle, frameAngle)
             if (activeBezierAnchor != null || activeBezierHandle != null || poseDrag != null) return hand
             return move
         }
+        if (placementHover != BoundingHandle.NONE) return CanvasCursors.transform(placementHover, 0f)
         if (tool in CREATION_TOOLS) {
             return if (tool == CanvasTool.GLUE) hand else cross
         }
@@ -3636,7 +3616,7 @@ internal class CanvasEditor(
         // over the pixels being judged is worse than no mark at all.
 
         if (hoveredBezierHandle != null || hoveredBezierAnchor != null || poseHover != null) return hand
-        if (hoveredHandle != BoundingHandle.NONE) return handleCursor(hoveredHandle)
+        if (hoveredHandle != BoundingHandle.NONE) return CanvasCursors.transform(hoveredHandle, frameAngle)
         if (hoveredVertex != null || hoveredMeshVertex != null || hoveredPathPoint != null) return hand
 
         if (hierarchyMode == EditHierarchyMode.SELECT) {
@@ -3645,19 +3625,6 @@ internal class CanvasEditor(
             if (tool == CanvasTool.SELECT) return arrow
         }
         return arrow
-    }
-
-    /** The cursor a transform handle promises, shared by hover and the drag itself. */
-    private fun handleCursor(handle: BoundingHandle): java.awt.Cursor = when (handle) {
-        BoundingHandle.TOP_LEFT, BoundingHandle.BOTTOM_RIGHT -> java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.NW_RESIZE_CURSOR)
-        BoundingHandle.TOP_RIGHT, BoundingHandle.BOTTOM_LEFT -> java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.NE_RESIZE_CURSOR)
-        BoundingHandle.TOP, BoundingHandle.BOTTOM -> java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.N_RESIZE_CURSOR)
-        BoundingHandle.LEFT, BoundingHandle.RIGHT -> java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.E_RESIZE_CURSOR)
-        BoundingHandle.BODY -> java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.MOVE_CURSOR)
-        // ROTATE keeps the plain arrow on purpose. AWT has no rotate cursor, and the crosshair that
-        // stood in for one read as "place a point" rather than "turn this" — the handle says what it
-        // does by lighting up under the pointer instead of by changing the pointer.
-        BoundingHandle.ROTATE, BoundingHandle.NONE -> java.awt.Cursor.getDefaultCursor()
     }
 
     fun commit(command: JsonObject) {
@@ -3896,9 +3863,12 @@ internal class CanvasEditor(
         val indexSets = targets.map { gestureIndices(it) }
         val chosen = targets.flatMapIndexed { k, item -> screen(item.geometry.points, item, viewport).filterIndexed { i, _ -> i in indexSets[k] } }
         if (chosen.isEmpty()) return
-        // The same pivot the transform box uses, so the panel and a canvas drag turn about one point.
+        // The same anchor the transform box uses, so the panel and a canvas drag turn and scale about one point.
         // A rotation deformer is the exception: it turns about its origin, which is its first axis point.
-        val center = if (targets.size == 1 && targets[0].kind == "rotation") screen(targets[0].geometry.points, targets[0], viewport)[0] else selectionPivot(chosen)
+        val center = when {
+            targets.size == 1 && targets[0].kind == "rotation" -> screen(targets[0].geometry.points, targets[0], viewport)[0]
+            else -> currentAnchor()?.let { uv -> selectionFrame(viewport)?.withAnchor(uv)?.anchor } ?: selectionPivot(chosen)
+        }
         val worlds = targets.map { it.mapping.localToWorld(it.geometry.points) }
         val movedSets = targets.mapIndexed { itemIndex, item ->
             val indices = indexSets[itemIndex]
@@ -5009,6 +4979,8 @@ internal class CanvasEditor(
         currentDragBounds = bounds
         frameAngleAtPress = frame?.angleDeg ?: frameAngle
         framePivotAtPress = pivot
+        anchorUvAtPress = frame?.anchorUv ?: Offset(0.5f, 0.5f)
+        frameAnchorAtPress = frame?.anchor ?: pivot
         boxDrag = true
         dragging = true
     }
@@ -5265,6 +5237,13 @@ internal class CanvasEditor(
             val frame = transformFrame(viewport) ?: return true
             val handle = transformHandleAt(pos, frame)
             if (handle == BoundingHandle.NONE) return true
+            // The anchor moves on its own: nothing is edited, so nothing is snapped or frozen.
+            if (handle == BoundingHandle.ANCHOR) {
+                activeHandle = handle
+                anchorDragging = true
+                dragging = true
+                return true
+            }
             val source = state.previewModel?.rig?.puppet ?: return true
             val targets = transformTargets(source)
             if (!objectMode && hierarchyMode == EditHierarchyMode.DEFORM &&
@@ -5440,6 +5419,13 @@ internal class CanvasEditor(
             return
         }
 
+        if (anchorDragging) {
+            selectionFrame(viewport)?.let { frame ->
+                transformAnchor = frame.anchorDraggedTo(pos)?.let { anchorKey() to it }
+            }
+            return
+        }
+
         if (subdividing) {
             targetAtPress?.let { t -> subdivideEdges = subdivideEdges + edgesWithin(previous, pos, t, viewport) }
             previous = pos
@@ -5472,7 +5458,7 @@ internal class CanvasEditor(
         }
 
         if (placement != null && placementHandle != PlacementHandle.NONE && placementDragStart != null && placementDragSnapshot != null) {
-            applyPlacementDrag(pos, viewport, shift)
+            applyPlacementDrag(pos, viewport, shift, alt)
             return
         }
 
@@ -5560,7 +5546,7 @@ internal class CanvasEditor(
                 val b0 = initialBounds
                 if (b0 == null && !editing) return
                 val result = b0?.let {
-                    TransformDrag(activeHandle, it, framePivotAtPress, frameAngleAtPress, start).apply(pos, axis, shift, alt)
+                    TransformDrag(activeHandle, it, framePivotAtPress, frameAngleAtPress, start, frameAnchorAtPress).apply(pos, axis, shift, alt)
                 }
                 if (result != null) {
                     currentDragBounds = result.bounds
@@ -5665,6 +5651,12 @@ internal class CanvasEditor(
 
     fun release() {
         if (!dragging) return
+        if (anchorDragging) {
+            anchorDragging = false
+            dragging = false
+            activeHandle = BoundingHandle.NONE
+            return
+        }
         if (swingHandle != null) {
             swingHover = swingHandle
             swingHandle = null
@@ -5793,7 +5785,8 @@ internal class CanvasEditor(
         }
 
         if (placementHandle != PlacementHandle.NONE) {
-            val layerPlace = placement?.takeIf { it.kind == CreatePlacementKind.LAYER }
+            // Moving the anchor leaves the layer where it is.
+            val layerPlace = placement?.takeIf { it.kind == CreatePlacementKind.LAYER && placementBoxHandle != BoundingHandle.ANCHOR }
             placementHandle = PlacementHandle.NONE
             placementDragStart = null
             placementDragSnapshot = null

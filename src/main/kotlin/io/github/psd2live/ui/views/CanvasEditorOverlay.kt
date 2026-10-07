@@ -600,7 +600,7 @@ internal fun BoxScope.CanvasEditorOverlay(
         // 3. Transform box (shared by TRANSFORM tool and points)
         if (editor.drawsTransformBox) {
             editor.transformFrame(viewport)?.let { frame ->
-                drawTransformBox(frame, editor.hoveredHandle, editor.axis.takeIf { editor.inGesture }, colors)
+                drawTransformBox(frame, editor.hoveredHandle, colors, axis = editor.axis.takeIf { editor.inGesture })
             }
         }
 
@@ -842,12 +842,10 @@ internal fun BoxScope.CanvasEditorOverlay(
                                 }
                             }
                         }
-                        listOf(
-                            Offset(r.left, r.top), Offset(r.right, r.top),
-                            Offset(r.left, r.bottom), Offset(r.right, r.bottom),
-                            Offset(r.center.x, r.top), Offset(r.center.x, r.bottom),
-                            Offset(r.left, r.center.y), Offset(r.right, r.center.y),
-                        ).forEach { drawCircle(colors.accent, 4.5f, it) }
+                    }
+                    // The same box the Transform tool draws; a ghost is an upright rectangle, so it has no turn.
+                    editor.placementFrame(viewport)?.let { frame ->
+                        drawTransformBox(frame, editor.placementHover, colors, PLACEMENT_HANDLES, outline = false)
                     }
                 }
                 CreatePlacementKind.ROTATION -> {
@@ -3504,95 +3502,6 @@ private fun DrawScope.drawRotationArrow(
     // Tip center target
     drawCircle(Color.Black.copy(alpha = 0.35f), radius = 2.8f, center = tip + Offset(0f, 0.8f))
     drawCircle(Color.White, radius = 2.2f, center = tip)
-}
-
-/**
- * The shared transform box: the rectangle, the rotate stem and its handle, the eight scale handles, and
- * the axis-lock guide.
- *
- * The box is drawn inside the frame it was measured in, so an oriented box is still just a rectangle
- * here — the rotation lives in this one [rotate], not in the geometry drawn inside it.
- */
-private fun DrawScope.drawTransformBox(frame: TransformFrame, hovered: BoundingHandle, axis: String?, colors: ToolColors) {
-    val bounds = frame.bounds
-    rotate(frame.angleDeg, frame.pivot) {
-        drawRect(
-            color = colors.accent,
-            topLeft = Offset(bounds.minX, bounds.minY),
-            size = Size(bounds.width, bounds.height),
-            style = Stroke(1.2f)
-        )
-
-        // Rotate handle: stem line + circle
-        drawLine(
-            color = colors.accent.copy(alpha = 0.8f),
-            start = Offset(bounds.centerX, bounds.minY),
-            end = bounds.rotateHandlePos,
-            strokeWidth = 1f
-        )
-        // Hovered, a handle takes the treatment the mesh vertices already use: a white ring
-        // around a filled accent mark. Swapping the fill on a fixed-size shape was too
-        // quiet to tell which handle the pointer had actually caught.
-        if (hovered == BoundingHandle.ROTATE) {
-            drawCircle(Color.White, 8.5f, bounds.rotateHandlePos, style = Stroke(1.8f))
-            drawCircle(colors.accent, 5.5f, bounds.rotateHandlePos)
-        } else {
-            drawCircle(colors.windowBackground, 4f, bounds.rotateHandlePos)
-            drawCircle(colors.accent, 4f, bounds.rotateHandlePos, style = Stroke(1.5f))
-        }
-
-        listOf(
-            BoundingHandle.TOP_LEFT to Offset(bounds.minX, bounds.minY),
-            BoundingHandle.TOP_RIGHT to Offset(bounds.maxX, bounds.minY),
-            BoundingHandle.BOTTOM_LEFT to Offset(bounds.minX, bounds.maxY),
-            BoundingHandle.BOTTOM_RIGHT to Offset(bounds.maxX, bounds.maxY),
-            BoundingHandle.TOP to Offset(bounds.centerX, bounds.minY),
-            BoundingHandle.BOTTOM to Offset(bounds.centerX, bounds.maxY),
-            BoundingHandle.LEFT to Offset(bounds.minX, bounds.centerY),
-            BoundingHandle.RIGHT to Offset(bounds.maxX, bounds.centerY),
-        ).forEach { (handle, pt) ->
-            val isCorner = handle in listOf(
-                BoundingHandle.TOP_LEFT, BoundingHandle.TOP_RIGHT,
-                BoundingHandle.BOTTOM_LEFT, BoundingHandle.BOTTOM_RIGHT
-            )
-            val isHovered = hovered == handle
-            val side = when {
-                isHovered && isCorner -> 8.5f
-                isHovered || isCorner -> 7f
-                else -> 5.5f
-            }
-            if (isHovered) {
-                val ring = side + 5f
-                drawRect(
-                    color = Color.White,
-                    topLeft = pt - Offset(ring * 0.5f, ring * 0.5f),
-                    size = Size(ring, ring),
-                    style = Stroke(1.8f)
-                )
-                drawRect(colors.accent, pt - Offset(side * 0.5f, side * 0.5f), Size(side, side))
-            } else {
-                drawRect(Color.White, pt - Offset(side * 0.5f, side * 0.5f), Size(side, side))
-                drawRect(
-                    color = colors.accent,
-                    topLeft = pt - Offset(side * 0.5f, side * 0.5f),
-                    size = Size(side, side),
-                    style = Stroke(1f)
-                )
-            }
-        }
-    }
-
-    // Axis lock guide. The constraint is a keyboard latch with no persistent on-screen state, so
-    // without this the drag just silently refuses one of the two directions.
-    if (axis != null) {
-        val span = size.width + size.height
-        // The pivot, not the box centre: it is already a screen point, while the box is expressed
-        // in the frame and would need turning back out of it.
-        val center = frame.pivot
-        val from = if (axis == "x") Offset(center.x - span, center.y) else Offset(center.x, center.y - span)
-        val to = if (axis == "x") Offset(center.x + span, center.y) else Offset(center.x, center.y + span)
-        drawLine(colors.warning.copy(alpha = 0.7f), from, to, 1.2f)
-    }
 }
 
 private fun DrawScope.drawDeformPathCurve(screenPoints: List<Offset>, stroke: Color) {
