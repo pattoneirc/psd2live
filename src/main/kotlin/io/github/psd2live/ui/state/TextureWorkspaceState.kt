@@ -37,7 +37,12 @@ data class TextureWorkspaceState(
 	 * committed. A dragged tile or corner is the atlas view's own state and never comes here.
 	 */
 	val densityPreview: Map<String, Float> = emptyMap(),
-	/** A texture command is running. */
+	/**
+	 * Tiles as queued texture edits leave them, by layer: the atlas shows each where its edit puts it from the
+	 * moment it is made until that edit's version arrives, so no gesture waits for a rebuild.
+	 */
+	val pending: Map<String, PendingTile> = emptyMap(),
+	/** Texture commands are queued or running; gestures go on and queue theirs behind them. */
 	val busy: Boolean = false,
 	/** Why the last texture command was refused, shown in the panel until the next command. */
 	val error: String? = null,
@@ -56,6 +61,27 @@ data class TileDragDraft(
 	val y: Int,
 	val collides: Boolean,
 )
+
+/**
+ * A tile as a queued texture edit leaves it: on [page] at ([x], [y]), [width] x [height] texture pixels, at
+ * [density] when the edit sets one. [token] names the queued edit; a later edit of the same layer replaces it.
+ */
+@Immutable
+data class PendingTile(val page: Int, val x: Int, val y: Int, val width: Int, val height: Int, val density: Float?, val token: Long)
+
+/** [tile] where [pending] puts it, or as it is. */
+internal fun WorkspaceAtlasTile.shownAs(pending: Map<String, PendingTile>): WorkspaceAtlasTile {
+	val p = pending[layerId] ?: return this
+	if (p.page == page && p.x == x && p.y == y && p.width == width && p.height == height) return this
+	val sx = p.width.toFloat() / width; val sy = p.height.toFloat() / height
+	return copy(page = p.page, x = p.x, y = p.y, width = p.width, height = p.height, scaleX = scaleX * sx, scaleY = scaleY * sy,
+		density = p.density ?: density)
+}
+
+/** The tiles on [page] as the atlas shows them: committed, with queued edits applied. */
+internal fun TextureSnapshot.shownTiles(page: Int, pending: Map<String, PendingTile>): List<WorkspaceAtlasTile> =
+	if (pending.isEmpty()) tiles(page)
+	else atlas.tiles.filter { layer(it.layerId)?.deleted == false }.map { it.shownAs(pending) }.filter { it.page == page }
 
 /** One captured version of the textures and atlas, as the texture views read it. */
 class TextureSnapshot(private val view: WorkspaceTextureView) {

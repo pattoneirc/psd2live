@@ -1,0 +1,144 @@
+package io.github.psd2live.ui.views.texture
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerButton
+import androidx.compose.ui.input.pointer.PointerButtons
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.unit.Density
+import io.github.psd2live.ui.state.AppSettings
+import io.github.psd2live.ui.state.DesktopWorkspace
+import io.github.psd2live.ui.state.PSD2LiveViewModel
+import io.github.psd2live.ui.theme.CompactToolTheme
+import io.github.psd2live.ui.theme.ToolColors
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import java.awt.image.BufferedImage
+import java.nio.file.Files
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * The atlas page edits in real time: a gesture shows while the pointer moves, also after earlier commits; its result
+ * shows the moment it is released, before its version lands; and an edit made while another is committing queues
+ * behind it instead of being refused.
+ */
+class AtlasRealtimeEditTest {
+	@OptIn(ExperimentalComposeUiApi::class)
+	@Test fun gesturesShowLiveAndTheirResultsBeforeTheyCommit() = kotlinx.coroutines.runBlocking<Unit> {
+		val saved = AppSettings.softwareCanvas
+		AppSettings.softwareCanvas = true
+		val temp = Files.createTempDirectory("atlas-realtime")
+		fun png(name: String, argb: Int) = temp.resolve("$name.png").also { path ->
+			val image = BufferedImage(24, 24, BufferedImage.TYPE_INT_ARGB)
+			for (y in 0 until 24) for (x in 0 until 24) image.setRGB(x, y, argb)
+			javax.imageio.ImageIO.write(image, "png", path.toFile())
+		}
+		try {
+			PSD2LiveViewModel().use { vm ->
+				DesktopWorkspace(vm, temp.resolve("store")).use { workspace ->
+					vm.attachWorkspace(workspace)
+					workspace.createArtwork(buildJsonObject {
+						put("width", JsonPrimitive(64)); put("height", JsonPrimitive(64))
+						put("layers", buildJsonArray {
+							for ((name, argb) in listOf("red" to 0xffff0000.toInt(), "blue" to 0xff0000ff.toInt())) add(buildJsonObject {
+								put("path", JsonPrimitive(png(name, argb).toString())); put("name", JsonPrimitive(name)); put("role", JsonPrimitive("objects"))
+							})
+						})
+					})
+					// A small page, so a tile spans many view pixels. It is set before the view is composed: the gesture
+					// handler is keyed on the page size, and a change would hand it fresh state the bug below never sees.
+					vm.setAtlasBudget(requireNotNull(vm.textureSnapshot()), pageSize = 256)
+					vm.awaitTextureEdits()
+					val first = requireNotNull(vm.textureSnapshot())
+					val red = first.atlas.tiles.single { first.layer(it.layerId)?.name == "red" }
+					vm.selectLayer(red.layerId)
+					val scene = ImageComposeScene(400, 400, density = Density(1f)) {
+						CompactToolTheme(colors = ToolColors.Dark) {
+							val state by vm.state.collectAsState()
+							Box(Modifier.fillMaxSize()) { AtlasPageView(state, vm) }
+						}
+					}
+					var clock = 0L
+					fun render(): BufferedImage {
+						clock += 16_000_000L
+						val image = scene.render(clock)
+						return org.jetbrains.skia.Bitmap.makeFromImage(image).let { bitmap ->
+							val out = BufferedImage(bitmap.width, bitmap.height, BufferedImage.TYPE_INT_ARGB)
+							for (y in 0 until bitmap.height) for (x in 0 until bitmap.width) out.setRGB(x, y, bitmap.getColor(x, y))
+							bitmap.close(); image.close(); out
+						}
+					}
+					fun settle() { repeat(20) { render(); Thread.sleep(20) } }
+					fun view(x: Float, y: Float): Offset { val c = AtlasPageProbe.camera; return Offset(c[0] + x * c[2], c[1] + y * c[2]) }
+					fun isRed(image: BufferedImage, at: Offset): Boolean {
+						val c = image.getRGB(at.x.toInt(), at.y.toInt())
+						return (c ushr 16 and 0xff) > 200 && (c ushr 8 and 0xff) < 60 && (c and 0xff) < 60
+					}
+					settle()
+
+					// A first edit commits, so the gestures below run on a later version than the view was first composed with.
+					vm.setTextureDensity(first, listOf(red.layerId), 2f)
+					vm.awaitTextureEdits()
+					settle()
+					val tile = requireNotNull(vm.textureSnapshot()).tilesByLayer.getValue(red.layerId)
+					val pageSize = requireNotNull(vm.textureSnapshot()).atlas.pages[tile.page].width
+					val target = pageSize - tile.width - 8f to pageSize - tile.height - 8f
+					val from = view(tile.x + tile.width / 2f, tile.y + tile.height / 2f)
+					val to = view(target.first + tile.width / 2f, target.second + tile.height / 2f)
+					val primary = PointerButtons(isPrimaryPressed = true)
+					scene.sendPointerEvent(PointerEventType.Move, from)
+					scene.sendPointerEvent(PointerEventType.Press, from, buttons = primary, button = PointerButton.Primary)
+					for (i in 1..10) { scene.sendPointerEvent(PointerEventType.Move, from + (to - from) * (i / 10f), buttons = primary); render() }
+					assertTrue(isRed(render(), to), "the dragged tile shows under the pointer while it moves")
+					assertTrue(!isRed(render(), from), "and no longer where it was")
+
+					scene.sendPointerEvent(PointerEventType.Release, to, button = PointerButton.Primary)
+					// Before the move's version lands: the tile already shows where it was dropped.
+					assertTrue(vm.state.value.textureWorkspace.pending.containsKey(red.layerId), "the move is queued")
+					assertTrue(isRed(render(), to), "the dropped tile shows at once")
+					// A second edit while the first commits is queued, not refused.
+					vm.scaleTextureDensity(requireNotNull(vm.textureSnapshot()), listOf(red.layerId), 0.5f)
+					assertNull(vm.state.value.textureWorkspace.error)
+					vm.awaitTextureEdits()
+					settle()
+					val landed = requireNotNull(vm.textureSnapshot())
+					val moved = landed.tilesByLayer.getValue(red.layerId)
+					assertTrue(kotlin.math.abs(moved.x - target.first) <= 8 && kotlin.math.abs(moved.y - target.second) <= 8, "the move landed: $moved")
+					assertEquals(1f, landed.layer(red.layerId)?.override?.density ?: 1f, "both density edits landed in order")
+					assertTrue(vm.state.value.textureWorkspace.pending.isEmpty())
+					assertNull(vm.state.value.textureWorkspace.error)
+
+					// A corner drag after those commits: the tile grows under the pointer from its opposite corner.
+					val grip = view((moved.x + moved.width).toFloat(), (moved.y + moved.height).toFloat())
+					val anchor = view(moved.x.toFloat(), moved.y.toFloat())
+					val outward = anchor + (grip - anchor) * 0.6f
+					scene.sendPointerEvent(PointerEventType.Move, grip)
+					scene.sendPointerEvent(PointerEventType.Press, grip, buttons = primary, button = PointerButton.Primary)
+					AtlasPageProbe.liftedDraws.set(0)
+					for (i in 1..10) { scene.sendPointerEvent(PointerEventType.Move, grip + (outward - grip) * (i / 10f), buttons = primary); render() }
+					assertTrue(AtlasPageProbe.liftedDraws.get() > 0, "the corner drag draws its tiles at their new size")
+					// Shrunk to a quarter-power step near 0.6: the corner it left shows no tile any more.
+					val leftBehind = anchor + (grip - anchor) * 0.8f
+					assertTrue(!isRed(render(), leftBehind), "the shrinking tile shows at its new size while the corner moves")
+					assertTrue(isRed(render(), anchor + (grip - anchor) * 0.3f))
+					scene.sendPointerEvent(PointerEventType.Release, outward, button = PointerButton.Primary)
+					vm.awaitTextureEdits()
+					assertTrue((requireNotNull(vm.textureSnapshot()).layer(red.layerId)?.override?.density ?: 1f) < 1f, "the corner drag committed")
+					scene.close()
+				}
+			}
+		} finally {
+			AppSettings.softwareCanvas = saved
+		}
+	}
+}

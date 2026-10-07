@@ -78,6 +78,7 @@ internal fun atlasScene(input: AtlasSceneInput, moved: (WorkspaceAtlasTile) -> R
 	val nearest = input.viewport.scale >= 2.0
 	val art = if (input.heatmap) 0.45f else 1f
 	val page = input.pageImage
+	fun rect(tile: WorkspaceAtlasTile) = Rect(tile.x.toFloat(), tile.y.toFloat(), (tile.x + tile.width).toFloat(), (tile.y + tile.height).toFloat())
 	/** [tile]'s pixels into [at] (page pixels), inside its cells when it was arranged by its meshes. */
 	fun pixels(tile: WorkspaceAtlasTile, at: Rect, alpha: Float) {
 		val sx = at.width / tile.width; val sy = at.height / tile.height
@@ -89,9 +90,11 @@ internal fun atlasScene(input: AtlasSceneInput, moved: (WorkspaceAtlasTile) -> R
 				}
 			}
 		}
+		// An upscaled page holds the tile where it was committed.
+		val source = snapshot.tilesByLayer[tile.layerId] ?: tile
 		val quad = if (page != null) TextureQuad(ImageTexture(page), at.left, -at.top, at.right, -at.bottom,
-			tile.x.toFloat() / page.width, tile.y.toFloat() / page.height,
-			(tile.x + tile.width).toFloat() / page.width, (tile.y + tile.height).toFloat() / page.height, alpha, nearest, clip)
+			source.x.toFloat() / page.width, source.y.toFloat() / page.height,
+			(source.x + source.width).toFloat() / page.width, (source.y + source.height).toFloat() / page.height, alpha, nearest, clip)
 		else {
 			val raster = snapshot.tileRaster(tile.layerId) ?: return
 			TextureQuad(RasterTexture(raster.width, raster.height, raster.rgba), at.left, -at.top, at.right, -at.bottom,
@@ -99,19 +102,22 @@ internal fun atlasScene(input: AtlasSceneInput, moved: (WorkspaceAtlasTile) -> R
 		}
 		items += quad
 	}
-	/** [tile]'s wireframe, moved with it to [at] when a gesture lifts it. */
+	/**
+	 * [tile]'s wireframe. It lies where the committed tile is; a queued edit's tile, or one a gesture lifts to [at],
+	 * takes it along.
+	 */
 	fun wires(tile: WorkspaceAtlasTile, at: Rect?, argb: Int) {
 		val segments = input.meshes?.segments?.get(tile.layerId) ?: return
-		val drawn = if (at == null) segments else {
-			val sx = at.width / tile.width; val sy = at.height / tile.height
+		val committed = snapshot.tilesByLayer[tile.layerId] ?: tile
+		val target = at ?: rect(tile)
+		val drawn = if (committed == tile && at == null) segments else {
+			val sx = target.width / committed.width; val sy = target.height / committed.height
 			FloatArray(segments.size) { i ->
-				if (i % 2 == 0) at.left + (segments[i] - tile.x) * sx else -(at.top + (-segments[i] - tile.y) * sy)
+				if (i % 2 == 0) target.left + (segments[i] - committed.x) * sx else -(target.top + (-segments[i] - committed.y) * sy)
 			}
 		}
 		items += LineBatch(argb, 1f, drawn)
 	}
-	fun rect(tile: WorkspaceAtlasTile) = Rect(tile.x.toFloat(), tile.y.toFloat(), (tile.x + tile.width).toFloat(), (tile.y + tile.height).toFloat())
-
 	val lifted = input.tiles.mapNotNull { tile -> moved(tile)?.let { tile to it } }
 	val liftedIds = lifted.mapTo(HashSet()) { it.first.layerId }
 	val standing = input.tiles.filter { it.layerId !in liftedIds }

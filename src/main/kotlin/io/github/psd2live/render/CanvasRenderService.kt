@@ -39,6 +39,8 @@ internal object CanvasRenderService {
 	 */
 	private val retained = ConcurrentHashMap<String, ArrayDeque<org.jetbrains.skia.Bitmap>>()
 	private const val RETAINED_FRAMES = 3
+	/** Frames drawn per view since start, for the development tools. */
+	val framesDrawn = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
 
 	/** Starts the GL context once, off the calling thread. */
 	fun ensureStarted() {
@@ -94,6 +96,7 @@ internal object CanvasRenderService {
 				val viewId = pending.keys.firstOrNull() ?: break
 				val scene = pending.remove(viewId) ?: continue
 				val bitmap = r.render(viewId, scene)
+				framesDrawn.getOrPut(viewId) { java.util.concurrent.atomic.AtomicInteger() }.incrementAndGet()
 				frameFlows.getOrPut(viewId) { MutableStateFlow(null) }.value =
 					RenderedFrame(bitmap, scene.width, scene.height, scene.viewport, scene)
 				val recent = retained.getOrPut(viewId) { ArrayDeque() }

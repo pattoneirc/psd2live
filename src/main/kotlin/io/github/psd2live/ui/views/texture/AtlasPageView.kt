@@ -54,6 +54,8 @@ import androidx.compose.ui.input.pointer.areAnyPressed
 import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -78,6 +80,7 @@ import io.github.psd2live.ui.state.ShortcutScope
 import io.github.psd2live.ui.state.TextureDensity
 import io.github.psd2live.ui.state.TextureSnapshot
 import io.github.psd2live.ui.state.TileDragDraft
+import io.github.psd2live.ui.state.shownTiles
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.theme.frostedGlass
@@ -139,6 +142,19 @@ fun AtlasPageView(state: PSD2LiveState, vm: PSD2LiveViewModel, modifier: Modifie
 	}
 }
 
+/**
+ * Where the atlas page last showed, for the development tools that drive the real window: the view's top left in
+ * window pixels and its camera (left, top, scale). Written on the UI thread, read by the tools.
+ */
+internal object AtlasPageProbe {
+	@Volatile var origin: Offset = Offset.Zero
+	@Volatile var camera: FloatArray = floatArrayOf(0f, 0f, 1f)
+	/** Draws that showed a tile a gesture lifts, and of those the ones whose GPU frame already had it lifted. */
+	val liftedDraws = java.util.concurrent.atomic.AtomicInteger()
+	val liftedGpuFrames = java.util.concurrent.atomic.AtomicInteger()
+	val liftedScenes: MutableSet<Any> = java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(java.util.WeakHashMap()))
+}
+
 /** Page-to-view mapping: a texture pixel (x, y) shows at (left + x * scale, top + y * scale). */
 private data class PageTransform(val left: Float, val top: Float, val scale: Float) {
 	fun toView(x: Float, y: Float) = Offset(left + x * scale, top + y * scale)
@@ -148,8 +164,7 @@ private data class PageTransform(val left: Float, val top: Float, val scale: Flo
 }
 
 /** A corner-handle drag in flight: [factor] scales every selected tile's density, about [anchor]'s tile corner. */
-private data class DensityDrag(val layerIds: List<String>, val primary: String, val anchor: Offset, val corner: Offset, val factor: Float,
-                               val committing: Boolean = false)
+private data class DensityDrag(val layerIds: List<String>, val primary: String, val anchor: Offset, val corner: Offset, val factor: Float)
 
 /** What a right-click opened its menu on: a tile's layer, or the page itself. */
 private data class AtlasMenu(val at: Offset, val layerId: String?)
@@ -162,7 +177,8 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	val texture = state.textureWorkspace
 	val atlas = snapshot.atlas
 	val pageInfo = atlas.pages[page]
-	val tiles = remember(snapshot, page) { snapshot.tiles(page) }
+	// The tiles as the atlas shows them: committed, with the queued edits' results laid over them until they land.
+	val tiles = remember(snapshot, page, texture.pending) { snapshot.shownTiles(page, texture.pending) }
 	// Tiles are drawn from their layers' rasters, so a moved or rescaled tile shows at once, without waiting for
 	// the page to be composed and converted; only upscaled pages, which hold pixels no raster has, are drawn whole.
 	// The GPU renderer draws the page's texels and wireframes when it can, as it does the edit canvas's artwork; the
@@ -181,30 +197,26 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	val gpuSubmission = remember(renderKey) { AtlasSceneSubmission(renderKey) }
 	val tileImages = rememberTileImages(snapshot, enabled = !gpuReady)
 	val pageImage = rememberPageImage(state, snapshot, page, enabled = snapshot.upscaled && !gpuReady)
-	val masks = remember(snapshot, page) { tiles.filter { it.shaped }.associate { it.layerId to maskPath(snapshot.shape(it, it.x, it.y)) } }
-	val maskCells = remember(snapshot, page) { tiles.filter { it.shaped }.associate { it.layerId to maskRects(snapshot.shape(it, it.x, it.y), it) } }
+	val masks = remember(snapshot, tiles) { tiles.filter { it.shaped }.associate { it.layerId to maskPath(snapshot.shape(it, it.x, it.y)) } }
+	val maskCells = remember(snapshot, tiles) { tiles.filter { it.shaped }.associate { it.layerId to maskRects(snapshot.shape(it, it.x, it.y), it) } }
 	val selection = remember(state.selectedLayerIds, state.selectedLayerId, snapshot) { textureSelection(state, snapshot) }
 	val selected = remember(selection) { selection.toSet() }
 	val shownIds = remember(tiles) { tiles.mapTo(HashSet()) { it.layerId } }
 	val meshes = rememberMeshes(state, snapshot, page)
-	val busy = texture.busy || state.isAnalyzing || state.isGenerating
+	// Queued texture edits never hold a gesture back: it queues behind them. Only a whole rebuild does.
+	val busy = state.isAnalyzing || state.isGenerating
 
 	var zoom by remember(page) { mutableStateOf(1f) }
 	var pan by remember(page) { mutableStateOf(Offset.Zero) }
 	var hovered by remember(snapshot, page) { mutableStateOf<String?>(null) }
 	var viewSize by remember { mutableStateOf(IntSize.Zero) }
 	var marquee by remember { mutableStateOf<Rect?>(null) }
-	// A released corner drag keeps showing its sizes until the commit's version arrives (or the command ends).
-	var densityDrag by remember(snapshot) { mutableStateOf<DensityDrag?>(null) }
-	// A dragged tile lives here, not in the application state, so moving the pointer recomposes only this view. Once
-	// dropped it shows where it lands until the commit's version arrives (or the command ends).
-	var tileDrag by remember(snapshot) { mutableStateOf<TileDragDraft?>(null) }
-	var tileDropped by remember(snapshot) { mutableStateOf(false) }
-	LaunchedEffect(texture.busy) {
-		if (texture.busy) return@LaunchedEffect
-		if (densityDrag?.committing == true) densityDrag = null
-		if (tileDropped) { tileDrag = null; tileDropped = false }
-	}
+	// A gesture's state lives here, not in the application state, so moving the pointer recomposes only this view. It
+	// must outlive every version: the gesture handler below keeps the state objects it first saw, so state remembered
+	// per snapshot would leave every gesture after the first commit drawing nothing. Once released, the result shows
+	// as a queued edit (TextureWorkspaceState.pending) until its version lands.
+	var densityDrag by remember { mutableStateOf<DensityDrag?>(null) }
+	var tileDrag by remember { mutableStateOf<TileDragDraft?>(null) }
 	var space by remember { mutableStateOf(false) }
 	var menu by remember { mutableStateOf<AtlasMenu?>(null) }
 	/** Where the pointer was at the last step of a pan, while one is in progress. */
@@ -270,6 +282,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	Box(
 		Modifier
 			.fillMaxSize()
+			.onGloballyPositioned { AtlasPageProbe.origin = it.positionInWindow() }
 			.focusRequester(focusRequester)
 			.onKeyEvent { event ->
 				if (state.keyCapture != null) return@onKeyEvent false
@@ -277,7 +290,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 				if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
 				if (event.key == Key.Escape) {
 					when {
-						(tileDrag != null && !tileDropped) || densityDrag?.committing == false || marquee != null -> {
+						tileDrag != null || densityDrag != null || marquee != null -> {
 							tileDrag = null; densityDrag = null; marquee = null
 						}
 						else -> vm.selectLayer(null)
@@ -339,8 +352,8 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 			}
 			.onPointerEvent(PointerEventType.Exit) { hovered = null; pointer = null }
 			.pointerHoverIcon(PointerIcon(atlasCursor(
-				panning = panFrom != null, space = space, moving = tileDrag != null && !tileDropped, boxing = marquee != null,
-				scaling = densityDrag?.takeIf { !it.committing }?.let { it.corner to it.anchor },
+				panning = panFrom != null, space = space, moving = tileDrag != null, boxing = marquee != null,
+				scaling = densityDrag?.let { it.corner to it.anchor },
 				corner = pointer?.takeIf { !busy }?.let { at -> hitCorner(at)?.let { it.second to it.third } },
 				overTile = pointer?.let { hit(it) } != null,
 			)))
@@ -360,7 +373,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 					if (corner != null) {
 						val (tile, at, anchor) = corner
 						val start = (at - anchor).getDistance()
-						val primaryDensity = snapshotAtStart.layer(tile.layerId)?.override?.density ?: 1f
+						val primaryDensity = vm.shownTextureDensity(snapshotAtStart, tile.layerId)
 						var drag = DensityDrag(currentSelection, tile.layerId, anchor, at, 1f)
 						densityDrag = drag
 						while (true) {
@@ -374,7 +387,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 							change.consume()
 						}
 						if (drag.factor != 1f) vm.scaleTextureDensity(snapshotAtStart, drag.layerIds, drag.factor)
-						densityDrag = if (drag.factor != 1f && vm.state.value.textureWorkspace.busy) drag.copy(committing = true) else null
+						densityDrag = null
 						return@awaitEachGesture
 					}
 
@@ -429,12 +442,11 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 						change.consume()
 					}
 					val dropped = tileDrag
+					tileDrag = null
 					if (dragging && dropped != null) {
-						tileDropped = vm.moveTextureTile(snapshotAtStart, dropped)
-						if (!tileDropped) tileDrag = null
+						vm.moveTextureTile(snapshotAtStart, dropped)
 						lastClick = null
 					} else {
-						tileDrag = null
 						// A plain click on a tile of a larger selection keeps only that tile, once the press is a click.
 						if (wasSelected && select == CanvasNavigation.SelectMode.REPLACE && currentSelected.size > 1) vm.selectLayer(tile.layerId)
 						val now = System.currentTimeMillis()
@@ -449,6 +461,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	) {
 		Canvas(Modifier.fillMaxSize()) {
 			if (viewSize != IntSize(size.width.toInt(), size.height.toInt())) viewSize = IntSize(size.width.toInt(), size.height.toInt())
+			AtlasPageProbe.camera = floatArrayOf(transform.left, transform.top, transform.scale)
 			val pageRect = transform.rect(0f, 0f, pageInfo.width.toFloat(), pageInfo.height.toFloat())
 			val draft = tileDrag?.takeIf { it.page == page }
 			val scaling = densityDrag
@@ -482,7 +495,8 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 						val draw: DrawScope.() -> Unit = {
 							if (image != null) drawImage(image, dstOffset = IntOffset(tile.x, tile.y), dstSize = IntSize(tile.width, tile.height),
 								alpha = alpha, filterQuality = filter)
-							else drawImage(source!!, srcOffset = IntOffset(tile.x, tile.y), srcSize = IntSize(tile.width, tile.height),
+							else drawImage(source!!, srcOffset = (snapshot.tilesByLayer[tile.layerId] ?: tile).let { IntOffset(it.x, it.y) },
+								srcSize = (snapshot.tilesByLayer[tile.layerId] ?: tile).let { IntSize(it.width, it.height) },
 								dstOffset = IntOffset(tile.x, tile.y), dstSize = IntSize(tile.width, tile.height), alpha = alpha, filterQuality = filter)
 						}
 						if (mask != null) clipPath(mask) { draw() } else draw()
@@ -492,6 +506,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 			clipRect {
 				drawChecker(pageRect, colors.checkerLight, colors.checkerDark)
 				val art = if (texture.heatmap) 0.45f else 1f
+				if (tiles.any { moved(it) != null }) AtlasPageProbe.liftedDraws.incrementAndGet()
 				if (gpuReady) {
 					val w = size.width.toInt(); val h = size.height.toInt()
 					val viewport = CanvasViewport(transform.scale.toDouble(), transform.left.toDouble(), transform.top.toDouble(),
@@ -502,8 +517,12 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 						atlasScene(AtlasSceneInput(snapshot, tiles, w, h, viewport, texture.showPage, texture.heatmap,
 							meshes?.takeIf { texture.showMeshes }, maskCells, selected, livePage,
 							colors.textPrimary.copy(alpha = 0.35f).toArgb(), colors.accent.copy(alpha = 0.9f).toArgb()), ::moved)
+							.also { if (liftedKey.isNotEmpty()) AtlasPageProbe.liftedScenes += it }
 					}
 					val frame = gpuFrame
+					if (liftedKey.isNotEmpty()) {
+						if (frame != null && frame.scene in AtlasPageProbe.liftedScenes) AtlasPageProbe.liftedGpuFrames.incrementAndGet()
+					}
 					val image = gpuImage
 					if (frame != null && image != null && !frame.bitmap.isClosed) {
 						// The frame may be a step behind the camera: move it to where the camera is now, so a pan or zoom
@@ -569,11 +588,15 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 						for (tile in tiles) {
 							val path = meshes.paths[tile.layerId] ?: continue
 							val chosen = tile.layerId in selected
-							val at = moved(tile)
-							val color = if (chosen || at != null) colors.accent.copy(alpha = 0.9f) else colors.textPrimary.copy(alpha = 0.35f)
-							if (at == null) drawPath(path, color, style = HAIRLINE)
+							val lifted = moved(tile)
+							// The wireframe is where the committed tile is; a queued edit or a gesture moves it with the tile.
+							val committed = snapshot.tilesByLayer[tile.layerId] ?: tile
+							val at = lifted ?: Rect(tile.x.toFloat(), tile.y.toFloat(), (tile.x + tile.width).toFloat(), (tile.y + tile.height).toFloat())
+							val color = if (chosen || lifted != null) colors.accent.copy(alpha = 0.9f) else colors.textPrimary.copy(alpha = 0.35f)
+							if (committed == tile && lifted == null) drawPath(path, color, style = HAIRLINE)
 							else withTransform({
-								translate(at.left, at.top); scale(at.width / tile.width, at.height / tile.height, Offset.Zero); translate(-tile.x.toFloat(), -tile.y.toFloat())
+								translate(at.left, at.top); scale(at.width / committed.width, at.height / committed.height, Offset.Zero)
+								translate(-committed.x.toFloat(), -committed.y.toFloat())
 							}) { drawPath(path, color, style = HAIRLINE) }
 						}
 					}

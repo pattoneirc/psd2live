@@ -12,10 +12,33 @@ import java.awt.image.BufferedImage
 internal object RigGenerationSource {
     data class Analyses(val geometry: PipelineAnalysis, val textures: PipelineAnalysis)
 
-    fun analyze(source: SourceArt, config: PipelineConfig): PipelineAnalysis {
+    fun analyze(source: SourceArt, config: PipelineConfig): PipelineAnalysis = AnalysisMemo.get(source, config.generationSource, config, "source") {
         val input = config.generationSource?.let { geometrySource(source, it, config.rigEdits) } ?: source
         val analysis = CharacterAnalyzer.analyze(input, RigLayerDeletion.generationConfig(config))
-        return if (input === source) analysis else analysis.copy(source = source, preview = PreviewRenderer.composite(source))
+        if (input === source) analysis else analysis.copy(source = source, preview = PreviewRenderer.composite(source))
+    }
+
+    /**
+     * The last few analyses, by their inputs: the very source and generation source objects, and the configuration
+     * without its texture layout. A texture atlas edit (a moved tile, a density, a lock, an arrangement) changes only
+     * the layout, which no analysis reads, so its rebuild takes the analyses of the version it starts from instead of
+     * classifying every layer again - as umamo moves a tile without rebuilding the puppet.
+     */
+    private object AnalysisMemo {
+        private class Key(val source: SourceArt, val reference: SourceArt?, val config: PipelineConfig, val stage: String) {
+            override fun equals(other: Any?) = other is Key && source === other.source && reference === other.reference &&
+                stage == other.stage && config == other.config
+            override fun hashCode() = (System.identityHashCode(source) * 31 + System.identityHashCode(reference)) * 31 + stage.hashCode()
+        }
+        private val entries = object : LinkedHashMap<Key, PipelineAnalysis>(8, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Key, PipelineAnalysis>?) = size > 4
+        }
+
+        fun get(source: SourceArt, reference: SourceArt?, config: PipelineConfig, stage: String, analyze: () -> PipelineAnalysis): PipelineAnalysis {
+            val key = Key(source, reference, config.copy(textureOverrides = emptyMap(), atlasArrangement = null), stage)
+            synchronized(entries) { entries[key] }?.let { return it }
+            return analyze().also { synchronized(entries) { entries[key] = it } }
+        }
     }
 
     fun prepare(input: PipelineAnalysis, config: PipelineConfig, textureConfig: PipelineConfig = config): Analyses {
@@ -23,7 +46,9 @@ internal object RigGenerationSource {
             MouthLipLayers.prepare(PrimitiveResolution.of(config.rigEdits).let { if (it.active) currentParts(input, it, config) else input }, config)
         }.let { Analyses(it, it) }
         val resolution = PrimitiveResolution.of(config.rigEdits)
-        val geometryAnalysis = RigBuildProfile.stage("prepare: geometry analyze") { CharacterAnalyzer.analyze(geometrySource(input.source, reference, config.rigEdits), config) }
+        val geometryAnalysis = RigBuildProfile.stage("prepare: geometry analyze") {
+            AnalysisMemo.get(input.source, reference, config, "geometry") { CharacterAnalyzer.analyze(geometrySource(input.source, reference, config.rigEdits), config) }
+        }
             .let { if (resolution.active) resolvedAnalysis(it, resolution, config) else it }
         val geometry = RigBuildProfile.stage("prepare: geometry mouth lips") { MouthLipLayers.prepare(geometryAnalysis, config) }
         val current = input.source.layers.associateBy { it.id.raw }

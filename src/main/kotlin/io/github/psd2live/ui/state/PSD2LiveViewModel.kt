@@ -4111,45 +4111,74 @@ class PSD2LiveViewModel : AutoCloseable {
 	fun clearTextureError() = updateTextureWorkspace { it.copy(error = null) }
 
 	/**
-	 * Where [layerId]'s tile lands when dragged to ([x], [y]) on its page; the atlas view keeps it while the pointer
-	 * moves, so a drag touches no application state until [moveTextureTile].
+	 * Where [layerId]'s tile lands when dragged to ([x], [y]) on its page, among the tiles as the atlas shows them
+	 * (queued edits applied); the atlas view keeps it while the pointer moves, so a drag touches no application state
+	 * until [moveTextureTile].
 	 */
 	fun draggedTextureTile(snapshot: TextureSnapshot, layerId: String, x: Float, y: Float, snap: Float): TileDragDraft? {
-		val tile = snapshot.tilesByLayer[layerId] ?: return null
+		val pending = _state.value.textureWorkspace.pending
+		val tile = snapshot.tilesByLayer[layerId]?.shownAs(pending) ?: return null
 		val page = snapshot.atlas.pages.getOrNull(tile.page) ?: return null
-		return placeDraggedTile(tile, x, y, page.width, page.height, snapshot.tiles(tile.page), snapshot.atlas.budget.padding, snap, snapshot::shape)
+		return placeDraggedTile(tile, x, y, page.width, page.height, snapshot.shownTiles(tile.page, pending), snapshot.atlas.budget.padding, snap,
+			snapshot::shape)
 	}
 
 	/**
-	 * Ends a tile drag: moves the tile once to where it was dropped, unless it collides or did not move. The spot is
-	 * stored; an automatically arranged atlas keeps its current layout from then on, so no other tile moves. True
-	 * when a commit started.
+	 * Ends a tile drag: moves the tile once to where it was dropped, unless it collides or did not move. The atlas
+	 * shows it there at once; the edit is queued. The spot is stored; an automatically arranged atlas keeps its
+	 * current layout from then on, so no other tile moves.
 	 */
 	fun moveTextureTile(snapshot: TextureSnapshot, draft: TileDragDraft): Boolean {
-		val tile = snapshot.tilesByLayer[draft.layerId]
+		val tile = snapshot.tilesByLayer[draft.layerId]?.shownAs(_state.value.textureWorkspace.pending)
 		if (tile == null || (tile.x == draft.x && tile.y == draft.y && tile.page == draft.page)) return false
 		if (draft.collides) {
 			updateTextureWorkspace { it.copy(error = tr("texture.drag.collides")) }
 			return false
 		}
-		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetTile(draft.layerId,
-			io.github.psd2live.project.TexturePin(draft.page, draft.x, draft.y)))
-		return _state.value.textureWorkspace.busy
+		queueTextureEdits(listOf(io.github.psd2live.application.WorkspaceTextureEdit.SetTile(draft.layerId,
+			io.github.psd2live.project.TexturePin(draft.page, draft.x, draft.y)))) { token ->
+			mapOf(draft.layerId to PendingTile(draft.page, draft.x, draft.y, tile.width, tile.height, null, token))
+		}
+		return true
 	}
 
 	/**
 	 * Shows the atlas as if [factors] (layer id to density ratio) were applied, while the density slider is dragged;
-	 * empty clears it. The next texture commit clears it too, once its result shows.
+	 * empty clears it.
 	 */
 	fun previewTextureDensity(factors: Map<String, Float>) {
 		if (_state.value.textureWorkspace.densityPreview != factors) updateTextureWorkspace { it.copy(densityPreview = factors) }
 	}
 
+	/** [layerId]'s density as the atlas shows it: a queued edit's, else the committed one; 1 by default. */
+	fun shownTextureDensity(snapshot: TextureSnapshot, layerId: String): Float =
+		_state.value.textureWorkspace.pending[layerId]?.density ?: snapshot.layer(layerId)?.override?.density ?: 1f
+
+	/**
+	 * Queued density changes: [densities] by layer (null resets to 1), shown at once at the sizes they give, each
+	 * tile growing or shrinking from its top left; [lock] when given.
+	 */
+	private fun queueDensities(snapshot: TextureSnapshot, densities: Map<String, Float?>, lock: Boolean? = null) {
+		if (densities.isEmpty()) return
+		val pending = _state.value.textureWorkspace.pending
+		val edits = densities.entries.groupBy({ it.value }, { it.key })
+			.map { (density, ids) -> io.github.psd2live.application.WorkspaceTextureEdit.SetPixelDensity(ids, density, lock) }
+		queueTextureEdits(edits) { token ->
+			densities.mapNotNull { (id, density) ->
+				val committed = snapshot.tilesByLayer[id] ?: return@mapNotNull null
+				val shown = committed.shownAs(pending)
+				val ratio = (density ?: 1f) / (snapshot.layer(id)?.override?.density ?: 1f)
+				id to PendingTile(shown.page, shown.x, shown.y, Math.round(committed.width * ratio).coerceAtLeast(1),
+					Math.round(committed.height * ratio).coerceAtLeast(1), density ?: 1f, token)
+			}.toMap()
+		}
+	}
 
 	/** Sets the texture density of [layerIds] (null resets to 1), keeping each layer's lock. */
 	fun setTextureDensity(snapshot: TextureSnapshot, layerIds: List<String>, density: Float?) {
 		if (layerIds.isEmpty()) return
-		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetPixelDensity(layerIds, density))
+		queueDensities(snapshot, layerIds.associateWith { density })
+		previewTextureDensity(emptyMap())
 	}
 
 	/**
@@ -4157,27 +4186,25 @@ class PSD2LiveViewModel : AutoCloseable {
 	 * a selection of mixed densities sends one command per density.
 	 */
 	fun setTextureLock(snapshot: TextureSnapshot, layerIds: List<String>, lock: Boolean) {
-		val groups = layerIds.groupBy { snapshot.layer(it)?.override?.density }
-		val edits = groups.map { (density, ids) -> io.github.psd2live.application.WorkspaceTextureEdit.SetPixelDensity(ids, density, lock) }
-		if (edits.isEmpty()) return
-		commitTextureEdits(snapshot.state, edits)
+		if (layerIds.isEmpty()) return
+		queueDensities(snapshot, layerIds.associateWith { id -> shownTextureDensity(snapshot, id).takeUnless { it == 1f } }, lock)
 	}
 
 	fun setLayerCanvasRect(snapshot: TextureSnapshot, layerId: String, rect: io.github.psd2live.project.LayerCanvasRect) =
-		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetCanvasRect(layerId, rect))
+		queueTextureEdits(listOf(io.github.psd2live.application.WorkspaceTextureEdit.SetCanvasRect(layerId, rect)))
 
 	/** Replaces [layerId]'s pixels from [file] with the workspace's fit and rebuild choices; the file is read by the command. */
 	fun replaceLayerImage(snapshot: TextureSnapshot, layerId: String, file: java.io.File) {
 		val options = _state.value.textureWorkspace
-		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.ReplaceImage(layerId,
-			io.github.psd2live.application.WorkspaceTextureImage.File(file.toPath().toAbsolutePath()), options.replaceFit, options.replaceRebuildMesh))
+		queueTextureEdits(listOf(io.github.psd2live.application.WorkspaceTextureEdit.ReplaceImage(layerId,
+			io.github.psd2live.application.WorkspaceTextureImage.File(file.toPath().toAbsolutePath()), options.replaceFit, options.replaceRebuildMesh)))
 	}
 
 	fun setAtlasBudget(snapshot: TextureSnapshot, pageSize: Int? = null, maxPages: Int? = null, padding: Int? = null) {
 		val current = snapshot.atlas.budget
 		if ((pageSize ?: current.pageSize) == current.pageSize && (maxPages ?: current.maxPages) == current.maxPages &&
 			(padding ?: current.padding) == current.padding) return
-		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetBudget(pageSize, maxPages, padding))
+		queueTextureEdits(listOf(io.github.psd2live.application.WorkspaceTextureEdit.SetBudget(pageSize, maxPages, padding)))
 	}
 
 	/**
@@ -4188,13 +4215,13 @@ class PSD2LiveViewModel : AutoCloseable {
 	                 onlySelection: Boolean = _state.value.textureWorkspace.arrangeSelectionOnly) {
 		val options = _state.value.textureWorkspace
 		val only = selection.filter { it in snapshot.tilesByLayer }.takeIf { onlySelection && it.isNotEmpty() }
-		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.Pack(options.arrangeByMesh, only))
+		queueTextureEdits(listOf(io.github.psd2live.application.WorkspaceTextureEdit.Pack(options.arrangeByMesh, only)))
 	}
 
 	/** Turns the automatic arrangement on (the atlas packs itself on every build) or off (it keeps its layout). */
 	fun setAtlasAuto(snapshot: TextureSnapshot, auto: Boolean) {
 		if (snapshot.atlas.auto == auto) return
-		commitTextureEdit(snapshot.state, io.github.psd2live.application.WorkspaceTextureEdit.SetBudget(auto = auto))
+		queueTextureEdits(listOf(io.github.psd2live.application.WorkspaceTextureEdit.SetBudget(auto = auto)))
 	}
 
 	/** The atlas budget back to its defaults; nothing is sent when it already is. */
@@ -4205,45 +4232,68 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	/**
 	 * Scales the density of [layerIds] by [factor], as a corner handle drag or a "×2" menu row does: each layer
-	 * keeps its own ratio to the others, snapped to the slider's grid. Layers that land on one density share
-	 * one command, keeping their locks.
+	 * keeps its own ratio to the others, snapped to the slider's grid, from the density the atlas shows for it.
+	 * Layers that land on one density share one command, keeping their locks.
 	 */
 	fun scaleTextureDensity(snapshot: TextureSnapshot, layerIds: List<String>, factor: Float) {
 		if (layerIds.isEmpty() || !(factor > 0f) || factor == 1f) return
-		val edits = layerIds.groupBy { id -> TextureDensity.snap((snapshot.layer(id)?.override?.density ?: 1f) * factor) }
-			.filter { (density, ids) -> ids.any { (snapshot.layer(it)?.override?.density ?: 1f) != density } }
-			.map { (density, ids) -> io.github.psd2live.application.WorkspaceTextureEdit.SetPixelDensity(ids, density.takeUnless { it == 1f }) }
-		if (edits.isEmpty()) return
-		commitTextureEdits(snapshot.state, edits)
+		val densities = layerIds.associateWith { id ->
+			val shown = shownTextureDensity(snapshot, id)
+			TextureDensity.snap(shown * factor).takeIf { it != shown }
+		}.filterValues { it != null }.mapValues { (_, density) -> density!!.takeUnless { it == 1f } }
+		queueDensities(snapshot, densities)
 	}
 
+	/** A run of texture edits waiting to commit, and the tiles it shows meanwhile. */
+	private class TextureJob(val token: Long, val edits: List<io.github.psd2live.application.WorkspaceTextureEdit>, val tiles: Set<String>)
 
-	private fun commitTextureEdit(state: String, edit: io.github.psd2live.application.WorkspaceTextureEdit) =
-		commitTextureEdits(state, listOf(edit))
+	private val textureJobs = kotlinx.coroutines.channels.Channel<TextureJob>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+	private val textureTokens = java.util.concurrent.atomic.AtomicLong()
+	private val texturesQueued = java.util.concurrent.atomic.AtomicInteger()
+	private var textureWorker: kotlinx.coroutines.Job? = null
 
 	/**
-	 * Runs [edits] in order off the UI thread, each one candidate, rebuild and CAS with the user as author; the
-	 * first starts from [state], the snapshot the gesture or field began on, and each later one from the state the
-	 * previous commit left. A refusal stops the chain and is shown in the texture panel.
+	 * Queues [edits] to commit in order after every edit queued before them; [shows] gives the tiles to show at once,
+	 * from the job's token, until the job's version arrives. Nothing is refused for being busy: each edit runs on the
+	 * version the previous one left, once no other edit holds the workspace, as umamo's placement gizmo commits a
+	 * gesture without making the next one wait.
 	 */
-	private fun commitTextureEdits(state: String, edits: List<io.github.psd2live.application.WorkspaceTextureEdit>) {
-		val current = _state.value
-		if (current.textureWorkspace.busy || current.workspaceEditBusy || current.editorDraftBusy) {
-			updateTextureWorkspace { it.copy(densityPreview = emptyMap(), error = tr("texture.busy")) }
-			return
+	private fun queueTextureEdits(edits: List<io.github.psd2live.application.WorkspaceTextureEdit>,
+	                              shows: (Long) -> Map<String, PendingTile> = { emptyMap() }) {
+		if (edits.isEmpty()) return
+		val token = textureTokens.incrementAndGet()
+		val tiles = shows(token)
+		texturesQueued.incrementAndGet()
+		updateTextureWorkspace { it.copy(busy = true, error = null, pending = if (tiles.isEmpty()) it.pending else it.pending + tiles) }
+		textureJobs.trySend(TextureJob(token, edits, tiles.keys))
+		synchronized(textureJobs) {
+			if (textureWorker?.isActive != true) textureWorker = scope.launch { for (job in textureJobs) runTextureJob(job) }
 		}
-		updateState { it.copy(canvasEditBusy = true, textureWorkspace = it.textureWorkspace.copy(busy = true, error = null)) }
-		scope.launch {
-			try {
-				var expected = state
-				for (edit in edits) expected = commitTextureEditNow(expected, edit).mutation.state ?: expected
-			} catch (failure: Exception) {
-				if (failure is kotlinx.coroutines.CancellationException) throw failure
-				updateTextureWorkspace { it.copy(error = failure.message ?: tr("texture.failed")) }
-			} finally {
-				updateState { it.copy(canvasEditBusy = false, textureWorkspace = it.textureWorkspace.copy(busy = false, densityPreview = emptyMap())) }
+	}
+
+	private suspend fun runTextureJob(job: TextureJob) {
+		try {
+			// Another kind of edit (a canvas gesture, a document command) finishes first; texture edits never interleave with it.
+			_state.first { !it.workspaceEditBusy && !it.editorDraftBusy && !it.canvasEditBusy }
+			updateState { it.copy(canvasEditBusy = true) }
+			val backend = requireNotNull(workspaceBackend) { "Project workspace unavailable" }
+			for (edit in job.edits) commitTextureEditNow(backend.captureTextures().state, edit)
+		} catch (failure: Exception) {
+			if (failure is kotlinx.coroutines.CancellationException) throw failure
+			updateTextureWorkspace { it.copy(error = failure.message ?: tr("texture.failed")) }
+		} finally {
+			val left = texturesQueued.decrementAndGet()
+			// A later edit of the same tile keeps showing its own result; this job's show what landed (or fall back).
+			updateState { s ->
+				s.copy(canvasEditBusy = false, textureWorkspace = s.textureWorkspace.copy(busy = left > 0,
+					pending = s.textureWorkspace.pending.filterNot { (id, tile) -> id in job.tiles && tile.token == job.token }))
 			}
 		}
+	}
+
+	/** Waits for every queued texture edit to commit; for tools and tests. */
+	internal suspend fun awaitTextureEdits() {
+		_state.first { !it.textureWorkspace.busy }
 	}
 
 	/** One texture command on [state] as the user, through the trusted execution context; publishes its notices. */

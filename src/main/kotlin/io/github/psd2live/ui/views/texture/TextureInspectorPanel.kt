@@ -41,7 +41,9 @@ import io.github.psd2live.ui.components.IconLock
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.state.TextureDensity
+import io.github.psd2live.ui.state.PendingTile
 import io.github.psd2live.ui.state.TextureSnapshot
+import io.github.psd2live.ui.state.shownAs
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.utils.NativeFilePicker
@@ -68,7 +70,8 @@ fun TextureInspectorPanel(state: PSD2LiveState, vm: PSD2LiveViewModel, modifier:
 		}
 		val ids = remember(state.selectedLayerIds, state.selectedLayerId, snapshot) { textureSelection(state, snapshot) }
 		val layers = ids.mapNotNull(snapshot::layer)
-		val busy = texture.busy || state.isAnalyzing || state.isGenerating
+		// Texture edits queue behind each other, so a running one disables nothing here; only a whole rebuild does.
+		val busy = state.isAnalyzing || state.isGenerating
 		if (layers.isEmpty()) {
 			Text(tr("texture.inspector.none"), style = typography.body.copy(fontSize = 11.5.sp), color = colors.textMuted)
 			AtlasSummary(vm, snapshot, busy)
@@ -80,7 +83,7 @@ fun TextureInspectorPanel(state: PSD2LiveState, vm: PSD2LiveViewModel, modifier:
 			style = typography.body.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
 			color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis,
 		)
-		if (layers.size == 1) SizeChain(snapshot, primary, texture.densityPreview[primary.layerId])
+		if (layers.size == 1) SizeChain(snapshot, primary, texture.densityPreview[primary.layerId], texture.pending)
 		DensitySection(vm, snapshot, layers, busy)
 		if (layers.size == 1) {
 			PixelsSection(state, vm, snapshot, primary, busy)
@@ -95,11 +98,12 @@ fun TextureInspectorPanel(state: PSD2LiveState, vm: PSD2LiveViewModel, modifier:
  * [preview] scales the tile to the size it would get.
  */
 @Composable
-private fun SizeChain(snapshot: TextureSnapshot, layer: WorkspaceLayerTexture, preview: Float? = null) {
+private fun SizeChain(snapshot: TextureSnapshot, layer: WorkspaceLayerTexture, preview: Float? = null,
+                      pending: Map<String, PendingTile> = emptyMap()) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	val factor = preview ?: 1f
-	val tile = layer.tile?.let { it.copy(width = Math.round(it.width * factor), height = Math.round(it.height * factor),
+	val tile = layer.tile?.shownAs(pending)?.let { it.copy(width = Math.round(it.width * factor), height = Math.round(it.height * factor),
 		scaleX = it.scaleX * factor, scaleY = it.scaleY * factor) }
 	Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
 		SizeCard(tr("texture.inspector.canvas"), "%.0f × %.0f".format(layer.canvasRect.width, layer.canvasRect.height), tr("texture.inspector.units"), Modifier.weight(1f))
@@ -142,8 +146,9 @@ private fun DensitySection(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, lay
 	val typography = LocalToolTypography.current
 	CompactSectionHeader(tr("texture.inspector.density"))
 	val ids = layers.map { it.layerId }
-	val density = layers.first().override.density ?: 1f
-	val mixed = layers.any { (it.override.density ?: 1f) != density }
+	// As the atlas shows them: a queued density counts at once.
+	val density = vm.shownTextureDensity(snapshot, layers.first().layerId)
+	val mixed = layers.any { vm.shownTextureDensity(snapshot, it.layerId) != density }
 	var draft by remember(density, ids) { mutableStateOf(TextureDensity.log2(density)) }
 	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
 		CompactSlider(
@@ -152,7 +157,7 @@ private fun DensitySection(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, lay
 				draft = Math.round(it * 4f) / 4f
 				// The atlas shows every selected tile at the size the slider's value gives it, before it is committed.
 				val next = TextureDensity.snap(TextureDensity.pow2(draft))
-				vm.previewTextureDensity(layers.associate { it.layerId to next / (it.override.density ?: 1f) })
+				vm.previewTextureDensity(layers.associate { it.layerId to next / vm.shownTextureDensity(snapshot, it.layerId) })
 			},
 			onValueChangeFinished = {
 				val next = TextureDensity.snap(TextureDensity.pow2(draft))
