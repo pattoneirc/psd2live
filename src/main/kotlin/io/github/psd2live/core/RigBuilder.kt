@@ -115,7 +115,18 @@ data class BuiltRig(
 	val overrideIssues: List<GeneratedOverrideIssue> = emptyList(),
 	/** Split parts the skeleton skinned with this base rig, which their journal records place (see [PrimitiveSkins]). */
 	val primitiveSkins: PrimitiveSkins = PrimitiveSkins.None,
-)
+) {
+	/**
+	 * The puppet with v2 stubs removed and side-channel parts spliced in: what the document shows once every
+	 * version 2 `art_primitive` record ([ArtPrimitiveV2]) has placed its parts, without the journal's authored
+	 * layers. Migration builds compare it in place of [puppet]. Equal to [puppet] when [primitiveSkins] holds no
+	 * stubs - every document without v2 records.
+	 */
+	fun resolvedPuppet(): PuppetModel {
+		if (primitiveSkins.stubs.isEmpty()) return puppet
+		throw UnsupportedOperationException("Resolving v2 art primitive stubs is not implemented yet")
+	}
+}
 
 internal data class MeshData(
 	val mesh: DrawableMesh,
