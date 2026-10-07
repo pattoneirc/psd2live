@@ -20,6 +20,7 @@ import io.github.psd2live.ui.state.TextureDensity
 import io.github.psd2live.ui.state.shownTiles
 import io.github.psd2live.ui.theme.CompactToolTheme
 import io.github.psd2live.ui.theme.ToolColors
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -186,6 +187,115 @@ class AtlasRealtimeEditTest {
 			}
 		} finally {
 			AppSettings.softwareCanvas = saved
+		}
+	}
+
+	/**
+	 * The right-click menu's turns: a quarter turn of the whole selection is one session step, a reset sets them
+	 * upright again; and the page saves byte for byte as the export writes it.
+	 */
+	@Test fun menuTurnsTheSelectionAsOneStepAndSavesThePage() = kotlinx.coroutines.runBlocking<Unit> {
+		val temp = Files.createTempDirectory("atlas-menu")
+		fun png(name: String, argb: Int) = temp.resolve("$name.png").also { path ->
+			val image = BufferedImage(24, 24, BufferedImage.TYPE_INT_ARGB)
+			for (y in 0 until 24) for (x in 0 until 24) image.setRGB(x, y, argb)
+			javax.imageio.ImageIO.write(image, "png", path.toFile())
+		}
+		PSD2LiveViewModel().use { vm ->
+			DesktopWorkspace(vm, temp.resolve("store")).use { workspace ->
+				vm.attachWorkspace(workspace)
+				workspace.createArtwork(buildJsonObject {
+					put("width", JsonPrimitive(64)); put("height", JsonPrimitive(64))
+					put("layers", buildJsonArray {
+						for ((name, argb) in listOf("red" to 0xffff0000.toInt(), "blue" to 0xff0000ff.toInt())) add(buildJsonObject {
+							put("path", JsonPrimitive(png(name, argb).toString())); put("name", JsonPrimitive(name)); put("role", JsonPrimitive("objects"))
+						})
+					})
+				})
+				vm.setAtlasBudget(requireNotNull(vm.textureSnapshot()), pageSize = 256)
+				vm.awaitTextureEdits()
+				val snapshot = requireNotNull(vm.textureSnapshot())
+				val ids = snapshot.atlas.tiles.map { it.layerId }
+				assertEquals(2, ids.size)
+
+				assertTrue(vm.turnTextureTiles(snapshot, ids) { it + 90f })
+				val texture = vm.state.value.textureWorkspace
+				assertNull(texture.error)
+				assertEquals(ids.toSet(), texture.session.keys)
+				assertTrue(texture.session.values.all { it.rotation == 90f }, "every selected tile turns a quarter")
+				assertEquals(1, texture.sessionUndo.size, "one session step for the selection")
+				assertTrue(vm.turnTextureTiles(snapshot, ids) { 0f })
+				assertTrue(vm.state.value.textureWorkspace.session.values.all { it.rotation == 0f }, "reset sets them upright")
+				assertFalse(vm.turnTextureTiles(snapshot, ids) { 0f }, "nothing to reset")
+				vm.discardTextureSession()
+
+				// A density changed only in the session counts for what the menu offers.
+				vm.scaleTextureDensity(snapshot, ids.take(1), 0.5f)
+				assertEquals(0.5f, vm.shownTextureDensity(snapshot, ids.first()))
+				assertNull(snapshot.layer(ids.first())?.override?.density)
+				vm.discardTextureSession()
+
+				val file = temp.resolve("page.png").toFile()
+				vm.saveAtlasPage(snapshot, 0, file)
+				kotlinx.coroutines.withTimeout(10_000) {
+					vm.state.first { it.statusText.contains(file.name) || it.textureWorkspace.error != null }
+				}
+				assertNull(vm.state.value.textureWorkspace.error)
+				assertTrue(snapshot.pagePng(0).contentEquals(file.readBytes()), "the saved page is the export's page")
+			}
+		}
+	}
+
+	/**
+	 * "Move to page": a tile goes to the first free spot of another page, in the session, and lands there when applied;
+	 * a page with no room for it refuses and moves nothing.
+	 */
+	@Test fun menuMovesTilesToAnotherPage() = kotlinx.coroutines.runBlocking<Unit> {
+		val temp = Files.createTempDirectory("atlas-pages")
+		fun png(name: String, argb: Int) = temp.resolve("$name.png").also { path ->
+			val image = BufferedImage(200, 200, BufferedImage.TYPE_INT_ARGB)
+			for (y in 0 until 200) for (x in 0 until 200) image.setRGB(x, y, argb)
+			javax.imageio.ImageIO.write(image, "png", path.toFile())
+		}
+		PSD2LiveViewModel().use { vm ->
+			DesktopWorkspace(vm, temp.resolve("store")).use { workspace ->
+				vm.attachWorkspace(workspace)
+				workspace.createArtwork(buildJsonObject {
+					put("width", JsonPrimitive(512)); put("height", JsonPrimitive(512))
+					put("layers", buildJsonArray {
+						for ((name, argb) in listOf("red" to 0xffff0000.toInt(), "green" to 0xff00ff00.toInt(), "blue" to 0xff0000ff.toInt())) add(buildJsonObject {
+							put("path", JsonPrimitive(png(name, argb).toString())); put("name", JsonPrimitive(name)); put("role", JsonPrimitive("objects"))
+						})
+					})
+				})
+				vm.setAtlasBudget(requireNotNull(vm.textureSnapshot()), pageSize = 256, maxPages = 4)
+				vm.awaitTextureEdits()
+				vm.arrangeAtlas(requireNotNull(vm.textureSnapshot()), onlySelection = false)
+				vm.awaitTextureEdits()
+				val snapshot = requireNotNull(vm.textureSnapshot())
+				assertTrue(snapshot.atlas.pages.size > 1, "one large tile a page")
+				val tile = snapshot.atlas.tiles.first { it.page != 0 }
+				val nodes = vm.state.value.historySnapshot?.nodes?.size
+
+				assertFalse(vm.moveTextureTilesToPage(snapshot, listOf(tile.layerId), 0), "the page has no room")
+				assertNotNull(vm.state.value.textureWorkspace.error)
+				assertTrue(vm.state.value.textureWorkspace.session.isEmpty(), "nothing moved")
+
+				vm.setTextureDensity(snapshot, listOf(tile.layerId), 0.25f)
+				assertTrue(vm.moveTextureTilesToPage(snapshot, listOf(tile.layerId), 0))
+				assertNull(vm.state.value.textureWorkspace.error)
+				val moved = vm.state.value.textureWorkspace.session.getValue(tile.layerId)
+				assertEquals(0, moved.page)
+				assertFalse(vm.texturePlacementCollides(snapshot, mapOf(tile.layerId to tile.copy(page = 0, x = moved.x, y = moved.y,
+					width = moved.width, height = moved.height))), "its spot is free")
+
+				vm.applyTextureSession()
+				vm.awaitTextureEdits()
+				assertNull(vm.state.value.textureWorkspace.error)
+				assertEquals(nodes?.plus(1), vm.state.value.historySnapshot?.nodes?.size)
+				val landed = requireNotNull(vm.textureSnapshot()).tilesByLayer.getValue(tile.layerId)
+				assertEquals(Triple(0, moved.x, moved.y), Triple(landed.page, landed.x, landed.y), "landed where the session showed it")
+			}
 		}
 	}
 

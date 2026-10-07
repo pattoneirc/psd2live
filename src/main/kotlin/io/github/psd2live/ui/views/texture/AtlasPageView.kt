@@ -93,6 +93,7 @@ import io.github.psd2live.ui.state.ShortcutScope
 import io.github.psd2live.ui.state.TextureDensity
 import io.github.psd2live.ui.state.TextureSnapshot
 import io.github.psd2live.ui.state.TileDragDraft
+import io.github.psd2live.ui.state.shownAs
 import io.github.psd2live.ui.state.shownTiles
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
@@ -809,7 +810,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 				BarDivider()
 				for (info in atlas.pages) {
 					BarChip("${info.index + 1}", info.index == page, { vm.setTexturePage(info.index) },
-						tooltip = tr("texture.atlas.page", info.index + 1, info.width))
+						tooltip = tr("texture.atlas.page", info.index + 1, info.width, info.height, info.tileCount, "%.0f".format(info.occupancy * 100f)))
 				}
 			}
 		}
@@ -843,8 +844,10 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 			visible = sessionOpen || texture.sessionRedo.isNotEmpty(),
 			summary = tr("texture.session.changed", texture.session.size),
 			badge = "${texture.session.size}",
-			undo = SessionAction(tr("texture.session.undo"), vm::undoTextureSession, texture.sessionUndo.isNotEmpty(), tr("texture.session.undoHint")),
-			redo = SessionAction(tr("texture.session.redo"), vm::redoTextureSession, texture.sessionRedo.isNotEmpty(), tr("texture.session.redoHint")),
+			undo = SessionAction(tr("texture.session.undo"), vm::undoTextureSession, texture.sessionUndo.isNotEmpty(),
+				withShortcut(tr("texture.session.undoHint"), state.keymap.labelFor(ShortcutAction.UNDO))),
+			redo = SessionAction(tr("texture.session.redo"), vm::redoTextureSession, texture.sessionRedo.isNotEmpty(),
+				withShortcut(tr("texture.session.redoHint"), state.keymap.labelFor(ShortcutAction.REDO))),
 			discard = SessionAction(tr("texture.session.discard"), vm::discardTextureSession, sessionOpen, tr("texture.session.discardHint")),
 			apply = SessionAction(tr("texture.session.apply"), vm::applyTextureSession, sessionOpen && !busy, tr("texture.session.applyHint")),
 			startInset = with(density) { (arrangeBarWidth + 8.dp.roundToPx()).toDp() },
@@ -925,32 +928,69 @@ private fun statusText(snapshot: TextureSnapshot, tiles: List<WorkspaceAtlasTile
 		"  ·  " + zoom) to (snapshot.atlas.fit < 1f)
 }
 
-/** The right-click menu: the selected tiles' texture commands, or the page's packing and view commands. */
+/** [text] with the shortcut [key] that does the same, when one is bound. */
+private fun withShortcut(text: String, key: String?): String = if (key == null) text else tr("texture.session.withKey", text, key)
+
+/**
+ * The right-click menu: the selected tiles' texture commands, or the page's packing, export and view commands.
+ * While an edit session is open, a line says why the commands that commit at once wait.
+ */
 @Composable
 private fun AtlasContextMenu(
 	menu: AtlasMenu?, onDismiss: () -> Unit, state: PSD2LiveState, vm: PSD2LiveViewModel, snapshot: TextureSnapshot,
 	selection: List<String>, busy: Boolean, onFrame: () -> Unit, onReset: () -> Unit,
 ) {
 	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
 	val frameKey = state.keymap.labelFor(ShortcutAction.FRAME_VIEW)
 	val resetKey = state.keymap.labelFor(ShortcutAction.RESET_CAMERA)
+	val texture = state.textureWorkspace
+	// Commands that commit at once wait for an open edit session to be applied or discarded.
+	val sessionOpen = texture.session.isNotEmpty()
 	TreeContextMenu(menu != null, onDismiss, clickOffset = menu?.at ?: Offset.Zero, frosted = true) {
 		fun run(action: () -> Unit) { onDismiss(); action() }
+		if (sessionOpen) {
+			Text(tr("texture.session.pending"), style = typography.caption.copy(fontSize = 10.sp), color = colors.warning,
+				modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
+		}
 		if (menu?.layerId != null && selection.isNotEmpty()) {
 			val layers = selection.mapNotNull(snapshot::layer)
 			val single = layers.singleOrNull()
-			CompactMenuSection(if (single != null) single.name else tr("texture.inspector.multiple", layers.size))
+			val shownTile = single?.tile?.shownAs(texture.shown)
+			CompactMenuSection(when {
+				single == null -> tr("texture.inspector.multiple", layers.size)
+				shownTile != null -> "${single.name} · ${shownTile.width} × ${shownTile.height}"
+				else -> single.name
+			})
+			// As the atlas shows them: the session's densities count.
+			val densities = layers.map { vm.shownTextureDensity(snapshot, it.layerId) }
 			CompactMenuItem(tr("texture.menu.density2x"), onClick = { run { vm.scaleTextureDensity(snapshot, selection, 2f) } },
-				enabled = !busy && layers.any { (it.override.density ?: 1f) < TextureDensity.MAX })
+				enabled = !busy && densities.any { it < TextureDensity.MAX })
 			CompactMenuItem(tr("texture.menu.densityHalf"), onClick = { run { vm.scaleTextureDensity(snapshot, selection, 0.5f) } },
-				enabled = !busy && layers.any { (it.override.density ?: 1f) > TextureDensity.MIN })
+				enabled = !busy && densities.any { it > TextureDensity.MIN })
 			CompactMenuItem(tr("texture.inspector.resetDensity"), onClick = { run { vm.setTextureDensity(snapshot, selection, null) } },
-				enabled = !busy && layers.any { it.override.density != null })
-			val locked = layers.all { it.override.lock }
-			// Commands that commit at once wait for an open edit session to be applied or discarded.
-			val sessionOpen = state.textureWorkspace.session.isNotEmpty()
-			CompactMenuItem(tr("texture.inspector.lock"), onClick = { run { vm.setTextureLock(snapshot, selection, !locked) } },
-				enabled = !busy && !sessionOpen, active = locked, icon = { IconLock(locked = locked, tint = if (locked) colors.accent else colors.textMuted) })
+				enabled = !busy && densities.any { it != 1f })
+			val turns = layers.mapNotNull { it.tile?.shownAs(texture.shown)?.rotation }
+			CompactMenuItem(tr("texture.menu.rotate90"), onClick = { run { vm.turnTextureTiles(snapshot, selection) { it + 90f } } },
+				enabled = !busy && turns.isNotEmpty())
+			if (turns.any { it != 0f }) {
+				CompactMenuItem(tr("texture.menu.resetRotation"), onClick = { run { vm.turnTextureTiles(snapshot, selection) { 0f } } }, enabled = !busy)
+			}
+			// With several pages: each page the selection is not wholly on, its tiles going to the first free spots there.
+			if (snapshot.atlas.pages.size > 1) {
+				val onPages = layers.mapNotNull { it.tile?.shownAs(texture.shown)?.page }
+				for (info in snapshot.atlas.pages) {
+					if (onPages.isEmpty() || onPages.all { it == info.index }) continue
+					CompactMenuItem(tr("texture.menu.moveToPage", info.index + 1), onClick = { run {
+						if (vm.moveTextureTilesToPage(snapshot, selection, info.index)) vm.setTexturePage(info.index)
+					} }, enabled = !busy)
+				}
+			}
+			val locked = layers.count { it.override.lock }
+			val allLocked = locked == layers.size
+			CompactMenuItem(lockLabel(locked, layers.size), onClick = { run { vm.setTextureLock(snapshot, selection, !allLocked) } },
+				enabled = !busy && !sessionOpen, active = allLocked,
+				icon = { IconLock(locked = locked > 0, tint = if (locked > 0) colors.accent else colors.textMuted) })
 			CompactMenuDivider()
 			CompactMenuItem(tr("texture.menu.arrangeSelection"), onClick = { run { vm.arrangeAtlas(snapshot, selection, onlySelection = true) } },
 				enabled = !busy && !sessionOpen)
@@ -961,12 +1001,17 @@ private fun AtlasContextMenu(
 			}
 			CompactMenuItem(tr("texture.menu.frame"), onClick = { run(onFrame) }, trailingText = frameKey)
 		} else {
+			val page = texture.selectedPage.coerceIn(0, snapshot.atlas.pages.lastIndex)
 			CompactMenuSection(tr("texture.menu.page"))
-			CompactMenuItem(tr("texture.atlas.arrange"), onClick = { run { vm.arrangeAtlas(snapshot, onlySelection = false) } },
-				enabled = !busy && state.textureWorkspace.session.isEmpty())
+			CompactMenuItem(tr("texture.menu.arrangeAll"), onClick = { run { vm.arrangeAtlas(snapshot, onlySelection = false) } },
+				enabled = !busy && !sessionOpen)
+			CompactMenuItem(tr("texture.menu.savePage"), onClick = { run {
+				NativeFilePicker.chooseSavePngFile(title = tr("texture.menu.savePage"), defaultName = "atlas_page${page + 1}.png")
+					?.let { vm.saveAtlasPage(snapshot, page, java.io.File(it)) }
+			} })
 			CompactMenuDivider()
-			CompactMenuItem(tr("texture.menu.selectAll"), onClick = { run { vm.selectLayers(snapshot.tiles(state.textureWorkspace.selectedPage
-				.coerceIn(0, snapshot.atlas.pages.lastIndex)).map { it.layerId }) } }, trailingText = state.keymap.labelFor(ShortcutAction.SELECT_ALL))
+			CompactMenuItem(tr("texture.menu.selectAll"), onClick = { run { vm.selectLayers(snapshot.tiles(page).map { it.layerId }) } },
+				trailingText = state.keymap.labelFor(ShortcutAction.SELECT_ALL))
 			CompactMenuItem(tr("texture.menu.fitPage"), onClick = { run(onReset) }, trailingText = resetKey)
 		}
 	}

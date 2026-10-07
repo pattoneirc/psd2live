@@ -4276,11 +4276,59 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	/** Turns [layerId]'s tile to [degrees] about its centre, unless its meshes would then meet another's. */
-	fun rotateTextureTile(snapshot: TextureSnapshot, layerId: String, degrees: Float): Boolean {
-		val tile = snapshot.tilesByLayer[layerId]?.shownAs(_state.value.textureWorkspace.shown) ?: return false
-		val turned = io.github.psd2live.project.normalizedRotation(degrees)
-		if (turned == tile.rotation) return false
-		return placeTextureTiles(snapshot, mapOf(layerId to tile.copy(rotation = turned)), "texture.rotate.collides")
+	fun rotateTextureTile(snapshot: TextureSnapshot, layerId: String, degrees: Float): Boolean =
+		turnTextureTiles(snapshot, listOf(layerId)) { degrees }
+
+	/**
+	 * Turns each of [layerIds]' tiles to [turn] of the turn the atlas shows for it, about its centre, as one session
+	 * step; refused when one would then meet another's meshes or leave the page.
+	 */
+	fun turnTextureTiles(snapshot: TextureSnapshot, layerIds: List<String>, turn: (Float) -> Float): Boolean {
+		val overlay = _state.value.textureWorkspace.shown
+		val placed = layerIds.mapNotNull { id ->
+			val tile = snapshot.tilesByLayer[id]?.shownAs(overlay) ?: return@mapNotNull null
+			val turned = io.github.psd2live.project.normalizedRotation(turn(tile.rotation))
+			if (turned == tile.rotation) null else id to tile.copy(rotation = turned)
+		}.toMap()
+		return placeTextureTiles(snapshot, placed, "texture.rotate.collides")
+	}
+
+	/**
+	 * Moves [layerIds]' tiles to [page], each at the first free spot from the top left that keeps it off the other
+	 * tiles' meshes and inside the page, at its size and turn, as one session step. Tiles already on [page] stay.
+	 * Refused, with nothing moved, when one finds no spot.
+	 */
+	fun moveTextureTilesToPage(snapshot: TextureSnapshot, layerIds: List<String>, page: Int): Boolean {
+		if (page !in snapshot.atlas.pages.indices) return false
+		val overlay = _state.value.textureWorkspace.shown
+		val moving = layerIds.mapNotNull { snapshot.tilesByLayer[it]?.shownAs(overlay) }.filter { it.page != page }
+		if (moving.isEmpty()) return false
+		val size = snapshot.atlas.pages[page]
+		val padding = snapshot.atlas.budget.padding
+		val standing = snapshot.shownTiles(page, overlay).filter { tile -> moving.none { it.layerId == tile.layerId } }.toMutableList()
+		fun box(tile: io.github.psd2live.application.WorkspaceAtlasTile) =
+			io.github.psd2live.core.TileTurn.bounds(tile.x.toFloat(), tile.y.toFloat(), tile.width.toFloat(), tile.height.toFloat(), tile.rotation)
+		val placed = LinkedHashMap<String, io.github.psd2live.application.WorkspaceAtlasTile>()
+		// The largest first, as a packer would; the others fill around them.
+		for (tile in moving.sortedByDescending { it.width.toLong() * it.height }) {
+			// Where the tile's turned box starts relative to its upright corner.
+			val own = box(tile.copy(x = 0, y = 0))
+			// Spots against the page's top left edges and right of or below each standing tile's turned box.
+			val edges = standing.map(::box)
+			val xs = (listOf(0f) + edges.map { it[2] + padding }).map { kotlin.math.ceil(it - own[0]).toInt() }.distinct().sorted()
+			val ys = (listOf(0f) + edges.map { it[3] + padding }).map { kotlin.math.ceil(it - own[1]).toInt() }.distinct().sorted()
+			val spot = ys.asSequence().flatMap { y -> xs.asSequence().map { x -> x to y } }
+				.filter { (x, y) -> x + own[2] <= size.width && y + own[3] <= size.height }
+				.firstOrNull { (x, y) -> !snapshot.collides(tile.copy(page = page, x = x, y = y), x, y, standing) }
+			if (spot == null) {
+				updateTextureWorkspace { it.copy(error = tr("texture.page.full", page + 1)) }
+				return false
+			}
+			val moved = tile.copy(page = page, x = spot.first, y = spot.second)
+			placed[tile.layerId] = moved
+			standing += moved
+		}
+		return placeTextureTiles(snapshot, placed, "texture.drag.collides")
 	}
 
 	/**
@@ -4506,6 +4554,19 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 		updateTextureWorkspace { it.copy(notices = result.notices, revision = it.revision + 1) }
 		return result
+	}
+
+	/** Writes [page] of the committed atlas to [file] as the export writes it; the status bar tells how it went. */
+	fun saveAtlasPage(snapshot: TextureSnapshot, page: Int, file: java.io.File) {
+		scope.launch {
+			try {
+				withContext(Dispatchers.IO) { file.writeBytes(snapshot.pagePng(page)) }
+				updateState { it.copy(statusText = tr("texture.menu.savePage.done", file.name)) }
+			} catch (failure: Exception) {
+				if (failure is kotlinx.coroutines.CancellationException) throw failure
+				updateTextureWorkspace { it.copy(error = tr("texture.menu.savePage.failed", failure.message ?: file.name)) }
+			}
+		}
 	}
 
 	fun openTextureUpscaleDialog() {

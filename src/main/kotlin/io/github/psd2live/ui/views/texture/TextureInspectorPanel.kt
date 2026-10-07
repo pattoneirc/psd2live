@@ -27,6 +27,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.psd2live.application.WorkspaceAtlasTile
 import io.github.psd2live.application.WorkspaceImageFit
 import io.github.psd2live.application.WorkspaceLayerTexture
 import io.github.psd2live.i18n.tr
@@ -74,7 +75,7 @@ fun TextureInspectorPanel(state: PSD2LiveState, vm: PSD2LiveViewModel, modifier:
 		val busy = state.isAnalyzing || state.isGenerating
 		if (layers.isEmpty()) {
 			Text(tr("texture.inspector.none"), style = typography.body.copy(fontSize = 11.5.sp), color = colors.textMuted)
-			AtlasSummary(vm, snapshot, busy)
+			AtlasSummary(vm, snapshot, busy, sessionOpen = texture.session.isNotEmpty())
 			return@Column
 		}
 		val primary = layers.first()
@@ -87,6 +88,9 @@ fun TextureInspectorPanel(state: PSD2LiveState, vm: PSD2LiveViewModel, modifier:
 		// Density goes to the edit session; commands that commit at once wait for the session to be applied or discarded.
 		val sessionOpen = texture.session.isNotEmpty()
 		DensitySection(vm, snapshot, layers, busy, locking = !busy && !sessionOpen)
+		if (layers.size == 1) primary.tile?.let { RotationRow(vm, snapshot, it.shownAs(texture.shown), busy) }
+		// Why the lock and the pixel commands are greyed out.
+		if (sessionOpen) Text(tr("texture.session.pending"), style = typography.caption.copy(fontSize = 10.sp), color = colors.warning)
 		if (layers.size == 1) {
 			PixelsSection(state, vm, snapshot, primary, busy || sessionOpen)
 			PreciseSection(vm, snapshot, primary, busy || sessionOpen)
@@ -179,13 +183,26 @@ private fun DensitySection(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, lay
 		CompactButton("½×", onClick = { vm.scaleTextureDensity(snapshot, ids, 0.5f) }, enabled = !busy, height = 22.dp)
 		CompactButton("2×", onClick = { vm.scaleTextureDensity(snapshot, ids, 2f) }, enabled = !busy, height = 22.dp)
 		CompactButton(tr("texture.inspector.resetDensity"), onClick = { vm.setTextureDensity(snapshot, ids, null) },
-			enabled = !busy && layers.any { it.override.density != null }, height = 22.dp)
-		val locked = layers.all { it.override.lock }
-		CompactToggleChip(tr("texture.inspector.lock"), locked, { vm.setTextureLock(snapshot, ids, !locked) }, enabled = locking,
-			leadingIcon = { IconLock(locked = locked, tint = if (locked) colors.accent else colors.textMuted) }, showCheckWhenSelected = false,
+			enabled = !busy && (mixed || density != 1f), height = 22.dp)
+		val locked = layers.count { it.override.lock }
+		val allLocked = locked == layers.size
+		CompactToggleChip(lockLabel(locked, layers.size), allLocked, { vm.setTextureLock(snapshot, ids, !allLocked) }, enabled = locking,
+			leadingIcon = { IconLock(locked = locked > 0, tint = if (locked > 0) colors.accent else colors.textMuted) }, showCheckWhenSelected = false,
 			tooltip = tr("texture.inspector.lockHint"))
 	}
 	Text(tr("texture.inspector.pageHint"), style = typography.caption.copy(fontSize = 10.sp), color = colors.textMuted)
+}
+
+/** The tile's turn on the page as the atlas shows it: typed, or back to upright; both go to the edit session. */
+@Composable
+private fun RotationRow(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, tile: WorkspaceAtlasTile, busy: Boolean) {
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+		FieldLabel(tr("texture.inspector.rotation"), 64.dp)
+		CommitNumberField(tile.rotation.toDouble(), { vm.rotateTextureTile(snapshot, tile.layerId, it.toFloat()) }, Modifier.width(90.dp),
+			min = -180.0, max = 180.0, step = 15.0, decimals = 1, unit = "°", enabled = !busy)
+		CompactButton(tr("texture.inspector.resetRotation"), onClick = { vm.rotateTextureTile(snapshot, tile.layerId, 0f) },
+			enabled = !busy && tile.rotation != 0f, height = 22.dp)
+	}
 }
 
 /** The layer's pixels: replace them at any resolution, or upscale them. */
@@ -236,17 +253,36 @@ private fun PreciseSection(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, lay
 	Text(tr("texture.inspector.canvasHint"), style = typography.caption.copy(fontSize = 10.sp), color = colors.textMuted)
 }
 
-/** With nothing selected: the atlas at a glance and its budget. */
+/**
+ * With nothing selected: the atlas at a glance - each page's fill, the space left, what the pages cost in video
+ * memory - and its budget, which waits for an open edit session like the page's budget menu.
+ */
 @Composable
-private fun AtlasSummary(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, busy: Boolean) {
+private fun AtlasSummary(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, busy: Boolean, sessionOpen: Boolean) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
 	val atlas = snapshot.atlas
 	val shown = atlas.pages.indices.flatMap(snapshot::tiles)
 	CompactSectionHeader(tr("texture.inspector.atlas"))
 	ValueRow(tr("texture.inspector.pages"), "${atlas.pages.size} / ${atlas.budget.maxPages}  ·  ${atlas.budget.pageSize} px")
+	for (page in atlas.pages) {
+		ValueRow(tr("texture.atlas.pageShort", page.index + 1),
+			tr("texture.inspector.pageValue", page.width, page.height, page.tileCount, "%.0f".format(page.occupancy * 100f)))
+	}
 	ValueRow(tr("texture.inspector.tiles"), shown.size.toString())
-	ValueRow(tr("texture.inspector.fitLabel"), "%.0f%%".format(atlas.fit * 100f))
+	val area = atlas.pages.sumOf { it.width.toLong() * it.height }
+	if (area > 0L) {
+		val free = atlas.pages.sumOf { (1.0 - it.occupancy) * it.width.toLong() * it.height } / area
+		ValueRow(tr("texture.inspector.free"), "%.0f%%".format(free * 100.0))
+	}
+	// RGBA, one byte a channel, as the runtime uploads the pages.
+	val memory = "%.1f MB".format(area * 4.0 / (1024.0 * 1024.0))
+	ValueRow(tr("texture.inspector.memory"), if (snapshot.upscaled) memory + tr("texture.inspector.upscaled") else memory)
 	ValueRow(tr("texture.inspector.locked"), shown.count { it.locked }.toString())
-	ValueRow(tr("texture.inspector.arrangement"), tr(if (atlas.auto) "texture.inspector.arrangement.auto" else "texture.inspector.arrangement.kept"))
+	ValueRow(tr("texture.inspector.fitLabel"), "%.0f%%".format(atlas.fit * 100f))
+	Text(tr("texture.inspector.fitHint"), style = typography.caption.copy(fontSize = 10.sp),
+		color = if (atlas.fit < 1f) colors.warning else colors.textMuted)
 	CompactSectionHeader(tr("texture.atlas.budget"))
-	AtlasBudgetControls(vm, snapshot, !busy)
+	AtlasBudgetControls(vm, snapshot, !busy && !sessionOpen)
+	if (sessionOpen) Text(tr("texture.session.pending"), style = typography.caption.copy(fontSize = 10.sp), color = colors.warning)
 }

@@ -274,6 +274,50 @@ object NativeFilePicker {
 	}
 
 	/**
+	 * Opens the native OS file picker for saving a PNG image; the name gets ".png" when it lacks it.
+	 */
+	fun chooseSavePngFile(window: Window? = null, title: String, defaultName: String? = null): String? {
+		if (!isPicking.compareAndSet(false, true)) {
+			return null
+		}
+		try {
+			val defaultFileName = if (defaultName.isNullOrBlank()) "image.png" else if (defaultName.endsWith(".png", ignoreCase = true)) defaultName else "$defaultName.png"
+			fun named(name: String) = if (name.endsWith(".png", ignoreCase = true)) name else "$name.png"
+
+			try {
+				val dialog = createFileDialog(window, title, FileDialog.SAVE).apply {
+					setFilenameFilter { _, name -> name.endsWith(".png", ignoreCase = true) }
+					file = defaultFileName
+					isVisible = true
+				}
+				val dir = dialog.directory
+				val selectedFile = dialog.file
+				if (!dir.isNullOrBlank() && !selectedFile.isNullOrBlank()) {
+					return File(dir, named(selectedFile)).toPath().toAbsolutePath().normalize().toString()
+				}
+				// Dialog completed normally and user cancelled
+				return null
+			} catch (_: Throwable) {}
+
+			try {
+				UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName())
+				val chooser = JFileChooser().apply {
+					dialogTitle = title
+					fileFilter = javax.swing.filechooser.FileNameExtensionFilter("PNG (*.png)", "png")
+					selectedFile = File(defaultFileName)
+				}
+				if (chooser.showSaveDialog(window) == JFileChooser.APPROVE_OPTION) {
+					val f = chooser.selectedFile
+					return File(f.parentFile ?: File("."), named(f.name)).toPath().toAbsolutePath().normalize().toString()
+				}
+			} catch (_: Throwable) {}
+			return null
+		} finally {
+			isPicking.set(false)
+		}
+	}
+
+	/**
 	 * Opens the modern native OS directory picker.
 	 */
 	fun chooseDirectory(window: Window? = null, initialPath: String? = null, title: String? = null): String? {

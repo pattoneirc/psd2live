@@ -94,8 +94,8 @@ internal fun IconTileOutlines(tint: Color, modifier: Modifier = Modifier) {
 }
 
 /**
- * The atlas budget - page size, page count and padding - as one block. The atlas view's settings menu, the
- * texture panel without a selection and the export dialog all show this block, so the budget has one editor.
+ * The atlas budget - page size, page count and padding - as one block. The atlas view's budget menu and the
+ * texture panel without a selection both show this block, so the budget has one editor.
  */
 @Composable
 internal fun AtlasBudgetControls(vm: PSD2LiveViewModel, snapshot: TextureSnapshot, enabled: Boolean, labelWidth: Dp = 92.dp) {
@@ -181,6 +181,13 @@ internal fun CommitNumberField(
 
 /** "1.00×", or "0.25×", for a density multiplier. */
 internal fun multiplier(value: Float): String = TextureDensity.format(value) + "×"
+
+/** The lock command for [locked] of [total] layers: lock them, unlock them all, or lock the rest. */
+internal fun lockLabel(locked: Int, total: Int): String = when (locked) {
+	0 -> tr("texture.inspector.lock")
+	total -> tr("texture.inspector.unlock")
+	else -> tr("texture.inspector.lockMixed", locked, total)
+}
 
 /** A small coloured box, as the heatmap draws a tile. */
 @Composable
