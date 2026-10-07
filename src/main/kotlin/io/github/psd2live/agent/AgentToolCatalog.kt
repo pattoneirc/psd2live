@@ -30,17 +30,6 @@ internal const val WAIT_FIELD = "wait_ms"
 internal const val MAX_WAIT_MS = 30_000L
 internal const val DEFAULT_CORE_WAIT_MS = 20_000L
 
-/** The core profile's tools: discovery, observation, the atomic batch and the project lifecycle. */
-internal val CORE_OPERATIONS: Set<String> = linkedSetOf(
-    "workspace_inspect", "workspace_list_operations", "workspace_get_operation",
-    "workspace_apply_edits", "workspace_preview_edits",
-    "view_render_model", "view_render_poses", "view_compare_history",
-    "rig_deform", "keyform_apply", "parameter_create",
-    "history_list", "history_checkout",
-    "project_open", "project_import_psd", "project_save", "project_save_as", "project_export_model",
-    "job_wait", "job_get", "job_cancel",
-)
-
 private val CONTEXT_FIELDS = setOf("request_id", "project_id")
 
 internal class AgentTool(
@@ -59,10 +48,14 @@ internal class AgentToolCatalog(
     val profile: AgentToolProfile,
 ) {
     val tools: Map<String, AgentTool> = buildMap {
-        registry.definitions().filter { profile == AgentToolProfile.FULL || it.id in CORE_OPERATIONS }.forEach { operation ->
+        val definitions = registry.definitions()
+        definitions.filter { profile == AgentToolProfile.FULL || it.id in CORE_OPERATIONS }.forEach { operation ->
             put(operation.id, operationTool(operation))
         }
-        if (profile == AgentToolProfile.CORE) put(CALL_TOOL, callTool())
+        if (profile == AgentToolProfile.CORE) {
+            AGENT_TOOL_FAMILIES.forEach { family -> put(family.name, familyTool(family, family.members(definitions))) }
+            put(CALL_TOOL, callTool())
+        }
     }
 
     private fun operationTool(operation: WorkspaceOperationDefinition) = AgentTool(
@@ -104,16 +97,40 @@ internal class AgentToolCatalog(
         // Every call carries an explicit or derived request ID, so a repeated call recovers the first outcome.
         annotations = ToolAnnotations(readOnlyHint = false, destructiveHint = true, idempotentHint = true, openWorldHint = false),
     ) { arguments ->
-        val id = (arguments?.get("operation") as? JsonPrimitive)?.takeIf { it.isString }?.content
-        val operation = id?.let { runCatching { registry.definition(it) }.getOrNull() }
-        if (operation == null) {
-            val failure = WorkspaceValidationException("arguments.operation",
-                if (id == null) "expected string" else "unknown operation $id; use workspace_list_operations")
-            val data = buildJsonObject { put("ok", false); put("operation", CALL_TOOL); put("error", WorkspaceFailure.from(failure).toJson()) }
-            CallToolResult(content = listOf(TextContent(data.toString())), structuredContent = data, isError = true)
-        } else run(operation) {
+        dispatch(CALL_TOOL, "operation", arguments) { id ->
+            runCatching { registry.definition(id) }.getOrNull()
+                ?: throw WorkspaceValidationException("arguments.operation", "unknown operation $id; use workspace_list_operations")
+        }
+    }
+
+    private fun familyTool(family: AgentToolFamily, members: List<WorkspaceOperationDefinition>): AgentTool {
+        require(members.isNotEmpty()) { "Tool family ${family.name} has no operations" }
+        val byOp = members.associateBy { family.op(it.id) }
+        return AgentTool(family.name, family.description(members), family.inputSchema(members), outputSchema = null,
+            // Members are queries or carry an explicit or derived request ID, so a repeated call recovers the first outcome.
+            annotations = ToolAnnotations(readOnlyHint = members.all { it.kind == WorkspaceOperationKind.QUERY },
+                destructiveHint = members.any { it.destructive }, idempotentHint = true, openWorldHint = false),
+        ) { arguments ->
+            dispatch(family.name, OP_FIELD, arguments) { op ->
+                byOp[op] ?: throw WorkspaceValidationException("arguments.$OP_FIELD", "expected one of ${byOp.keys}")
+            }
+        }
+    }
+
+    /** Runs the operation that [selector] names, validating the request against that operation's exact schema. */
+    private suspend fun dispatch(tool: String, selector: String, arguments: JsonObject?,
+                                 resolve: (String) -> WorkspaceOperationDefinition): CallToolResult {
+        val operation = try {
+            val name = (arguments?.get(selector) as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw WorkspaceValidationException("arguments.$selector", "expected string")
+            resolve(name)
+        } catch (failure: WorkspaceValidationException) {
+            val data = buildJsonObject { put("ok", false); put("operation", tool); put("error", WorkspaceFailure.from(failure).toJson()) }
+            return CallToolResult(content = listOf(TextContent(data.toString())), structuredContent = data, isError = true)
+        }
+        return run(operation) {
             val envelope = requireNotNull(arguments)
-            val unknown = envelope.keys - setOf("operation", "request", WAIT_FIELD)
+            val unknown = envelope.keys - setOf(selector, "request", WAIT_FIELD)
             if (unknown.isNotEmpty()) throw WorkspaceValidationException("arguments.${unknown.first()}", "unknown field")
             val wait = waitOf(operation, envelope)
             val request = envelope["request"] as? JsonObject ?: throw WorkspaceValidationException("arguments.request", "expected object")
@@ -214,7 +231,7 @@ internal class AgentToolCatalog(
 
 private val RETRYABLE_JOB_STATUS = setOf("failed", "cancelled")
 
-private fun waitSchema() = buildJsonObject {
+internal fun waitSchema() = buildJsonObject {
     put("type", "integer"); put("minimum", 0); put("maximum", MAX_WAIT_MS)
     put("description", "Background operations only: wait this long for the job to finish (default $DEFAULT_CORE_WAIT_MS). " +
         "A finished job returns its result; otherwise pass the returned id to job_wait.")
@@ -240,7 +257,7 @@ internal fun WorkspaceOperationDefinition.compactEnvelope(): JsonObject {
     }))
 }
 
-private fun compactRequest(schema: JsonObject): JsonObject {
+internal fun compactRequest(schema: JsonObject): JsonObject {
     val next = schema.toMutableMap()
     schema["required"]?.jsonArray?.let { required -> next["required"] = JsonArray(required.filter { it.jsonPrimitive.content !in CONTEXT_FIELDS }) }
     schema["oneOf"]?.jsonArray?.let { branches -> next["oneOf"] = JsonArray(branches.map { compactRequest(it.jsonObject) }) }

@@ -159,7 +159,7 @@ fun AgentMcpDialog(
 			FieldLabel(tr("dialog.agent.tools"))
 			Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
 				ProfileOption(profile == AgentToolProfile.CORE, tr("dialog.agent.profile.core"),
-					tr("dialog.agent.profile.coreDesc", (CORE_TOOL_COUNT).toString()), !applying) { profile = AgentToolProfile.CORE }
+					tr("dialog.agent.profile.coreDesc", CORE_TOOL_COUNT.toString()), !applying) { profile = AgentToolProfile.CORE }
 				ProfileOption(profile == AgentToolProfile.FULL, tr("dialog.agent.profile.full"),
 					tr("dialog.agent.profile.fullDesc"), !applying) { profile = AgentToolProfile.FULL }
 			}
@@ -171,9 +171,6 @@ fun AgentMcpDialog(
 		}
 	}
 }
-
-/** The core tools plus workspace_call. */
-private val CORE_TOOL_COUNT = CORE_OPERATIONS.size + 1
 
 @Composable
 private fun StatusChip(status: AgentMcpStatus) {

@@ -20,7 +20,10 @@
 
 工具集只决定 `tools/list` 发布哪些工具，所有操作在两种工具集下都能调用，执行与校验相同。
 
-- **精简（默认）**：发布 21 项常用操作和 `workspace_call`（共 22 个工具，输入 schema 与说明约 3.4 万字符；完整工具集约 45 万字符，另有约 275 万字符的输出 schema）。包括 `workspace_inspect`、`workspace_list_operations`、`workspace_get_operation`、`workspace_apply_edits`、`workspace_preview_edits`、`view_render_model/poses`、`view_compare_history`、`rig_deform`、`keyform_apply`、`parameter_create`、`history_list/checkout`、`project_open/import_psd/save/save_as/export_model` 与 `job_wait/get/cancel`。其他操作经 `workspace_call` 调用：`{"operation":"motion_set_key","request":{...},"wait_ms":20000}`，`request` 按该操作的完整 schema 校验。
+- **精简（默认）**：21 个工具，直接覆盖 94 项操作（输入 schema 与说明约 5.8 万字符；完整工具集约 45 万字符，另有约 275 万字符的输出 schema）。
+  - 单项工具：`workspace_inspect`、`workspace_list_operations`、`workspace_get_operation`、`workspace_apply_edits`、`workspace_preview_edits`、`rig_deform`、`keyform_apply`。
+  - 族工具：`view`、`parameter`、`motion`、`skeleton`、`path`、`physics`、`simulation`、`swing`、`source_paint`、`snapshot`、`history`、`project`、`job`。调用 `{"op":"set_key","request":{...},"wait_ms":20000}` 执行 `<族>_<op>`（此例为 `motion_set_key`），结果的 `operation` 为该操作 ID，`request` 按该操作的完整 schema 校验。成员取注册表中带该前缀的全部操作，私有草稿、试听与实时预览会话（`skeleton_draft_*`、`physics_audition*`、`*_preview*`）、历史注释和全局物理预设库除外。族工具发布各成员字段的扁平并集（不含 `oneOf`、`const`、`$ref`，形状因成员而异的字段只给说明），各 op 的必填字段列在工具说明中。
+  - 其他操作经 `workspace_call` 调用：`{"operation":"layer_classify","request":{...}}`。操作 ID 同时是 `workspace_apply_edits` 成员名。
   - 不发布 `outputSchema`（结果仍以 `structuredContent` 返回，契约见 `workspace_get_operation`）；原子批量的 `edits` 成员只发布操作名枚举与 `request` 对象，成员字段执行时按单项 schema 严格校验。
   - `request_id` 与 `project_id` 可省略。`project_id` 取当前加载的工程；`state` 仍为必填，属于其他加载的 `state` 照常报 `state_conflict`。`request_id` 由操作与参数（含 `state`）派生，相同参数的重试取回原结果；上次相同调用已失败（含任务 `failed/cancelled`）时，再次调用作为新尝试执行。
   - 后台操作接受 `wait_ms`（0–30000，默认 20000）：任务在时限内结束则直接返回终态与结果（与 `job_wait` 相同结构），否则返回运行中的任务，继续用 `job_wait`。`wait_ms: 0` 立即返回任务句柄。
