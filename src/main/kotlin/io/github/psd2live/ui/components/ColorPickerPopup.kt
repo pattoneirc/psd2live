@@ -152,6 +152,7 @@ internal fun Color.toHex(): String {
  * @param Function onColorChanged    Receives the picked colour, with the alpha channel restored.
  * @param Dp popupOffset             Distance from the chip's top edge to the popup, which is what
  *                                   clears the chip whatever size the caller gave it.
+ * @param String? paintTitle         When set, the chip opens Photoshop's picker under this title, for paint colours.
  */
 @Composable
 fun PaintColorChip(
@@ -161,6 +162,7 @@ fun PaintColorChip(
     popupOffset: Dp = 30.dp,
     shape: Shape = RoundedCornerShape(4.dp),
     border: BorderStroke = BorderStroke(1.dp, LocalToolColors.current.border),
+    paintTitle: String? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val density = LocalDensity.current
@@ -181,7 +183,12 @@ fun PaintColorChip(
                 onDismissRequest = { expanded = false },
                 properties = PopupProperties(focusable = true),
             ) {
-                ColorPickerPopupContent(
+                if (paintTitle != null) PsColorPickerPopupContent(
+                    initial = color,
+                    onColorChanged = onColorChanged,
+                    onDismiss = { expanded = false },
+                    title = paintTitle,
+                ) else ColorPickerPopupContent(
                     initialColor = color.toArgb() and 0xFFFFFF,
                     sampledColor = null,
                     onColorChanged = { rgb -> onColorChanged(Color(0xFF000000L or rgb.toLong())) },
@@ -194,7 +201,8 @@ fun PaintColorChip(
 
 /**
  * Photoshop-style foreground / background swatch: overlapping squares (FG top-left in front,
- * BG bottom-right behind) with a tiny swap control in the upper-right corner.
+ * BG bottom-right behind) with a tiny swap control in the upper-right corner and, given [onReset],
+ * the default-colours control in the lower-left one. Each square opens Photoshop's picker.
  *
  * @param Dp squareSize   Edge length of each colour square; overall footprint grows slightly for the swap hit target.
  */
@@ -207,6 +215,7 @@ fun PaintFgBgSwatch(
     onSwap: () -> Unit,
     modifier: Modifier = Modifier,
     squareSize: Dp = 18.dp,
+    onReset: (() -> Unit)? = null,
 ) {
     val colors = LocalToolColors.current
     val swapHit = (squareSize * 0.48f).coerceIn(9.dp, 12.dp)
@@ -227,6 +236,7 @@ fun PaintFgBgSwatch(
             popupOffset = squareSize + 4.dp,
             shape = shape,
             border = thin,
+            paintTitle = tr("editor.paint.editBackground"),
         )
         PaintColorChip(
             color = foreground,
@@ -237,6 +247,7 @@ fun PaintFgBgSwatch(
             popupOffset = squareSize + 4.dp,
             shape = shape,
             border = thinAccent,
+            paintTitle = tr("editor.paint.editForeground"),
         )
         Box(
             modifier = Modifier
@@ -252,6 +263,33 @@ fun PaintFgBgSwatch(
                 tint = colors.textMuted,
             )
         }
+        if (onReset != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .size(swapHit)
+                    .clip(RoundedCornerShape(2.dp))
+                    .clickable(onClick = onReset)
+                    .pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR))),
+                contentAlignment = Alignment.Center,
+            ) {
+                IconPaintDefaultColors(Modifier.size(swapHit * 0.75f))
+            }
+        }
+    }
+}
+
+/** Photoshop's default-colours control: a small black square over a small white one. */
+@Composable
+fun IconPaintDefaultColors(modifier: Modifier = Modifier.size(10.dp)) {
+    val border = LocalToolColors.current.textMuted
+    Canvas(modifier = modifier) {
+        val cell = size.width * 0.58f
+        val back = Offset(size.width - cell, size.height - cell)
+        drawRect(Color.White, back, androidx.compose.ui.geometry.Size(cell, cell))
+        drawRect(border, back, androidx.compose.ui.geometry.Size(cell, cell), style = Stroke(0.8f))
+        drawRect(Color.Black, Offset.Zero, androidx.compose.ui.geometry.Size(cell, cell))
+        drawRect(border, Offset.Zero, androidx.compose.ui.geometry.Size(cell, cell), style = Stroke(0.8f))
     }
 }
 

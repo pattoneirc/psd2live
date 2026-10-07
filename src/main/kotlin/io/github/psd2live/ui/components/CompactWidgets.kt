@@ -1265,7 +1265,7 @@ fun CompactButton(
 		) {
 			if (leadingIcon != null) {
 				leadingIcon()
-				Spacer(modifier.width(5.dp))
+				Spacer(Modifier.width(5.dp))
 			}
 			Text(
 				text = text,

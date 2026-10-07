@@ -67,6 +67,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -1531,11 +1532,47 @@ internal fun BoxScope.CanvasEditorOverlay(
     CanvasToolBar(editor = editor, keymap = keymap, focus = focus)
 
     // Top Left Hierarchy / Layer Mode Toolbar
+    var modeBarWidth by remember { mutableStateOf(0) }
     HierarchyModeBar(
         editor = editor,
         selectedLayerId = selectedLayerId,
         selectedDeformerId = selectedDeformerId,
         focus = focus,
+        onWidth = { modeBarWidth = it },
+    )
+
+    // Top centre: the paint session, in the bar the atlas's edit session shows.
+    PaintSessionBar(editor, modeBarWidth, focus)
+}
+
+/**
+ * The open paint session as a bar dropping in at the top of the canvas once it holds strokes: what is being painted,
+ * undo, redo, discard and apply - the atlas session's bar, so both sessions read and work alike.
+ */
+@Composable
+private fun BoxScope.PaintSessionBar(editor: CanvasEditor, modeBarWidth: Int, focus: () -> Unit) {
+    val session = editor.paintSession
+    // Read for their state: the stroke list and the step in it are what undo and redo change.
+    val strokes = session?.strokeRecords?.size ?: 0
+    val step = session?.currentStrokeIndex ?: 0
+    val canUndo = session != null && step > 0 && session.canUndo()
+    val canRedo = session != null && step < strokes - 1 && session.canRedo()
+    val dirty = session?.isDirty == true
+    val keymap = editor.state.keymap
+    val density = LocalDensity.current
+    SessionTopBar(
+        visible = editor.hierarchyMode == EditHierarchyMode.PAINT && session != null && (dirty || canRedo),
+        summary = session?.let { tr("editor.paint.sessionSummary", it.layerName, it.strokeCount) } ?: "",
+        badge = "${session?.strokeCount ?: 0}",
+        undo = SessionAction(tr("editor.undo"), { editor.undoPaint(); focus() }, canUndo,
+            tr("editor.paint.undoHint", keymap.labelFor(ShortcutAction.UNDO))),
+        redo = SessionAction(tr("editor.redo"), { editor.redoPaint(); focus() }, canRedo,
+            tr("editor.paint.redoHint", keymap.labelFor(ShortcutAction.REDO))),
+        discard = SessionAction(tr("texture.session.discard"), { editor.discardPaintSession(); focus() }, dirty,
+            tr("editor.paint.discardHint")),
+        apply = SessionAction(tr("texture.session.apply"), { editor.promptCommitPaintSession(); focus() }, dirty && !editor.busy,
+            tr("editor.paint.applyHint")),
+        startInset = with(density) { (modeBarWidth + 8.dp.roundToPx()).toDp() },
     )
 }
 
@@ -2638,6 +2675,7 @@ private fun BoxScope.HierarchyModeBar(
     selectedLayerId: String?,
     selectedDeformerId: String?,
     focus: () -> Unit,
+    onWidth: (Int) -> Unit = {},
 ) {
     val colors = LocalToolColors.current
     // Resolve from the selection keys passed by the parent so the badge tracks picks immediately,
@@ -2659,6 +2697,7 @@ private fun BoxScope.HierarchyModeBar(
         modifier = Modifier
             .align(Alignment.TopStart)
             .padding(start = 8.dp, top = 8.dp)
+            .onSizeChanged { onWidth(it.width) }
             .tutorialTarget(TutorialTargetId.MODE_BAR)
             .frostedGlass(
                 shape = RoundedCornerShape(6.dp),
@@ -2807,29 +2846,22 @@ private fun BoxScope.HierarchyModeBar(
                     onSwap = { editor.swapPaintColors(); focus() },
                     squareSize = 15.dp,
                 )
-                val currentSize = editor.paintSize
                 Text(
-                    text = "${currentSize.toInt()}px",
+                    text = editor.paintColor.toHex(),
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = colors.textMuted,
+                    modifier = Modifier.padding(start = 2.dp),
+                )
+                ModeBarDivider()
+                Text(
+                    text = "${editor.paintSize.toInt()}px",
                     fontSize = 10.5.sp,
                     color = colors.textMuted,
                     modifier = Modifier.padding(horizontal = 2.dp),
                 )
-                val session = editor.paintSession
-                if (session != null) {
-                    val isDirty = session.isDirty
-                    StructureActionChip(
-                        text = if (isDirty) tr("editor.paint.applyCount", session.strokeCount) else tr("editor.paint.apply"),
-                        onClick = { editor.promptCommitPaintSession(); focus() },
-                        enabled = isDirty,
-                        primary = isDirty,
-                    )
-                    if (isDirty) {
-                        StructureActionChip(
-                            text = tr("editor.paint.discard"),
-                            onClick = { editor.discardPaintSession(); focus() },
-                        )
-                    }
-                } else if (editor.hierarchyMode == EditHierarchyMode.PAINT) {
+                // Applying and discarding the strokes live in the session bar at the top of the canvas.
+                if (editor.paintSession == null && editor.hierarchyMode == EditHierarchyMode.PAINT) {
                     // The prompt asks for the one thing paint mode cannot start without, so it may only
                     // be said while paint mode is the mode in hand. Leaving it drops the session on the
                     // spot, and this row outlives that by the length of its exit animation - tested on

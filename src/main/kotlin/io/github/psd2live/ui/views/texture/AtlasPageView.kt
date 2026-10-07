@@ -56,6 +56,8 @@ import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -93,6 +95,8 @@ import io.github.psd2live.ui.views.CanvasNavigation
 import io.github.psd2live.ui.views.CanvasOptionsRail
 import io.github.psd2live.ui.views.RailDivider
 import io.github.psd2live.ui.views.RailToggle
+import io.github.psd2live.ui.views.SessionAction
+import io.github.psd2live.ui.views.SessionTopBar
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
@@ -730,7 +734,10 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 
 		// Top left: arranging, as the edit canvas's mode bar - the one-shot Arrange with its options, the automatic
 		// mode, and the pages.
-		FloatingBar(Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp)) {
+		// The session bar drops in between the two top bars, so it learns how wide they are.
+		var arrangeBarWidth by remember { mutableStateOf(0) }
+		var budgetBarWidth by remember { mutableStateOf(0) }
+		FloatingBar(Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp).onSizeChanged { arrangeBarWidth = it.width }) {
 			var arrangeMenu by remember { mutableStateOf(false) }
 			Box {
 				AccentSplitButton(
@@ -743,7 +750,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 					tooltip = tr(if (sessionOpen) "texture.session.pending" else "texture.atlas.arrangeHint"),
 					menuTooltip = tr("texture.atlas.arrangeMenu"),
 				)
-				// The menu holds only how the next Arrange works - a choice of method and a scope switch; the button runs it.
+				// The menu holds only how the next Arrange works - a choice of method and of scope; the button runs it.
 				FloatingMenu(arrangeMenu, { arrangeMenu = false }, width = 270.dp) {
 					FloatingMenuSection(tr("texture.atlas.arrangeMethod"))
 					FloatingMenuRadio(tr("texture.atlas.arrangeByMesh"), texture.arrangeByMesh,
@@ -754,14 +761,19 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 						icon = { IconArrangeRect(it) })
 					FloatingMenuDivider()
 					FloatingMenuSection(tr("texture.atlas.arrangeScope"))
-					FloatingMenuSwitch(tr("texture.atlas.arrangeSelection"), texture.arrangeSelectionOnly,
-						{ vm.setTextureArrangeOptions(texture.arrangeByMesh, !texture.arrangeSelectionOnly) }, hint = tr("texture.atlas.arrangeSelectionHint"))
+					FloatingMenuRadio(tr("texture.atlas.arrangeAll"), !texture.arrangeSelectionOnly,
+						{ vm.setTextureArrangeOptions(texture.arrangeByMesh, false) }, hint = tr("texture.atlas.arrangeAllHint"),
+						icon = { IconAtlasPages(it) })
+					FloatingMenuRadio(tr("texture.atlas.arrangeSelection"), texture.arrangeSelectionOnly,
+						{ vm.setTextureArrangeOptions(texture.arrangeByMesh, true) }, hint = tr("texture.atlas.arrangeSelectionHint"),
+						icon = { IconArrangeSelection(it) })
 				}
 			}
 			BarDivider()
-			// The automatic arrangement is a mode, so a switch; Arrange is one action that keeps its result.
-			BarSwitch(tr("texture.atlas.auto"), atlas.auto, { vm.setAtlasAuto(snapshot, !atlas.auto) }, enabled = !busy && !sessionOpen,
-				tooltip = tr(if (sessionOpen) "texture.session.pending" else "texture.atlas.autoHint"))
+			// The automatic arrangement is a mode, so a chip that stays lit while it is on; Arrange is one action that
+			// keeps its result.
+			BarChip(tr("texture.atlas.auto"), atlas.auto, { vm.setAtlasAuto(snapshot, !atlas.auto) }, enabled = !busy && !sessionOpen,
+				tooltip = tr(if (sessionOpen) "texture.session.pending" else "texture.atlas.autoHint"), icon = { IconArrangeAuto(it) })
 			if (atlas.pages.size > 1) {
 				BarDivider()
 				for (info in atlas.pages) {
@@ -772,7 +784,7 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 		}
 
 		// Top right: the budget.
-		FloatingBar(Modifier.align(Alignment.TopEnd).padding(end = 8.dp, top = 8.dp)) {
+		FloatingBar(Modifier.align(Alignment.TopEnd).padding(end = 8.dp, top = 8.dp).onSizeChanged { budgetBarWidth = it.width }) {
 			var budgetMenu by remember { mutableStateOf(false) }
 			Box {
 				BarChip(tr("texture.atlas.budgetSummary", atlas.budget.pageSize, atlas.pages.size, atlas.budget.maxPages), false,
@@ -794,19 +806,19 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 				modifier = Modifier.align(Alignment.TopCenter).padding(top = 42.dp, start = 8.dp, end = 8.dp))
 		}
 
-		// Bottom centre: the edit session, as the paint session's bar - what it changed, step back, discard, apply.
-		if (sessionOpen || texture.sessionRedo.isNotEmpty()) {
-			FloatingBar(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp)) {
-				Text(tr("texture.session.changed", texture.session.size), color = colors.textPrimary, fontSize = 11.sp, maxLines = 1,
-					modifier = Modifier.padding(horizontal = 6.dp))
-				BarDivider()
-				BarChip(tr("texture.session.undo"), false, vm::undoTextureSession, enabled = texture.sessionUndo.isNotEmpty(),
-					tooltip = tr("texture.session.undoHint"))
-				BarChip(tr("texture.session.redo"), false, vm::redoTextureSession, enabled = texture.sessionRedo.isNotEmpty())
-				BarChip(tr("texture.session.discard"), false, vm::discardTextureSession, enabled = sessionOpen)
-				AccentButton(tr("texture.session.apply"), vm::applyTextureSession, enabled = sessionOpen && !busy, tooltip = tr("texture.session.applyHint"))
-			}
-		}
+		// Top centre: the edit session, in the bar the paint session shows - what it changed, step back, discard, apply.
+		val density = LocalDensity.current
+		SessionTopBar(
+			visible = sessionOpen || texture.sessionRedo.isNotEmpty(),
+			summary = tr("texture.session.changed", texture.session.size),
+			badge = "${texture.session.size}",
+			undo = SessionAction(tr("texture.session.undo"), vm::undoTextureSession, texture.sessionUndo.isNotEmpty(), tr("texture.session.undoHint")),
+			redo = SessionAction(tr("texture.session.redo"), vm::redoTextureSession, texture.sessionRedo.isNotEmpty(), tr("texture.session.redoHint")),
+			discard = SessionAction(tr("texture.session.discard"), vm::discardTextureSession, sessionOpen, tr("texture.session.discardHint")),
+			apply = SessionAction(tr("texture.session.apply"), vm::applyTextureSession, sessionOpen && !busy, tr("texture.session.applyHint")),
+			startInset = with(density) { (arrangeBarWidth + 8.dp.roundToPx()).toDp() },
+			endInset = with(density) { (budgetBarWidth + 8.dp.roundToPx()).toDp() },
+		)
 
 		// Bottom right: the display rail of the edit canvas, with the heat scale beside it while the heatmap shows.
 		if (texture.heatmap) {

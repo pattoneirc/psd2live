@@ -1192,6 +1192,12 @@ internal class CanvasEditor(
         paintSecondaryColor = previous
     }
 
+    /** Black in hand and white behind it, as Photoshop's default colours. */
+    fun resetPaintColors() {
+        paintColor = androidx.compose.ui.graphics.Color.Black
+        paintSecondaryColor = androidx.compose.ui.graphics.Color.White
+    }
+
     var isPainting by mutableStateOf(false)
     /** True while the pointer is picking a colour rather than drawing one: the eyedropper's own
      *  gesture, or an Alt + left press over any paint tool. */

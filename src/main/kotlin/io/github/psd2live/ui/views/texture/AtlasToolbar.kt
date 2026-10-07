@@ -261,9 +261,13 @@ internal fun AccentSplitButton(
 	}
 }
 
-/** The bar's one-click primary action, accent-filled like [AccentSplitButton]'s body. */
+/**
+ * The bar's one-click primary action, accent-filled like [AccentSplitButton]'s body: an optional icon and a label, or
+ * the icon alone when [label] is null (its name then goes in the [tooltip]).
+ */
 @Composable
-internal fun AccentButton(label: String, onClick: () -> Unit, enabled: Boolean = true, tooltip: String? = null) {
+internal fun AccentButton(label: String?, onClick: () -> Unit, enabled: Boolean = true, tooltip: String? = null,
+                          icon: (@Composable (Color) -> Unit)? = null) {
 	val colors = LocalToolColors.current
 	val interaction = remember { MutableInteractionSource() }
 	val hovered by interaction.collectIsHoveredAsState()
@@ -274,18 +278,24 @@ internal fun AccentButton(label: String, onClick: () -> Unit, enabled: Boolean =
 		else -> colors.accent.copy(alpha = 0.2f)
 	}, tween(80))
 	BarTooltip(tooltip) {
-		Box(
+		Row(
 			Modifier
 				.height(24.dp)
+				.defaultMinSize(minWidth = 24.dp)
 				.clip(RoundedCornerShape(4.dp))
 				.background(fill)
 				.border(0.5.dp, colors.accent.copy(alpha = if (enabled) 0.55f else 0.2f), RoundedCornerShape(4.dp))
 				.hoverable(interaction)
 				.clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick)
-				.semantics { contentDescription = label }
-				.padding(horizontal = 10.dp),
-			contentAlignment = Alignment.Center,
-		) { Text(label, color = tint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1) }
+				.semantics { contentDescription = label ?: tooltip ?: "" }
+				.padding(horizontal = if (label == null) 5.dp else if (icon != null) 8.dp else 10.dp),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.Center,
+		) {
+			if (icon != null) icon(tint)
+			if (icon != null && label != null) Spacer(Modifier.width(5.dp))
+			if (label != null) Text(label, color = tint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+		}
 	}
 }
 
@@ -419,12 +429,6 @@ internal fun FloatingMenuRadio(label: String, selected: Boolean, onSelect: () ->
 		control = { RadioMark(selected, enabled) })
 }
 
-/** An on/off setting in a [FloatingMenu]: the label and hint, and a switch at the end that slides on while [checked]. */
-@Composable
-internal fun FloatingMenuSwitch(label: String, checked: Boolean, onToggle: () -> Unit, enabled: Boolean = true, hint: String? = null) {
-	FloatingMenuRow(label, onToggle, enabled = enabled, hint = hint, bar = false, control = { SwitchTrack(checked, enabled) })
-}
-
 /** A radio mark: a ring, with an accent dot while [selected]. */
 @Composable
 internal fun RadioMark(selected: Boolean, enabled: Boolean = true) {
@@ -435,54 +439,6 @@ internal fun RadioMark(selected: Boolean, enabled: Boolean = true) {
 		val r = size.minDimension / 2f
 		drawCircle(ring, r - 0.75f, style = Stroke(1.3f))
 		if (dot > 0f) drawCircle(colors.accent, (r - 3f) * dot)
-	}
-}
-
-/** An on/off switch: a track whose knob slides to the end, and which fills with the accent, while [checked]. */
-@Composable
-internal fun SwitchTrack(checked: Boolean, enabled: Boolean = true) {
-	val colors = LocalToolColors.current
-	val knob by animateFloatAsState(if (checked) 1f else 0f, tween(140, easing = FastOutSlowInEasing))
-	val track by animateColorAsState(if (checked) colors.accent.copy(alpha = if (enabled) 0.9f else 0.4f) else colors.border.copy(alpha = 0.9f), tween(140))
-	Canvas(Modifier.width(24.dp).height(13.dp).alpha(if (enabled) 1f else 0.6f)) {
-		val r = size.height / 2f
-		drawRoundRect(track, cornerRadius = CornerRadius(r))
-		drawCircle(Color.White.copy(alpha = 0.95f), r - 2f, Offset(r + (size.width - r * 2) * knob, r))
-	}
-}
-
-/**
- * A switch of a [FloatingBar] for a mode: the track and its label, the label in the accent while [checked]. Unlike a
- * [BarChip] it reads as a setting that stays on, not a button that runs something.
- */
-@Composable
-internal fun BarSwitch(label: String, checked: Boolean, onToggle: () -> Unit, enabled: Boolean = true, tooltip: String? = null) {
-	val colors = LocalToolColors.current
-	val interactionSource = remember { MutableInteractionSource() }
-	val hovered by interactionSource.collectIsHoveredAsState()
-	val background by animateColorAsState(if (hovered && enabled) colors.controlHover.copy(alpha = 0.7f) else Color.Transparent, tween(80))
-	val tint by animateColorAsState(when {
-		!enabled -> colors.textMuted.copy(alpha = 0.5f)
-		checked -> colors.accent
-		hovered -> colors.textPrimary
-		else -> colors.textMuted
-	}, tween(80))
-	BarTooltip(tooltip) {
-		Row(
-			Modifier
-				.height(24.dp)
-				.clip(RoundedCornerShape(4.dp))
-				.background(background)
-				.hoverable(interactionSource)
-				.clickable(interactionSource = interactionSource, indication = null, enabled = enabled, onClick = onToggle)
-				.semantics { contentDescription = label }
-				.padding(horizontal = 6.dp),
-			verticalAlignment = Alignment.CenterVertically,
-		) {
-			SwitchTrack(checked, enabled)
-			Spacer(Modifier.width(6.dp))
-			Text(label, color = tint, fontSize = 11.sp, maxLines = 1, fontWeight = if (checked) FontWeight.SemiBold else FontWeight.Medium)
-		}
 	}
 }
 
@@ -559,5 +515,24 @@ internal fun IconAtlasPages(tint: Color, modifier: Modifier = Modifier) {
 		drawRect(tint, Offset(0.5f, 3.5f), Size(s - 4f, s - 4f), style = Stroke(1.1f))
 		drawLine(tint, Offset(0.5f, s * 0.6f), Offset(s - 3.5f, s * 0.6f), 0.8f)
 		drawLine(tint, Offset(s * 0.45f, 3.5f), Offset(s * 0.45f, s - 0.5f), 0.8f)
+	}
+}
+
+/** The automatic arrangement: two tiles with a circling arrow round them. */
+@Composable
+internal fun IconArrangeAuto(tint: Color, modifier: Modifier = Modifier) {
+	Canvas(modifier.size(14.dp)) {
+		val s = size.width
+		drawRect(tint, Offset(s * 0.3f, s * 0.3f), Size(s * 0.18f, s * 0.4f))
+		drawRect(tint.copy(alpha = 0.55f), Offset(s * 0.52f, s * 0.3f), Size(s * 0.18f, s * 0.22f))
+		drawArc(tint, -60f, 270f, false, Offset(1f, 1f), Size(s - 2f, s - 2f), style = Stroke(1.1f, cap = StrokeCap.Round))
+		// The arrowhead where the circle ends, pointing on round it.
+		val r = s / 2f - 1f
+		val at = Math.toRadians(210.0)
+		val tip = Offset(s / 2f + r * kotlin.math.cos(at).toFloat(), s / 2f + r * kotlin.math.sin(at).toFloat())
+		for (side in floatArrayOf(-1f, 1f)) {
+			val back = at + Math.PI / 2 + Math.PI + side * Math.toRadians(35.0)
+			drawLine(tint, tip, tip + Offset(3f * kotlin.math.cos(back).toFloat(), 3f * kotlin.math.sin(back).toFloat()), 1.1f, StrokeCap.Round)
+		}
 	}
 }

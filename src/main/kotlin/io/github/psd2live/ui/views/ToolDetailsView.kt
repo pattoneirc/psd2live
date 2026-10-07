@@ -60,7 +60,12 @@ import io.github.psd2live.ui.components.CompactDropdown
 import io.github.psd2live.ui.components.CompactNumberSpinner
 import io.github.psd2live.ui.components.CompactSectionHeader
 import io.github.psd2live.ui.components.CompactToggleChip
+import io.github.psd2live.ui.components.HexField
+import io.github.psd2live.ui.components.PAINT_SWATCHES
 import io.github.psd2live.ui.components.PaintFgBgSwatch
+import io.github.psd2live.ui.components.PaintSwatchRow
+import io.github.psd2live.ui.components.PsColorField
+import io.github.psd2live.ui.components.RecentPaintColors
 import io.github.psd2live.ui.components.toHex
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -1200,13 +1205,13 @@ private fun PaintToolDetailsColumn(editor: CanvasEditor, target: CanvasTarget?) 
 
         Divider(color = colors.divider, thickness = 0.5.dp)
 
-        // Palette & Swatches
+        // Palette: Photoshop's foreground/background pair, its colour field for the foreground, the swatches and the
+        // colours used last.
         Text(
             text = tr("editor.paintPalette"),
             style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
             color = colors.textPrimary,
         )
-        // Photoshop-style FG/BG swatch with hex values beside it. X swaps from the canvas.
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1218,6 +1223,7 @@ private fun PaintToolDetailsColumn(editor: CanvasEditor, target: CanvasTarget?) 
                 onForegroundChanged = { editor.paintColor = it },
                 onBackgroundChanged = { editor.paintSecondaryColor = it },
                 onSwap = { editor.swapPaintColors() },
+                onReset = { editor.resetPaintColors() },
                 squareSize = 26.dp,
             )
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -1237,43 +1243,30 @@ private fun PaintToolDetailsColumn(editor: CanvasEditor, target: CanvasTarget?) 
                 )
             }
         }
-
-        // Swatches grid
-        val swatches = listOf(
-            Color(0xFF000000), Color(0xFFFFFFFF), Color(0xFF7F7F7F), Color(0xFFC3C3C3),
-            Color(0xFFED1C24), Color(0xFFFF7F27), Color(0xFFFFF200), Color(0xFF22B14C),
-            Color(0xFF00A2E8), Color(0xFF3F48CC), Color(0xFFA349A4), Color(0xFFFFAEC9),
-            Color(0xFFFFDFC4), Color(0xFFB97A57)
+        PsColorField(
+            color = editor.paintColor,
+            onColorChange = { editor.paintColor = it },
+            modifier = Modifier.fillMaxWidth(),
+            height = 120.dp,
+            onRelease = RecentPaintColors::push,
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            swatches.take(7).forEach { col ->
-                Box(
-                    modifier = Modifier
-                        .size(18.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(col)
-                        .border(1.dp, if (editor.paintColor == col) colors.accent else colors.border, RoundedCornerShape(3.dp))
-                        .clickable { editor.paintColor = col }
-                )
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            swatches.drop(7).forEach { col ->
-                Box(
-                    modifier = Modifier
-                        .size(18.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(col)
-                        .border(1.dp, if (editor.paintColor == col) colors.accent else colors.border, RoundedCornerShape(3.dp))
-                        .clickable { editor.paintColor = col }
-                )
-            }
+        HexField(editor.paintColor, { editor.paintColor = it })
+        Text(
+            text = tr("editor.paint.swatches"),
+            style = typography.caption.copy(fontSize = 10.sp),
+            color = colors.textMuted,
+        )
+        val pick = { color: Color -> editor.paintColor = color; RecentPaintColors.push(color) }
+        PaintSwatchRow(PAINT_SWATCHES.take(8), editor.paintColor, pick)
+        PaintSwatchRow(PAINT_SWATCHES.drop(8), editor.paintColor, pick)
+        val recent = RecentPaintColors.colors.take(8)
+        if (recent.isNotEmpty()) {
+            Text(
+                text = tr("editor.paint.recentColors"),
+                style = typography.caption.copy(fontSize = 10.sp),
+                color = colors.textMuted,
+            )
+            PaintSwatchRow(recent, editor.paintColor, pick)
         }
 
         Divider(color = colors.divider, thickness = 0.5.dp)
@@ -1406,18 +1399,22 @@ private fun PaintToolDetailsColumn(editor: CanvasEditor, target: CanvasTarget?) 
             Text(tr("editor.depthSplit.paintHint"), style = typography.caption, color = colors.textMuted)
         }
         if (paintT != null && layerId != null) {
+            val canUndo = editor.canUndoPaint()
+            val canRedo = editor.canRedoPaint()
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 CompactButton(
                     text = tr("editor.undo"),
                     onClick = { editor.undoPaint() },
-                    enabled = editor.canUndoPaint(),
+                    enabled = canUndo,
+                    leadingIcon = { IconSessionUndo(if (canUndo) colors.textPrimary else colors.textDisabled) },
                     modifier = Modifier.weight(1f),
                     height = 24.dp,
                 )
                 CompactButton(
                     text = tr("editor.redo"),
                     onClick = { editor.redoPaint() },
-                    enabled = editor.canRedoPaint(),
+                    enabled = canRedo,
+                    leadingIcon = { IconSessionRedo(if (canRedo) colors.textPrimary else colors.textDisabled) },
                     modifier = Modifier.weight(1f),
                     height = 24.dp,
                 )
@@ -1425,28 +1422,34 @@ private fun PaintToolDetailsColumn(editor: CanvasEditor, target: CanvasTarget?) 
             CompactButton(
                 text = tr("editor.paintClear"),
                 onClick = { editor.clearCurrentLayerPaint() },
+                danger = true,
                 modifier = Modifier.fillMaxWidth(),
                 height = 24.dp,
             )
 
             Spacer(Modifier.height(4.dp))
 
-            // Commit / Discard
-            CompactButton(
-                text = if (uncommittedCount > 0) tr("editor.paint.applyCount", uncommittedCount) else tr("editor.paint.apply"),
-                onClick = { editor.promptCommitPaintSession() },
-                enabled = hasSession && (editor.paintSession?.isDirty == true || uncommittedCount > 0),
-                isPrimary = true,
-                modifier = Modifier.fillMaxWidth(),
-                height = 26.dp,
-            )
-            CompactButton(
-                text = tr("editor.paint.discard"),
-                onClick = { editor.discardPaintSession() },
-                enabled = hasSession && (editor.paintSession?.isDirty == true || uncommittedCount > 0),
-                modifier = Modifier.fillMaxWidth(),
-                height = 24.dp,
-            )
+            // Discard and apply side by side, as the session bar at the top of the canvas has them.
+            val pending = hasSession && (editor.paintSession?.isDirty == true || uncommittedCount > 0)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                CompactButton(
+                    text = tr("texture.session.discard"),
+                    onClick = { editor.discardPaintSession() },
+                    enabled = pending,
+                    leadingIcon = { IconSessionDiscard(if (pending) colors.textPrimary else colors.textDisabled) },
+                    modifier = Modifier.weight(1f),
+                    height = 28.dp,
+                )
+                CompactButton(
+                    text = if (uncommittedCount > 0) tr("editor.paint.applyCount", uncommittedCount) else tr("editor.paint.apply"),
+                    onClick = { editor.promptCommitPaintSession() },
+                    enabled = pending,
+                    isPrimary = true,
+                    leadingIcon = { IconSessionApply(if (pending) colors.accentText else colors.textDisabled) },
+                    modifier = Modifier.weight(1.4f),
+                    height = 28.dp,
+                )
+            }
         }
     }
 }
