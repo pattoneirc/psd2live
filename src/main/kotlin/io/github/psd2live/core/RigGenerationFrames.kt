@@ -59,9 +59,12 @@ internal object RigGenerationFrames {
         val meshTransforms = mutableMapOf<String, (FloatArray) -> FloatArray>()
         val roots = input.drawables.filter { d -> d.mesh != null && desired.drawables.any { it.id == d.id } }.groupBy { d ->
             var root = d.parentDeformerId
-            val oldParent = previous.drawables.singleOrNull { it.id == d.id }?.parentDeformerId?.let(oldIds::get)
-            // A direct binding chosen by the author remains a real frame even when its ID is generated.
-            if (root in automatic && root == oldParent) root = null
+            val old = previous.drawables.singleOrNull { it.id == d.id }
+            val oldParent = old?.parentDeformerId?.let(oldIds::get)
+            // A direct binding chosen by the author remains a real frame even when its ID is generated. A mesh the
+            // previous generation never had (a part of a version 1 split, placed by its record) has no binding to
+            // compare: under an automatic frame it follows the generation like the meshes around it.
+            if (root in automatic && (root == oldParent || old == null)) root = null
             val seen = HashSet<DeformerId>()
             while (root != null) {
                 require(seen.add(root)) { "Generation migration parent hierarchy contains a cycle" }
