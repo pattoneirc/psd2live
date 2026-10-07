@@ -21,7 +21,7 @@ import io.github.psd2live.format.eval.P2lRuntime
 internal object ExportService {
 	/**
 	 * Geometry for targets that bake deformation: the Rust runtime when its library is present (faster, and
-	 * pose for pose the editor's evaluation, see NativeRuntimeConformanceTest), else the editor's evaluator.
+	 * pose for pose the editor's evaluation), else the editor's evaluator.
 	 */
 	val geometry: GeometryEvaluator by lazy {
 		runCatching { P2lRuntime.load()?.let(::NativeGeometryEvaluator) }.getOrNull() ?: IrGeometryEvaluator

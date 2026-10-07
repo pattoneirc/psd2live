@@ -71,7 +71,6 @@ Windows 也可以直接运行根目录的 `run-gui.bat`。不带参数启动 GUI
 ## 测试与打包
 
 ```bash
-./gradlew quickTest                              # 日常回归：跳过标记 @Tag("slow") 的测试类
 ./gradlew test                                   # 全部测试（CI 在 Ubuntu 与 Windows 上运行）
 ./gradlew test --tests "io.github.psd2live.core.SwingDeformerTest"   # 单个测试类
 ./gradlew createDistributable                    # 带运行时的应用目录
@@ -82,7 +81,8 @@ Windows 也可以直接运行根目录的 `run-gui.bat`。不带参数启动 GUI
 - 官方 SDK 资源（`src/main/resources/cubism/`）默认不打包，只有传入 `-Ppsd2live.includeCubism=true` 或设置 `PSD2LIVE_INCLUDE_CUBISM=true` 时才包含。含 SDK 的包不得公开分发，发行流程见 [CI 与发行](CUBISM_CI_RELEASE.md)。
 - Linux 也可用 `./native/package_linux.sh` 生成需要系统 JDK 21 的本地启动包（输出到 `dist/linux-<时间戳>/`），详见 [native/README.md](../../../native/README.md)。
 - 项目没有独立的 lint 任务，代码风格为 `kotlin.code.style=official`。
-- Rust 运行时在 `runtime/` 中用 `cargo test`、`cargo build --release` 构建；构建后 `NativeRuntimeConformanceTest` 等依赖它的测试才会运行，未构建时跳过。见[运行时](../spec/RUNTIME.md)。
+- Rust 运行时在 `runtime/` 中用 `cargo test`、`cargo build --release` 构建，见[运行时](../spec/RUNTIME.md)。
+- 测试套件只保留快速的单元与契约测试，全量 `./gradlew test` 应在 1 分钟内完成。不要加入在示例 PSD（tml、ds）上跑完整流水线、逐步对比冷重放或渲染整幅画面的测试；这类检查写成下面的开发工具，需要时手动运行。
 
 ## 开发工具
 

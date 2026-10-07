@@ -71,7 +71,6 @@ The `export` command exports a `.psd2live` project (its current history state) o
 ## Tests and packaging
 
 ```bash
-./gradlew quickTest                              # everyday regression run: skips test classes tagged @Tag("slow")
 ./gradlew test                                   # all tests (CI runs them on Ubuntu and Windows)
 ./gradlew test --tests "io.github.psd2live.core.SwingDeformerTest"   # one test class
 ./gradlew createDistributable                    # application directory with runtime
@@ -82,7 +81,8 @@ The `export` command exports a `.psd2live` project (its current history state) o
 - Official SDK resources (`src/main/resources/cubism/`) are excluded unless you pass `-Ppsd2live.includeCubism=true` or set `PSD2LIVE_INCLUDE_CUBISM=true`. Packages with the SDK must not be distributed publicly; see [CI and releases](CUBISM_CI_RELEASE.md).
 - On Linux, `./native/package_linux.sh` builds a local launcher package that needs a system JDK 21 (written to `dist/linux-<timestamp>/`); see [native/README.md](../../../native/README.md).
 - There is no separate lint task; code style is `kotlin.code.style=official`.
-- The Rust runtime builds in `runtime/` with `cargo test` and `cargo build --release`; tests that load it, such as `NativeRuntimeConformanceTest`, run once it is built and skip otherwise. See [Runtime (中文)](../../zh/spec/RUNTIME.md).
+- The Rust runtime builds in `runtime/` with `cargo test` and `cargo build --release`. See [Runtime (中文)](../../zh/spec/RUNTIME.md).
+- The test suite keeps only fast unit and contract tests; a full `./gradlew test` should finish within one minute. Do not add tests that run the whole pipeline on the example PSDs (tml, ds), compare every step against a cold replay or render whole frames; write such checks as the development tools below and run them by hand.
 
 ## Development tools
 

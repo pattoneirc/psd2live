@@ -172,16 +172,6 @@ tasks.test {
 	enabled = true
 }
 
-// Everyday regression run: the full suite minus classes tagged "slow" (whole-pipeline, desktop and
-// visual integration tests). CI and pre-release checks keep running `test`.
-tasks.register<Test>("quickTest") {
-	group = "verification"
-	description = "Runs the test suite without the tests tagged slow."
-	testClassesDirs = sourceSets.test.get().output.classesDirs
-	classpath = sourceSets.test.get().runtimeClasspath
-	useJUnitPlatform { excludeTags("slow") }
-}
-
 
 // Keep Cubism out of classpath resources unless explicitly opted in.
 tasks.processResources {

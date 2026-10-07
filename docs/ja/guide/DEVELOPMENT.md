@@ -71,7 +71,6 @@ Windows ではリポジトリ直下の `run-gui.bat` でも GUI を起動でき�
 ## テストとパッケージ作成
 
 ```bash
-./gradlew quickTest                              # 日常の回帰テスト：@Tag("slow") のテストクラスを除外
 ./gradlew test                                   # 全テスト（CI は Ubuntu と Windows で実行）
 ./gradlew test --tests "io.github.psd2live.core.SwingDeformerTest"   # 単一のテストクラス
 ./gradlew createDistributable                    # ランタイム付きのアプリディレクトリ
@@ -82,7 +81,8 @@ Windows ではリポジトリ直下の `run-gui.bat` でも GUI を起動でき�
 - 公式 SDK のリソース（`src/main/resources/cubism/`）は、`-Ppsd2live.includeCubism=true` または `PSD2LIVE_INCLUDE_CUBISM=true` を指定したときだけ含まれます。SDK を含むパッケージは公開配布できません。[CI とリリース](../../en/guide/CUBISM_CI_RELEASE.md)（英語）を参照してください。
 - Linux では `./native/package_linux.sh` で、システムの JDK 21 を使うローカル起動パッケージを作成できます（`dist/linux-<タイムスタンプ>/` に出力）。詳しくは [native/README.md](../../../native/README.md) を参照してください。
 - 独立した lint タスクはありません。コードスタイルは `kotlin.code.style=official` です。
-- Rust ランタイムは `runtime/` で `cargo test`、`cargo build --release` によりビルドします。ビルド後は `NativeRuntimeConformanceTest` などそれを読み込むテストが実行され、未ビルドならスキップされます。[ランタイム（中国語）](../../zh/spec/RUNTIME.md) を参照してください。
+- Rust ランタイムは `runtime/` で `cargo test`、`cargo build --release` によりビルドします。[ランタイム（中国語）](../../zh/spec/RUNTIME.md) を参照してください。
+- テストスイートには高速な単体テストと契約テストだけを残し、`./gradlew test` 全体は 1 分以内に終わるようにします。サンプル PSD（tml、ds）でパイプライン全体を実行するテスト、各ステップをコールドリプレイと比較するテスト、画面全体を描画するテストは追加せず、下記の開発ツールとして書いて必要なときに手動で実行します。
 
 ## 開発ツール
 

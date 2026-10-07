@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicLong
  * by value (layer metadata, a raster's digest, the settings the stage reads), never the document as a whole, so
  * a change reruns only the stages that read it: one layer's mesh setting reruns that layer's mesh, a role change
  * of a body layer leaves the face layers' meshes alone. Every stage is a pure function of its key, so a build
- * through the cache equals a build without it ([RigStageCacheTest]).
+ * through the cache equals a build without it.
  *
  * Each kind keeps its most recent entries (least recently used out). Held per pipeline, next to
  * [PreviewMeshCache]; a pipeline without one builds every stage.

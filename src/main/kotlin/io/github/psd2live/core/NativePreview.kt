@@ -17,8 +17,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * The software preview's deformation through the Rust runtime: one runtime session per preview model,
  * compiled in the background the first time the model is evaluated (the engine answers meanwhile, so
  * transient drag previews never wait) and kept while the model lives. Results come back in the engine's
- * form (world y up, visible drawables only), pose for pose the engine's evaluation (see
- * NativeRuntimeConformanceTest). Without the runtime library, or when a rig fails to compile, callers keep
+ * form (world y up, visible drawables only), pose for pose the engine's evaluation.
+ * Without the runtime library, or when a rig fails to compile, callers keep
  * the engine; `-Dpsd2live.preview.runtime=false` turns it off.
  */
 internal object NativePreview {

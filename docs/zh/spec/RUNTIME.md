@@ -15,7 +15,7 @@
 
 构建：在 `runtime/` 运行 `cargo build --release`，库位于 `runtime/target/release/`（Windows 为 `p2l_runtime.dll`）。Gradle 的 `buildRuntime` 在有 cargo 时自动构建：`./gradlew run` 使用它，打包时随应用资源分发；没有 cargo 时跳过，应用回退到编辑器求值器。`P2lRuntime.locate()` 依次查找系统属性 `psd2live.runtime.library`、环境变量 `PSD2LIVE_RUNTIME`（文件或目录）、系统属性 `psd2live.runtime.dir`、打包应用的资源目录和 `java.library.path`。
 
-编辑器的导出烘焙（Spine、DragonBones、glTF）在运行时库可用时经 `NativeGeometryEvaluator` 求值，否则使用引擎求值器；两者逐姿势一致（`NativeRuntimeConformanceTest`）。编辑器软件预览（`RigCanvasSupport.evaluate`）同样经 `NativePreview` 使用运行时：首次遇到某个预览模型时由引擎作答并在后台编译，之后的帧走运行时；拖动中的临时模型不等待编译，失败或 `-Dpsd2live.preview.runtime=false` 时保持引擎。`NativePreviewTest` 在带骨架的 tml 上逐姿势比对，单次求值约 0.5 毫秒，与引擎相当（JNA 调用与结果转换抵消了原生速度）。
+编辑器的导出烘焙（Spine、DragonBones、glTF）在运行时库可用时经 `NativeGeometryEvaluator` 求值，否则使用引擎求值器；两者逐姿势一致。编辑器软件预览（`RigCanvasSupport.evaluate`）同样经 `NativePreview` 使用运行时：首次遇到某个预览模型时由引擎作答并在后台编译，之后的帧走运行时；拖动中的临时模型不等待编译，失败或 `-Dpsd2live.preview.runtime=false` 时保持引擎。在带骨架的 tml 上单次求值约 0.5 毫秒，与引擎相当（JNA 调用与结果转换抵消了原生速度）。
 
 ## `.p2lrt` 格式
 
@@ -53,7 +53,6 @@
 ## 验证
 
 - `cargo test`：每条求值规则一个小模型单元测试（数值来自探测结果），以及 Warp、动作片段测试。
-- `NativeRuntimeConformanceTest`（`@Tag("slow")`）：在 `tml`（无骨架和自动骨架）的随机姿势上比较运行时与编辑器求值器，顶点误差小于 0.02 像素；运行时未构建时跳过。CI 先构建运行时。
 - `RuntimeConformanceTool`（`PSD2LIVE_TOOLS=1`）：生成 80 个随机模型（Warp、旋转、嵌套、稀疏网格、混合形、Glue、通道、部件、混合）、样例和本地工程的参考姿势，以及物理轨迹；`cargo run --release --bin p2lrt-conformance -- ../build/tools/runtime-conformance`（物理为 `runtime-physics`）逐例比较。当前除两个在放大极端的镜像格子中出现 0.02–0.1 像素单精度误差的随机模型外全部一致。
 
 ## 尚未完成
