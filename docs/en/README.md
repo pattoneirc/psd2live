@@ -1,12 +1,12 @@
 # PSD2Live
 
-[中文](../../README.md) · [日本語](../ja/README.md) · [Download](https://github.com/tsunehimatoi/psd2live/releases/latest) · [Documentation](../README.md)
+[中文](../../README.md) · [日本語](../ja/README.md) · [Download](https://github.com/tsunehimatoi/psd2live/releases/latest) · [Changelog](../zh/CHANGELOG.md) · [Documentation](../README.md)
 
-**Generate a Live2D model from a layered PSD, then refine, rig, animate, simulate and export it in one desktop workspace.**
+**Generate a Live2D model from a layered PSD, refine, rig, animate, simulate and texture it in one desktop workspace, then export it to Cubism, VTube Studio, the web or video.**
 
 ![PSD2Live editing workspace: hierarchy on the left, the canvas in Deform mode showing the front-hair mesh, model presets and the layer classification table on the right](../imgs/overview.webp)
 
-PSD2Live recognizes parts from layer names and generates meshes, a deformer hierarchy, head, body and facial parameters, basic motions and physics. The generated model is a starting point: keep shaping it on the canvas, cut and subdivide meshes, paint textures, build a skeleton and edit motion curves, then export a `.cmo3` for further work in Cubism Editor or a `.moc3` runtime bundle.
+PSD2Live recognizes parts from layer names and generates meshes, a deformer hierarchy, head, body and facial parameters, basic motions, physics and cloth simulation. The generated model is a starting point: keep shaping it on the canvas, split meshes, paint textures, build a skeleton, edit motion curves and tune the texture atlas, then export a `.cmo3` for further work in Cubism Editor, a `.moc3` runtime bundle, or another format.
 
 ![The same model at different head and body angles: left, lower right, neutral, upper right, lower left](../imgs/poses.webp)
 
@@ -17,13 +17,14 @@ PSD2Live recognizes parts from layer names and generates meshes, a deformer hier
 | Area | Capabilities |
 | --- | --- |
 | Automatic rigging | Chinese / English / Japanese layer names, automatic splitting of paired parts, adaptive meshes, head and body deformer chains, eye, mouth, gaze and brow parameters, idle / blink / nod / shake motions, hair and eye-jelly physics |
-| Canvas editing | Select / Deform / Edit / Paint modes; deformation brushes, mesh subdivision and cuts, Warp / Rotation creation, Glue and deform paths (experimental) |
-| Skeleton | Inferred skeletons for limbs, tails and wings with FK / IK posing, baked on export into native Cubism deformers, parameters and corrective keyforms that run without PSD2Live |
-| Swing and physics | Generated lateral / vertical sway with matching pendulums; visual pendulum editing, response curves and chained groups, evaluated to match the Cubism Native Framework |
-| Artwork and variants | Transparent image placement, toggle and exclusive variants, layer painting and edge cleanup, optional 2× / 4× texture upscaling |
+| Canvas editing | Seven modes: Select, Deform, Edit, Simulate, Skeleton, Paint and Preview; deformation brushes, mesh subdivision and cuts, splitting by mesh or polygon, front / back depth split, Warp / Rotation creation, Glue, deform paths (experimental) |
+| Skeleton | Inferred skeletons for limbs, tails and wings with FK / IK posing; joints shaped after human joint poses; baked on export into native Cubism deformers, parameters and corrective keyforms that run without PSD2Live |
+| Swing, physics and simulation | Lateral / vertical sway with matching pendulums; visual pendulum editing, response curves and chained groups, evaluated to match the Cubism Native Framework; 2D cloth and hair simulation baked into parameters, keyforms and pendulums |
+| Artwork and textures | Transparent image placement, toggle and exclusive variants, layer painting and edge cleanup; a Texture workspace for per-layer texture density and dragging or scaling tiles on the atlas; optional 2× / 4× texture upscaling |
 | Animation | Timeline, keyframe and curve editing with live preview; preset crouch, wave, cheer and other motions when a skeleton is available |
-| Projects | Single-file `.psd2live` projects, branching history, tabs, seven workspace presets (Edit, Mesh, Rigging, Animation, Preview, Physics, Texture), light and dark themes, Photoshop / Blender / Cubism keymaps |
-| Agents | Authenticated local MCP server with 170 public tools (discovered page by page through `workspace_list_operations`) for observation, shapes, artwork, parameters, skeletons, motions, physics, simulation, export and history |
+| Export | `.moc3` / `.cmo3` for Cubism 3.0 – 5.3, VTube Studio, the PSD2Live runtime rig and web player, PNG sequences, sprite sheets, GIF, APNG, WebP, video and layered PSDs at a pose; every export comes with a loss report |
+| Projects | Single-file `.psd2live` projects, branching history, tabs, eight workspace presets plus a blank layout, light and dark themes, Photoshop / Blender / Cubism keymaps |
+| Agents | Authenticated local MCP server with more than 180 public operations for observation, shapes, artwork, textures, parameters, skeletons, motions, physics, simulation, export and history; atomic batches and dry runs |
 
 <table>
 <tr>
@@ -42,22 +43,22 @@ PSD2Live recognizes parts from layer names and generates meshes, a deformer hier
 
 ## Download
 
-Get the latest version from [Releases](https://github.com/tsunehimatoi/psd2live/releases/latest):
+Get the latest version from [Releases](https://github.com/tsunehimatoi/psd2live/releases/latest); see the [changelog](../zh/CHANGELOG.md) (Chinese) for what changed.
 
 | Platform | Package | Notes |
 | --- | --- | --- |
 | Windows 10 / 11 x64 | Portable ZIP, EXE, MSI | Bundles a Java runtime; extract or install and run |
 | Linux x86_64 | Deb | Bundles the runtime and Cubism native preview; requires X11 / GLX (XWayland works) |
-| Other | Run from source | Install JDK 21; see [Build from source](#build-from-source) |
+| macOS and others | No package yet | Install JDK 21 and [run from source](#build-from-source) |
 
 The Linux native preview does not support pure Wayland without XWayland, aarch64 or musl (e.g. Alpine); those environments fall back to the built-in renderer. See [Cubism native preview](guide/CUBISM_SDK_SETUP.md).
 
 ## Quick start
 
-1. **Import a PSD** with **File → Import → New project from PSD…** (`Ctrl+Shift+O`) or drop it on the window. The Start screen opens next: set the model presets with the Minimal / Default / Full quick choices (Default includes loose clothing simulation) and tick the layers holding several disconnected parts (such as both legs) to split by mesh. Reopen it later from Tools → Start Screen….
+1. **Import a PSD** with **File → Import → New project from PSD…** (`Ctrl+Shift+O`) or drop it on the window. On the Start screen that opens next, pick the model presets (Minimal / Default / Full) and tick the layers to split by mesh (such as both legs drawn on one layer).
 2. **Check the classification** in the Layers table: part type, side and variant settings. Correct anything that was misread.
-3. **Preview and refine** in the Preview workspace, then adjust in the Edit, Rigging, Animation and Physics workspaces as needed.
-4. **Save and export**: `Ctrl+S` saves a `.psd2live` project; `Ctrl+G` opens export settings for `.cmo3` and / or the `.moc3` bundle.
+3. **Preview and refine** in the Preview workspace, then adjust in the Edit, Rigging, Animation, Physics and Texture workspaces as needed.
+4. **Save and export**: `Ctrl+S` saves a `.psd2live` project; `Ctrl+G` exports `.moc3` / `.cmo3`, and other formats are under **File → Export as**.
 
 <img src="../imgs/import-split.webp" width="560" alt="Splitting layers by mesh: legwear, footwear, eyelash and front hair are each detected as two parts">
 
@@ -74,7 +75,9 @@ Layer structure matters most for the automatic result:
 
 See [PSD preparation and naming](spec/PSD_LAYER_SPEC.md) for the full name table. Unrecognized layers are kept and can be classified manually.
 
-## Output files
+## Export
+
+**File → Export Live2D model…** (`Ctrl+G`) writes the Cubism formats:
 
 | File | Purpose |
 | --- | --- |
@@ -83,27 +86,51 @@ See [PSD preparation and naming](spec/PSD_LAYER_SPEC.md) for the full name table
 | `.model3.json` + `.moc3` + textures, physics, motions | Runtime bundle; deliver together and load from `.model3.json` |
 | `.psd2live.json` | Export diagnostics, not a project |
 
-Export targets Cubism 3.0 – 5.0 (default 5.0); features the target cannot express are downgraded and reported. A successful export does not guarantee identical results in every runtime, so check the model in the target editor and runtime before delivery. Support boundaries are described in the [runtime and export reference](../zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md) (Chinese). Through the neutral rig IR the model also exports to a VTube Studio model, the PSD2Live runtime rig and web player, a layered PSD at a pose, PNG sequences, sprite sheets, GIF and video, each with a loss report; see [export targets](../zh/spec/EXPORT_TARGETS.md) (Chinese).
+The target version ranges from Cubism 3.0 to 5.3 (default 5.0); features the target cannot express are downgraded and reported.
 
-The built-in renderer needs no official SDK. [Cubism native preview](guide/CUBISM_SDK_SETUP.md) is optional and lets you compare against the official runtime's rendering and physics.
+**File → Export as** offers other formats:
+
+| Format | Notes |
+| --- | --- |
+| VTube Studio | The `.moc3` bundle plus `.vtube.json`, mapping face tracking onto the standard parameters, one hotkey per motion |
+| PSD2Live runtime rig / web player | A `.p2lrt` rig, or a WebGL player page that opens in a browser; see [runtime](../zh/spec/RUNTIME.md) (Chinese) |
+| PNG sequence, sprite sheet, GIF | Rendered from sampled motions |
+| APNG, animated WebP, MP4, WebM, ProRes 4444 | Encoded by ffmpeg, which you install yourself (set it in the settings or put it on `PATH`) |
+| PSD at a pose, source PSD | A layered PSD of the current pose, or the source PSD including generated layers |
+
+Every export compiles through the same neutral rig IR and comes with a loss report listing what the target format cannot keep. Spine 4.2, DragonBones 5.5 and glTF 2.0 are experimental targets available only from the command line. See [export targets](../zh/spec/EXPORT_TARGETS.md) (Chinese).
+
+A successful export does not guarantee identical results in every runtime, so check the model in the target editor and runtime before delivery; support boundaries are described in the [runtime and export reference](../zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md) (Chinese). The built-in renderer needs no official SDK. [Cubism native preview](guide/CUBISM_SDK_SETUP.md) is optional and lets you compare against the official runtime's rendering and physics.
+
+## Playing models in your own project
+
+[`runtime/`](../../runtime/) is an open-source (MIT) Rust runtime that plays exported `.p2lrt` rigs: parameter-driven deformation, physics, motion clips, and procedural blinking, breathing, gaze and lip sync. It exposes a C interface; the web player uses its WebAssembly build, and a Godot 4 node, `P2LCharacter`, lives in [`runtime/godot/`](../../runtime/godot/). The editor's software preview evaluates through the same library. See [runtime](../zh/spec/RUNTIME.md) (Chinese).
 
 ## Connecting an agent (MCP)
 
 1. Keep PSD2Live running and open **Tools → MCP → MCP Connection & Setup…**.
 2. Copy the configuration for your host. Hosts with Streamable HTTP connect directly; Stdio-only hosts use [`mcp_proxy.py`](../../mcp_proxy.py) in the repository root.
-3. Have the agent call `workspace_inspect` first. Every write goes into the same history as UI edits and can be undone in the app.
+3. Have the agent call `workspace_list_operations` to discover operations, then `workspace_inspect` to read the project. Every write goes into the same history as UI edits and can be undone in the app.
 
-The [MCP reference](../zh/agent/MCP_AUTHORING.md) (Chinese) lists requests and examples. The MCP server does not generate images; new artwork requires image generation in the host. A callable tool does not make a complex modeling task reliable; [recorded evaluations](../zh/STATUS.md) keep both successes and failures.
+`workspace_apply_edits` commits several edits atomically (all or nothing), and `workspace_preview_edits` dry-runs them to check geometry without changing the project. The [MCP reference](../zh/agent/MCP_AUTHORING.md) (Chinese) lists requests and examples. The MCP server does not generate images; new artwork requires image generation in the host. A callable tool does not make a complex modeling task reliable; [recorded evaluations](../zh/STATUS.md) keep both successes and failures.
 
 ## Build from source
 
-Requires JDK 21; Gradle runs through the bundled wrapper.
+Requires JDK 21; Gradle runs through the bundled wrapper. When Rust (cargo) is installed the Rust runtime is built too; without it the step is skipped and the editor uses its built-in evaluator.
 
 ```bash
-./gradlew run                      # start the GUI (Windows: .\gradlew.bat run or run-gui.bat)
-./gradlew run --args="--input examples/tml/psd-input/tml.psd --output build/example-output"   # generate from the command line
-./gradlew test                     # run the tests
-./gradlew packageDistributionForCurrentOS   # build an installer for this platform
+# start the GUI (Windows: .\gradlew.bat run or run-gui.bat)
+./gradlew run
+
+# generate a model from a PSD on the command line
+./gradlew run --args="--input examples/tml/psd-input/tml.psd --output build/example-output"
+
+# export a project to another format, e.g. GIF
+./gradlew run --args="export model.psd2live --target gif --set clip=Nod"
+
+# run the tests / build an installer for this platform
+./gradlew test
+./gradlew packageDistributionForCurrentOS
 ```
 
 Source builds use the built-in renderer. The official Cubism SDK must be obtained separately to build the native bridge. See [development and CLI](guide/DEVELOPMENT.md) for all CLI options, packaging and native builds.
@@ -115,7 +142,7 @@ Source builds use the built-in renderer. The official Cubism SDK must be obtaine
 | [User guide](guide/USER_GUIDE.md) · [Development and CLI](guide/DEVELOPMENT.md) | [PSD preparation](spec/PSD_LAYER_SPEC.md) · [Deformers and parameters](spec/DEFORMER_AND_PARAMETER_SPEC.md) |
 | [Cubism native preview](guide/CUBISM_SDK_SETUP.md) · [CI and releases](guide/CUBISM_CI_RELEASE.md) | [Project format](spec/PROJECT_FORMAT.md) · [Implementation overview](spec/IMPLEMENTATION_COMPARISON.md) |
 
-Guides for canvas editing, skeletons, swing, physics and texture upscaling are currently in Chinese; see the [documentation index](../README.md). Example PSDs and outputs are in [examples](../../examples/readme.md).
+Guides for canvas editing, skeletons, swing, physics, simulation and texture upscaling, and the export and runtime references, are currently in Chinese; see the [documentation index](../README.md). Example PSDs and outputs are in [examples](../../examples/readme.md).
 
 ## Contributing
 
@@ -127,6 +154,6 @@ Issues, reproducible PSDs, documentation fixes and code are welcome.
 
 ## License
 
-Code is released under [GPL-3.0](../../LICENSE); see [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md) for third-party components. Example artwork has its own usage terms.
+The application as a whole is released under [GPL-3.0](../../LICENSE): the `umamo` Live2D engine, the Cubism and PSD export targets and the application itself are GPL-3.0. The neutral rig IR (`format-model`), the export framework (`format-compile`), the other export targets and the Rust runtime (`runtime/`) are MIT and can be reused on their own; see each module's `LICENSE` and the [module table](../zh/spec/EXPORT_TARGETS.md#模块) (Chinese). Third-party components are listed in [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md); example artwork has its own usage terms.
 
 PSD2Live is an independent project, not affiliated with or endorsed by Live2D Inc. This repository does not contain or distribute proprietary Live2D Cubism SDK components. Live2D and Cubism are trademarks of Live2D Inc.
