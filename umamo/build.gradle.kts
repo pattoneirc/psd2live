@@ -36,7 +36,7 @@ tasks.withType<Test>().configureEach {
 	}
 }
 
-// Every engine test is quick; the root quickTest includes this module's suite.
+// Every engine test is quick.
 tasks.register("quickTest") {
 	group = "verification"
 	description = "Runs the engine tests."
