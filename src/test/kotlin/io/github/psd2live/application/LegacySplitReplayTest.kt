@@ -2,6 +2,8 @@ package io.github.psd2live.application
 
 import io.github.psd2live.core.*
 import io.github.psd2live.format.compile.document.ContentHash
+import io.github.psd2live.i18n.AppLanguage
+import io.github.psd2live.i18n.I18n
 import io.github.psd2live.project.*
 import io.github.psd2live.targets.cubism.PuppetIr
 import kotlinx.coroutines.runBlocking
@@ -18,6 +20,11 @@ import kotlin.test.*
 class LegacySplitReplayTest {
     @TempDir lateinit var temporary: Path
     private val builder = WorkspacePreviewBuilder()
+    private val language = I18n.currentLanguage
+
+    // Generated names follow the UI language, and the project was saved (and its hashes taken) in Chinese.
+    @BeforeTest fun pinLanguage() = I18n.setLanguage(AppLanguage.CHINESE, persist = false)
+    @AfterTest fun restoreLanguage() = I18n.setLanguage(language, persist = false)
 
     private val hashes = mapOf(
         "history-a8855e4e-2343-4c25-ac37-5bbd5975f837" to "4a0b26852596e8ebcb3371a571667378edc016d7e515258298ecd7aabd2ff6a0",
