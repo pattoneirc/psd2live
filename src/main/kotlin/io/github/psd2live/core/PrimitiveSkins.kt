@@ -5,6 +5,7 @@ import org.umamo.runtime.model.Drawable
 import org.umamo.runtime.model.DrawableId
 import org.umamo.runtime.model.Glue
 import org.umamo.runtime.model.ParameterId
+import org.umamo.runtime.model.PartId
 
 /**
  * Split parts the skeleton skinned with the base rig. An `art_primitive` record creates its parts only where it
@@ -33,7 +34,37 @@ class PrimitiveSkins internal constructor(
 	val generatedAxes: Map<DrawableId, Set<ParameterId>> = emptyMap(),
 	/** Superseded drawables the base built as stubs for later v2 records; excluded from [BuiltRig.resolvedPuppet]. */
 	val stubs: Set<DrawableId> = emptySet(),
+	/**
+	 * Base drawables whose generated masks name v2 parts: the list as generated. The base names, in place of
+	 * each part, the drawable it replaces (its passenger), so the journal before the record sees a consistent rig;
+	 * a record restores these lists for the masks naming its parts.
+	 */
+	val generatedMasks: Map<DrawableId, List<DrawableId>> = emptyMap(),
+	/** Per v2 part, the part-tree slot generation gives it (its passenger may sit in another). */
+	val partSlots: Map<DrawableId, PartId> = emptyMap(),
+	/**
+	 * Per v2 part, the generator node owning each axis of its generated grids, in part and axis order:
+	 * `mesh:<layer>` ([DocumentGenerators.meshId]) for its mesh stage's feature axes, [DocumentGenerators.SKELETON]
+	 * for the bone axes the bake added.
+	 */
+	val ownership: Map<DrawableId, Map<ParameterId, String>> = emptyMap(),
+	/**
+	 * v2 parts whose record names a parent (a journal edit made it): generated without keyforms or skin, their
+	 * positions canvas units - the replay places them into that parent's space once it exists.
+	 */
+	val deferredParents: Set<DrawableId> = emptySet(),
+	/** Per v2 part, its source layer. */
+	val partLayers: Map<DrawableId, String> = emptyMap(),
+	/** Per v2 part, its generated neutral bounds (canvas units). */
+	val neutralBounds: Map<DrawableId, Bounds> = emptyMap(),
+	/** Per v2 part, the drawable its record's `replace` says it takes the place of. */
+	val replaces: Map<DrawableId, DrawableId> = emptyMap(),
+	/** The v2 layer set the base was built from ([ArtPrimitiveV2.resolve]). */
+	val resolved: ResolvedLayers = ResolvedLayers.Empty,
 ) {
+	/** The held-back v2 parts, in record order. */
+	val parts: List<Drawable> get() = partLayers.keys.mapNotNull { drawables[it] }
+
 	companion object {
 		val None = PrimitiveSkins(emptyMap(), emptyList())
 	}

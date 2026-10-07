@@ -19,8 +19,12 @@ internal object RigGenerationSource {
     }
 
     fun prepare(input: PipelineAnalysis, config: PipelineConfig, textureConfig: PipelineConfig = config): Analyses {
-        val reference = config.generationSource ?: return RigBuildProfile.stage("prepare: mouth lips") { MouthLipLayers.prepare(input, config) }.let { Analyses(it, it) }
+        val reference = config.generationSource ?: return RigBuildProfile.stage("prepare: mouth lips") {
+            MouthLipLayers.prepare(PrimitiveResolution.of(config.rigEdits).let { if (it.active) currentParts(input, it, config) else input }, config)
+        }.let { Analyses(it, it) }
+        val resolution = PrimitiveResolution.of(config.rigEdits)
         val geometryAnalysis = RigBuildProfile.stage("prepare: geometry analyze") { CharacterAnalyzer.analyze(geometrySource(input.source, reference, config.rigEdits), config) }
+            .let { if (resolution.active) resolvedAnalysis(it, resolution, config) else it }
         val geometry = RigBuildProfile.stage("prepare: geometry mouth lips") { MouthLipLayers.prepare(geometryAnalysis, config) }
         val current = input.source.layers.associateBy { it.id.raw }
         val creationCoverage = config.rigEdits.authoringJournal.filter { it["op"]?.jsonPrimitive?.contentOrNull == RasterMeshCreation.OP }
@@ -64,7 +68,7 @@ internal object RigGenerationSource {
                         override val id = layer.source.id
                         override val name = layer.source.name
                     } } ?: error("Generation layer has no current artwork")
-                val classified = CharacterAnalyzer.classify(artwork, textureConfig)
+                val classified = resolution.classify(CharacterAnalyzer.classify(artwork, textureConfig), textureConfig)
                 val covered = padded(artwork, layer.source.bounds).let { source -> creationCoverage[artwork.id.raw]?.let { padded(source, it) } ?: source }
                 layer.copy(source = covered, semantic = classified.semantic, bounds = classified.bounds,
                     centroidX = classified.centroidX, centroidY = classified.centroidY,
@@ -78,7 +82,7 @@ internal object RigGenerationSource {
                 LayerRaster(lip.raster.width, lip.raster.height, ByteArray(lip.raster.rgba.size)), lip.bounds)
             val covered = creationCoverage[lip.id.raw]?.let { padded(source, it) } ?: source
             layer.copy(source = MouthLipLayer(lip.ownerId, lip.side, owner, covered.raster, covered.bounds), opaquePixels = layer.opaquePixels.coerceAtLeast(1))
-        } + primitiveCoverage.mapNotNull { (id, coverage) ->
+        } + primitiveCoverage.filterNot { (id, _) -> resolution.active && geometry.layers.any { it.source.id.raw == id } }.mapNotNull { (id, coverage) ->
             // Primitive layers are textured, never generated. A superseded one keeps a transparent tile.
             val artwork = current[id]?.let { padded(it, coverage) } ?: if (id in superseded) ArtPrimitiveJournal.placeholder(id, id, coverage) else null
             artwork?.let { CharacterAnalyzer.classify(it, textureConfig).let { classified -> classified.copy(opaquePixels = classified.opaquePixels.coerceAtLeast(1)) } }
@@ -105,7 +109,9 @@ internal object RigGenerationSource {
         }
         val previous = reference.layers.associateBy { it.id.raw }
         val partitions = partitionCoverage(overlay)
-        val owned = ArtPrimitiveJournal.ownedLayers(overlay)
+        val resolution = PrimitiveResolution.of(overlay)
+        // Version 2 parts generate like any layer (Rule A); only version 1 parts stay out of the generation.
+        val owned = if (resolution.active) resolution.legacyOwnedLayers else ArtPrimitiveJournal.ownedLayers(overlay)
         val superseded = ArtPrimitiveJournal.supersededLayers(overlay)
         val currentById = current.layers.associateBy { it.id.raw }
         // A superseded layer still generates, in the slot its replacements hold, so the frames and identities
@@ -115,7 +121,7 @@ internal object RigGenerationSource {
             object : SourceLayer by layer { override val order = order }
         }
         // Current metadata and newly added layers remain authoritative; existing raster shapes stay fixed.
-        return object : SourceArt by current {
+        val generation = object : SourceArt by current {
             override val layers = (if (owned.isEmpty() && restored.isEmpty()) current.layers else
                 current.layers.filterNot { it.id.raw in owned } + restored).map { layer ->
                 if (layer.id.raw in superseded && layer.id.raw !in currentById) return@map layer
@@ -137,6 +143,51 @@ internal object RigGenerationSource {
                 } } ?: layer
             }
         }
+        return if (resolution.active) pinnedSource(generation, resolution, overlay, currentById) else generation
+    }
+
+    /**
+     * [generation] with the parts of version 2 records: a part's current pixels padded to the rectangle its mesh
+     * samples (painting a part moves its footprint, never its pinned mesh), and a transparent stand-in at that
+     * rectangle for a part a later record superseded, which only its own record's replay shows.
+     */
+    private fun pinnedSource(generation: SourceArt, resolution: PrimitiveResolution, overlay: RigEditOverlay,
+                             current: Map<String, SourceLayer>): SourceArt {
+        val present = generation.layers.mapTo(HashSet()) { it.id.raw }
+        val missing = resolution.parts.filter { it.layerId !in present }.distinctBy { it.layerId }.map { part ->
+            val stand = ArtPrimitiveJournal.placeholder(part.layerId, part.name, part.sourceBounds)
+            val order = ArtPrimitiveJournal.anchorOrder(overlay, part.layerId, current) ?: 0
+            object : SourceLayer by stand { override val order = order }
+        }
+        return object : SourceArt by generation {
+            override val layers = generation.layers.map { layer ->
+                resolution.partByLayer[layer.id.raw]?.let { padded(layer, it.sourceBounds) } ?: layer
+            } + missing
+        }
+    }
+
+    /**
+     * [input] - the current art, without a saved generation input - with its version 2 parts padded to the
+     * rectangle their meshes sample and resolved like [resolvedAnalysis]. Superseded layers are gone from the art,
+     * so the base builds no passenger for them.
+     */
+    private fun currentParts(input: PipelineAnalysis, resolution: PrimitiveResolution, config: PipelineConfig): PipelineAnalysis =
+        resolvedAnalysis(input.copy(layers = input.layers.map { layer ->
+            resolution.partByLayer[layer.source.id.raw]?.let { layer.copy(source = padded(layer.source, it.sourceBounds)) } ?: layer
+        }), resolution, config)
+
+    /**
+     * The geometry analysis of a document with version 2 records: parts classified from their layer override
+     * (the record's classification otherwise) and never empty, and anchors read off the resolved set only.
+     */
+    private fun resolvedAnalysis(analysis: PipelineAnalysis, resolution: PrimitiveResolution, config: PipelineConfig): PipelineAnalysis {
+        val layers = analysis.layers.map { layer ->
+            if (!resolution.isPartLayer(layer.source.id.raw)) layer
+            else resolution.classify(layer, config).let { it.copy(opaquePixels = it.opaquePixels.coerceAtLeast(1)) }
+        }
+        val resolved = resolution.aggregates(layers).filter { it.opaquePixels > 0 }
+        return analysis.copy(layers = layers, anchors = analysis.calibration?.anchors
+            ?: if (resolved.isEmpty()) analysis.anchors else CharacterAnalyzer.anchorsFor(resolved))
     }
 
     fun repack(rig: BuiltRig, geometry: PipelineAnalysis, from: PackedAtlas,
@@ -169,7 +220,14 @@ internal object RigGenerationSource {
             drawable.copy(mesh = DrawableMesh(mesh.positions, uvs, mesh.indices), texturePage = next.page)
         }
         val (atlas, sources) = PuppetSourceAtlas.build(textures, to)
-        return rig.copy(puppet = rig.puppet.copy(drawables = drawables, atlas = atlas, sources = sources), pageByDrawableId = pages)
+        // Parked version 2 parts keep canvas-unit texture coordinates; only the page they sample follows the layout.
+        val skins = rig.primitiveSkins
+        val parked = if (skins.partLayers.isEmpty()) skins else PrimitiveSkins(skins.drawables.mapValues { (id, drawable) ->
+            skins.partLayers[id]?.let { layer -> to.placementByLayerId[layer]?.let { drawable.copy(texturePage = it.page) } } ?: drawable
+        }, skins.glues, skins.paths, skins.generatedAxes, skins.stubs, skins.generatedMasks, skins.partSlots, skins.ownership,
+            skins.deferredParents, skins.partLayers, skins.neutralBounds, skins.replaces, skins.resolved)
+        return rig.copy(puppet = rig.puppet.copy(drawables = drawables, atlas = atlas, sources = sources), pageByDrawableId = pages,
+            primitiveSkins = parked)
     }
 
     /**

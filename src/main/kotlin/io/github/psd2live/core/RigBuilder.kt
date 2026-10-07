@@ -123,8 +123,54 @@ data class BuiltRig(
 	 * stubs - every document without v2 records.
 	 */
 	fun resolvedPuppet(): PuppetModel {
-		if (primitiveSkins.stubs.isEmpty()) return puppet
-		throw UnsupportedOperationException("Resolving v2 art primitive stubs is not implemented yet")
+		val skins = primitiveSkins
+		if (skins.stubs.isEmpty() && skins.partLayers.isEmpty()) return puppet
+		val stubs = skins.stubs
+		// Parts textured through this puppet's atlas, as their records place them; a part without a tile keeps canvas units.
+		val parts = skins.parts.filter { it.id !in stubs }.map { part ->
+			val tile = puppet.atlas.tiles.firstOrNull { it.id == part.atlasTileId }
+			val mesh = part.mesh
+			if (tile == null || mesh == null) part else {
+				val placed = part.copy(texturePage = tile.placement?.pageIndex ?: part.texturePage)
+				runCatching { placed.copy(mesh = DrawableMesh(mesh.positions, RasterMeshJournal.TextureCoordinates(puppet, placed).toUvs(mesh.uvs), mesh.indices)) }
+					.getOrDefault(placed)
+			}
+		}
+		val partIds = parts.mapTo(HashSet()) { it.id }
+		val kept = puppet.drawables.filterNot { it.id in stubs }.map { drawable ->
+			skins.generatedMasks[drawable.id]?.let { masks -> drawable.copy(maskedBy = masks.filter { it !in stubs }) } ?: drawable
+		}
+		val drawables = kept + parts
+		val present = drawables.mapTo(HashSet()) { it.id }
+		// Each part takes its passenger's place where they share a slot, otherwise it joins its own slot's end.
+		val placedParts = HashSet<DrawableId>()
+		val tree = puppet.parts.map { owner ->
+			val children = owner.children.flatMap { child ->
+				val id = (child as? OrgChild.Drawable)?.id ?: return@flatMap listOf(child)
+				if (id !in stubs) return@flatMap listOf(child)
+				parts.filter { part -> skins.partSlots[part.id] == owner.id && part.id !in placedParts &&
+					replaced(part.id, id) }
+					.onEach { placedParts += it.id }.map { OrgChild.Drawable(it.id) }
+			}
+			owner.copy(children = children)
+		}.map { owner ->
+			val rest = parts.filter { skins.partSlots[it.id] == owner.id && it.id !in placedParts }
+			if (rest.isEmpty()) owner else owner.copy(children = owner.children + rest.map { OrgChild.Drawable(it.id) }).also { placedParts += rest.map { it.id } }
+		}
+		val glues = puppet.glues.filterNot { it.meshA in stubs || it.meshB in stubs } +
+			skins.glues.filter { (it.meshA in partIds || it.meshB in partIds) && it.meshA in present && it.meshB in present }
+		return puppet.copy(drawables = drawables, parts = tree, glues = glues,
+			deformPaths = puppet.deformPaths.filterNot { it.drawableId in stubs } + skins.paths.filter { it.drawableId in partIds },
+			vertexGroups = puppet.vertexGroups.filterNot { it.drawableId in stubs }).withDerivedRenderRoot()
+	}
+
+	/** Whether v2 part [part] replaces [stub], directly or through records in between. */
+	private fun replaced(part: DrawableId, stub: DrawableId): Boolean {
+		val resolution = primitiveSkins.replaces
+		var current = part
+		val seen = HashSet<DrawableId>()
+		while (seen.add(current)) { current = resolution[current] ?: return false; if (current == stub) return true }
+		return false
 	}
 }
 
@@ -306,9 +352,11 @@ object RigBuilder {
 				)
 			}
 		}
+		// Version 2 records: the aggregates read the resolved set - no superseded layer, parts on their pinned meshes.
+		val resolution = PrimitiveResolution.of(config.rigEdits)
 		val analysis = RigBuildProfile.stage("context: mesh footprints + anchors") { meshFramedAnalysis(inputAnalysis.copy(
-			layers = inputAnalysis.layers.filter { it.source !is MouthLipLayer },
-		), config, meshCache) }
+			layers = resolution.aggregates(inputAnalysis.layers.filter { it.source !is MouthLipLayer }),
+		), config, meshCache, resolution) }
 		val layout = analysis.calibration ?: analysis
 		val scaffold = scaffold(analysis, config, stagesOf(meshCache))
 		// The eye whites carry their layers, which a reused scaffold must not hand out from an older analysis.
@@ -483,22 +531,55 @@ object RigBuilder {
 		analysis: PipelineAnalysis,
 		config: PipelineConfig,
 		meshCache: PreviewMeshCache?,
+		resolution: PrimitiveResolution = PrimitiveResolution.Inactive,
 	): PipelineAnalysis {
-		val unitScale = MeshResolution.unitScale(config, analysis.source)
-		val layers = analysis.layers.map { layer ->
-			val footprint = meshFootprint(layer, config, meshCache, unitScale) ?: return@map layer
-			layer.copy(
-				bounds = footprint.bounds,
-				centroidX = footprint.centerX,
-				centroidY = footprint.centerY,
-			)
-		}
+		val layers = framedLayers(analysis.layers, analysis, config, meshCache, resolution)
 		val calibration = analysis.calibration?.let { meshFramedAnalysis(it, config, meshCache) }
 		return analysis.copy(
 			layers = layers,
 			anchors = calibration?.anchors ?: CharacterAnalyzer.anchorsFor(layers),
 			calibration = calibration,
 		)
+	}
+
+	/** [layers] with their mesh footprints as bounds and centroid; a version 2 part's footprint is its pinned mesh. */
+	private fun framedLayers(
+		layers: List<ClassifiedLayer>, analysis: PipelineAnalysis, config: PipelineConfig, meshCache: PreviewMeshCache?,
+		resolution: PrimitiveResolution,
+	): List<ClassifiedLayer> {
+		val unitScale = MeshResolution.unitScale(config, analysis.source)
+		return layers.map { layer ->
+			val pinned = resolution.partByLayer[layer.source.id.raw]
+			val footprint = (if (pinned != null) pinnedFootprint(pinned) else meshFootprint(layer, config, meshCache, unitScale)) ?: return@map layer
+			layer.copy(
+				bounds = footprint.bounds,
+				centroidX = footprint.centerX,
+				centroidY = footprint.centerY,
+			)
+		}
+	}
+
+	/** The footprint of a part's recorded mesh: the canvas positions its triangles cover, centred on their area. */
+	private fun pinnedFootprint(part: ResolvedPart): MeshFootprint? {
+		if (part.triangles.isEmpty()) return null
+		val p = part.positions
+		var left = Float.POSITIVE_INFINITY; var top = Float.POSITIVE_INFINITY
+		var right = Float.NEGATIVE_INFINITY; var bottom = Float.NEGATIVE_INFINITY
+		for (vertex in part.triangles) {
+			left = minOf(left, p[vertex * 2]); top = minOf(top, p[vertex * 2 + 1])
+			right = maxOf(right, p[vertex * 2]); bottom = maxOf(bottom, p[vertex * 2 + 1])
+		}
+		val bounds = Bounds(left, top, right, bottom)
+		var area = 0.0; var weightedX = 0.0; var weightedY = 0.0
+		for (offset in part.triangles.indices step 3) {
+			val a = part.triangles[offset] * 2; val b = part.triangles[offset + 1] * 2; val c = part.triangles[offset + 2] * 2
+			val triangle = kotlin.math.abs((p[b] - p[a]).toDouble() * (p[c + 1] - p[a + 1]) - (p[b + 1] - p[a + 1]).toDouble() * (p[c] - p[a]))
+			area += triangle
+			weightedX += triangle * (p[a] + p[b] + p[c]) / 3.0
+			weightedY += triangle * (p[a + 1] + p[b + 1] + p[c + 1]) / 3.0
+		}
+		return if (area > 1e-10) MeshFootprint(bounds, (weightedX / area).toFloat(), (weightedY / area).toFloat())
+		else MeshFootprint(bounds, bounds.centerX, bounds.centerY)
 	}
 
 	private data class MeshFootprint(val bounds: Bounds, val centerX: Float, val centerY: Float)
@@ -817,6 +898,19 @@ object RigBuilder {
 		val extraPartId = PartId("PartExtra")
 		val rawDeformers = context.deformers
 		val stages = stagesOf(meshCache)
+		// Version 2 art primitives (see [PrimitiveResolution]): the drawable loop builds the layers the journal
+		// before each record addresses - the superseded layers in their slots as passengers, never the parts - so
+		// ids and default draw orders are those of a base without the split; the parts are built after it on
+		// their pinned meshes and parked for their records. Inactive, every list below is the one it always was.
+		val resolution = PrimitiveResolution.of(config.rigEdits)
+		val v2 = resolution.active
+		val passengers = if (!v2) emptyList() else framedLayers(inputAnalysis.layers.filter {
+			it.source !is MouthLipLayer && resolution.isStubLayer(it.source.id.raw)
+		}, inputAnalysis, config, meshCache, resolution)
+		val partLayers = if (!v2) emptyMap() else (analysis.layers + passengers).filter { resolution.isPartLayer(it.source.id.raw) }
+			.associateBy { it.source.id.raw }
+		val baseLayers = if (!v2) analysis.layers
+			else analysis.layers.filterNot { resolution.isPartLayer(it.source.id.raw) } + passengers.filterNot { resolution.isPartLayer(it.source.id.raw) }
 		// The face lean rewrites each warp's own grid and nothing else, so it commutes with the re-parenting below.
 		val leaned = stages?.get(RigStageCache.LEAN, 8, Identity(rawDeformers, config.rigTuning)) { withFaceLean(rawDeformers, config.rigTuning) }
 			?: withFaceLean(rawDeformers, config.rigTuning)
@@ -903,7 +997,10 @@ object RigBuilder {
 		val builtDeformPaths = mutableListOf<DeformPath>()
 		val meshConfig = stageConfig(config, skeleton = false)
 		val reservedDrawableIds = stableDrawableIds.values.toMutableSet()
-		val orderedLayers = orderMouthLayers(analysis.layers.sortedBy { it.source.order })
+		val orderedLayers = orderMouthLayers(baseLayers.sortedBy { it.source.order })
+		// A passenger keys a toggle or switch only while the resolved layers still need its parameter.
+		val knownParameters = if (!v2) emptySet() else (StandardParameters.all + customParams).mapTo(HashSet()) { it.id }
+		val ghostIds = LinkedHashSet<DrawableId>()
 		for ((drawIndex, layer) in orderedLayers.withIndex()) {
 			val placement = atlas.placementByLayerId[layer.source.id.raw]
 			if (placement == null || layer.opaquePixels == 0) {
@@ -938,7 +1035,11 @@ object RigBuilder {
 			val override = config.layerOverrides[layer.source.id.raw]
 			val classification = override?.type ?: layer.semantic.type
 			val channelGrids = if (config.meshOnly && classification == LayerType.PRESET) ChannelGrids.Empty
-				else channelStage(layer, override, switchParamKeys, config.rigTuning, stages)
+				else channelStage(layer, override, switchParamKeys, config.rigTuning, stages).let { grids ->
+					if (v2 && resolution.isStubLayer(layer.source.id.raw) &&
+						grids.gridsByChannel.values.any { grid -> grid.axes.any { it.parameterId !in knownParameters } }) ChannelGrids.Empty else grids
+				}
+			if (v2 && resolution.isStubLayer(layer.source.id.raw)) ghostIds += id
 			val drawable = Drawable(
 				id = id,
 				name = layer.source.name,
@@ -975,16 +1076,42 @@ object RigBuilder {
 			layerIdByDrawable[id.raw] = layer.source.id.raw
 		}
 
+		// The parts, after every layer of the base: ids from their records, draw order from the drawable they replace.
+		val partDrawables = ArrayList<Drawable>()
+		val deferredParts = LinkedHashSet<DrawableId>()
+		val partLayerById = LinkedHashMap<DrawableId, String>()
+		val partNeutralBounds = LinkedHashMap<DrawableId, Bounds>()
+		if (v2) for (part in resolution.parts) {
+			val layer = partLayers[part.layerId] ?: continue
+			if (atlas.placementByLayerId[part.layerId] == null || partDrawables.any { it.id == part.drawableId } ||
+				drawables.any { it.id == part.drawableId }) continue
+			val baseIds = drawables.mapTo(HashSet()) { it.id }
+			val standIn = resolution.baseStandIn(part.drawableId, baseIds)
+			val order = config.drawOrderOverrides[part.layerId] ?: config.drawOrderOverrides[part.drawableId.raw]
+				?: (drawables.firstOrNull { it.id == standIn } ?: partDrawables.firstOrNull { it.id == standIn })?.drawOrder
+				?: org.umamo.runtime.model.DEFAULT_DRAW_ORDER.toFloat()
+			val built = pinnedPart(part, layer, context, config, shouldBuildDeformers, switchParamKeys, stages, order,
+				atlas.placementByLayerId.getValue(part.layerId).page)
+			partDrawables += built.first
+			if (part.parent != null) deferredParts += part.drawableId
+			classifiedByDrawable[part.drawableId] = layer
+			partLayerById[part.drawableId] = part.layerId
+			partNeutralBounds[part.drawableId] = built.second
+		}
+
 		val assemblyStart = System.nanoTime()
-		val drawableByTagSide = drawables.groupBy { drawable ->
+		// Masks are generated among the resolved drawables: a passenger never masks, a part does.
+		val maskSources = if (!v2) drawables else drawables.filterNot { it.id in ghostIds } + partDrawables
+		val maskTargets = if (!v2) drawables else drawables + partDrawables
+		val drawableByTagSide = maskSources.groupBy { drawable ->
 			val semantic = classifiedByDrawable.getValue(drawable.id).semantic
 			semantic.tag to semantic.side
 		}
-		val mouthMasks = drawables.filter { drawable ->
+		val mouthMasks = maskSources.filter { drawable ->
             drawable.id !in lipOwnerById &&
 			classifiedByDrawable.getValue(drawable.id).semantic.tag in setOf(SemanticTag.MOUTH, SemanticTag.MOUTH_OPEN)
 		}
-		val maskedDrawables = drawables.map { drawable ->
+		val maskedAll = maskTargets.map { drawable ->
 			val semantic = classifiedByDrawable.getValue(drawable.id).semantic
 			when {
 				semantic.tag == SemanticTag.IRIDES -> {
@@ -1024,6 +1151,19 @@ object RigBuilder {
 
 		}
 
+		// The base is the world before the records: a mask naming a part names the drawable it replaces there, and
+		// the generated list goes to the side channel for the record to restore.
+		val generatedMasks = LinkedHashMap<DrawableId, List<DrawableId>>()
+		val baseDrawableIds = if (!v2) emptySet() else drawables.mapTo(HashSet()) { it.id }
+		val maskedDrawables = if (!v2) maskedAll else maskedAll.filter { it.id in baseDrawableIds }.map { drawable ->
+			val rewritten = drawable.maskedBy.map { resolution.baseStandIn(it, baseDrawableIds) }.distinct()
+			if (rewritten == drawable.maskedBy) drawable else {
+				generatedMasks[drawable.id] = drawable.maskedBy
+				drawable.copy(maskedBy = rewritten)
+			}
+		}
+		val maskedParts = if (!v2) emptyList() else maskedAll.filter { it.id in partLayerById }
+
 		fun childrenFor(group: LayerGroup): List<OrgChild> =
 			maskedDrawables
 				.filter { inferredGroup(classifiedByDrawable.getValue(it.id), analysis.anchors) == group }
@@ -1061,6 +1201,21 @@ object RigBuilder {
 			Part(extraPartId, tr("model.part.extra"), childrenFor(LayerGroup.EXTRA), groupMode = PartGroupMode.PassThrough),
 			Part(bodyPartId, tr("model.part.body"), childrenFor(LayerGroup.BODY) + childrenFor(LayerGroup.UNKNOWN), groupMode = PartGroupMode.PassThrough),
 		)
+		// Each part's slot in the part tree, as [childrenFor] and [headChildrenFor] would give it.
+		val partSlots = LinkedHashMap<DrawableId, PartId>()
+		for (part in maskedParts) {
+			val layer = classifiedByDrawable.getValue(part.id)
+			partSlots[part.id] = when (inferredGroup(layer, analysis.anchors)) {
+				LayerGroup.HEAD -> when {
+					layer.semantic.tag == SemanticTag.BACK_HAIR -> backHairPartId
+					layer.semantic.tag in faceTags -> facePartId
+					layer.semantic.tag == SemanticTag.FRONT_HAIR -> frontHairPartId
+					else -> headAccessoryPartId
+				}
+				LayerGroup.EXTRA -> extraPartId
+				else -> bodyPartId
+			}
+		}
 		val standardIds = StandardParameters.all.map { it.id }.toSet()
 		val uniqueCustomParams = customParams.filter { it.id !in standardIds }
 		val parameterTree = parameterTree(uniqueCustomParams)
@@ -1101,6 +1256,24 @@ object RigBuilder {
 			// moving, scaling or repacking tiles reuses it. Split parts its bones bind are skinned with it and handed
 			// to their journal records (see [PrimitiveSkins]); they texture in canvas units, which interpolate alike.
 			val parts = skeleton?.let { skinnablePrimitives(unbound, it, config) }.orEmpty()
+			if (v2) {
+				// Version 2 parts bake with the base - a deferred-parent part has no skin - and passengers never bind.
+				val baked = maskedParts.filter { it.id !in deferredParts }
+				val locked = handEditedTopology(config) + resolution.parts.filter { it.fixedTopology }.map { it.drawableId.raw }
+				val spec = skeleton?.let { withoutBindings(it, ghostIds) }
+				val withParts = unbound.copy(drawables = unbound.drawables + parts + baked)
+				val skeletal = spec?.let { RigBuildProfile.stage("skeleton") {
+					SkeletonRig.takeLastKey()
+					SkeletonRig.generate(withParts, it, context.bodyFrame, locked, context.stance).also { skeletonKey = SkeletonRig.takeLastKey() }
+				} } ?: withParts
+				val (skinnedBase, skins) = parked(skeletal, parts.mapTo(HashSet()) { it.id }, maskedParts, deferredParts, resolution,
+					generatedMasks, partSlots, partLayerById, partNeutralBounds)
+				val skeletonPuppet = RigBuildProfile.stage("binding: UvBinding.bind") {
+					UvBinding.bind(skinnedBase, inputAnalysis, atlas) { classifiedByDrawable[it.id] }.puppet
+				}
+				return BuiltRig(skeletonPuppet, pageByDrawable, sourceBoundsByDrawable, layerIdByDrawable, faceCenterCanvas.first,
+					faceCenterCanvas.second, faceRig.radiusX, faceRig.radiusY, warnings, faceRig.initialAngleZ, unbound, primitiveSkins = skins)
+			}
 			val skeletal = skeleton
 				?.let { RigBuildProfile.stage("skeleton") {
 					SkeletonRig.takeLastKey()
@@ -1136,7 +1309,9 @@ object RigBuilder {
 				skinnedRecords(it, config)) },
 			listOf(pageByDrawable, sourceBoundsByDrawable, layerIdByDrawable, warnings.toList(), faceCenterCanvas,
 				faceRig.radiusX, faceRig.radiusY, faceRig.initialAngleZ),
-			io.github.psd2live.i18n.I18n.currentLanguage.tag)
+			io.github.psd2live.i18n.I18n.currentLanguage.tag,
+			if (!v2) null else listOf(resolution.resolved.contentKey, maskedParts, deferredParts, generatedMasks, partSlots,
+				partNeutralBounds, ghostIds))
 		val bound = stages.get(RigStageCache.BOUND, 4, key) { finish() to skeletonKey }
 		// Reusing the rig reuses its skeleton bake: keep that bake the most recent, as asking the skeleton cache would.
 		bound.second?.let(SkeletonRig::touch)
@@ -1155,6 +1330,8 @@ object RigBuilder {
 		val assembled: PuppetModel, val hairFront: Boolean, val hairBack: Boolean, val placements: Map<String, AtlasPlacement>,
 		val pages: List<Pair<Int, Int>>, val layers: List<List<Any?>>, val layerOfDrawable: Map<String, String>,
 		val skeleton: List<Any?>?, val result: List<Any?>, val language: String,
+		/** Version 2 parts and what is parked with them; null without v2 records. */
+		val primitives: List<Any?>? = null,
 	)
 
 	/** A key part compared by identity: a stage output that later stages reuse while it is the same instance. */
@@ -1235,6 +1412,49 @@ object RigBuilder {
 			for (part in ArtPrimitiveJournal.skinnable(model, command, bound)) if (parts.none { it.id == part.id }) parts += part
 		}
 		return parts
+	}
+
+	/** [spec] without bindings of [drawables]: a passenger never binds to a bone. */
+	private fun withoutBindings(spec: SkeletonSpec, drawables: Set<DrawableId>): SkeletonSpec {
+		if (drawables.isEmpty() || spec.bones.none { bone -> bone.drawableIds.any { DrawableId(it) in drawables } }) return spec
+		return spec.copy(bones = spec.bones.map { bone -> bone.copy(drawableIds = bone.drawableIds.filterNot { DrawableId(it) in drawables }) })
+	}
+
+	/**
+	 * [model] - baked with the version 2 [parts] (and the version 1 [legacy] skinned parts) - without them, and the
+	 * side channel that holds them: each part whole with the welds touching it and the paths on it, its generated
+	 * keyform axes and who owns them (its mesh stage, or the skeleton for axes the bake added), the generated mask
+	 * lists the base names passengers in, each part's slot in the part tree, and the stubs.
+	 */
+	private fun parked(
+		model: PuppetModel, legacy: Set<DrawableId>, parts: List<Drawable>, deferred: Set<DrawableId>, resolution: PrimitiveResolution,
+		generatedMasks: Map<DrawableId, List<DrawableId>>, slots: Map<DrawableId, PartId>, layers: Map<DrawableId, String>,
+		neutral: Map<DrawableId, Bounds>,
+	): Pair<PuppetModel, PrimitiveSkins> {
+		val ids = legacy + parts.map { it.id }
+		val (welds, glues) = model.glues.partition { it.meshA in ids || it.meshB in ids }
+		val byId = model.drawables.associateBy { it.id }
+		val held = LinkedHashMap<DrawableId, Drawable>()
+		for (id in legacy) byId[id]?.let { held[id] = it }
+		val axes = LinkedHashMap<DrawableId, Set<ParameterId>>()
+		val ownership = LinkedHashMap<DrawableId, Map<ParameterId, String>>()
+		for (part in parts) {
+			val baked = byId[part.id] ?: part
+			held[part.id] = baked
+			fun axesOf(drawable: Drawable) = (drawable.geometryGrid?.axes.orEmpty() + drawable.channelGrids.gridsByChannel.values.flatMap { it.axes })
+				.mapTo(LinkedHashSet()) { it.parameterId }
+			val generated = axesOf(part)
+			val all = axesOf(baked)
+			axes[part.id] = all
+			val node = DocumentGenerators.meshId(layers.getValue(part.id))
+			ownership[part.id] = all.associateWithTo(LinkedHashMap()) { if (it in generated) node else DocumentGenerators.SKELETON }
+		}
+		val skins = PrimitiveSkins(held, welds, model.deformPaths.filter { it.drawableId in ids }, axes, resolution.resolved.stubDrawables,
+			generatedMasks = generatedMasks, partSlots = slots, ownership = ownership, deferredParents = deferred,
+			partLayers = layers, neutralBounds = neutral, replaces = resolution.replaces, resolved = resolution.resolved)
+		return model.copy(drawables = model.drawables.filterNot { it.id in ids }, glues = glues,
+			deformPaths = model.deformPaths.filterNot { it.drawableId in ids },
+			vertexGroups = model.vertexGroups.filterNot { it.drawableId in ids }).withDerivedRenderRoot() to skins
 	}
 
 	/** [model] without the skinned split [parts], and those parts with the welds the bake gave them. */
@@ -1438,6 +1658,65 @@ object RigBuilder {
 			MeshResolution.unitScale(config, context.analysis.source), meshConfig, config.meshOverrides[layer.source.id.raw],
 			io.github.psd2live.i18n.I18n.currentLanguage.tag)
 		return stages.get(RigStageCache.MESH, 1024, key, build)
+	}
+
+	/**
+	 * One version 2 part built on its recorded mesh (Rule A): positions are the record's rest canvas positions,
+	 * expressed in the generated parent's frame like any layer's - never re-meshed - with texture coordinates in
+	 * canvas units (its record places it through the current atlas). Keyforms, channels and neutral bounds are
+	 * generated as for a layer of the part's role, against the resolved scaffold; a mouth part gets the whole-mouth
+	 * keyforms but no contour mesh or paths. A generator axis the record froze leaves the geometry to the record.
+	 * A part whose record names a parent keeps canvas positions under it and gets no keyforms.
+	 */
+	private fun pinnedPart(
+		part: ResolvedPart, layer: ClassifiedLayer, context: RigContext, config: PipelineConfig, deformersEnabled: Boolean,
+		switchParamKeys: Map<String, FloatArray>, stages: RigStageCache?, drawOrder: Float, page: Int,
+	): Pair<Drawable, Bounds> {
+		val rigLayer = context.rigLayer(layer)
+		val deferred = part.parent != null
+		val (generatedParent, parentFrame) = if (deferred) null to context.character else context.parentAndFrame(layer, config)
+		val headSpace = if (deferred) null else context.headSpaceFor(layer)
+		val canvas = part.positions
+		val rig = FloatArray(canvas.size)
+		val local = FloatArray(canvas.size)
+		for (index in canvas.indices step 2) {
+			val point = headSpace?.toAligned(canvas[index], canvas[index + 1]) ?: (canvas[index] to canvas[index + 1])
+			rig[index] = point.first; rig[index + 1] = point.second
+			local[index] = normalizeX(point.first, parentFrame); local[index + 1] = normalizeY(point.second, parentFrame)
+		}
+		val uvs = part.canvasUvs.copyOf()
+		val data = MeshData(DrawableMesh(local, uvs, part.triangles.copyOf()), rig)
+		val parentId = if (deferred) part.parent else if (deformersEnabled) generatedParent else null
+		val mesh = when {
+			deferred -> DrawableMesh(canvas.copyOf(), uvs, part.triangles.copyOf())
+			parentId != null -> data.mesh
+			else -> DrawableMesh(rig, uvs, part.triangles.copyOf())
+		}
+		val aperture = mouthApertureFor(rigLayer)
+		val generated = if (config.meshOnly || deferred) zeroMeshGrid(canvas.size)
+			else buildDrawableGeometry(rigLayer, data, parentFrame, context.faceRig, matchingEyeWhiteBounds(rigLayer, context.eyeWhiteLayers),
+				aperture, config, emptyList())
+		val geometry = if (generated.axes.any { it.parameterId in part.frozenAxes }) zeroMeshGrid(canvas.size) else generated
+		val override = config.layerOverrides[layer.source.id.raw]
+		val classification = override?.type ?: layer.semantic.type
+		val channels = if (deferred || config.meshOnly && classification == LayerType.PRESET) ChannelGrids.Empty
+			else channelStage(layer, override, switchParamKeys, config.rigTuning, stages)
+		val drawable = Drawable(
+			id = part.drawableId,
+			name = part.name,
+			parentDeformerId = parentId,
+			blendMode = blendMode(layer.source.blend),
+			maskedBy = emptyList(),
+			mesh = mesh,
+			geometryGrid = geometry,
+			channelGrids = channels,
+			drawOrder = drawOrder.coerceIn(0f, 1000f),
+			opacity = layer.source.opacity.coerceIn(0f, 1f),
+			isVisible = layerVisibility(config, layer.source.id.raw, layer.source.visible),
+			texturePage = page,
+			atlasTileId = PuppetSourceAtlas.tileIdFor(part.layerId, part.sourceId),
+		)
+		return drawable to neutralValidationBounds(layer, data, aperture, headSpace, config.meshOnly, config)
 	}
 
 	private data class MeshKey(

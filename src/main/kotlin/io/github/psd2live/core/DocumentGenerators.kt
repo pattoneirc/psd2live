@@ -30,6 +30,9 @@ internal object DocumentGenerators {
 	/** The mesh stage of layer [layerId]. */
 	fun meshId(layerId: String) = MESH + layerId
 	const val SKELETON = "skeleton"
+
+	/** The pinned inputs of version 2 `art_primitive` records ([ArtPrimitiveV2]): their parts' meshes, layers and roles. */
+	const val PRIMITIVES = "document:primitives"
 	const val JOURNAL = "journal"
 	const val OVERRIDES = "overrides"
 	const val PHYSICS = "physics"
@@ -50,25 +53,45 @@ internal object DocumentGenerators {
 	 * (layer roles and footprints, settings, the skeleton), the meshes - one node per layer of [layers] (its
 	 * pixels, role and mesh override, and the scaffold), or one `rig.meshes` node for all when none are named -
 	 * and `rig`, the assembly and atlas binding that owns the base rig.
+	 *
+	 * With version 2 `art_primitive` records the footprints, scaffold, meshes and skeleton also read their pinned
+	 * inputs ([PRIMITIVES]), and [primitives] - the side channel of the base rig ([PrimitiveSkins.ownership]) -
+	 * names the generated keyforms of each part, `keyform:mesh:<part>@<parameter>`: the part layer's mesh stage
+	 * (`rig.meshes` when no layers are named, `rig` when its layer is not among them) owns its feature axes and
+	 * the skeleton its bone axes, so an edit of one is recorded as an override.
 	 */
-	fun graph(overlay: RigEditOverlay, layers: List<String> = emptyList()): GeneratorGraph {
+	fun graph(overlay: RigEditOverlay, layers: List<String> = emptyList(), primitives: PrimitiveSkins = PrimitiveSkins.None): GeneratorGraph {
 		val owned = HashSet<String>()
 		fun claim(ids: Collection<String>) = ids.filterTo(LinkedHashSet()) { owned.add(it) }
+		val pinned = if (overlay.authoringJournal.any(ArtPrimitiveV2::isV2)) setOf(PRIMITIVES) else emptySet()
+		val meshNodes = layers.mapTo(HashSet(), ::meshId)
+		val partKeyforms = LinkedHashMap<String, MutableList<String>>()
+		for ((part, axes) in primitives.ownership) for ((parameter, node) in axes) {
+			val owner = when {
+				node == SKELETON -> SKELETON
+				layers.isEmpty() -> RIG_MESHES
+				node in meshNodes -> node
+				else -> RIG
+			}
+			partKeyforms.getOrPut(owner) { ArrayList() } += keyform("mesh", part.raw, parameter.raw)
+		}
 		val nodes = ArrayList<GeneratorNode>()
-		nodes += GeneratorNode(RIG_FOOTPRINTS, setOf("document:source", "document:settings", "document:meshes"), claim(listOf("rig:footprints")))
-		nodes += GeneratorNode(RIG_SCAFFOLD, setOf("rig:footprints", "document:layers", "document:settings", "document:skeleton"),
+		nodes += GeneratorNode(RIG_FOOTPRINTS, setOf("document:source", "document:settings", "document:meshes") + pinned, claim(listOf("rig:footprints")))
+		nodes += GeneratorNode(RIG_SCAFFOLD, setOf("rig:footprints", "document:layers", "document:settings", "document:skeleton") + pinned,
 			claim(listOf("rig:scaffold")))
 		val meshes = if (layers.isEmpty()) {
-			nodes += GeneratorNode(RIG_MESHES, setOf("rig:scaffold", "document:source", "document:layers", "document:meshes", "document:settings"),
-				claim(listOf("rig:meshes")))
+			nodes += GeneratorNode(RIG_MESHES, setOf("rig:scaffold", "document:source", "document:layers", "document:meshes", "document:settings") + pinned,
+				claim(listOf("rig:meshes") + partKeyforms[RIG_MESHES].orEmpty()))
 			listOf("rig:meshes")
 		} else layers.map { layer ->
 			nodes += GeneratorNode(meshId(layer), setOf("rig:scaffold", "document:source:$layer", "document:layers:$layer",
-				"document:meshes:$layer", "document:settings"), claim(listOf("rig:mesh:$layer")))
+				"document:meshes:$layer", "document:settings") + pinned, claim(listOf("rig:mesh:$layer") + partKeyforms[meshId(layer)].orEmpty()))
 			"rig:mesh:$layer"
 		}
-		nodes += GeneratorNode(RIG, (meshes + listOf("rig:scaffold", "document:source", "document:settings", "document:layers")).toSet(), claim(listOf("rig:base")))
-		nodes += GeneratorNode(SKELETON, setOf("rig:base", "document:skeleton"), claim(listOf("rig:skeleton")))
+		nodes += GeneratorNode(RIG, (meshes + listOf("rig:scaffold", "document:source", "document:settings", "document:layers")).toSet(),
+			claim(listOf("rig:base") + partKeyforms[RIG].orEmpty()))
+		// The skeleton skins the parts of v2 records with the base: it reads their pinned inputs too.
+		nodes += GeneratorNode(SKELETON, setOf("rig:base", "document:skeleton") + pinned, claim(listOf("rig:skeleton") + partKeyforms[SKELETON].orEmpty()))
 		nodes += GeneratorNode(JOURNAL, setOf("rig:skeleton", "document:journal"), claim(listOf("rig:authored")))
 		val keyforms = LinkedHashSet<String>()
 		val parameters = LinkedHashSet<String>()
@@ -153,6 +176,7 @@ internal object DocumentGenerators {
 			before.keyformSetEdits != after.keyformSetEdits || before.keyformCopyEdits != after.keyformCopyEdits ||
 			before.keyformDeleteEdits != after.keyformDeleteEdits || before.warpEdits != after.warpEdits ||
 			before.deletedParameterIds != after.deletedParameterIds) add("document:journal")
+		if (before.authoringJournal.filter(ArtPrimitiveV2::isV2) != after.authoringJournal.filter(ArtPrimitiveV2::isV2)) add(PRIMITIVES)
 		if (before.authoringJournal.filter(GeneratedOverrides::isOverride) != after.authoringJournal.filter(GeneratedOverrides::isOverride))
 			add("document:overrides")
 		val swingsBefore = before.swingEdits.associateBy(::swingId); val swingsAfter = after.swingEdits.associateBy(::swingId)
