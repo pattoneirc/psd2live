@@ -24,10 +24,12 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.Side
 import io.github.psd2live.i18n.tr
+import io.github.psd2live.ui.state.AppPrompt
 import io.github.psd2live.ui.state.AppSettings
 import io.github.psd2live.ui.state.HairMode
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -92,6 +94,8 @@ internal fun StartScreenDialog(
     offer: PSD2LiveViewModel.StartScreenOffer,
     onApply: (StartPresetChoices?, List<PSD2LiveViewModel.LayerSplitDecision>) -> Unit,
     onDismiss: () -> Unit,
+    mutedOnImport: Boolean = !AppSettings.autoDetectMeshSplitsOnImport,
+    onPromptMutedChange: (AppPrompt, Boolean) -> Unit = { prompt, muted -> AppSettings.setPromptEnabled(prompt, !muted) },
 ) {
     val colors = LocalToolColors.current
     val typography = LocalToolTypography.current
@@ -101,7 +105,6 @@ internal fun StartScreenDialog(
         splits.orEmpty().associate { split -> split.layerId to split.plan.previewImages.map { it.toImageBitmapFast() } }
     }
     var choices by remember(offer.initial) { mutableStateOf(offer.initial) }
-    var showOnImport by remember { mutableStateOf(AppSettings.autoDetectMeshSplitsOnImport) }
     val parts = remember(offer.preview) { PresetParts.of(offer.preview.analysis) }
 
     val selectedItems = itemStates.filter { it.isSelected }
@@ -113,111 +116,71 @@ internal fun StartScreenDialog(
         PSD2LiveViewModel.LayerSplitDecision(item.offer, names, sides)
     }
 
-    Box(
-        Modifier.fillMaxSize().background(colors.scrim).scrimDismiss(onDismiss = onDismiss),
-        contentAlignment = Alignment.Center,
-    ) {
-        BoxWithConstraints(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            Column(
-                Modifier.width(if (offer.presets) 900.dp else 720.dp)
-                    .then(if (offer.presets) Modifier.height(minOf(maxHeight, 640.dp)) else Modifier.heightIn(max = minOf(maxHeight, 620.dp)))
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(colors.panelElevated)
-                    .border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(8.dp))
-                    .clickable(enabled = false) {},
-            ) {
-                StartHeader(offer)
-                Divider(color = colors.divider, thickness = 1.dp)
-
-                Row(Modifier.fillMaxWidth().weight(1f, fill = offer.presets)) {
-                    if (offer.presets) {
-                        Column(
-                            Modifier.width(340.dp).fillMaxHeight().verticalScroll(rememberScrollState())
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            QuickPresetRow(choices, parts) { choices = it.choices }
-                            Spacer(Modifier.height(4.dp))
-                            PresetChoicesPanel(choices, parts) { choices = it }
-                        }
-                        Box(Modifier.width(1.dp).fillMaxHeight().background(colors.divider))
-                    }
-                    Column(
-                        Modifier.weight(1f).then(if (offer.presets) Modifier.fillMaxHeight() else Modifier)
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        SplitHeader(itemStates, scanning = splits == null)
-                        when {
-                            splits == null -> EmptyNote(tr("start.splits.scanning"))
-                            itemStates.isEmpty() -> EmptyNote(tr("start.splits.none"))
-                            else -> Column(
-                                Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                itemStates.forEach { SplitCard(it, previewsByOffer[it.offer.layerId].orEmpty()) }
-                            }
-                        }
-                    }
-                }
-
-                Divider(color = colors.divider, thickness = 1.dp)
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CompactCheckbox(
-                        checked = showOnImport,
-                        onCheckedChange = {
-                            showOnImport = it
-                            AppSettings.autoDetectMeshSplitsOnImport = it
-                        },
-                        label = tr("editor.meshSplit.promptOnImport"),
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CompactButton(text = tr("start.skip"), onClick = onDismiss)
-                        CompactButton(
-                            text = if (offer.presets) tr("start.apply")
-                                else tr("editor.meshSplit.confirmSelected", selectedItems.size),
-                            onClick = { onApply(if (offer.presets) choices else null, decisions()) },
-                            enabled = canApply,
-                            isPrimary = true,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StartHeader(offer: PSD2LiveViewModel.StartScreenOffer) {
-    val colors = LocalToolColors.current
-    val typography = LocalToolTypography.current
     val source = offer.preview.analysis.source
-    Column(
-        Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                if (offer.presets) tr("start.title") else tr("editor.meshSplit.batchTitle"),
-                style = typography.title.copy(fontSize = 16.sp),
-                color = colors.textPrimary,
-            )
-            Spacer(Modifier.weight(1f))
+    ModalDialogFrame(
+        title = if (offer.presets) tr("start.title") else tr("editor.meshSplit.batchTitle"),
+        subtitle = if (offer.presets) tr("start.body") else tr("editor.meshSplit.batchBody", offer.splits.orEmpty().size),
+        onDismiss = onDismiss,
+        width = 720.dp,
+        maxHeight = 620.dp,
+        fit = if (offer.presets) { maxWidth, maxHeight -> DpSize(minOf(900.dp, maxWidth), minOf(640.dp, maxHeight)) } else null,
+        scrollable = false,
+        headerDivider = true,
+        bodyPadding = PaddingValues(0.dp),
+        bodySpacing = 0.dp,
+        titleTrailing = {
             Text(
                 tr("start.subtitle", source.widthPx.toString(), source.heightPx.toString(), offer.preview.analysis.layers.size),
                 style = typography.caption,
                 color = colors.textMuted,
             )
+        },
+        footerStart = {
+            DontShowAgainCheckbox(AppPrompt.START_SCREEN_ON_IMPORT, mutedOnImport, onPromptMutedChange,
+                label = tr("prompt.dontShowOnImport"))
+        },
+        footer = {
+            CompactButton(text = tr("start.skip"), onClick = onDismiss)
+            CompactButton(
+                text = if (offer.presets) tr("start.apply")
+                    else tr("editor.meshSplit.confirmSelected", selectedItems.size),
+                onClick = { onApply(if (offer.presets) choices else null, decisions()) },
+                enabled = canApply,
+                isPrimary = true,
+            )
+        },
+    ) {
+        Row(Modifier.fillMaxWidth().weight(1f, fill = offer.presets)) {
+            if (offer.presets) {
+                Column(
+                    Modifier.width(340.dp).fillMaxHeight().verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    QuickPresetRow(choices, parts) { choices = it.choices }
+                    Spacer(Modifier.height(4.dp))
+                    PresetChoicesPanel(choices, parts) { choices = it }
+                }
+                Box(Modifier.width(1.dp).fillMaxHeight().background(colors.divider))
+            }
+            Column(
+                Modifier.weight(1f).then(if (offer.presets) Modifier.fillMaxHeight() else Modifier)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SplitHeader(itemStates, scanning = splits == null)
+                when {
+                    splits == null -> EmptyNote(tr("start.splits.scanning"))
+                    itemStates.isEmpty() -> EmptyNote(tr("start.splits.none"))
+                    else -> Column(
+                        Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        itemStates.forEach { SplitCard(it, previewsByOffer[it.offer.layerId].orEmpty()) }
+                    }
+                }
+            }
         }
-        Text(
-            if (offer.presets) tr("start.body") else tr("editor.meshSplit.batchBody", offer.splits.orEmpty().size),
-            style = typography.body.copy(fontSize = 12.sp),
-            color = colors.textMuted,
-        )
     }
 }
 

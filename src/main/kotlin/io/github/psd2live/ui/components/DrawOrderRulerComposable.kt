@@ -529,137 +529,79 @@ fun DrawOrderInputDialog(
 	val currentFloat = textValue.toFloatOrNull() ?: initialOrder
 	val isValid = currentFloat in 0f..1000f
 
-	Box(
-		modifier = Modifier
-			.fillMaxSize()
-			.background(colors.scrim)
-			.scrimDismiss(onDismiss = onDismiss),
-		contentAlignment = Alignment.Center,
+	val confirm = {
+		if (isValid) {
+			onConfirm(currentFloat)
+			onDismiss()
+		}
+	}
+	val awtColor = ComponentPalette.strong(targetId)
+	ModalDialogFrame(
+		title = tr("canvas.drawOrder.title"),
+		subtitle = targetName,
+		onDismiss = onDismiss,
+		width = 340.dp,
+		onConfirm = confirm,
+		titleTrailing = {
+			Box(Modifier.size(8.dp).background(Color(awtColor.red, awtColor.green, awtColor.blue), RoundedCornerShape(2.dp)))
+		},
+		footer = {
+			CompactButton(text = tr("project.cancel"), onClick = onDismiss)
+			CompactButton(text = tr("canvas.drawOrder.title"), onClick = confirm, enabled = isValid, isPrimary = true)
+		},
 	) {
-		Column(
-			modifier = Modifier
-				.width(320.dp)
-				.background(colors.panelBackground, RoundedCornerShape(6.dp))
-				.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(6.dp))
-				.clickable(enabled = false) {}
-				.padding(14.dp),
-			verticalArrangement = Arrangement.spacedBy(10.dp),
+		Text(
+			text = tr("canvas.drawOrder.inputPrompt") + " · " + tr("canvas.drawOrder.default", defaultOrder.roundToInt()),
+			style = typography.caption.copy(fontSize = 10.sp),
+			color = colors.textMuted,
+		)
+		// Exact Numeric Input Field
+		Row(
+			modifier = Modifier.fillMaxWidth(),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.spacedBy(6.dp),
 		) {
-			// Title Bar
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.SpaceBetween,
-			) {
-				Row(
-					verticalAlignment = Alignment.CenterVertically,
-					horizontalArrangement = Arrangement.spacedBy(6.dp),
-				) {
-					val awtColor = ComponentPalette.strong(targetId)
-					Box(
-						modifier = Modifier
-							.size(8.dp)
-							.background(Color(awtColor.red, awtColor.green, awtColor.blue), RoundedCornerShape(2.dp))
-					)
-					Text(
-						text = tr("canvas.drawOrder.title"),
-						style = typography.title.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold),
-						color = colors.textPrimary,
-					)
-				}
-				CompactIconButton(onClick = onDismiss, size = 20.dp) {
-					IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted)
-				}
-			}
+			CompactTextField(
+				value = textValue,
+				onValueChange = { input ->
+					val filtered = input.filter { it.isDigit() || it == '.' }
+					textValue = filtered
+				},
+				placeholder = "0..1000",
+				isMono = true,
+				modifier = Modifier.weight(1f),
+				height = 28.dp,
+			)
 
-			// Target Name & Default
-			Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-				Text(
-					text = targetName,
-					style = typography.body.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
-					color = colors.textPrimary,
-				)
-				Text(
-					text = "${tr("canvas.drawOrder.inputPrompt")} · 默认: ${defaultOrder.roundToInt()}",
-					style = typography.caption.copy(fontSize = 9.5.sp),
-					color = colors.textMuted,
-				)
-			}
-
-			// Exact Numeric Input Field
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.spacedBy(6.dp),
-			) {
-				CompactTextField(
-					value = textValue,
-					onValueChange = { input ->
-						val filtered = input.filter { it.isDigit() || it == '.' }
-						textValue = filtered
+			if (isOverridden) {
+				CompactButton(
+					text = tr("canvas.drawOrder.reset"),
+					onClick = {
+						onReset()
+						onDismiss()
 					},
-					placeholder = "0..1000",
-					isMono = true,
-					modifier = Modifier.weight(1f),
 					height = 28.dp,
 				)
+			}
+		}
 
-				if (isOverridden) {
-					CompactButton(
-						text = tr("canvas.drawOrder.reset"),
-						onClick = {
-							onReset()
-							onDismiss()
-						},
-						height = 28.dp,
-					)
-				}
+		// Quick adjustment step buttons
+		Row(
+			modifier = Modifier.fillMaxWidth(),
+			horizontalArrangement = Arrangement.spacedBy(4.dp),
+		) {
+			fun adjust(delta: Int) {
+				val curr = textValue.toIntOrNull() ?: initialOrder.roundToInt()
+				val updated = (curr + delta).coerceIn(0, 1000)
+				textValue = updated.toString()
 			}
 
-			// Quick adjustment step buttons
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				horizontalArrangement = Arrangement.spacedBy(4.dp),
-			) {
-				fun adjust(delta: Int) {
-					val curr = textValue.toIntOrNull() ?: initialOrder.roundToInt()
-					val updated = (curr + delta).coerceIn(0, 1000)
-					textValue = updated.toString()
-				}
-
-				CompactButton(text = "-100", onClick = { adjust(-100) }, modifier = Modifier.weight(1f), height = 22.dp)
-				CompactButton(text = "-10", onClick = { adjust(-10) }, modifier = Modifier.weight(1f), height = 22.dp)
-				CompactButton(text = "-1", onClick = { adjust(-1) }, modifier = Modifier.weight(1f), height = 22.dp)
-				CompactButton(text = "+1", onClick = { adjust(1) }, modifier = Modifier.weight(1f), height = 22.dp)
-				CompactButton(text = "+10", onClick = { adjust(10) }, modifier = Modifier.weight(1f), height = 22.dp)
-				CompactButton(text = "+100", onClick = { adjust(100) }, modifier = Modifier.weight(1f), height = 22.dp)
-			}
-
-			// Confirmation Buttons
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				horizontalArrangement = Arrangement.End,
-				verticalAlignment = Alignment.CenterVertically,
-			) {
-				CompactButton(
-					text = tr("project.cancel"),
-					onClick = onDismiss,
-					height = 24.dp,
-				)
-				Spacer(Modifier.width(8.dp))
-				CompactButton(
-					text = tr("canvas.drawOrder.title"),
-					onClick = {
-						if (isValid) {
-							onConfirm(currentFloat)
-							onDismiss()
-						}
-					},
-					enabled = isValid,
-					isPrimary = true,
-					height = 24.dp,
-				)
-			}
+			CompactButton(text = "-100", onClick = { adjust(-100) }, modifier = Modifier.weight(1f), height = 22.dp)
+			CompactButton(text = "-10", onClick = { adjust(-10) }, modifier = Modifier.weight(1f), height = 22.dp)
+			CompactButton(text = "-1", onClick = { adjust(-1) }, modifier = Modifier.weight(1f), height = 22.dp)
+			CompactButton(text = "+1", onClick = { adjust(1) }, modifier = Modifier.weight(1f), height = 22.dp)
+			CompactButton(text = "+10", onClick = { adjust(10) }, modifier = Modifier.weight(1f), height = 22.dp)
+			CompactButton(text = "+100", onClick = { adjust(100) }, modifier = Modifier.weight(1f), height = 22.dp)
 		}
 	}
 }

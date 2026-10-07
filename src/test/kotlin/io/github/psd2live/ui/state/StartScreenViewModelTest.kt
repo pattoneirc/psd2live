@@ -37,6 +37,28 @@ class StartScreenViewModelTest {
     }
 
     @Test
+    fun promptsMuteAndRestoreTogether() {
+        val original = AppSettings.mutedPrompts()
+        try {
+            PSD2LiveViewModel().use { vm ->
+                vm.restorePrompts()
+                vm.setPromptEnabled(AppPrompt.EXPORT_SUCCESS, false)
+                vm.setPromptEnabled(AppPrompt.START_SCREEN_ON_IMPORT, false)
+                assertEquals(AppPrompt.entries.toSet(), vm.state.value.mutedPrompts)
+                assertEquals(AppPrompt.entries.toSet(), AppSettings.mutedPrompts())
+                assertFalse(vm.state.value.autoDetectMeshSplitsOnImport)
+
+                vm.restorePrompts()
+                assertTrue(vm.state.value.mutedPrompts.isEmpty())
+                assertTrue(AppSettings.mutedPrompts().isEmpty())
+                assertTrue(AppSettings.autoDetectMeshSplitsOnImport)
+            }
+        } finally {
+            AppPrompt.entries.forEach { AppSettings.setPromptEnabled(it, it !in original) }
+        }
+    }
+
+    @Test
     fun dismissAllMeshSplitsClearsAllPendingOffersAndQueue() {
         PSD2LiveViewModel().use { vm ->
             vm.dismissAllMeshSplits()

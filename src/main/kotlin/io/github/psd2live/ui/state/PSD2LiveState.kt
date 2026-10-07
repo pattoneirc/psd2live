@@ -524,7 +524,8 @@ data class PSD2LiveState(
 	val selectedDeformerId: String? = null,
 	/** Source ArtMesh waiting for the next canvas/layer pick to become its clipping mask. UI-transient. */
 	val clipMaskPickSourceId: String? = null,
-	val autoDetectMeshSplitsOnImport: Boolean = AppSettings.autoDetectMeshSplitsOnImport,
+	/** The prompts turned off with "Don't show again"; mirrors [AppSettings.mutedPrompts]. */
+	val mutedPrompts: Set<AppPrompt> = AppSettings.mutedPrompts(),
 	val hoveredLayerId: String? = null,
 	val hoveredDeformerId: String? = null,
 	val layerVisibility: Map<String, Boolean> = emptyMap(),
@@ -586,9 +587,12 @@ data class PSD2LiveState(
 	/** The simulation the preview runs live over the rig, or null; the canvas then draws in software. */
 	val simulationPreviewId: String? = null,
 	val errorMessage: String? = null,
-	val successExportMessage: String? = null,
+	/** The export that just finished, shown in the export-success dialog until it is closed. */
+	val exportSuccess: ExportSuccess? = null,
 ) {
 	val darkTheme: Boolean get() = toolColors.isDark
+
+	val autoDetectMeshSplitsOnImport: Boolean get() = AppPrompt.START_SCREEN_ON_IMPORT !in mutedPrompts
 
 	val activeWorkspace: EditorWorkspace
 		get() = workspaces.firstOrNull { it.id == activeWorkspaceId }
@@ -805,3 +809,14 @@ data class PSD2LiveState(
 	fun minRequiredAtlasSize(scale: Int = textureUpscale.scale): Int =
         minimumAtlasSize(previewModel?.analysis ?: analysis, scale, texturePadding)
 }
+
+/**
+ * A finished export: [message] says what was written, [folder] is what Open folder opens, and [notes] (the
+ * export's warnings or what the format could not keep) are listed under [notesTitle].
+ */
+data class ExportSuccess(
+	val message: String,
+	val folder: String,
+	val notesTitle: String? = null,
+	val notes: List<String> = emptyList(),
+)

@@ -42,12 +42,15 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.i18n.AppLanguage
 import io.github.psd2live.i18n.I18n
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.state.AppSettings
+import io.github.psd2live.ui.state.AppPrompt
 import io.github.psd2live.ui.state.CaptureCheck
 import io.github.psd2live.ui.state.KeyBinding
 import io.github.psd2live.ui.state.KeyCapture
@@ -74,6 +77,7 @@ private enum class SettingsSection(val labelKey: String) {
 	THEME("dialog.settings.category.theme"),
 	LANGUAGE("dialog.settings.category.language"),
 	CANVAS("settings.canvas.title"),
+	PROMPTS("dialog.settings.category.prompts"),
 	SHORTCUTS("dialog.settings.category.shortcuts"),
 	ENVIRONMENT("dialog.settings.category.environment"),
 }
@@ -99,7 +103,7 @@ fun SettingsDialog(
 	fontScale: Float,
 	themeId: String = ThemeCatalog.DARK_ID,
 	customThemes: List<CustomTheme> = emptyList(),
-	autoDetectMeshSplitsOnImport: Boolean = AppSettings.autoDetectMeshSplitsOnImport,
+	mutedPrompts: Set<AppPrompt> = AppSettings.mutedPrompts(),
 	keymap: Keymap = Keymap.DEFAULT,
 	keyPreset: KeymapPreset = KeymapPreset.PHOTOSHOP,
 	keyCapture: KeyCapture? = null,
@@ -111,12 +115,14 @@ fun SettingsDialog(
 	onCustomThemeChange: (CustomTheme) -> Unit = {},
 	onCustomThemeDelete: (String) -> Unit = {},
 	onThemeImport: (String) -> Boolean = { false },
-	onAutoDetectMeshSplitsOnImportChange: (Boolean) -> Unit = { AppSettings.autoDetectMeshSplitsOnImport = it },
+	onPromptEnabledChange: (AppPrompt, Boolean) -> Unit = AppSettings::setPromptEnabled,
+	onRestorePrompts: () -> Unit = {},
 	onLanguageChange: (AppLanguage) -> Unit = {},
 	onKeyCapture: (ShortcutAction, Int) -> Unit = { _, _ -> },
 	onKeyRemoveBinding: (ShortcutAction, Int) -> Unit = { _, _ -> },
 	onKeyResetBinding: (ShortcutAction) -> Unit = {},
 	onKeyPresetChange: (KeymapPreset) -> Unit = {},
+	onCaptureKeyEvent: (androidx.compose.ui.input.key.KeyEvent) -> Unit = {},
 	onResetDefaults: () -> Unit,
 	onDismiss: () -> Unit,
 ) {
@@ -135,152 +141,98 @@ fun SettingsDialog(
 	// would land the new section mid-scroll.
 	LaunchedEffect(selectedSection) { contentScroll.scrollTo(0) }
 
-	BoxWithConstraints(
-		modifier = Modifier
-			.fillMaxSize()
-			.background(colors.scrim)
-			.scrimDismiss(onDismiss = onDismiss),
-		contentAlignment = Alignment.Center,
+	// Follow the main window rather than a fixed size. The bounds matter at the extremes: in a
+	// maximised window an unbounded 78% would stretch every row until each label drifted away
+	// from the control it belongs to, and in a small window 76% of the height is not enough to
+	// show a section plus the action row.
+	ModalDialogFrame(
+		title = tr("dialog.settings.title"),
+		onDismiss = onDismiss,
+		fit = { maxWidth, maxHeight ->
+			DpSize((maxWidth * 0.8f).coerceIn(560.dp, 1100.dp).coerceAtMost(maxWidth),
+				(maxHeight * 0.8f).coerceIn(420.dp, 860.dp).coerceAtMost(maxHeight))
+		},
+		scrollable = false,
+		headerDivider = true,
+		// The dialog holds the keyboard, so a shortcut being recorded is handed over here rather than by the
+		// root dispatcher; while one is, no key closes or confirms the dialog.
+		onKeyDown = { event -> if (keyCapture != null) { onCaptureKeyEvent(event); true } else false },
+		// No padding: the sidebar has to reach the panel edge.
+		bodyPadding = PaddingValues(0.dp),
+		bodySpacing = 0.dp,
+		titleTrailing = {
+			Text(text = "v2.0.4", style = typography.monoSmall.copy(fontSize = 10.sp), color = colors.textMuted)
+		},
+		footerStart = {
+			CompactButton(text = tr("dialog.settings.resetDefaults"), onClick = onResetDefaults)
+		},
+		footer = {
+			CompactButton(text = tr("dialog.ok"), onClick = onDismiss, isPrimary = true)
+		},
 	) {
-		// Follow the main window rather than a fixed size. The bounds matter at the extremes: in a
-		// maximised window an unbounded 78% would stretch every row until each label drifted away
-		// from the control it belongs to, and in a small window 76% of the height is not enough to
-		// show a section plus the action row.
-		val panelWidth = (maxWidth * 0.78f).coerceIn(560.dp, 1100.dp)
-		val panelHeight = (maxHeight * 0.76f).coerceIn(420.dp, 860.dp)
-
-		Column(
+		Row(
 			modifier = Modifier
-				.width(panelWidth)
-				.height(panelHeight)
-				.background(colors.panelBackground, RoundedCornerShape(6.dp))
-				.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(6.dp))
-				.clickable(enabled = false) {}
-				// No horizontal padding: the sidebar has to reach the panel edge. The title and
-				// action rows carry their own instead.
-				.padding(vertical = 16.dp),
+				.weight(1f)
+				.fillMaxWidth(),
 		) {
-			// Title Bar
-			Row(
+			SettingsSidebar(
+				selected = selectedSection,
+				onSelect = { selectedSection = it },
+			)
+
+			Box(
 				modifier = Modifier
-					.fillMaxWidth()
-					.padding(horizontal = 20.dp),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.SpaceBetween,
-			) {
-				Row(
-					verticalAlignment = Alignment.CenterVertically,
-					horizontalArrangement = Arrangement.spacedBy(8.dp),
-				) {
-					Text(
-						text = tr("dialog.settings.title"),
-						style = typography.title.copy(fontSize = 15.sp, fontWeight = FontWeight.Bold),
-						color = colors.textPrimary,
-					)
-					Text(
-						text = "v2.0.4",
-						style = typography.monoSmall.copy(fontSize = 10.sp),
-						color = colors.textMuted,
-					)
-				}
-				CompactIconButton(
-					onClick = onDismiss,
-					size = 22.dp,
-				) {
-					IconClose(tint = colors.textMuted)
-				}
-			}
+					.width(1.dp)
+					.fillMaxHeight()
+					.background(colors.divider),
+			)
 
-			Spacer(Modifier.height(14.dp))
-			Divider(color = colors.divider, thickness = 1.dp)
-
-			Row(
+			Column(
 				modifier = Modifier
 					.weight(1f)
-					.fillMaxWidth(),
+					.fillMaxHeight()
+					.verticalScroll(contentScroll)
+					.padding(horizontal = 16.dp, vertical = 14.dp),
+				verticalArrangement = Arrangement.spacedBy(14.dp),
 			) {
-				SettingsSidebar(
-					selected = selectedSection,
-					onSelect = { selectedSection = it },
-				)
-
-				Box(
-					modifier = Modifier
-						.width(1.dp)
-						.fillMaxHeight()
-						.background(colors.divider),
-				)
-
-				Column(
-					modifier = Modifier
-						.weight(1f)
-						.fillMaxHeight()
-						.verticalScroll(contentScroll)
-						.padding(horizontal = 16.dp, vertical = 14.dp),
-					verticalArrangement = Arrangement.spacedBy(14.dp),
-				) {
-					when (selectedSection) {
-						SettingsSection.SCALE -> SettingsScaleSection(
-							uiScale = uiScale,
-							fontScale = fontScale,
-							recommendedScale = displayMetrics.recommendedScale,
-							onUiScaleChange = onUiScaleChange,
-							onFontScaleChange = onFontScaleChange,
-						)
-						SettingsSection.THEME -> SettingsThemeSection(
-							themeId = themeId,
-							customThemes = customThemes,
-							onSelect = onThemeSelect,
-							onDuplicate = onThemeDuplicate,
-							onChange = onCustomThemeChange,
-							onDelete = onCustomThemeDelete,
-							onImport = onThemeImport,
-						)
-						SettingsSection.LANGUAGE -> SettingsLanguageSection(
-							currentLanguage = currentLanguage,
-							onLanguageChange = onLanguageChange,
-						)
-						SettingsSection.CANVAS -> SettingsCanvasSection(
-							autoDetectMeshSplitsOnImport = autoDetectMeshSplitsOnImport,
-							onAutoDetectMeshSplitsOnImportChange = onAutoDetectMeshSplitsOnImportChange,
-						)
-						SettingsSection.SHORTCUTS -> SettingsShortcutsSection(
-							keymap = keymap,
-							preset = keyPreset,
-							capture = keyCapture,
-							onBeginCapture = onKeyCapture,
-							onRemoveBinding = onKeyRemoveBinding,
-							onResetBinding = onKeyResetBinding,
-							onPresetChange = onKeyPresetChange,
-						)
-						SettingsSection.ENVIRONMENT -> SettingsEnvironmentSection(displayMetrics)
-					}
+				when (selectedSection) {
+					SettingsSection.SCALE -> SettingsScaleSection(
+						uiScale = uiScale,
+						fontScale = fontScale,
+						recommendedScale = displayMetrics.recommendedScale,
+						onUiScaleChange = onUiScaleChange,
+						onFontScaleChange = onFontScaleChange,
+					)
+					SettingsSection.THEME -> SettingsThemeSection(
+						themeId = themeId,
+						customThemes = customThemes,
+						onSelect = onThemeSelect,
+						onDuplicate = onThemeDuplicate,
+						onChange = onCustomThemeChange,
+						onDelete = onCustomThemeDelete,
+						onImport = onThemeImport,
+					)
+					SettingsSection.LANGUAGE -> SettingsLanguageSection(
+						currentLanguage = currentLanguage,
+						onLanguageChange = onLanguageChange,
+					)
+					SettingsSection.CANVAS -> SettingsCanvasSection()
+					SettingsSection.PROMPTS -> SettingsPromptsSection(
+						mutedPrompts = mutedPrompts,
+						onPromptEnabledChange = onPromptEnabledChange,
+						onRestore = onRestorePrompts,
+					)
+					SettingsSection.SHORTCUTS -> SettingsShortcutsSection(
+						keymap = keymap,
+						preset = keyPreset,
+						capture = keyCapture,
+						onBeginCapture = onKeyCapture,
+						onRemoveBinding = onKeyRemoveBinding,
+						onResetBinding = onKeyResetBinding,
+						onPresetChange = onKeyPresetChange,
+					)
+					SettingsSection.ENVIRONMENT -> SettingsEnvironmentSection(displayMetrics)
 				}
-			}
-
-			Spacer(Modifier.height(14.dp))
-			Divider(color = colors.divider, thickness = 1.dp)
-			Spacer(Modifier.height(14.dp))
-
-			// Bottom Actions
-			Row(
-				modifier = Modifier
-					.fillMaxWidth()
-					.padding(horizontal = 20.dp),
-				horizontalArrangement = Arrangement.SpaceBetween,
-				verticalAlignment = Alignment.CenterVertically,
-			) {
-				CompactButton(
-					text = tr("dialog.settings.resetDefaults"),
-					onClick = onResetDefaults,
-					height = 26.dp,
-				)
-				CompactButton(
-					text = tr("dialog.ok"),
-					onClick = onDismiss,
-					isPrimary = true,
-					height = 26.dp,
-				)
 			}
 		}
 	}
@@ -558,10 +510,7 @@ private fun SettingsLanguageSection(
 }
 
 @Composable
-private fun SettingsCanvasSection(
-	autoDetectMeshSplitsOnImport: Boolean,
-	onAutoDetectMeshSplitsOnImportChange: (Boolean) -> Unit,
-) {
+private fun SettingsCanvasSection() {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 
@@ -575,27 +524,6 @@ private fun SettingsCanvasSection(
 			.padding(10.dp),
 		verticalArrangement = Arrangement.spacedBy(6.dp),
 	) {
-		Row(
-			modifier = Modifier
-				.fillMaxWidth()
-				.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
-				.clickable { onAutoDetectMeshSplitsOnImportChange(!autoDetectMeshSplitsOnImport) }
-				.padding(vertical = 2.dp),
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(8.dp),
-		) {
-			Text(
-				text = if (autoDetectMeshSplitsOnImport) "✓" else " ",
-				style = typography.body.copy(fontWeight = FontWeight.Bold),
-				color = if (autoDetectMeshSplitsOnImport) colors.accent else Color.Transparent,
-				modifier = Modifier.width(16.dp),
-			)
-			Text(
-				text = tr("editor.meshSplit.promptOnImport"),
-				style = typography.body.copy(fontSize = 11.5.sp),
-				color = colors.textPrimary,
-			)
-		}
 		val softwareCanvas by AppSettings.softwareCanvasFlow.collectAsState()
 		val gpuStatus by io.github.psd2live.render.CanvasRenderService.status.collectAsState()
 		Row(
@@ -628,6 +556,47 @@ private fun SettingsCanvasSection(
 			style = typography.caption.copy(fontSize = 10.5.sp),
 			color = colors.textMuted,
 			modifier = Modifier.padding(start = 24.dp),
+		)
+	}
+}
+
+/**
+ * Every prompt that carries "Don't show again", as switches that read "shown when on", and a button that turns
+ * them all back on. A prompt muted from the prompt itself is unchecked here.
+ */
+@Composable
+private fun SettingsPromptsSection(
+	mutedPrompts: Set<AppPrompt>,
+	onPromptEnabledChange: (AppPrompt, Boolean) -> Unit,
+	onRestore: () -> Unit,
+) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+
+	SettingsSectionDescription(tr("dialog.settings.prompts.desc"))
+
+	Column(
+		modifier = Modifier
+			.fillMaxWidth()
+			.background(colors.panelElevated, RoundedCornerShape(4.dp))
+			.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(4.dp))
+			.padding(10.dp),
+		verticalArrangement = Arrangement.spacedBy(8.dp),
+	) {
+		for (prompt in AppPrompt.entries) {
+			CompactCheckbox(
+				checked = prompt !in mutedPrompts,
+				onCheckedChange = { onPromptEnabledChange(prompt, it) },
+				label = tr(prompt.labelKey),
+			)
+		}
+	}
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+		CompactButton(text = tr("dialog.settings.prompts.restore"), onClick = onRestore, enabled = mutedPrompts.isNotEmpty())
+		if (mutedPrompts.isNotEmpty()) Text(
+			tr("dialog.settings.prompts.muted", mutedPrompts.size),
+			style = typography.caption.copy(fontSize = 10.5.sp),
+			color = colors.textMuted,
 		)
 	}
 }

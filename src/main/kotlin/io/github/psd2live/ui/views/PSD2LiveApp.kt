@@ -100,8 +100,11 @@ import io.github.psd2live.ui.tutorial.tutorialTarget
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material.DropdownMenu
 import io.github.psd2live.ui.components.SettingsDialog
-import io.github.psd2live.ui.components.scrimDismiss
 import io.github.psd2live.ui.state.AppSettings
+import io.github.psd2live.ui.state.AppPrompt
+import io.github.psd2live.ui.components.ModalDialogFrame
+import io.github.psd2live.ui.components.ModalMessage
+import io.github.psd2live.ui.components.ModalTone
 import io.github.psd2live.ui.utils.DesktopUtils
 import io.github.psd2live.ui.utils.DesktopDropTarget
 import kotlin.math.roundToInt
@@ -321,6 +324,7 @@ fun FrameWindowScope.PSD2LiveApp(
 			state.showSettingsDialog ||
 			state.projectSaveError != null ||
 			state.errorMessage != null ||
+			state.exportSuccess != null ||
 			isDraggingOver ||
 			tutorial.active
 
@@ -602,19 +606,6 @@ fun FrameWindowScope.PSD2LiveApp(
 				}
 			}
 
-			// Floating Non-blocking Success Toast
-			state.successExportMessage?.let { successMsg ->
-				SuccessToast(
-					message = successMsg,
-					onOpenFolder = {
-						openFolder(state.outputPath)
-						viewModel.clearSuccessExportMessage()
-					},
-					onDismiss = { viewModel.clearSuccessExportMessage() },
-					modifier = Modifier.align(Alignment.BottomEnd),
-				)
-			}
-
 			if (tutorialShown && !tutorial.step.coachBesideMenu) {
 				// Menu steps render their overlay inside the menu popup.
 				val step = tutorial.step
@@ -653,6 +644,21 @@ fun FrameWindowScope.PSD2LiveApp(
 				message = error,
 				onDismiss = { viewModel.clearErrorMessage() },
 				isError = true,
+			)
+		}
+
+		state.exportSuccess?.let { success ->
+			io.github.psd2live.ui.components.ExportSuccessDialog(
+				success = success,
+				onOpenFolder = {
+					openFolder(success.folder)
+					viewModel.clearExportSuccess()
+				},
+				onDismiss = { viewModel.clearExportSuccess() },
+				onDontShowAgain = {
+					viewModel.setPromptEnabled(AppPrompt.EXPORT_SUCCESS, false)
+					viewModel.clearExportSuccess()
+				},
 			)
 		}
 
@@ -721,7 +727,7 @@ fun FrameWindowScope.PSD2LiveApp(
 				fontScale = state.fontScale,
 				themeId = state.themeId,
 				customThemes = state.customThemes,
-				autoDetectMeshSplitsOnImport = state.autoDetectMeshSplitsOnImport,
+				mutedPrompts = state.mutedPrompts,
 				keymap = state.keymap,
 				keyPreset = state.keymapPreset,
 				keyCapture = state.keyCapture,
@@ -733,12 +739,14 @@ fun FrameWindowScope.PSD2LiveApp(
 				onCustomThemeChange = viewModel::updateCustomTheme,
 				onCustomThemeDelete = viewModel::deleteCustomTheme,
 				onThemeImport = viewModel::importTheme,
-				onAutoDetectMeshSplitsOnImportChange = viewModel::setAutoDetectMeshSplitsOnImport,
+				onPromptEnabledChange = viewModel::setPromptEnabled,
+				onRestorePrompts = viewModel::restorePrompts,
 				onLanguageChange = viewModel::setLanguage,
 				onKeyCapture = viewModel::beginKeyCapture,
 				onKeyRemoveBinding = viewModel::removeKeyBinding,
 				onKeyResetBinding = viewModel::resetKeyBinding,
 				onKeyPresetChange = viewModel::applyKeymapPreset,
+				onCaptureKeyEvent = viewModel::captureKeyEvent,
 				onResetDefaults = {
 					AppSettings.resetToDefaults()
 					viewModel.resetZoom()
@@ -950,70 +958,16 @@ private fun ModalDialog(
 	onDismiss: () -> Unit,
 	isError: Boolean = false,
 	confirmText: String = tr("dialog.ok"),
-	extraAction: (@Composable () -> Unit)? = null,
 ) {
-	val colors = LocalToolColors.current
-	val typography = LocalToolTypography.current
-
-	Box(
-		modifier = Modifier
-			.fillMaxSize()
-			.background(colors.scrim)
-			.scrimDismiss(onDismiss = onDismiss),
-		contentAlignment = Alignment.Center,
+	ModalDialogFrame(
+		title = title,
+		onDismiss = onDismiss,
+		width = 440.dp,
+		tone = if (isError) ModalTone.ERROR else ModalTone.NONE,
+		onConfirm = onDismiss,
+		footer = { CompactButton(text = confirmText, onClick = onDismiss, isPrimary = true) },
 	) {
-		Column(
-			modifier = Modifier
-				.width(420.dp)
-				.background(colors.panelBackground, RoundedCornerShape(4.dp))
-				.border(BorderStroke(1.dp, if (isError) colors.error else colors.border), RoundedCornerShape(4.dp))
-				.clickable(enabled = false) {}
-				.padding(14.dp),
-		) {
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.SpaceBetween,
-			) {
-				Text(
-					text = title,
-					style = typography.title.copy(fontSize = 13.sp, fontWeight = FontWeight.Bold),
-					color = if (isError) colors.error else colors.textPrimary,
-				)
-				CompactIconButton(
-					onClick = onDismiss,
-					size = 20.dp,
-				) {
-					IconClose(tint = colors.textMuted)
-				}
-			}
-
-			Spacer(Modifier.height(10.dp))
-
-			Text(
-				text = message,
-				style = typography.body.copy(fontSize = 11.5.sp, lineHeight = 16.sp),
-				color = colors.textPrimary,
-			)
-
-			Spacer(Modifier.height(14.dp))
-
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-				verticalAlignment = Alignment.CenterVertically,
-			) {
-				if (extraAction != null) {
-					extraAction()
-				}
-				CompactButton(
-					text = confirmText,
-					onClick = onDismiss,
-					isPrimary = true,
-					height = 24.dp,
-				)
-			}
-		}
+		ModalMessage(message)
 	}
 }
 
@@ -1025,52 +979,3 @@ private fun copyToClipboard(text: String) {
 	DesktopUtils.copyToClipboard(text)
 }
 
-@Composable
-private fun SuccessToast(
-	message: String,
-	onOpenFolder: () -> Unit,
-	onDismiss: () -> Unit,
-	modifier: Modifier = Modifier,
-) {
-	val colors = LocalToolColors.current
-	val typography = LocalToolTypography.current
-
-	LaunchedEffect(message) {
-		delay(7000)
-		onDismiss()
-	}
-
-	Box(
-		modifier = modifier
-			.padding(end = 16.dp, bottom = 32.dp)
-			.background(colors.panelElevated, RoundedCornerShape(6.dp))
-			.border(BorderStroke(1.dp, colors.accent), RoundedCornerShape(6.dp))
-			.padding(horizontal = 12.dp, vertical = 8.dp),
-	) {
-		Row(
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(10.dp),
-		) {
-			Text(
-				text = message,
-				style = typography.body.copy(fontSize = 11.sp),
-				color = colors.textPrimary,
-				maxLines = 2,
-				overflow = TextOverflow.Ellipsis,
-				modifier = Modifier.widthIn(max = 380.dp),
-			)
-			CompactButton(
-				text = tr("dialog.openFolder"),
-				onClick = onOpenFolder,
-				isPrimary = true,
-				height = 22.dp,
-			)
-			CompactIconButton(
-				onClick = onDismiss,
-				size = 18.dp,
-			) {
-				IconClose(tint = colors.textMuted)
-			}
-		}
-	}
-}

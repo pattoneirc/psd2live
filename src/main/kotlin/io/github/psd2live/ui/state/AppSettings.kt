@@ -211,7 +211,6 @@ object AppSettings {
 			}
 		}
 
-	private const val KEY_AUTO_DETECT_MESH_SPLITS_ON_IMPORT = "auto_detect_mesh_splits_on_import"
 	private const val KEY_RECENT_FILES = "recent_files"
 
 	/**
@@ -219,13 +218,21 @@ object AppSettings {
 	 * splits of a layer import. The name and key predate the start screen.
 	 */
 	var autoDetectMeshSplitsOnImport: Boolean
-		get() = runCatching { preferences.getBoolean(KEY_AUTO_DETECT_MESH_SPLITS_ON_IMPORT, true) }.getOrDefault(true)
-		set(value) {
-			runCatching {
-				preferences.putBoolean(KEY_AUTO_DETECT_MESH_SPLITS_ON_IMPORT, value)
-				preferences.flush()
-			}
+		get() = promptEnabled(AppPrompt.START_SCREEN_ON_IMPORT)
+		set(value) = setPromptEnabled(AppPrompt.START_SCREEN_ON_IMPORT, value)
+
+	fun promptEnabled(prompt: AppPrompt): Boolean =
+		runCatching { preferences.getBoolean(prompt.key, true) }.getOrDefault(true)
+
+	fun setPromptEnabled(prompt: AppPrompt, enabled: Boolean) {
+		runCatching {
+			preferences.putBoolean(prompt.key, enabled)
+			preferences.flush()
 		}
+	}
+
+	/** The prompts the user turned off with "Don't show again". */
+	fun mutedPrompts(): Set<AppPrompt> = AppPrompt.entries.filterTo(mutableSetOf()) { !promptEnabled(it) }
 
 	// ---------------------------------------------------------------------------------------
 	// Keyboard shortcuts
@@ -395,3 +402,13 @@ object AppSettings {
 	}
 }
 
+/**
+ * A prompt the user can turn off from the prompt itself ("Don't show again") and back on in Settings › Prompts.
+ * [key] is its preference; [labelKey] names it in Settings, phrased as what is shown when it is on.
+ */
+enum class AppPrompt(internal val key: String, val labelKey: String) {
+	/** The start screen after a PSD import; the key predates the start screen. */
+	START_SCREEN_ON_IMPORT("auto_detect_mesh_splits_on_import", "editor.meshSplit.promptOnImport"),
+	/** The dialog that reports a finished export and offers its folder. */
+	EXPORT_SUCCESS("prompt_export_success", "prompt.exportSuccess"),
+}

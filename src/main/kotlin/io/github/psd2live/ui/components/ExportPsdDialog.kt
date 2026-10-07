@@ -65,224 +65,174 @@ fun ExportPsdDialog(
 	val canvasH = analysis.source.heightPx * selectedScale
 	val layerCount = if (includeGenerated) analysis.layers.size else analysis.source.layers.size
 
-	Box(
-		modifier = Modifier
-			.fillMaxSize()
-			.background(colors.scrim)
-			.scrimDismiss(enabled = !isExporting) { viewModel.closeExportPsdDialog() },
-		contentAlignment = Alignment.Center,
+	val export = {
+		runCatching { Path.of(targetPathString) }.getOrNull()?.let { viewModel.exportPsd(it, selectedScale, includeGenerated) }
+	}
+	ModalDialogFrame(
+		title = tr("exportPsd.title"),
+		onDismiss = { viewModel.closeExportPsdDialog() },
+		width = 520.dp,
+		dismissible = !isExporting,
+		footer = {
+			CompactButton(text = tr("exportPsd.cancel"), enabled = !isExporting, onClick = { viewModel.closeExportPsdDialog() })
+			CompactButton(
+				text = tr("exportPsd.export"),
+				isPrimary = true,
+				enabled = !isExporting && targetPathString.isNotBlank(),
+				onClick = { export() },
+			)
+		},
 	) {
-		Column(
-			modifier = Modifier
-				.width(520.dp)
-				.background(colors.panelBackground, RoundedCornerShape(8.dp))
-				.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(8.dp))
-				.clickable(enabled = false) {}
-				.padding(16.dp),
-			verticalArrangement = Arrangement.spacedBy(12.dp),
-		) {
-			// Header
+		// Destination File Section
+		Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+			Text(
+				text = tr("exportPsd.destinationFile"),
+				style = typography.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = 10.5.sp),
+				color = colors.textPrimary,
+			)
 			Row(
 				modifier = Modifier.fillMaxWidth(),
 				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.SpaceBetween,
+				horizontalArrangement = Arrangement.spacedBy(6.dp),
 			) {
-				Row(
-					verticalAlignment = Alignment.CenterVertically,
-					horizontalArrangement = Arrangement.spacedBy(8.dp),
+				Box(
+					modifier = Modifier
+						.weight(1f)
+						.height(28.dp)
+						.background(colors.inputBackground, RoundedCornerShape(4.dp))
+						.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(4.dp))
+						.padding(horizontal = 8.dp),
+					contentAlignment = Alignment.CenterStart,
 				) {
 					Text(
-						text = tr("exportPsd.title"),
-						style = typography.title.copy(fontSize = 13.5.sp, fontWeight = FontWeight.Bold),
+						text = targetPathString,
+						style = typography.monoSmall.copy(fontSize = 10.5.sp),
 						color = colors.textPrimary,
+						maxLines = 1,
+						overflow = TextOverflow.Ellipsis,
 					)
 				}
-				CompactIconButton(
-					onClick = { viewModel.closeExportPsdDialog() },
-					enabled = !isExporting,
-					size = 20.dp,
-				) {
-					IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted)
-				}
-			}
-
-			// Destination File Section
-			Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-				Text(
-					text = tr("exportPsd.destinationFile"),
-					style = typography.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = 10.5.sp),
-					color = colors.textPrimary,
-				)
-				Row(
-					modifier = Modifier.fillMaxWidth(),
-					verticalAlignment = Alignment.CenterVertically,
-					horizontalArrangement = Arrangement.spacedBy(6.dp),
-				) {
-					Box(
-						modifier = Modifier
-							.weight(1f)
-							.height(28.dp)
-							.background(colors.inputBackground, RoundedCornerShape(4.dp))
-							.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(4.dp))
-							.padding(horizontal = 8.dp),
-						contentAlignment = Alignment.CenterStart,
-					) {
-						Text(
-							text = targetPathString,
-							style = typography.monoSmall.copy(fontSize = 10.5.sp),
-							color = colors.textPrimary,
-							maxLines = 1,
-							overflow = TextOverflow.Ellipsis,
-						)
-					}
-					CompactButton(
-						text = tr("exportPsd.browse"),
-						isPrimary = false,
-						enabled = !isExporting,
-						onClick = {
-							val chosen = NativeFilePicker.chooseSavePsdFile(
-								window = window,
-								defaultName = computeDefaultFileName(selectedScale),
-								initialDir = sourceParentDir,
-							)
-							if (!chosen.isNullOrBlank()) {
-								targetPathString = chosen
-							}
-						},
-					)
-				}
-			}
-
-			// Resolution / Scale Section
-			Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-				Text(
-					text = tr("exportPsd.resolutionScale"),
-					style = typography.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = 10.5.sp),
-					color = colors.textPrimary,
-				)
-				Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-					listOf(1, 2, 4).forEach { scale ->
-						val isSelected = selectedScale == scale
-						Row(
-							verticalAlignment = Alignment.CenterVertically,
-							horizontalArrangement = Arrangement.spacedBy(6.dp),
-							modifier = Modifier
-								.clickable(enabled = !isExporting) {
-									selectedScale = scale
-									val defaultName = computeDefaultFileName(scale)
-									targetPathString = if (sourceParentDir != null) Path.of(sourceParentDir, defaultName).toString() else defaultName
-								},
-						) {
-							Box(
-								modifier = Modifier
-									.size(14.dp)
-									.clip(RoundedCornerShape(7.dp))
-									.border(BorderStroke(1.5.dp, if (isSelected) colors.accent else colors.border), RoundedCornerShape(7.dp))
-									.padding(3.dp),
-								contentAlignment = Alignment.Center,
-							) {
-								if (isSelected) {
-									Box(
-										modifier = Modifier
-											.fillMaxSize()
-											.clip(RoundedCornerShape(4.dp))
-											.background(colors.accent),
-									)
-								}
-							}
-							Text(
-								text = if (scale == 1) tr("exportPsd.scale1x") else tr("exportPsd.scaleNx", scale),
-								style = typography.body.copy(fontSize = 11.sp),
-								color = if (isSelected) colors.textPrimary else colors.textMuted,
-							)
-						}
-					}
-				}
-			}
-
-			// Model info preview
-			Box(
-				modifier = Modifier
-					.fillMaxWidth()
-					.background(colors.inputBackground, RoundedCornerShape(4.dp))
-					.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(4.dp))
-					.padding(10.dp),
-			) {
-				Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-					Row(
-						modifier = Modifier.fillMaxWidth(),
-						horizontalArrangement = Arrangement.SpaceBetween,
-					) {
-						Text(
-							text = tr("exportPsd.canvasDimensions"),
-							style = typography.caption.copy(fontSize = 10.sp),
-							color = colors.textMuted,
-						)
-						Text(
-							text = "${canvasW} × ${canvasH} px",
-							style = typography.monoSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-							color = colors.accent,
-						)
-					}
-					Row(
-						modifier = Modifier.fillMaxWidth(),
-						horizontalArrangement = Arrangement.SpaceBetween,
-					) {
-						Text(
-							text = tr("exportPsd.layerCount"),
-							style = typography.caption.copy(fontSize = 10.sp),
-							color = colors.textMuted,
-						)
-						Text(
-							text = "$layerCount",
-							style = typography.monoSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-							color = colors.textPrimary,
-						)
-					}
-				}
-			}
-
-			// Include generated layers checkbox
-			Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-				CompactCheckbox(
-					checked = includeGenerated,
-					onCheckedChange = { includeGenerated = it },
-					label = tr("exportPsd.includeGenerated"),
-					enabled = !isExporting,
-				)
-				Text(
-					text = tr("exportPsd.includeGeneratedDesc"),
-					style = typography.caption.copy(fontSize = 9.5.sp),
-					color = colors.textMuted,
-					modifier = Modifier.padding(start = 22.dp),
-				)
-			}
-
-			// Footer Buttons
-			Row(
-				modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-				horizontalArrangement = Arrangement.End,
-				verticalAlignment = Alignment.CenterVertically,
-			) {
 				CompactButton(
-					text = tr("exportPsd.cancel"),
+					text = tr("exportPsd.browse"),
 					isPrimary = false,
 					enabled = !isExporting,
-					onClick = { viewModel.closeExportPsdDialog() },
-				)
-				Spacer(Modifier.width(8.dp))
-				CompactButton(
-					text = tr("exportPsd.export"),
-					isPrimary = true,
-					enabled = !isExporting && targetPathString.isNotBlank(),
 					onClick = {
-						val target = runCatching { Path.of(targetPathString) }.getOrNull()
-						if (target != null) {
-							viewModel.exportPsd(target, selectedScale, includeGenerated)
+						val chosen = NativeFilePicker.chooseSavePsdFile(
+							window = window,
+							defaultName = computeDefaultFileName(selectedScale),
+							initialDir = sourceParentDir,
+						)
+						if (!chosen.isNullOrBlank()) {
+							targetPathString = chosen
 						}
 					},
 				)
 			}
+		}
+
+		// Resolution / Scale Section
+		Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+			Text(
+				text = tr("exportPsd.resolutionScale"),
+				style = typography.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = 10.5.sp),
+				color = colors.textPrimary,
+			)
+			Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+				listOf(1, 2, 4).forEach { scale ->
+					val isSelected = selectedScale == scale
+					Row(
+						verticalAlignment = Alignment.CenterVertically,
+						horizontalArrangement = Arrangement.spacedBy(6.dp),
+						modifier = Modifier
+							.clickable(enabled = !isExporting) {
+								selectedScale = scale
+								val defaultName = computeDefaultFileName(scale)
+								targetPathString = if (sourceParentDir != null) Path.of(sourceParentDir, defaultName).toString() else defaultName
+							},
+					) {
+						Box(
+							modifier = Modifier
+								.size(14.dp)
+								.clip(RoundedCornerShape(7.dp))
+								.border(BorderStroke(1.5.dp, if (isSelected) colors.accent else colors.border), RoundedCornerShape(7.dp))
+								.padding(3.dp),
+							contentAlignment = Alignment.Center,
+						) {
+							if (isSelected) {
+								Box(
+									modifier = Modifier
+										.fillMaxSize()
+										.clip(RoundedCornerShape(4.dp))
+										.background(colors.accent),
+								)
+							}
+						}
+						Text(
+							text = if (scale == 1) tr("exportPsd.scale1x") else tr("exportPsd.scaleNx", scale),
+							style = typography.body.copy(fontSize = 11.sp),
+							color = if (isSelected) colors.textPrimary else colors.textMuted,
+						)
+					}
+				}
+			}
+		}
+
+		// Model info preview
+		Box(
+			modifier = Modifier
+				.fillMaxWidth()
+				.background(colors.inputBackground, RoundedCornerShape(4.dp))
+				.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(4.dp))
+				.padding(10.dp),
+		) {
+			Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+				Row(
+					modifier = Modifier.fillMaxWidth(),
+					horizontalArrangement = Arrangement.SpaceBetween,
+				) {
+					Text(
+						text = tr("exportPsd.canvasDimensions"),
+						style = typography.caption.copy(fontSize = 10.sp),
+						color = colors.textMuted,
+					)
+					Text(
+						text = "${canvasW} × ${canvasH} px",
+						style = typography.monoSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+						color = colors.accent,
+					)
+				}
+				Row(
+					modifier = Modifier.fillMaxWidth(),
+					horizontalArrangement = Arrangement.SpaceBetween,
+				) {
+					Text(
+						text = tr("exportPsd.layerCount"),
+						style = typography.caption.copy(fontSize = 10.sp),
+						color = colors.textMuted,
+					)
+					Text(
+						text = "$layerCount",
+						style = typography.monoSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+						color = colors.textPrimary,
+					)
+				}
+			}
+		}
+
+		// Include generated layers checkbox
+		Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+			CompactCheckbox(
+				checked = includeGenerated,
+				onCheckedChange = { includeGenerated = it },
+				label = tr("exportPsd.includeGenerated"),
+				enabled = !isExporting,
+			)
+			Text(
+				text = tr("exportPsd.includeGeneratedDesc"),
+				style = typography.caption.copy(fontSize = 9.5.sp),
+				color = colors.textMuted,
+				modifier = Modifier.padding(start = 22.dp),
+			)
 		}
 	}
 }

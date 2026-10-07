@@ -4152,8 +4152,19 @@ class PSD2LiveViewModel : AutoCloseable {
 	 * is not part of the project, and "Reset Defaults" must not leave an opened project looking unsaved.
 	 */
 	fun resetInteractionPrefs() {
-		AppSettings.autoDetectMeshSplitsOnImport = true
-		updateState { it.copy(autoDetectMeshSplitsOnImport = true) }
+		restorePrompts()
+	}
+
+	/** Turns [prompt] on or off ("Don't show again"); a global preference, so the project stays clean. */
+	fun setPromptEnabled(prompt: AppPrompt, enabled: Boolean) {
+		AppSettings.setPromptEnabled(prompt, enabled)
+		updateState { it.copy(mutedPrompts = if (enabled) it.mutedPrompts - prompt else it.mutedPrompts + prompt) }
+	}
+
+	/** Turns every prompt muted with "Don't show again" back on. */
+	fun restorePrompts() {
+		AppPrompt.entries.forEach { AppSettings.setPromptEnabled(it, true) }
+		updateState { it.copy(mutedPrompts = emptySet()) }
 	}
 
 	fun openSettingsDialog() {
@@ -5374,11 +5385,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	    markWorkspaceChanged()
 	}
 
-	fun setAutoDetectMeshSplitsOnImport(enabled: Boolean) {
-		AppSettings.autoDetectMeshSplitsOnImport = enabled
-		updateState { it.copy(autoDetectMeshSplitsOnImport = enabled) }
-		markWorkspaceChanged()
-	}
+	fun setAutoDetectMeshSplitsOnImport(enabled: Boolean) = setPromptEnabled(AppPrompt.START_SCREEN_ON_IMPORT, enabled)
 
 	fun setHoveredItem(layerId: String?, deformerId: String?) {
 		updateState {
@@ -6149,8 +6156,8 @@ class PSD2LiveViewModel : AutoCloseable {
 		updateState { it.copy(statusText = text) }
 	}
 
-	fun clearSuccessExportMessage() {
-		updateState { it.copy(successExportMessage = null) }
+	fun clearExportSuccess() {
+		updateState { it.copy(exportSuccess = null, focusCanvasRequest = it.focusCanvasRequest + 1) }
 	}
 
     fun analyze(discardUnsaved: Boolean = false) {
@@ -6235,9 +6242,10 @@ class PSD2LiveViewModel : AutoCloseable {
 				}, level = LogLevel.INFO, tag = "Export").let {
 					if (warnings.isEmpty()) it else it.withLogs(listOf(tr("log.warnings")) + warnings.map { text -> "• $text" },
 						level = LogLevel.WARNING, tag = "Export")
-				}.copy(progress = 1f, statusText = tr("status.completed", files.size, warnings.size),
-					successExportMessage = tr("dialog.exportSuccess", files.size, directory))
+				}.copy(progress = 1f, statusText = tr("status.completed", files.size, warnings.size))
 			}
+			reportExportSuccess(ExportSuccess(tr("dialog.exportSuccess", files.size), directory.toString(),
+				tr("log.warnings").takeIf { warnings.isNotEmpty() }, warnings))
 		}
 	}
 
@@ -6266,17 +6274,12 @@ class PSD2LiveViewModel : AutoCloseable {
 	/** Opens the export dialog of one neutral target (File > Export as). */
 	fun openOtherExport(targetId: String) {
 		if (_state.value.previewModel == null) return
-		_otherExportResult.value = null
 		updateState { it.copy(otherExportTarget = targetId) }
 	}
 
 	fun closeOtherExport() {
 		updateState { it.copy(otherExportTarget = null, focusCanvasRequest = it.focusCanvasRequest + 1) }
 	}
-
-	/** The last export through a neutral target, shown with its loss report in that target's dialog. */
-	private val _otherExportResult = MutableStateFlow<kotlinx.serialization.json.JsonObject?>(null)
-	internal val otherExportResult: StateFlow<kotlinx.serialization.json.JsonObject?> = _otherExportResult.asStateFlow()
 
 	/** Motion clips an export can render, by id and name, compiled from the current rig. */
 	internal fun exportClipChoices(): List<Pair<String, String>> {
@@ -6315,12 +6318,17 @@ class PSD2LiveViewModel : AutoCloseable {
 			?: run { updateState { it.copy(errorMessage = tr("export.other.noOutput")) }; return }
 		val name = (_state.value.projectSourceName ?: "model").substringBeforeLast('.')
 		val target = Path.of(root).toAbsolutePath().normalize().resolve("$name-$targetId")
-		_otherExportResult.value = null
 		launchWorkspaceExport(false, { port, state -> port.exportTarget(state, targetId, target.toString(), settings) }) { result ->
-			_otherExportResult.value = result
 			val count = result.getValue("files").jsonArray.size
+			val losses = result["losses"]?.jsonArray.orEmpty().map { it.jsonObject }
+				.distinctBy { it["note"]?.jsonPrimitive?.content }
+				.map { "${tr("export.loss.${it["handling"]?.jsonPrimitive?.content}")}: ${it["note"]?.jsonPrimitive?.content}" }
 			addLog(tr("export.other.done", count, target.toString()), level = LogLevel.SUCCESS, tag = "Export")
+			if (losses.isNotEmpty()) updateState { it.withLogs(listOf(tr("export.other.losses", losses.size)) + losses.map { line -> "• $line" },
+				level = LogLevel.WARNING, tag = "Export") }
 			updateState { it.copy(progress = 1f, statusText = tr("export.other.done", count, target.fileName.toString())) }
+			reportExportSuccess(ExportSuccess(tr("export.other.success", tr("export.target.$targetId"), count), target.toString(),
+				tr("export.other.losses", losses.size).takeIf { losses.isNotEmpty() }, losses))
 		}
 	}
 
@@ -6333,6 +6341,19 @@ class PSD2LiveViewModel : AutoCloseable {
 			addLog(tr("log.exportPsdSuccess", target.fileName.toString(), result.getValue("layers").jsonPrimitive.int,
 				result.getValue("bytes").jsonPrimitive.long), level = LogLevel.SUCCESS, tag = "Export")
 			updateState { it.copy(progress = 1f, statusText = tr("exportPsd.completed", target.fileName.toString())) }
+			reportExportSuccess(ExportSuccess(tr("exportPsd.success", target.fileName.toString()), target.parent.toString()))
+		}
+	}
+
+	/**
+	 * Every GUI export ends here: the export's dialog closes and, unless the user turned it off, the export-success
+	 * dialog reports what was written and offers its folder. With it off, the log and status bar still say so.
+	 */
+	private fun reportExportSuccess(success: ExportSuccess) {
+		updateState {
+			it.copy(showExportDialog = false, showExportPsdDialog = false, otherExportTarget = null,
+				exportSuccess = success.takeIf { _ -> AppPrompt.EXPORT_SUCCESS !in it.mutedPrompts },
+				focusCanvasRequest = it.focusCanvasRequest + 1)
 		}
 	}
 
@@ -6352,7 +6373,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			if (!currentExport()) return@launch
 			val completion = io.github.psd2live.application.WorkspaceJobCompletion()
 			updateState { it.copy(isGenerating = !psd, isExportingPsd = psd, showExportPsdDialog = false,
-				progress = 0f, isIndeterminateProgress = false, errorMessage = null, successExportMessage = null,
+				progress = 0f, isIndeterminateProgress = false, errorMessage = null, exportSuccess = null,
 				statusText = tr("status.generating")) }
 			try {
 				val settled = workspace.settleEditorDrafts(expected.projectId, expected.state)

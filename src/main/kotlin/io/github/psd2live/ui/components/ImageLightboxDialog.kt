@@ -19,6 +19,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.i18n.tr
@@ -61,99 +62,45 @@ fun ImageLightboxDialog(
 		Toolkit.getDefaultToolkit().systemClipboard.setContents(transferable, null)
 	}
 
-	Box(
-		modifier = Modifier
-			.fillMaxSize()
-			.background(Color(0xCC000000))
-			.scrimDismiss(onDismiss = onDismiss),
-		contentAlignment = Alignment.Center,
+	ModalDialogFrame(
+		title = title ?: tr("lightbox.title"),
+		subtitle = bufferedImage?.let { "${it.width} × ${it.height} px · ${(imageBytes.size / 1024).coerceAtLeast(1)} KB" },
+		onDismiss = onDismiss,
+		fit = { maxWidth, maxHeight -> DpSize(minOf(800.dp, maxWidth), minOf(680.dp, maxHeight)) },
+		scrollable = false,
+		onConfirm = onDismiss,
+		footerStart = {
+			CompactButton(text = tr("lightbox.copy"), onClick = ::copyImageToClipboard, enabled = bufferedImage != null)
+		},
+		footer = {
+			CompactButton(text = tr("dialog.ok"), onClick = onDismiss, isPrimary = true)
+		},
 	) {
-		Column(
+		// Image Container with Checkerboard Background
+		Box(
 			modifier = Modifier
-				.widthIn(min = 360.dp, max = 800.dp)
-				.heightIn(min = 280.dp, max = 680.dp)
-				.background(colors.panelBackground, RoundedCornerShape(8.dp))
-				.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(8.dp))
-				.clickable(enabled = false) {}
-				.padding(14.dp),
+				.weight(1f)
+				.fillMaxWidth()
+				.background(colors.inputBackground, RoundedCornerShape(4.dp))
+				.border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(4.dp)),
+			contentAlignment = Alignment.Center,
 		) {
-			// Title Bar
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.SpaceBetween,
-			) {
-				Column {
-					Text(
-						text = title ?: "Image Preview",
-						style = typography.title.copy(fontSize = 13.sp, fontWeight = FontWeight.Bold),
-						color = colors.textPrimary,
-					)
-					if (bufferedImage != null) {
-						Text(
-							text = "${bufferedImage.width} × ${bufferedImage.height} px · ${(imageBytes.size / 1024).coerceAtLeast(1)} KB",
-							style = typography.caption.copy(fontSize = 10.sp),
-							color = colors.textMuted,
-						)
-					}
-				}
-				CompactIconButton(
-					onClick = onDismiss,
-					size = 22.dp,
-				) {
-					IconClose(tint = colors.textMuted)
-				}
-			}
+			CheckerboardBackground(modifier = Modifier.fillMaxSize())
 
-			Spacer(Modifier.height(10.dp))
-
-			// Image Container with Checkerboard Background
-			Box(
-				modifier = Modifier
-					.weight(1f)
-					.fillMaxWidth()
-					.background(colors.inputBackground, RoundedCornerShape(4.dp))
-					.border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(4.dp)),
-				contentAlignment = Alignment.Center,
-			) {
-				CheckerboardBackground(modifier = Modifier.fillMaxSize())
-
-				if (bitmap != null) {
-					Image(
-						bitmap = bitmap,
-						contentDescription = title ?: "Preview",
-						modifier = Modifier
-							.fillMaxSize()
-							.padding(8.dp),
-						alignment = Alignment.Center,
-					)
-				} else {
-					Text(
-						text = "Failed to decode image",
-						style = typography.body.copy(fontSize = 12.sp),
-						color = colors.error,
-					)
-				}
-			}
-
-			Spacer(Modifier.height(12.dp))
-
-			// Bottom Actions
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				horizontalArrangement = Arrangement.SpaceBetween,
-				verticalAlignment = Alignment.CenterVertically,
-			) {
-				CompactButton(
-					text = "Copy Image",
-					onClick = ::copyImageToClipboard,
-					height = 24.dp,
+			if (bitmap != null) {
+				Image(
+					bitmap = bitmap,
+					contentDescription = title ?: tr("lightbox.title"),
+					modifier = Modifier
+						.fillMaxSize()
+						.padding(8.dp),
+					alignment = Alignment.Center,
 				)
-				CompactButton(
-					text = tr("dialog.ok"),
-					onClick = onDismiss,
-					isPrimary = true,
-					height = 24.dp,
+			} else {
+				Text(
+					text = tr("lightbox.decodeFailed"),
+					style = typography.body.copy(fontSize = 12.sp),
+					color = colors.error,
 				)
 			}
 		}

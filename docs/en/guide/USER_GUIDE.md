@@ -66,6 +66,7 @@ The catalog has 19 topics. The beginner path contains the 18 lessons below; the 
 ## Important distinctions
 
 - Saving preserves artwork, edits and history. Exporting delivers model files. `.psd2live.json` is only a report.
+- When an export finishes (Live2D model, PSD or any Export as format), its dialog closes and **Export complete** shows where the files went, with the warnings or what the format could not keep, and offers **Open folder**. After **Close and don't show again**, exports report only in the log and status bar; **Settings › Prompts** lists every window with "Don't show again" (the start screen after an import too), to turn each back on or **Show all prompts again**.
 - Parameter keyforms belong to modeling and interpolate model shapes. Animation keyframes record parameter values at points in time.
 - Deform changes shapes; Edit changes mesh structure; Paint changes pixels in an isolated apply/discard session.
 - Temporary solo visibility and static visibility are not parameter-driven variants. Use variants or opacity keyforms for animated switches.

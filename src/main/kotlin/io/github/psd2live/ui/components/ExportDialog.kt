@@ -35,6 +35,8 @@ import androidx.compose.ui.unit.sp
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
+import io.github.psd2live.ui.state.ShortcutAction
+import io.github.psd2live.ui.state.ShortcutScope
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import org.umamo.runtime.model.RuntimeTarget
@@ -66,57 +68,30 @@ fun ExportDialog(
 	onDismiss: () -> Unit,
 ) {
 	if (!state.showExportDialog) return
-	val colors = LocalToolColors.current
-	val typography = LocalToolTypography.current
 	val isBusy = state.isAnalyzing || state.isGenerating
+	val canGenerate = state.inputPath.isNotBlank() && (state.exportCmo3 || state.exportMoc3 || state.exportJson) && !isBusy
 
-	Box(
-		modifier = Modifier
-			.fillMaxSize()
-			.background(colors.scrim)
-			.scrimDismiss(enabled = !isBusy) { onDismiss() },
-		contentAlignment = Alignment.Center,
+	ModalDialogFrame(
+		title = tr("export.live2d.title"),
+		onDismiss = onDismiss,
+		width = 560.dp,
+		dismissible = !isBusy,
+		onKeyDown = { event ->
+			val generate = state.keymap.match(event, ShortcutScope.APP) == ShortcutAction.GENERATE
+			if (generate && canGenerate) viewModel.generateRig()
+			generate
+		},
+		footer = {
+			CompactButton(text = tr("action.cancel"), onClick = onDismiss, enabled = !isBusy)
+			CompactButton(
+				text = if (state.isGenerating) tr("export.other.running") else tr("action.generate"),
+				onClick = { viewModel.generateRig() },
+				enabled = canGenerate,
+				isPrimary = true,
+			)
+		},
 	) {
-		Column(
-			modifier = Modifier
-				.width(560.dp)
-				.heightIn(max = 720.dp)
-				.background(colors.panelBackground, RoundedCornerShape(8.dp))
-				.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(8.dp))
-				.clickable(enabled = false) {}
-				.padding(16.dp),
-			verticalArrangement = Arrangement.spacedBy(10.dp),
-		) {
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.SpaceBetween,
-			) {
-				Text(
-					text = tr("export.live2d.title"),
-					style = typography.title.copy(fontSize = 13.5.sp, fontWeight = FontWeight.Bold),
-					color = colors.textPrimary,
-				)
-				CompactIconButton(onClick = onDismiss, enabled = !isBusy, size = 20.dp) {
-					IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted)
-				}
-			}
-
-			Column(
-				modifier = Modifier
-					.weight(1f, fill = false)
-					.verticalScroll(rememberScrollState()),
-				verticalArrangement = Arrangement.spacedBy(10.dp),
-			) {
-				ExportActionSection(
-					state = state,
-					viewModel = viewModel,
-					onGenerate = { viewModel.generateRig() },
-					onChooseOutput = onChooseOutput,
-				)
-			}
-
-		}
+		ExportActionSection(state = state, viewModel = viewModel, onChooseOutput = onChooseOutput)
 	}
 }
 
@@ -124,7 +99,6 @@ fun ExportDialog(
 internal fun ExportActionSection(
 	state: PSD2LiveState,
 	viewModel: PSD2LiveViewModel,
-	onGenerate: () -> Unit,
 	onChooseOutput: () -> Unit,
 ) {
 	val colors = LocalToolColors.current
@@ -330,16 +304,6 @@ internal fun ExportActionSection(
 		}
 
 		ExportOutputRow(state, viewModel, onChooseOutput, enabled = !isBusy)
-
-		CompactButton(
-			text = tr("action.generate"),
-			onClick = onGenerate,
-			enabled = state.inputPath.isNotBlank() &&
-				(state.exportCmo3 || state.exportMoc3 || state.exportJson) && !isBusy,
-			isPrimary = true,
-			height = 28.dp,
-			modifier = Modifier.fillMaxWidth(),
-		)
 	}
 }
 

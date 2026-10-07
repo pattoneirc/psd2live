@@ -17,6 +17,8 @@ import androidx.compose.ui.window.Dialog
 import io.github.psd2live.core.ParameterKeyEdits
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactButton
+import io.github.psd2live.ui.components.ModalPanel
+import io.github.psd2live.ui.components.ModalTone
 import io.github.psd2live.ui.components.CompactCheckbox
 import io.github.psd2live.ui.components.CompactTextField
 import io.github.psd2live.ui.components.InlineEditorRegions
@@ -116,151 +118,143 @@ internal fun ParameterDefinitionDialog(
     val focusState = rememberUpdatedState(focusManager)
     Dialog(onDismissRequest = { if (!busy) onDismiss() }) {
         CompositionLocalProvider(LocalInlineEditorRegions provides editorRegions) {
-            Surface(color = colors.panelElevated, shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, colors.divider)) {
-                Column(
-                    Modifier
-                        .width(440.dp)
-                        .onPointerEvent(PointerEventType.Press, pass = PointerEventPass.Initial) {
-                            editorRegions.pressedInside = false
-                        }
-                        .onPointerEvent(PointerEventType.Press, pass = PointerEventPass.Final) {
-                            if (!editorRegions.pressedInside) focusState.value.clearFocus(force = true)
-                        }
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+            ModalPanel(
+                modifier = Modifier
+                    .width(440.dp)
+                    .onPointerEvent(PointerEventType.Press, pass = PointerEventPass.Initial) {
+                        editorRegions.pressedInside = false
+                    }
+                    .onPointerEvent(PointerEventType.Press, pass = PointerEventPass.Final) {
+                        if (!editorRegions.pressedInside) focusState.value.clearFocus(force = true)
+                    },
+                title = tr(when {
+                    deleting -> "parameters.delete"
+                    copying -> "parameters.duplicate"
+                    parameter == null -> "parameters.create"
+                    else -> "parameters.properties"
+                }),
+                tone = if (deleting) ModalTone.WARNING else ModalTone.NONE,
+                onDismiss = { if (deleting) deleting = false else onDismiss() },
+                dismissible = !busy,
+                scrollable = false,
+                bodySpacing = 8.dp,
+                footerStart = {
+                    if (!creating && !deleting) {
+                        CompactButton(tr("parameters.delete"), { deleting = true }, enabled = !busy, danger = true)
+                        CompactButton(tr("parameters.copy"), {
+                            copying = true
+                            deleting = false
+                            keyEdits = emptyList()
+                            undone = emptyList()
+                            failure = null
+                            id = baseModel?.freshParameterId()?.raw.orEmpty()
+                            name = tr("parameters.copyName", parameter.name)
+                        }, enabled = !busy)
+                    }
+                },
+                footer = {
+                    CompactButton(tr("parameters.cancel"), { if (deleting) deleting = false else onDismiss() }, enabled = !busy)
+                    CompactButton(
+                        tr(if (deleting) "parameters.delete" else "parameters.save"),
+                        { submit(if (deleting) "delete" else if (creating) "create" else "update") },
+                        enabled = !busy && (deleting || (valid && staged.isSuccess)),
+                        isPrimary = !deleting,
+                        danger = deleting,
+                    )
+                },
+            ) {
+                if (deleting) {
                     Text(
-                        tr(when {
-                            deleting -> "parameters.delete"
-                            copying -> "parameters.duplicate"
-                            parameter == null -> "parameters.create"
-                            else -> "parameters.properties"
-                        }),
-                        style = typography.header,
+                        tr("parameters.deleteWarning", parameter?.name.orEmpty()),
+                        style = typography.body,
                         color = colors.textPrimary,
                     )
-                    if (deleting) {
-                        Text(
-                            tr("parameters.deleteWarning", parameter?.name.orEmpty()),
-                            style = typography.body,
-                            color = colors.textPrimary,
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DefinitionField("ID", id, creating && !busy) { id = it }
+                        DefinitionField(tr("parameters.fieldName"), name, !busy) { name = it }
+                    }
+                    if (parameter != null && !copying) {
+                        // Locking pins the preview value only; it is not part of the definition.
+                        CompactCheckbox(
+                            checked = parameter.id in state.lockedParameters,
+                            onCheckedChange = { viewModel.toggleParameterLock(parameter.id, lockValue) },
+                            label = tr("parameters.lock"),
                         )
-                    } else {
+                    }
+                    if (creating) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            DefinitionField("ID", id, creating && !busy) { id = it }
-                            DefinitionField(tr("parameters.fieldName"), name, !busy) { name = it }
-                        }
-                        if (parameter != null && !copying) {
-                            // Locking pins the preview value only; it is not part of the definition.
-                            CompactCheckbox(
-                                checked = parameter.id in state.lockedParameters,
-                                onCheckedChange = { viewModel.toggleParameterLock(parameter.id, lockValue) },
-                                label = tr("parameters.lock"),
-                            )
-                        }
-                        if (creating) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                CompactButton(tr("parameters.kindNormal"), {
-                                    kind = ParameterKind.NORMAL
-                                }, enabled = !busy, isPrimary = kind == ParameterKind.NORMAL, height = 22.dp)
-                                CompactButton(tr("parameters.kindBlend"), {
-                                    kind = ParameterKind.BLEND_SHAPE
-                                    if (min == "-1.0" || min == "-1") min = "0"
-                                    if (max == "1.0" || max == "1") max = "1"
-                                    if (default == "0.0" || default == "0") default = "0"
-                                    if (low == -1f && high == 1f && neutral == 0f) {
-                                        min = "0"
-                                        default = "0"
-                                        max = "1"
-                                    }
-                                }, enabled = !busy, isPrimary = kind == ParameterKind.BLEND_SHAPE, height = 22.dp)
-                            }
-                        }
-                        if (copying) {
-                            Text(tr("parameters.duplicateHint"), style = typography.caption, color = colors.textMuted)
-                        }
-                        if (!valid) {
-                            Text(tr("parameters.invalidDefinition"), style = typography.caption, color = colors.error)
-                        }
-                        if (axisModel != null && axisParameter != null) {
-                            ParameterKeysEditor(
-                                parameter = axisParameter,
-                                model = axisModel,
-                                enabled = !busy && valid && staged.isSuccess,
-                                canUndo = keyEdits.isNotEmpty(),
-                                canRedo = undone.isNotEmpty(),
-                                onUndo = {
-                                    if (keyEdits.isNotEmpty()) {
-                                        undone = undone + keyEdits.last()
-                                        keyEdits = keyEdits.dropLast(1)
-                                        failure = null
-                                    }
-                                },
-                                onRedo = {
-                                    if (undone.isNotEmpty()) {
-                                        keyEdits = keyEdits + undone.last()
-                                        undone = undone.dropLast(1)
-                                        failure = null
-                                    }
-                                },
-                                onRange = { nextMin, nextDefault, nextMax ->
-                                    min = formatAxisValue(nextMin)
-                                    default = formatAxisValue(nextDefault)
-                                    max = formatAxisValue(nextMax)
-                                },
-                            ) { command ->
-                                try {
-                                    require(keyEdits.size < 127) { tr("parameters.axisEditLimit") }
-                                    val next = ParameterKeyEdits.apply(draftModel ?: axisModel, command)
-                                    if (next === (draftModel ?: axisModel)) return@ParameterKeysEditor false
-                                    keyEdits = keyEdits + command
-                                    undone = emptyList()
-                                    failure = null
-                                    true
-                                } catch (error: IllegalArgumentException) {
-                                    failure = error.message
-                                    false
-                                } catch (error: IllegalStateException) {
-                                    failure = error.message
-                                    false
+                            CompactButton(tr("parameters.kindNormal"), {
+                                kind = ParameterKind.NORMAL
+                            }, enabled = !busy, isPrimary = kind == ParameterKind.NORMAL, height = 22.dp)
+                            CompactButton(tr("parameters.kindBlend"), {
+                                kind = ParameterKind.BLEND_SHAPE
+                                if (min == "-1.0" || min == "-1") min = "0"
+                                if (max == "1.0" || max == "1") max = "1"
+                                if (default == "0.0" || default == "0") default = "0"
+                                if (low == -1f && high == 1f && neutral == 0f) {
+                                    min = "0"
+                                    default = "0"
+                                    max = "1"
                                 }
-                            }
-                        }
-                        if (valid && staged.isFailure) {
-                            Text(staged.exceptionOrNull()?.message.orEmpty(), style = typography.caption, color = colors.error)
+                            }, enabled = !busy, isPrimary = kind == ParameterKind.BLEND_SHAPE, height = 22.dp)
                         }
                     }
-                    failure?.let { Text(it, style = typography.caption, color = colors.error) }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (!creating && !deleting) {
-                            CompactButton(tr("parameters.delete"), { deleting = true }, enabled = !busy, danger = true, height = 22.dp)
-                            CompactButton(tr("parameters.copy"), {
-                                copying = true
-                                deleting = false
-                                keyEdits = emptyList()
+                    if (copying) {
+                        Text(tr("parameters.duplicateHint"), style = typography.caption, color = colors.textMuted)
+                    }
+                    if (!valid) {
+                        Text(tr("parameters.invalidDefinition"), style = typography.caption, color = colors.error)
+                    }
+                    if (axisModel != null && axisParameter != null) {
+                        ParameterKeysEditor(
+                            parameter = axisParameter,
+                            model = axisModel,
+                            enabled = !busy && valid && staged.isSuccess,
+                            canUndo = keyEdits.isNotEmpty(),
+                            canRedo = undone.isNotEmpty(),
+                            onUndo = {
+                                if (keyEdits.isNotEmpty()) {
+                                    undone = undone + keyEdits.last()
+                                    keyEdits = keyEdits.dropLast(1)
+                                    failure = null
+                                }
+                            },
+                            onRedo = {
+                                if (undone.isNotEmpty()) {
+                                    keyEdits = keyEdits + undone.last()
+                                    undone = undone.dropLast(1)
+                                    failure = null
+                                }
+                            },
+                            onRange = { nextMin, nextDefault, nextMax ->
+                                min = formatAxisValue(nextMin)
+                                default = formatAxisValue(nextDefault)
+                                max = formatAxisValue(nextMax)
+                            },
+                        ) { command ->
+                            try {
+                                require(keyEdits.size < 127) { tr("parameters.axisEditLimit") }
+                                val next = ParameterKeyEdits.apply(draftModel ?: axisModel, command)
+                                if (next === (draftModel ?: axisModel)) return@ParameterKeysEditor false
+                                keyEdits = keyEdits + command
                                 undone = emptyList()
                                 failure = null
-                                id = baseModel?.freshParameterId()?.raw.orEmpty()
-                                name = tr("parameters.copyName", parameter.name)
-                            }, enabled = !busy, height = 22.dp)
+                                true
+                            } catch (error: IllegalArgumentException) {
+                                failure = error.message
+                                false
+                            } catch (error: IllegalStateException) {
+                                failure = error.message
+                                false
+                            }
                         }
-                        Spacer(Modifier.weight(1f))
-                        CompactButton(
-                            tr("parameters.cancel"),
-                            { if (deleting) deleting = false else onDismiss() },
-                            enabled = !busy,
-                            height = 22.dp,
-                        )
-                        CompactButton(
-                            tr(if (deleting) "parameters.delete" else "parameters.save"),
-                            { submit(if (deleting) "delete" else if (creating) "create" else "update") },
-                            enabled = !busy && (deleting || (valid && staged.isSuccess)),
-                            isPrimary = !deleting,
-                            danger = deleting,
-                            height = 22.dp,
-                        )
+                    }
+                    if (valid && staged.isFailure) {
+                        Text(staged.exceptionOrNull()?.message.orEmpty(), style = typography.caption, color = colors.error)
                     }
                 }
+                failure?.let { Text(it, style = typography.caption, color = colors.error) }
             }
         }
     }

@@ -81,118 +81,54 @@ fun HelpDialog(
 		tr("help.tab.about"),
 	)
 
-	Box(
-		modifier = Modifier
-			.fillMaxSize()
-			.background(colors.scrim)
-			.scrimDismiss(onDismiss = onDismiss),
-		contentAlignment = Alignment.Center,
+	ModalDialogFrame(
+		title = tr("help.dialog.title"),
+		onDismiss = onDismiss,
+		width = 720.dp,
+		maxHeight = 660.dp,
+		scrollable = false,
+		bodySpacing = 12.dp,
+		titleTrailing = {
+			Text(text = "v2.0.4", style = typography.monoSmall.copy(fontSize = 10.sp), color = colors.textMuted)
+		},
+		footerStart = {
+			Text(
+				text = copyNotification ?: "PSD2Live / GPL-3.0 / tsunehimatoi",
+				style = typography.caption.copy(fontSize = 11.sp, fontWeight = if (copyNotification != null) FontWeight.Medium else FontWeight.Normal),
+				color = if (copyNotification != null) colors.accent else colors.textMuted,
+			)
+		},
+		footer = {
+			CompactButton(text = tr("dialog.ok"), onClick = onDismiss, isPrimary = true)
+		},
 	) {
+		CompactTabBar(
+			tabs = tabTitles,
+			selectedIndex = selectedTab.ordinal,
+			onTabSelected = { selectedTab = HelpTab.entries[it] },
+			modifier = Modifier.fillMaxWidth(),
+		)
 		Column(
 			modifier = Modifier
-				.width(720.dp)
-				.heightIn(max = 660.dp)
-				.background(colors.panelBackground, RoundedCornerShape(3.dp))
-				.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(3.dp))
-				.clickable(enabled = false) {}
-				.padding(16.dp),
+				.weight(1f, fill = false)
+				.fillMaxWidth()
+				.verticalScroll(rememberScrollState()),
+			verticalArrangement = Arrangement.spacedBy(10.dp),
 		) {
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.SpaceBetween,
-			) {
-				Row(
-					verticalAlignment = Alignment.CenterVertically,
-					horizontalArrangement = Arrangement.spacedBy(8.dp),
-				) {
-					Text(
-						text = tr("help.dialog.title"),
-						style = typography.title.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
-						color = colors.textPrimary,
-					)
-					Text(
-						text = "v2.0.4",
-						style = typography.monoSmall.copy(fontSize = 10.sp),
-						color = colors.textMuted,
-					)
-				}
-				CompactIconButton(
-					onClick = onDismiss,
-					modifier = Modifier.size(22.dp),
-				) {
-					Text(
-						text = "✕",
-						style = typography.caption.copy(fontWeight = FontWeight.Bold),
-						color = colors.textMuted,
-					)
-				}
-			}
-
-			Spacer(Modifier.height(10.dp))
-
-			CompactTabBar(
-				tabs = tabTitles,
-				selectedIndex = selectedTab.ordinal,
-				onTabSelected = { selectedTab = HelpTab.entries[it] },
-				modifier = Modifier.fillMaxWidth(),
-			)
-
-			Spacer(Modifier.height(12.dp))
-
-			Column(
-				modifier = Modifier
-					.weight(1f, fill = false)
-					.fillMaxWidth()
-					.verticalScroll(rememberScrollState()),
-				verticalArrangement = Arrangement.spacedBy(10.dp),
-			) {
-				when (selectedTab) {
-					HelpTab.QUICK_START -> InteractiveTutorialCatalog(
-						onStartInteractiveTutorial = onStartInteractiveTutorial,
-					)
-					HelpTab.PSD_SPEC -> DccPsdSpecContent(onOpenUrl)
-					HelpTab.SHORTCUTS -> DccShortcutsContent(keymap)
-					HelpTab.COMMUNITY_LINKS -> DccCommunityLinksContent(
-						onOpenUrl = onOpenUrl,
-						onCopyLink = { url ->
-							DesktopUtils.copyToClipboard(url)
-							copyNotification = tr("help.links.copied")
-						},
-					)
-					HelpTab.ABOUT -> DccAboutContent()
-				}
-			}
-
-			Spacer(Modifier.height(12.dp))
-			Divider(color = colors.divider, thickness = 1.dp)
-			Spacer(Modifier.height(10.dp))
-
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				horizontalArrangement = Arrangement.SpaceBetween,
-				verticalAlignment = Alignment.CenterVertically,
-			) {
-				if (copyNotification != null) {
-					Text(
-						text = copyNotification ?: "",
-						style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Medium),
-						color = colors.accent,
-					)
-				} else {
-					Text(
-						text = "PSD2Live / GPL-3.0 / tsunehimatoi",
-						style = typography.caption.copy(fontSize = 11.sp),
-						color = colors.textMuted,
-					)
-				}
-
-				CompactButton(
-					text = tr("dialog.ok"),
-					onClick = onDismiss,
-					isPrimary = true,
-					height = 24.dp,
+			when (selectedTab) {
+				HelpTab.QUICK_START -> InteractiveTutorialCatalog(
+					onStartInteractiveTutorial = onStartInteractiveTutorial,
 				)
+				HelpTab.PSD_SPEC -> DccPsdSpecContent(onOpenUrl)
+				HelpTab.SHORTCUTS -> DccShortcutsContent(keymap)
+				HelpTab.COMMUNITY_LINKS -> DccCommunityLinksContent(
+					onOpenUrl = onOpenUrl,
+					onCopyLink = { url ->
+						DesktopUtils.copyToClipboard(url)
+						copyNotification = tr("help.links.copied")
+					},
+				)
+				HelpTab.ABOUT -> DccAboutContent()
 			}
 		}
 	}

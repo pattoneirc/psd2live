@@ -27,37 +27,37 @@ internal fun DepthSplitDialog(offer: PSD2LiveViewModel.DepthSplitOffer,
     val choices = remember(offer) { offer.preview.rig.puppet.drawables
         .filter { it.id != source.id && it.mesh != null }.sortedBy { it.name } }
     var middle by remember(offer) { mutableStateOf(choices.firstOrNull { it.id.raw == offer.initialMiddleId }) }
-    Box(Modifier.fillMaxSize().background(colors.scrim).scrimDismiss(onDismiss = onDismiss), Alignment.Center) {
-        Column(Modifier.width(420.dp).clip(RoundedCornerShape(8.dp)).background(colors.panelElevated)
-            .border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(8.dp))
-            .clickable(enabled = false) {}.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(tr("editor.depthSplit.title"), style = typography.title, color = colors.textPrimary)
-            Text(tr("editor.depthSplit.body", source.name), style = typography.body, color = colors.textPrimary)
-            Text(tr("editor.depthSplit.middle"), style = typography.caption, color = colors.textMuted)
-            CompactDropdown(items = listOf(null) + choices, selectedItem = middle, onItemSelected = { middle = it },
-                itemLabel = { it?.name ?: tr("editor.depthSplit.choose") }, modifier = Modifier.fillMaxWidth())
-            Column(Modifier.fillMaxWidth().background(colors.inputBackground, RoundedCornerShape(4.dp))
-                .padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                // Top to bottom matches the visible draw-order stack in the hierarchy.
-                listOf(
-                    tr("editor.depthSplit.front") to tr("editor.depthSplit.frontName", source.name),
-                    tr("editor.depthSplit.between") to (middle?.name ?: tr("editor.depthSplit.choose")),
-                    tr("editor.depthSplit.back") to tr("editor.depthSplit.backName", source.name),
-                ).forEach { (role, name) ->
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(role, style = typography.caption, color = colors.textMuted, modifier = Modifier.width(40.dp))
-                        Text(name, style = typography.body, color = colors.textPrimary, maxLines = 1,
-                            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    }
+    ModalDialogFrame(
+        title = tr("editor.depthSplit.title"),
+        onDismiss = onDismiss,
+        width = 420.dp,
+        footer = {
+            CompactButton(tr("action.cancel"), onDismiss)
+            CompactButton(tr("editor.depthSplit.confirm"), { middle?.let { onConfirm(it.id.raw) } },
+                enabled = middle != null, isPrimary = true)
+        },
+    ) {
+        ModalMessage(tr("editor.depthSplit.body", source.name))
+        Text(tr("editor.depthSplit.middle"), style = typography.caption, color = colors.textMuted)
+        CompactDropdown(items = listOf(null) + choices, selectedItem = middle, onItemSelected = { middle = it },
+            itemLabel = { it?.name ?: tr("editor.depthSplit.choose") }, modifier = Modifier.fillMaxWidth())
+        Column(Modifier.fillMaxWidth().background(colors.inputBackground, RoundedCornerShape(4.dp))
+            .border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(4.dp))
+            .padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Top to bottom matches the visible draw-order stack in the hierarchy.
+            listOf(
+                tr("editor.depthSplit.front") to tr("editor.depthSplit.frontName", source.name),
+                tr("editor.depthSplit.between") to (middle?.name ?: tr("editor.depthSplit.choose")),
+                tr("editor.depthSplit.back") to tr("editor.depthSplit.backName", source.name),
+            ).forEach { (role, name) ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(role, style = typography.caption, color = colors.textMuted, modifier = Modifier.width(40.dp))
+                    Text(name, style = typography.body, color = colors.textPrimary, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 }
             }
-            Text(tr("editor.depthSplit.hint"), style = typography.caption, color = colors.textMuted)
-            if (choices.isEmpty()) Text(tr("editor.depthSplit.noMiddle"), style = typography.caption, color = colors.warning)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
-                CompactButton(tr("action.cancel"), onDismiss)
-                CompactButton(tr("editor.depthSplit.confirm"), { middle?.let { onConfirm(it.id.raw) } },
-                    enabled = middle != null, isPrimary = true)
-            }
         }
+        Text(tr("editor.depthSplit.hint"), style = typography.caption, color = colors.textMuted)
+        if (choices.isEmpty()) Text(tr("editor.depthSplit.noMiddle"), style = typography.caption, color = colors.warning)
     }
 }

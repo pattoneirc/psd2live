@@ -15,13 +15,18 @@ import io.github.psd2live.i18n.AppLanguage
 import io.github.psd2live.i18n.I18n
 import io.github.psd2live.ui.components.AppTitleBar
 import io.github.psd2live.ui.components.OtherFormatExportDialog
+import io.github.psd2live.ui.components.ExportDialog
+import io.github.psd2live.ui.components.ExportPsdDialog
+import io.github.psd2live.ui.components.ExportSuccessDialog
+import io.github.psd2live.ui.state.ExportSuccess
+import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.CompactToolTheme
 import io.github.psd2live.ui.theme.ToolColors
 import java.io.File
 import kotlin.test.Test
 
-/** The File menu and every export-as dialog: PSD2LIVE_TOOLS=1 ./gradlew test --tests '*ExportDialogTool'. */
+/** The File menu, every export dialog and the export-success dialog: PSD2LIVE_TOOLS=1 ./gradlew test --tests '*ExportDialogTool'. */
 class ExportDialogTool {
 	@OptIn(ExperimentalComposeUiApi::class)
 	@Test fun renderMenuAndDialogs() {
@@ -68,6 +73,22 @@ class ExportDialogTool {
 							CompactToolTheme(colors = ToolColors.Dark) {
 								OtherFormatExportDialog(vm.state.value, vm, onChooseOutput = {})
 							}
+						})
+					}
+					vm.setStateForTest(vm.state.value.copy(otherExportTarget = null, showExportDialog = true))
+					write("$tag-cubism", ImageComposeScene(640, 760, density = Density(1f)) {
+						CompactToolTheme(colors = ToolColors.Dark) { ExportDialog(vm.state.value, vm, onChooseOutput = {}, onDismiss = {}) }
+					})
+					vm.setStateForTest(vm.state.value.copy(showExportDialog = false, analysis = preview.analysis, showExportPsdDialog = true))
+					write("$tag-psd", ImageComposeScene(600, 480, density = Density(1f)) {
+						CompactToolTheme(colors = ToolColors.Dark) { ExportPsdDialog(vm.state.value, vm) }
+					})
+					vm.setStateForTest(vm.state.value.copy(showExportPsdDialog = false))
+					val success = ExportSuccess(tr("export.other.success", tr("export.target.gif"), 3), "D:/output/tml-gif",
+						tr("export.other.losses", 2), listOf("drop: physics are not simulated", "approximate: blend modes are flattened"))
+					for ((name, colors) in listOf("success" to ToolColors.Dark, "success-light" to ToolColors.Light)) {
+						write("$tag-$name", ImageComposeScene(560, 360, density = Density(1f)) {
+							CompactToolTheme(colors = colors) { ExportSuccessDialog(success, onOpenFolder = {}, onDismiss = {}, onDontShowAgain = {}) }
 						})
 					}
 				}

@@ -65,58 +65,25 @@ fun OtherFormatExportDialog(state: PSD2LiveState, viewModel: PSD2LiveViewModel, 
 	val typography = LocalToolTypography.current
 	val isBusy = state.isAnalyzing || state.isGenerating
 
-	Box(
-		modifier = Modifier
-			.fillMaxSize()
-			.background(colors.scrim)
-			.scrimDismiss(enabled = !isBusy) { viewModel.closeOtherExport() },
-		contentAlignment = Alignment.Center,
-	) {
-		Column(
-			modifier = Modifier
-				.width(480.dp)
-				.heightIn(max = 640.dp)
-				.background(colors.panelBackground, RoundedCornerShape(8.dp))
-				.border(BorderStroke(1.dp, colors.border), RoundedCornerShape(8.dp))
-				.clickable(enabled = false) {}
-				.padding(16.dp),
-			verticalArrangement = Arrangement.spacedBy(10.dp),
-		) {
-			Row(
-				modifier = Modifier.fillMaxWidth(),
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.SpaceBetween,
-			) {
-				Text(
-					text = tr("export.other.dialogTitle", tr("export.target.${target.id}")),
-					style = typography.title.copy(fontSize = 13.5.sp, fontWeight = FontWeight.Bold),
-					color = colors.textPrimary,
-					maxLines = 1,
-					overflow = TextOverflow.Ellipsis,
-					modifier = Modifier.weight(1f),
-				)
-				CompactIconButton(onClick = { viewModel.closeOtherExport() }, enabled = !isBusy, size = 20.dp) {
-					IconClose(modifier = Modifier.size(10.dp), tint = colors.textMuted)
-				}
-			}
-			Column(
-				modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
-				verticalArrangement = Arrangement.spacedBy(10.dp),
-			) {
-				OtherFormatSection(state, viewModel, target)
-				ExportOutputRow(state, viewModel, onChooseOutput, enabled = !isBusy)
-				Text(tr("export.other.folderHint", target.id), style = typography.caption.copy(fontSize = 10.sp), color = colors.textMuted)
-			}
+	ModalDialogFrame(
+		title = tr("export.other.dialogTitle", tr("export.target.${target.id}")),
+		onDismiss = { viewModel.closeOtherExport() },
+		width = 480.dp,
+		maxHeight = 640.dp,
+		dismissible = !isBusy,
+		footer = {
+			CompactButton(text = tr("action.cancel"), onClick = { viewModel.closeOtherExport() }, enabled = !isBusy)
 			CompactButton(
 				text = if (isBusy) tr("export.other.running") else tr("export.other.export"),
 				onClick = { viewModel.exportOtherFormat(target.id, viewModel.otherExportSettings(target)) },
 				enabled = !isBusy && state.previewModel != null && state.outputPath.isNotBlank(),
 				isPrimary = true,
-				height = 28.dp,
-				modifier = Modifier.fillMaxWidth(),
 			)
-			OtherFormatResult(viewModel, target)
-		}
+		},
+	) {
+		OtherFormatSection(state, viewModel, target)
+		ExportOutputRow(state, viewModel, onChooseOutput, enabled = !isBusy)
+		Text(tr("export.other.folderHint", target.id), style = typography.caption.copy(fontSize = 10.sp), color = colors.textMuted)
 	}
 }
 
@@ -143,28 +110,6 @@ internal fun OtherFormatSection(state: PSD2LiveState, viewModel: PSD2LiveViewMod
 			TargetSettingRow(setting, viewModel.otherExportSetting(target, setting.key) ?: defaults[setting.key], clips, enabled = !isBusy) { value ->
 				viewModel.setOtherExportSetting(target, setting.key, value)
 			}
-		}
-	}
-}
-
-@Composable
-private fun OtherFormatResult(viewModel: PSD2LiveViewModel, target: ExportTarget) {
-	val colors = LocalToolColors.current
-	val typography = LocalToolTypography.current
-	val result by viewModel.otherExportResult.collectAsState()
-	val report = result?.takeIf { it["target"]?.jsonPrimitive?.content == target.id } ?: return
-	val losses = report["losses"]?.jsonArray.orEmpty().map { it.jsonObject }
-	Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-		Text(tr("export.other.done", report["files"]?.jsonArray?.size ?: 0, report["directory"]?.jsonPrimitive?.content ?: ""),
-			style = typography.caption.copy(fontSize = 10.sp), color = colors.textPrimary)
-		if (losses.isEmpty()) Text(tr("export.other.noLosses"), style = typography.caption.copy(fontSize = 10.sp), color = colors.textMuted)
-		else {
-			Text(tr("export.other.losses", losses.size), style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-				color = colors.warning)
-			for (loss in losses.distinctBy { it["note"]?.jsonPrimitive?.content }.take(8)) Text(
-				"· ${tr("export.loss.${loss["handling"]?.jsonPrimitive?.content}")}: ${loss["note"]?.jsonPrimitive?.content}",
-				style = typography.caption.copy(fontSize = 10.sp), color = colors.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis,
-			)
 		}
 	}
 }

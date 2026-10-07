@@ -364,6 +364,8 @@ internal fun DockWorkspaceView(
                 onSplit = viewModel::confirmMeshSplit,
                 onDismiss = viewModel::dismissMeshSplit,
                 onDismissAll = viewModel::dismissAllMeshSplits,
+                mutedOnImport = !state.autoDetectMeshSplitsOnImport,
+                onPromptMutedChange = { prompt, muted -> viewModel.setPromptEnabled(prompt, !muted) },
             )
         }
         viewModel.pendingStartScreen?.let { offer ->
@@ -371,6 +373,8 @@ internal fun DockWorkspaceView(
                 offer = offer,
                 onApply = viewModel::applyStartScreen,
                 onDismiss = viewModel::dismissStartScreen,
+                mutedOnImport = !state.autoDetectMeshSplitsOnImport,
+                onPromptMutedChange = { prompt, muted -> viewModel.setPromptEnabled(prompt, !muted) },
             )
         }
     }

@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.Side
 import io.github.psd2live.i18n.tr
+import io.github.psd2live.ui.state.AppPrompt
 import io.github.psd2live.ui.state.AppSettings
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
@@ -39,6 +40,8 @@ internal fun MeshSplitDialog(
     onSplit: (List<String>, List<Side>) -> Unit,
     onDismiss: () -> Unit,
     onDismissAll: (() -> Unit)? = null,
+    mutedOnImport: Boolean = !AppSettings.autoDetectMeshSplitsOnImport,
+    onPromptMutedChange: (AppPrompt, Boolean) -> Unit = { prompt, muted -> AppSettings.setPromptEnabled(prompt, !muted) },
 ) {
     val colors = LocalToolColors.current
     val typography = LocalToolTypography.current
@@ -71,92 +74,58 @@ internal fun MeshSplitDialog(
     }
     val valid = generated.all { it.isNotBlank() } && generated.distinct().size == count
 
-    Box(
-        Modifier.fillMaxSize().background(colors.scrim).scrimDismiss(onDismiss = onDismiss),
-        contentAlignment = Alignment.Center,
+    ModalDialogFrame(
+        title = tr("editor.meshSplit.title"),
+        onDismiss = onDismiss,
+        width = 520.dp,
+        footerStart = {
+            DontShowAgainCheckbox(AppPrompt.START_SCREEN_ON_IMPORT, mutedOnImport, onPromptMutedChange,
+                label = tr("prompt.dontShowOnImport"))
+        },
+        footer = {
+            if (onDismissAll != null) {
+                CompactButton(tr("editor.meshSplit.keepAll"), onDismissAll)
+            }
+            CompactButton(tr("editor.meshSplit.keep"), onDismiss)
+            CompactButton(tr("editor.meshSplit.confirm"), { onSplit(generated, sides) }, enabled = valid, isPrimary = true)
+        },
     ) {
-        Column(
-            Modifier.width(520.dp).clip(RoundedCornerShape(8.dp))
-                .background(colors.panelElevated)
-                .border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(8.dp))
-                .clickable(enabled = false) {}.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Text(tr("editor.meshSplit.title"), style = typography.title.copy(fontSize = 15.sp), color = colors.textPrimary)
-            Text(tr("editor.meshSplit.body", offer.layerName, count), style = typography.body.copy(fontSize = 13.sp), color = colors.textPrimary)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                val choices = if (count == 2) listOf(
-                    SplitNames.LR to "L / R", SplitNames.TB to "T / B",
-                    SplitNames.NUMBER to "1 / 2", SplitNames.CUSTOM to tr("editor.meshSplit.custom"),
-                ) else listOf(SplitNames.NUMBER to "1…$count", SplitNames.CUSTOM to tr("editor.meshSplit.custom"))
-                choices.forEach { (choice, label) ->
-                    CompactToggleChip(label, mode == choice, { mode = choice }, showCheckWhenSelected = false)
-                }
+        ModalMessage(tr("editor.meshSplit.body", offer.layerName, count))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            val choices = if (count == 2) listOf(
+                SplitNames.LR to "L / R", SplitNames.TB to "T / B",
+                SplitNames.NUMBER to "1 / 2", SplitNames.CUSTOM to tr("editor.meshSplit.custom"),
+            ) else listOf(SplitNames.NUMBER to "1…$count", SplitNames.CUSTOM to tr("editor.meshSplit.custom"))
+            choices.forEach { (choice, label) ->
+                CompactToggleChip(label, mode == choice, { mode = choice }, showCheckWhenSelected = false)
             }
-            Column(Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                components.indices.forEach { index ->
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("#${index + 1}", style = typography.caption, color = colors.textMuted, modifier = Modifier.width(30.dp))
-                        Box(
-                            Modifier.size(84.dp, 58.dp).clip(RoundedCornerShape(4.dp))
-                                .background(colors.inputBackground)
-                                .border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(4.dp)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Image(
-                                bitmap = previews[index],
-                                contentDescription = tr("editor.meshSplit.preview", index + 1),
-                                modifier = Modifier.fillMaxSize().padding(3.dp),
-                                contentScale = ContentScale.Fit,
-                            )
-                        }
-                        if (mode == SplitNames.CUSTOM) {
-                            CompactTextField(
-                                value = custom[index],
-                                onValueChange = { value -> custom = custom.toMutableList().also { it[index] = value } },
-                                modifier = Modifier.weight(1f),
-                            )
-                        } else {
-                            Text(generated[index], style = typography.body, color = colors.textPrimary)
-                        }
+        }
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            components.indices.forEach { index ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("#${index + 1}", style = typography.caption, color = colors.textMuted, modifier = Modifier.width(30.dp))
+                    Box(
+                        Modifier.size(84.dp, 58.dp).clip(RoundedCornerShape(4.dp))
+                            .background(colors.inputBackground)
+                            .border(BorderStroke(1.dp, colors.divider), RoundedCornerShape(4.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Image(
+                            bitmap = previews[index],
+                            contentDescription = tr("editor.meshSplit.preview", index + 1),
+                            modifier = Modifier.fillMaxSize().padding(3.dp),
+                            contentScale = ContentScale.Fit,
+                        )
                     }
-                }
-            }
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                var autoPromptOnImport by remember { mutableStateOf(AppSettings.autoDetectMeshSplitsOnImport) }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.clickable {
-                        autoPromptOnImport = !autoPromptOnImport
-                        AppSettings.autoDetectMeshSplitsOnImport = autoPromptOnImport
-                    },
-                ) {
-                    CompactCheckbox(
-                        checked = autoPromptOnImport,
-                        onCheckedChange = {
-                            autoPromptOnImport = it
-                            AppSettings.autoDetectMeshSplitsOnImport = it
-                        },
-                    )
-                    Text(
-                        tr("editor.meshSplit.promptOnImport"),
-                        style = typography.caption,
-                        color = colors.textMuted,
-                    )
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (onDismissAll != null) {
-                        CompactButton(tr("editor.meshSplit.keepAll"), onDismissAll)
+                    if (mode == SplitNames.CUSTOM) {
+                        CompactTextField(
+                            value = custom[index],
+                            onValueChange = { value -> custom = custom.toMutableList().also { it[index] = value } },
+                            modifier = Modifier.weight(1f),
+                        )
+                    } else {
+                        Text(generated[index], style = typography.body, color = colors.textPrimary)
                     }
-                    CompactButton(tr("editor.meshSplit.keep"), onDismiss)
-                    CompactButton(tr("editor.meshSplit.confirm"), { onSplit(generated, sides) }, enabled = valid, isPrimary = true)
                 }
             }
         }
