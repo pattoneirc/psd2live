@@ -135,6 +135,23 @@ internal fun BoxScope.CanvasEditorOverlay(
         )
     val textMeasurer = rememberTextMeasurer()
 
+    // The drag guide, press point to pointer, is drawn while points are carried. On the release it stays
+    // where the drag ended and fades, rather than blinking out the moment the pointer stops.
+    val guiding by remember(editor) {
+        derivedStateOf { editor.inGesture && editor.marquee.isEmpty() && editor.selection.values.any { it.isNotEmpty() } }
+    }
+    val guideFade = remember { Animatable(0f) }
+    var guideEnd by remember { mutableStateOf<Offset?>(null) }
+    LaunchedEffect(guiding) {
+        if (guiding) {
+            guideEnd = null
+            guideFade.snapTo(1f)
+        } else {
+            guideEnd = editor.cursor
+            guideFade.animateTo(0f, tween(durationMillis = 260, easing = FastOutSlowInEasing))
+        }
+    }
+
     Canvas(Modifier.fillMaxSize()) {
         // placementOrigin changes when the dock moves this canvas. The read keeps the draw from
         // being reused at the previous window position.
@@ -415,12 +432,14 @@ internal fun BoxScope.CanvasEditorOverlay(
                 drawText(layout, topLeft = origin)
             }
 
-            // Dragging guide line
-            if (editor.inGesture && selection.values.any { it.isNotEmpty() } && editor.marquee.isEmpty() && editor.cursor != null) {
+            // Dragging guide line. Until the release's fade has frozen its end, it follows the pointer.
+            val guideAlpha = if (guiding) 1f else guideFade.value
+            val end = (if (guiding) null else guideEnd) ?: editor.cursor
+            if (guideAlpha > 0f && end != null) {
                 drawLine(
-                    color = colors.accent.copy(alpha = 0.6f),
+                    color = colors.accent.copy(alpha = 0.6f * guideAlpha),
                     start = editor.dragStartPos,
-                    end = editor.cursor!!,
+                    end = end,
                     strokeWidth = 1.5f
                 )
             }

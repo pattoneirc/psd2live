@@ -1502,7 +1502,8 @@ internal class CanvasEditor(
     private var samplingSecondary = false
     /** When the painted bitmap was last republished, in [System.nanoTime] units. */
     private var lastPaintBitmapAt = 0L
-    private var dragging = false
+    /** State, so chrome that lasts only as long as the gesture (the drag guide) leaves on the release itself. */
+    private var dragging by mutableStateOf(false)
     private var ctrlAtPress = false
 
     /** Active brush deformation vertex weights [0f..1f] for target points; non-null while a brush stroke is live. */
