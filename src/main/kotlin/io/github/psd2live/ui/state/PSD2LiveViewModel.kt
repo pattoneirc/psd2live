@@ -3761,7 +3761,16 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	/** Commit an edited armature as one undoable project change and rebuild its derived rig. */
 	fun setSkeleton(spec: io.github.psd2live.core.SkeletonSpec, expectedState: String? = currentWorkspaceState(),
-		onComplete: (String?) -> Unit = {}) {
+		onComplete: (String?) -> Unit = {}) = editSkeleton("Edit skeleton", io.github.psd2live.application.WorkspaceDocumentOperation("skeleton_put",
+			kotlinx.serialization.json.buildJsonObject { put("spec", spec.toJson()) }), expectedState, onComplete)
+
+	/** Removes the armature as one undoable project change; a new one can be created afterwards. */
+	fun deleteSkeleton(expectedState: String? = currentWorkspaceState(), onComplete: (String?) -> Unit = {}) =
+		editSkeleton("Delete skeleton", io.github.psd2live.application.WorkspaceDocumentOperation("skeleton_delete",
+			kotlinx.serialization.json.JsonObject(emptyMap())), expectedState, onComplete)
+
+	private fun editSkeleton(summary: String, operation: io.github.psd2live.application.WorkspaceDocumentOperation,
+		expectedState: String?, onComplete: (String?) -> Unit) {
 		if (expectedState == null) { onComplete("Project workspace unavailable"); return }
 		val started = _state.value
 		var committedState: String? = null
@@ -3781,9 +3790,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			}
 		}) {
 			val workspace: io.github.psd2live.application.WorkspaceDocumentPort = requireNotNull(workspaceBackend) { "Project workspace unavailable" }
-			committedState = workspace.applyDocumentEdits(expectedState, "Edit skeleton",
-				listOf(io.github.psd2live.application.WorkspaceDocumentOperation("skeleton_put",
-					kotlinx.serialization.json.buildJsonObject { put("spec", spec.toJson()) })), MutationAuthor.USER).state
+			committedState = workspace.applyDocumentEdits(expectedState, summary, listOf(operation), MutationAuthor.USER).state
 		}
 	}
 

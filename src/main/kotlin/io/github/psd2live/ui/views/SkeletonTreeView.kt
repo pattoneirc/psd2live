@@ -140,7 +140,7 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 
 	Column(Modifier.fillMaxSize()) {
 		val addLabel = tr("skeleton.panel.add")
-		PanelToolbar(labels = if (draft != null) listOf(addLabel) else emptyList(), iconCount = 4, reservedWidth = 96.dp) { labelsShown ->
+		PanelToolbar(labels = if (draft != null) listOf(addLabel) else emptyList(), iconCount = 5, reservedWidth = 96.dp) { labelsShown ->
 			if (draft != null) {
 				PanelToolButton(addLabel, showLabel = labelsShown > 0, onClick = { editor.addBone() },
 					enabled = editor.selectedBoneId != null, tooltip = addLabel) {
@@ -162,9 +162,16 @@ internal fun SkeletonTreeView(state: PSD2LiveState, viewModel: PSD2LiveViewModel
 					)
 				}
 			} else if (committed == null) {
-				CompactButton(text = tr("skeleton.tree.create"), onClick = { editor.beginSkeletonEdit() }, isPrimary = true, height = PanelToolHeight)
+				CompactButton(text = tr("skeleton.tree.create"), onClick = { editor.createSkeleton() }, enabled = !editor.skeletonCreating,
+					isPrimary = true, height = PanelToolHeight)
 			}
 			Spacer(Modifier.weight(1f))
+			if (committed != null) {
+				// The whole armature goes; Skeleton mode then offers to create a new one.
+				PanelIconButton(onClick = { editor.deleteSkeleton() }, tooltip = tr("skeleton.tree.delete")) {
+					IconTrash(Modifier.size(11.dp), tint = colors.error)
+				}
+			}
 			if (shown != null) {
 				PanelExpandCollapseButtons(
 					onExpandAll = { collapsed.clear() },

@@ -707,9 +707,10 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
             listOf("state", "bone_id", "end", "point")),
         variant("mode", "bind", buildJsonObject { put("state", string()); put("drawable_id", string()); put("bone_id", string()) }, listOf("state", "drawable_id")),
         variant("mode", "remove", buildJsonObject { put("state", string()); put("bone_id", string()) }, listOf("state", "bone_id")),
+        variant("mode", "delete", buildJsonObject { put("state", string()) }, listOf("state")),
         variant("mode", "pose", buildJsonObject { put("bone_id", string()); put("target", vector(2)); put("ik", boolean()) }, listOf("bone_id", "target")),
     )
-    registerJsonOperation("skeleton", "Read, infer and edit the authored skeleton before it is baked to Cubism. put replaces the complete armature; bone upserts one bone (existing fields are retained); move keeps connected joints together; bind assigns a drawable to one bone or unbinds when bone_id is omitted; pose solves FK/IK into parameter values without changing history. Apply returned pose values with preview or use them as motion keys.",
+    registerJsonOperation("skeleton", "Read, infer and edit the authored skeleton before it is baked to Cubism. put replaces the complete armature; bone upserts one bone (existing fields are retained); move keeps connected joints together; bind assigns a drawable to one bone or unbinds when bone_id is omitted; delete removes the whole armature so auto or put can create a new one; pose solves FK/IK into parameter values without changing history. Apply returned pose values with preview or use them as motion keys.",
         buildJsonObject { put("request", oneOf(skeletonBranches)) }, listOf("request"), true) { a ->
         val input = a.getValue("request").jsonObject
         validateOperationSchema(input, oneOf(skeletonBranches))

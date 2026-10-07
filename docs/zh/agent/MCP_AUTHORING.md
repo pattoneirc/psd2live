@@ -59,7 +59,7 @@ Token 允许编辑当前工作区，应保留在本机宿主配置中。工具�
 | `simulation_put / simulation_delete / simulation_simulate / simulation_bake / simulation_clear_bake` | `request` 内 `state`、`id` | `put/delete/bake/clear_bake` 返回进程任务句柄（终态含原编辑结果与烘焙诊断）；`simulate` 同样返回只读任务句柄，不改变工程。网格上的 2D 布料 / 头发模拟，只在编辑器内运行；`bake` 把它烘焙成 -30…30 的 `ParamSim<id>_<k>` 参数（`keys` 个关键点，`blend_shapes` 选择写法，默认自动）与拟合摆锤 `PhysicsSim_<id>`，点头、身体上下和前后倾另外烘焙成由平移输入的摆锤 `PhysicsSim_<id>_y` 驱动的 `ParamSim<id>_Y`，并返回在检验动作上的 R²、误差、参数用量、顶到极值的帧占比和急动度比；`exaggeration` 放大模态摆动且无需重新烘焙；`auto_bake` 开启（默认）时 `put` 在同一步内重新烘焙；新建未给 `inputs` 时写入默认输入，空数组即没有输入；`output_names` 重命名烘焙出的参数和摆锤；`input_ranges` 按输入设置训练范围，`vertical` 开关上下参数（`null` 为自动），`outputs` 按生成的模态参数 ID 改写出的 ID、范围（±1…±100）和增益（0…3），不需要重新烘焙；物理面板对模拟摆锤的覆盖在重新烘焙后三方合并，见[模拟与烘焙](../guide/SIMULATION.md) |
 | `model_apply_preset` | `request` 内 `preset`、`state`、`layers`、`sway` | `front_hair/back_hair/clothing/auto_weights/classic_front_hair/classic_back_hair/remove_clothing`：后台生成权重组与预设物理体并烘焙，返回任务句柄，成功后只增加一个历史节点；头发预设移除该类头发的旧摆动参数、变形器与摆锤，`classic_*` 恢复（`sway:false` 则关闭传统摆动），`remove_clothing` 删除全部服装预设物理体；`clothing` 只模拟上衣、下装、领饰、袖子和腿部穿戴中宽松的部分，返回每张网格的部位（下装另含裙子 / 裤子判定与腰线、裆部、下摆）、宽松比例、悬垂起点与是否模拟，见[模拟与烘焙](../guide/SIMULATION.md#模型预设) |
 | `vertex_group_update` | `request` 内 `state`、`target`、`name` | 按规则 `fill/outline/gradient/glue/region` 生成或 `delete` 仅本软件使用的顶点权重组（固定点、刚度等），不导出 |
-| `skeleton_get / skeleton_propose / skeleton_auto / skeleton_put / skeleton_enable / skeleton_bone / skeleton_move / skeleton_bind / skeleton_remove / skeleton_pose` | `request` | `get/propose/auto/put/enable/bone/move/bind/remove/pose`：读取或推断骨架、提交完整骨架、编辑骨骼与绑定；`pose` 求 FK/IK 参数值，不写历史 |
+| `skeleton_get / skeleton_propose / skeleton_auto / skeleton_put / skeleton_enable / skeleton_bone / skeleton_move / skeleton_bind / skeleton_remove / skeleton_delete / skeleton_pose` | `request` | `get/propose/auto/put/enable/bone/move/bind/remove/delete/pose`：读取或推断骨架、提交完整骨架、编辑骨骼与绑定，`delete` 删除整副骨架（之后可再 `auto`/`put`）；`pose` 求 FK/IK 参数值，不写历史 |
 | `motion_list / motion_get / motion_sample / motion_put / motion_delete / motion_seed_builtin / motion_set_key / motion_delete_key / motion_remove_curve` | `request` | `list/get/sample/put/delete/seed_builtin/set_key/delete_key/remove_curve`：读取插值姿态并持久化编辑动作片段、参数轨道和时间线关键帧 |
 | `path_get / path_list / path_preview / path_put / path_delete / path_deform` | `request` | `get/list/preview/put/delete/deform` |
 | `project_save / history_checkpoint / history_list / history_checkout` | `request` | 保存工程、创建检查点、读取历史或切换节点 |
@@ -344,7 +344,7 @@ GUI 参数定义、文件夹位置和参数关键点可组合为一次共享提�
 
 ### 骨骼与动作
 
-先调用 `skeleton_propose` 检查按当前图层推断出的骨架；`skeleton_auto` 才将它写入工程。`skeleton_get` 返回完整 `spec`，包含骨骼坐标、层级、画元绑定、关节角度范围和关节带宽。`skeleton_put` 可用返回的 `spec` 整体替换；`bone` 合并单根骨骼的字段，`move` 同时移动相连关节，`bind` 把画元绑定到指定骨骼（省略 `bone_id` 则解绑），`remove` 删除非身体骨骼。画元 ID 从 `workspace_inspect scope=objects` 取得。写入使用最新 `state`，成功后重建并提交历史；无效骨架或不存在的画元会拒绝写入。
+先调用 `skeleton_propose` 检查按当前图层推断出的骨架；`skeleton_auto` 才将它写入工程。`skeleton_get` 返回完整 `spec`，包含骨骼坐标、层级、画元绑定、关节角度范围和关节带宽。`skeleton_put` 可用返回的 `spec` 整体替换；`bone` 合并单根骨骼的字段，`move` 同时移动相连关节，`bind` 把画元绑定到指定骨骼（省略 `bone_id` 则解绑），`remove` 删除非身体骨骼，`delete` 删除整副骨架。画元 ID 从 `workspace_inspect scope=objects` 取得。写入使用最新 `state`，成功后重建并提交历史；无效骨架或不存在的画元会拒绝写入。
 
 ```json
 {"request":{"mode":"propose"}}

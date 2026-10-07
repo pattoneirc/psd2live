@@ -226,7 +226,7 @@ private fun ColumnScope.SelectModeContextMenu(
                             enabled = editor.editable,
                             icon = { IconRotationDeformer(modifier = Modifier.size(12.dp), tint = it) },
                         ) {
-                            editor.beginSkeletonEdit()
+                            if (editor.committedSkeleton == null) editor.createSkeleton() else editor.beginSkeletonEdit()
                             onAction()
                             onDismissRequest()
                         },

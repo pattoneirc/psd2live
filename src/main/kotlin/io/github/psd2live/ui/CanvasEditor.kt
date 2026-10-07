@@ -459,9 +459,13 @@ internal class CanvasEditor(
 		settleModeOnTarget()
 	}
 
-	/** The target half of [selectSkeleton], without re-fitting the mode: entering Skeleton mode does that itself. */
-	private fun takeSkeleton(boneId: String? = null): Boolean {
-		val spec = committedSkeleton ?: return false
+	/**
+	 * The target half of [selectSkeleton], without re-fitting the mode: entering Skeleton mode does that itself.
+	 * Skeleton mode may also take the skeleton before there is one, [allowEmpty], and offers to create it.
+	 */
+	private fun takeSkeleton(boneId: String? = null, allowEmpty: Boolean = false): Boolean {
+		val spec = committedSkeleton
+		if (spec == null && !allowEmpty) return false
 		if (!skeletonSelected) {
 			skeletonSelected = true
 			objects = emptySet()
@@ -470,7 +474,7 @@ internal class CanvasEditor(
 				it.copy(selectedLayerId = null, selectedLayerIds = emptySet(), selectedDeformerId = null)
 			}
 		}
-		selectedBoneId = (skeletonDraft ?: spec).let { s -> boneId?.takeIf { s.bone(it) != null } ?: selectedBoneId?.takeIf { s.bone(it) != null }
+		selectedBoneId = (skeletonDraft ?: spec)?.let { s -> boneId?.takeIf { s.bone(it) != null } ?: selectedBoneId?.takeIf { s.bone(it) != null }
 			?: s.bones.firstOrNull { !it.role.anchor }?.id }
 		return true
 	}
@@ -483,11 +487,43 @@ internal class CanvasEditor(
 		settleModeOnTarget()
 	}
 
-	/** Enters Skeleton mode on the Edit tool, proposing an armature from the layers' tags the first time. */
+	/** Enters Skeleton mode on the Edit tool; without an armature the canvas offers to create one instead. */
 	fun beginSkeletonEdit() {
 		if (busy) return
 		if (placement != null) cancelPlacement()
-		ensureSkeleton { enterSkeletonMode(CanvasTool.SKELETON_EDIT) }
+		skeletonEntrySerial++
+		enterSkeletonMode(CanvasTool.SKELETON_EDIT)
+	}
+
+	/** An armature is being proposed and written; the create button waits for it. */
+	var skeletonCreating by mutableStateOf(false)
+		private set
+
+	/** Proposes an armature from the layers' tags and opens it in the Edit tool; an existing one is just opened. */
+	fun createSkeleton() {
+		if (busy || skeletonCreating) return
+		if (placement != null) cancelPlacement()
+		ensureSkeleton { takeSkeleton(allowEmpty = true); enterSkeletonMode(CanvasTool.SKELETON_EDIT) }
+	}
+
+	/**
+	 * Removes the whole armature as one history entry, dropping an open edit. Skeleton mode stays, now offering
+	 * to create a new armature.
+	 */
+	fun deleteSkeleton() {
+		if (busy || committedSkeleton == null) return
+		skeletonEntrySerial++
+		skeletonSession?.let { session -> runCatching { viewModel.skeletonDraftPort?.cancelSkeletonDraft(session.id) } }
+		skeletonDraft = null
+		skeletonSession = null
+		selectedBoneId = null
+		pendingSkeletonDrawableIds = emptySet()
+		skeletonWeightDrawableId = null
+		if (hierarchyMode != EditHierarchyMode.SKELETON) skeletonSelected = false
+		else if (tool == CanvasTool.SKELETON_POSE) tool = CanvasTool.SKELETON_EDIT
+		error = null
+		clearHover()
+		viewModel.deleteSkeleton { failure -> if (failure != null) error = failure }
 	}
 
 	/** Enters Skeleton mode on the Pose tool, which turns the bones of an enabled armature. */
@@ -507,8 +543,10 @@ internal class CanvasEditor(
 		val started = viewModel.uiState.value
 		val expected = viewModel.currentWorkspaceState() ?: return
 		val spec = state.previewModel?.let { io.github.psd2live.core.SkeletonAutoBuilder.build(it.analysis, it.rig) } ?: return
-		if (spec.bones.isEmpty()) return
+		if (spec.bones.isEmpty()) { error = tr("skeleton.create.empty"); return }
+		skeletonCreating = true
 		viewModel.setSkeleton(spec.copy(enabled = true), expected) { failure ->
+			skeletonCreating = false
 			val current = viewModel.uiState.value
 			if (serial != skeletonEntrySerial || current.projectId != started.projectId ||
 				current.projectOpenGeneration != started.projectOpenGeneration || current.activeWorkspace.id != workspaceId ||
@@ -2908,9 +2946,8 @@ internal class CanvasEditor(
         if (next == EditHierarchyMode.SKELETON) {
             if (hierarchyMode == EditHierarchyMode.SKELETON) return
             if (placement != null) cancelPlacement()
-            ensureSkeleton {
-                enterSkeletonMode(if (committedSkeleton?.enabled == true) CanvasTool.SKELETON_POSE else CanvasTool.SKELETON_EDIT)
-            }
+            // Without an armature the mode waits on the canvas's create button rather than proposing one.
+            enterSkeletonMode(if (committedSkeleton?.enabled == true) CanvasTool.SKELETON_POSE else CanvasTool.SKELETON_EDIT)
             return
         }
         if (!hasPartFor(next)) { deferMode(next, null); return }
@@ -2957,7 +2994,7 @@ internal class CanvasEditor(
         selection = if (sameTarget) previous.selection else emptyMap()
         deferredMode = previous.deferred
         if (previous.mode == EditHierarchyMode.SKELETON && !skeletonSelected) {
-            if (takeSkeleton()) switchSkeletonTool(previous.tool)
+            if (takeSkeleton(allowEmpty = true)) switchSkeletonTool(previous.tool)
             else hierarchyMode = EditHierarchyMode.SELECT
         }
         if (previous.deferred != null) {
@@ -3012,7 +3049,7 @@ internal class CanvasEditor(
      */
     private fun hasPartFor(mode: EditHierarchyMode): Boolean = when {
         mode == EditHierarchyMode.SELECT -> true
-        // Skeleton mode brings its own target, proposing an armature when there is none.
+        // Skeleton mode brings its own target, offering to create an armature when there is none.
         mode == EditHierarchyMode.SKELETON -> state.previewModel != null
         // With the skeleton picked there is no drawable for the other modes to work on.
         skeletonSelected -> false
@@ -3089,11 +3126,11 @@ internal class CanvasEditor(
         cancel()
         val prev = hierarchyMode
         // Leaving Skeleton mode keeps an open edit, and gives the skeleton up as the target unless the mode
-        // gone to is Object mode, which can hold it. Entering it takes the skeleton.
+        // gone to is Object mode, which can hold it - when there is one. Entering it takes the skeleton.
         if (next != EditHierarchyMode.SKELETON) {
             commitSkeletonDraft()
-            if (skeletonSelected && next != EditHierarchyMode.SELECT) skeletonSelected = false
-        } else if (!takeSkeleton()) {
+            if (skeletonSelected && (next != EditHierarchyMode.SELECT || committedSkeleton == null)) skeletonSelected = false
+        } else if (!takeSkeleton(allowEmpty = true)) {
             return
         }
         hierarchyMode = next

@@ -21,7 +21,7 @@ internal object WorkspaceAuthoringResultSchemas {
         "settings_update", "layer_mesh_update", "rig_deform", "keyform_apply", "vertex_group_update",
         "object_edit_appearance", "rig_edit_structure", "simulation_delete", "simulation_clear_bake",
         "source_paint_brush", "source_paint_pencil", "source_paint_eraser", "source_paint_bucket", "source_paint_shape", "source_paint_clear",
-        "skeleton_auto", "skeleton_put", "skeleton_enable", "skeleton_bone", "skeleton_move", "skeleton_bind", "skeleton_remove",
+        "skeleton_auto", "skeleton_put", "skeleton_enable", "skeleton_bone", "skeleton_move", "skeleton_bind", "skeleton_remove", "skeleton_delete",
         "motion_put", "motion_delete", "motion_seed_builtin", "motion_set_key", "motion_delete_key", "motion_remove_curve",
         "motion_pose", "motion_move_keys", "motion_delete_keys", "motion_paste_keys", "motion_replace_keys", "motion_preset",
         "motion_create", "motion_duplicate", "motion_rename", "motion_properties",

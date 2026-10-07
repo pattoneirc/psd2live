@@ -281,12 +281,31 @@ class CanvasModeMenuTest {
             val spec = io.github.psd2live.core.SkeletonAutoBuilder.build(preview.analysis, preview.rig)
             assumeBones(spec)
 
+            // Without an armature the mode is entered empty, waiting on the canvas's create button.
             editor.setHierarchyMode(EditHierarchyMode.SKELETON)
-            withTimeout(10000) { while (vm.state.value.workspaceEditBusy || editor.hierarchyMode != EditHierarchyMode.SKELETON) delay(10) }
             assertEquals(EditHierarchyMode.SKELETON, editor.hierarchyMode)
             assertTrue(editor.skeletonSelected)
             assertEquals(listOf(CanvasTool.SKELETON_POSE, CanvasTool.SKELETON_EDIT), editor.palette())
+            withTimeout(10000) { while (vm.state.value.workspaceEditBusy) delay(10) }
+            assertNull(editor.committedSkeleton)
 
+            editor.createSkeleton()
+            withTimeout(10000) { while (vm.state.value.workspaceEditBusy || editor.skeletonDraft == null) delay(10) }
+            assertNotNull(editor.committedSkeleton)
+            assertEquals(CanvasTool.SKELETON_EDIT, editor.tool)
+
+            // Deleting keeps the mode and lets a new armature be created.
+            editor.deleteSkeleton()
+            withTimeout(10000) { while (vm.state.value.workspaceEditBusy || editor.committedSkeleton != null) delay(10) }
+            assertNull(editor.skeletonDraft)
+            assertEquals(EditHierarchyMode.SKELETON, editor.hierarchyMode)
+            editor.createSkeleton()
+            withTimeout(10000) { while (vm.state.value.workspaceEditBusy || editor.skeletonDraft == null) delay(10) }
+            assertNotNull(editor.committedSkeleton)
+
+            editor.activateTool(CanvasTool.SKELETON_POSE)
+            assertEquals(CanvasTool.SKELETON_POSE, editor.tool)
+            withTimeout(10000) { while (vm.state.value.workspaceEditBusy) delay(10) }
             editor.activateTool(CanvasTool.SKELETON_EDIT)
             assertEquals(CanvasTool.SKELETON_EDIT, editor.tool)
             // The draft opens on its own rest-pose commit, so it appears once that write settles.

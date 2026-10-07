@@ -1666,6 +1666,9 @@ fun CanvasViewportComposable(
 					)
 				}
 			}
+			if (mode == CanvasMode.EDIT && editor.hierarchyMode == EditHierarchyMode.SKELETON && editor.committedSkeleton == null) {
+				SkeletonCreatePrompt(editor, Modifier.align(Alignment.Center))
+			}
 			// Bottom-right: display-toggle rail (mirrors the left tool palette).
 			CanvasViewOptionsBar(
 				options = viewOptions,

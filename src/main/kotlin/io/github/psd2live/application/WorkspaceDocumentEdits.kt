@@ -20,7 +20,7 @@ internal object WorkspaceDocumentEdits {
         "parameter_create", "parameter_update", "parameter_delete", "rig_deform", "keyform_apply",
         "rig_edit_structure", "object_edit_appearance", "vertex_group_update", WorkspaceDrawOrderEdits.OP) +
         WorkspaceRasterCommands.supported + WorkspaceLayerEdits.supported + WorkspaceAssetLayerEdits.supported + WorkspaceImagePlacementEdits.supported + WorkspacePartitionCommands.supported + WorkspaceSplitUpgradeEdits.supported + WorkspaceWarpEdits.supported + WorkspaceWarpControlEdits.supported +
-        setOf("auto", "put", "enable", "bone", "move", "bind", "remove").map { "skeleton_$it" } +
+        setOf("auto", "put", "enable", "bone", "move", "bind", "remove", "delete").map { "skeleton_$it" } +
         setOf("put", "delete", "seed_builtin", "set_key", "delete_key", "remove_curve", "pose", "move_keys", "delete_keys", "paste_keys", "replace_keys", "preset", "create", "duplicate", "rename", "properties").map { "motion_$it" } +
         setOf("warp", "rotation", "glue", "topology").map { "canvas_$it" } +
         setOf("put", "delete", "deform").map { "path_$it" } +
@@ -199,6 +199,11 @@ internal object WorkspaceDocumentEdits {
     }
 
     fun skeleton(document: WorkspaceDocument, model: RigPreviewModel, request: JsonObject): WorkspaceDocument {
+        // Deleting drops the armature itself; auto or put can build a new one afterwards.
+        if (request.text("mode") == "delete") {
+            requireNotNull(document.rigEdits.skeleton) { "No skeleton to delete" }
+            return document.copy(rigEdits = document.rigEdits.copy(skeleton = null))
+        }
         val spec = WorkspaceSkeletonMotionEdits.skeleton(document.rigEdits.skeleton, request) { SkeletonAutoBuilder.build(model.analysis, model.rig) }
         SkeletonDraftEdits.validated(spec, model.rig.puppet.drawables.mapTo(HashSet()) { it.id.raw })
         return document.copy(rigEdits = document.rigEdits.copy(skeleton = spec))
