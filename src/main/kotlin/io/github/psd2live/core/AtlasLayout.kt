@@ -188,9 +188,7 @@ internal object AtlasLayout {
             }
         }
         val notices = ArrayList<String>()
-        // Layers new to the arrangement fill free space quietly; only a tile that lost its stored spot is news.
-        if (kept.displaced.isNotEmpty()) notices += "Textures whose stored spot no longer fits were placed into free space (" +
-            kept.displaced.joinToString() + "); arrange the atlas to lay them out again."
+        // Tiles new to the arrangement or that lost their stored spot fill free space quietly.
         if (kept.pageCount > maxPages) notices += "Textures need ${kept.pageCount} atlas pages, more than the budget of $maxPages."
         if (arrangement.fitStep < AtlasArrangement.FIT_STEPS)
             notices += "Textures are scaled to ${String.format(Locale.ROOT, "%.1f", fit * 100)}% to fit the atlas budget of $maxPages page(s) of ${pageSize}px."

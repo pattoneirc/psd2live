@@ -86,7 +86,7 @@
 
 ### 纹理与纹理集
 
-图层的画布矩形（画布单位，可为小数）与栅格像素相互独立：原生密度是每画布单位的栅格像素，纹理集图块保存 `栅格像素 × 密度 × fit`。密度默认 1；超出预算时，未锁定图块共用一个 fit（≤1）统一缩小，锁定与固定位置放不下时被取消并在 `notices` 中说明。几何不感知纹理集：密度、预算、固定位置和重排只改变图块与绑定 UV，不改变网格。
+图层的画布矩形（画布单位，可为小数）与栅格像素相互独立：原生密度是每画布单位的栅格像素，纹理集图块保存 `栅格像素 × 密度 × fit`。密度默认 1；超出预算时，未锁定图块共用一个 fit（≤1）统一缩小，锁定与固定位置放不下时被取消（说明只写入程序日志，不进入工具结果）。几何不感知纹理集：密度、预算、固定位置和重排只改变图块与绑定 UV，不改变网格。
 
 - `layer_get_texture`（查询）：`layer_id`；返回 `canvas_rect`、整数外包 `bounds`、`raster`、`native_density`、`override{density,lock,pin}`、`deleted`、`tile`（页、纹理像素矩形、每栅格像素的纹理像素 `scale_x/scale_y`、密度、锁定与固定；透明或已删除图层为 null）及 `atlas_fit`，全部来自同一捕获版本。
 - `atlas_get`（查询）：可选 `page` 过滤图块；返回有效 `budget{page_size,max_pages,padding}`、`fit`、`notices`、`auto`（是否每次自动排布）、`pages[{index,width,height,tile_count,occupancy}]` 与 `tiles`。
@@ -99,7 +99,7 @@
 - `atlas_set_budget`：`page_size`（256–16384 的 2 的幂）、`max_pages`（1–64）、`padding`（0–32）与 `auto`，至少给一项，省略项沿用当前值；预算写入 `atlas` 设置。`auto=true` 删除保存的排布，此后每次重建按矩形自动排布（MaxRects）；`auto=false` 保存当前布局。
 - `atlas_pack`：一次性排布并保存结果（`auto` 变为 false）。可选 `shape`：`mesh`（默认）按各图层最终网格的纹理坐标覆盖区域（每格 4 栅格像素、外加间距）排布，矩形可以相互嵌套，各图块只写入自己的单元格；`rect` 按矩形。按占用面积从大到小放置，放不下预算页数时所有未锁定图块按 1/64 步长共同缩小。可选 `layer_ids` 只移动这些图块，其余保持原位与原 fit。同时清除自动排布的固定位置及已不存在图层的覆盖；相同输入再次排布无变化。之后若网格编辑超出排布时的覆盖区域，`atlas_get` 的 `notices` 会提示重新排布。图块 `shaped` 表示按网格覆盖区域排布。
 
-六项编辑均为进程任务和原子批量成员，经 `WorkspaceTextureEdits` 纯候选、完整重建与 CAS 提交，一次成功只追加一个历史节点，撤销恢复此前图块。终态为 `project_id/state/history_node_id/revision/applied/layers/atlas_fit/notices`（可含 `geometry_diagnostics`），`layers` 为纹理实际变化的图层。
+六项编辑均为进程任务和原子批量成员，经 `WorkspaceTextureEdits` 纯候选、完整重建与 CAS 提交，一次成功只追加一个历史节点，撤销恢复此前图块。终态为 `project_id/state/history_node_id/revision/applied/layers/atlas_fit`（可含 `geometry_diagnostics`），`layers` 为纹理实际变化的图层。
 
 
 ## 工程与导出任务

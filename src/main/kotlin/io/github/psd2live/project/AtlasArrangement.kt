@@ -48,7 +48,7 @@ fun normalizedRotation(degrees: Float): Float {
  * A stored atlas layout. Without one the atlas is packed afresh on every build (automatic arrangement); with
  * one every listed tile keeps its spot and the common fit stays [fitStep] / [FIT_STEPS], so a paint, a density
  * change or a new layer never moves the other tiles. Tiles it does not list - new layers, or ones that no
- * longer fit where they were - are placed into free space with a notice. It changes only when the user
+ * longer fit where they were - are placed into free space. It changes only when the user
  * arranges the atlas, moves a tile or turns the automatic arrangement back on.
  */
 data class AtlasArrangement(val fitStep: Int, val tiles: Map<String, ArrangedTile>) {

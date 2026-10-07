@@ -176,7 +176,6 @@ class WorkspaceTextureCommandsTest {
 
             val small = operations.completed("atlas_set_budget", input(runtime, "budget", buildJsonObject { put("page_size", 256); put("max_pages", 1) }))
             assertEquals(256, runtime.capture().model.atlas.pages.first().image.width)
-            assertTrue(small.getValue("notices").jsonArray.isNotEmpty())
 
             val packed = operations.completed("atlas_pack", input(runtime, "pack", JsonObject(emptyMap())))
             assertTrue(packed.getValue("applied").jsonPrimitive.boolean)

@@ -4531,7 +4531,7 @@ class PSD2LiveViewModel : AutoCloseable {
 					withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(projectId, state, MutationAuthor.USER)) {
 						port.applyDocumentEdits(state, job.summary, job.operations, MutationAuthor.USER)
 					}
-					updateTextureWorkspace { it.copy(notices = emptyList(), revision = it.revision + 1) }
+					updateTextureWorkspace { it.copy(revision = it.revision + 1) }
 				}
 			}
 		} catch (failure: Exception) {
@@ -4554,7 +4554,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		_state.first { !it.textureWorkspace.busy }
 	}
 
-	/** One texture command on [state] as the user, through the trusted execution context; publishes its notices. */
+	/** One texture command on [state] as the user, through the trusted execution context. */
 	internal suspend fun commitTextureEditNow(state: String, edit: io.github.psd2live.application.WorkspaceTextureEdit):
 		io.github.psd2live.application.WorkspaceTextureResult {
 		val backend = requireNotNull(workspaceBackend) { "Project workspace unavailable" }
@@ -4563,7 +4563,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		val result = withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(projectId, state, MutationAuthor.USER)) {
 			port.editTexture(state, edit, MutationAuthor.USER)
 		}
-		updateTextureWorkspace { it.copy(notices = result.notices, revision = it.revision + 1) }
+		updateTextureWorkspace { it.copy(revision = it.revision + 1) }
 		return result
 	}
 
@@ -6971,6 +6971,12 @@ class PSD2LiveViewModel : AutoCloseable {
 	// that sit lower in this class (pausedPhysics, live pose, etc.).
 	init {
 		startMotionLoop()
+		// What the atlas layout reports (a fit below 1, pages or locks beyond the budget) goes to the log only, once per change.
+		scope.launch {
+			_state.map { it.previewModel?.atlas?.notices.orEmpty() }.distinctUntilChanged().collect { notices ->
+				notices.forEach { addLog(it, level = LogLevel.WARNING, tag = "Texture") }
+			}
+		}
 	}
 
 	override fun close() {

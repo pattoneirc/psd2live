@@ -78,7 +78,6 @@ data class WorkspaceTextureResult(
     val mutation: WorkspaceMutationResult,
     val layerIds: List<String>,
     val atlasFit: Float,
-    val notices: List<String>,
 )
 
 /** One layer's atlas tile; positions and sizes are texture pixels. */
@@ -172,7 +171,7 @@ class WorkspaceTextureView internal constructor(private val capture: WorkspaceCa
                 if (area == 0L) 0f else (onPage.sumOf { it.width.toLong() * it.height } / area.toDouble()).toFloat().coerceIn(0f, 1f))
         }
         val overflow = WorkspaceAtlasFootprints.overflowing(model)
-        val notices = model.atlas.notices + if (overflow.isEmpty()) emptyList() else listOf("Meshes of " + overflow.joinToString() +
+        val notices = if (overflow.isEmpty()) emptyList() else listOf("Meshes of " + overflow.joinToString() +
             " reach beyond the footprint they were arranged by; arrange the atlas again so their tiles keep clear of their neighbours.")
         return WorkspaceAtlasSnapshot(document.config().effectiveAtlasBudget(), pages, model.atlas.fit, notices, tiles, !model.atlas.arranged)
     }

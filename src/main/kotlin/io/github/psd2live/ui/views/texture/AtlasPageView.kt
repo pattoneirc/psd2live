@@ -829,9 +829,9 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 			}
 		}
 
-		// Top centre: why the last command was refused, and what the layout reported.
+		// Top centre: why the last command was refused, and meshes that outgrew their arranged footprint.
 		val messages = (texture.error?.let { listOf(it to colors.error) }.orEmpty() +
-			(texture.notices.ifEmpty { atlas.notices }).map { it to colors.warning }).take(3)
+			atlas.notices.map { it to colors.warning }).take(3)
 		var dismissed by remember(snapshot.state) { mutableStateOf(false) }
 		if (messages.isNotEmpty() && (!dismissed || texture.error != null)) {
 			NoticeBanner(messages, onClose = { dismissed = true; vm.clearTextureError() },

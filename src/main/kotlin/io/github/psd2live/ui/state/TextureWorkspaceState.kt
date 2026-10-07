@@ -54,8 +54,6 @@ data class TextureWorkspaceState(
 	val busy: Boolean = false,
 	/** Why the last texture command was refused, shown in the panel until the next command. */
 	val error: String? = null,
-	/** Notices the last committed layout reported (fit below 1, locks or pins that did not fit). */
-	val notices: List<String> = emptyList(),
 	/** Bumped after each texture commit so views capture again even when nothing else they read changed. */
 	val revision: Int = 0,
 ) {

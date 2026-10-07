@@ -266,8 +266,7 @@ internal object AtlasArrange {
 	/** Cells of padding between tiles: the shapes keep at least the rectangle packer's `2 x padding` pixels apart. */
 	fun paddingCells(padding: Int): Int = ceilDiv(padding.coerceAtLeast(0) * 2, CELL)
 
-	/** [displaced] names the tiles that had a stored spot it could not keep; tiles new to the arrangement are not listed. */
-	class Kept(val spots: Map<String, Spot>, val shapes: Map<String, Shape>, val pageCount: Int, val displaced: List<String>)
+	class Kept(val spots: Map<String, Spot>, val shapes: Map<String, Shape>, val pageCount: Int)
 
 	/**
 	 * The stored spots of [requests] that still hold - on a page of the budget, inside it, clear of the tiles
@@ -314,7 +313,7 @@ internal object AtlasArrange {
 			spots[request.id] = spot; shapes[request.id] = shape
 			pageCount = maxOf(pageCount, page + 1)
 		}
-		return Kept(spots, shapes, maxOf(pageCount, 1), pending.filter { it.stored != null }.map { it.name })
+		return Kept(spots, shapes, maxOf(pageCount, 1))
 	}
 
 	/** The first free cell-aligned spot for [request] on a page, scanning rows top to bottom; null when none. */

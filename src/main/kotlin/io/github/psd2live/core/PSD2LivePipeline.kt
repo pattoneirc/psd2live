@@ -516,7 +516,7 @@ class PSD2LivePipeline {
 		val outputRoot = outputDirectory.toAbsolutePath().normalize()
 		Files.createDirectories(outputRoot)
 		val files = mutableListOf<ExportedFile>()
-		val warnings = (analysis.warnings + atlas.notices + rig.warnings + neutralRig.warnings + generatedAngleWarnings + generatedWarpWarnings).toMutableList()
+		val warnings = (analysis.warnings + rig.warnings + neutralRig.warnings + generatedAngleWarnings + generatedWarpWarnings).toMutableList()
 		val (runtimeBundle, runtimeReport) = buildRuntimeBundle(baseName, analysis, atlas, rig, config, validate = true, preview = false)
 
 		if (config.exportMoc3) {

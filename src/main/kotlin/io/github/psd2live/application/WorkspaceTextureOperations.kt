@@ -59,7 +59,7 @@ internal object WorkspaceTextureSchemas {
 
     private val identity = s.identity + ("revision" to s.handle())
     private val editFields = identity + mapOf("applied" to s.boolean(), "layers" to s.array(s.handle()),
-        "atlas_fit" to s.number(0, 1), "notices" to s.array(s.string()), "geometry_diagnostics" to WorkspaceGeometrySafetySchemas.report)
+        "atlas_fit" to s.number(0, 1), "geometry_diagnostics" to WorkspaceGeometrySafetySchemas.report)
     val edit = s.obj(editFields, editFields.keys - "geometry_diagnostics")
 
     private val tileFields = linkedMapOf("page" to s.integer(0), "x" to s.integer(0), "y" to s.integer(0),

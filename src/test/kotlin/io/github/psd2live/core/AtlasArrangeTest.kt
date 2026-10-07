@@ -54,9 +54,8 @@ class AtlasArrangeTest {
 		val moved = kept.placementByLayerId.filter { (id, at) -> frozen.tiles[id]?.let { it.x != at.x || it.y != at.y || it.page != at.page } != false }.keys
 		assertTrue("new" in moved)
 		assertTrue(moved.size <= layers.size / 2, "only the grown tile, what it now overlaps and the new one move: $moved")
-		// Only a tile that lost its stored spot is reported; a new layer fills free space quietly.
-		assertTrue(kept.notices.none { "new" in it })
-		assertEquals(grown in moved, kept.notices.any { grown in it })
+		// A new layer and a tile that lost its stored spot fill free space quietly.
+		assertTrue(kept.notices.none { "free space" in it || grown in it })
 		val tiles = kept.placementByLayerId.values.toList()
 		for (i in tiles.indices) for (j in i + 1 until tiles.size) {
 			val a = tiles[i]; val b = tiles[j]

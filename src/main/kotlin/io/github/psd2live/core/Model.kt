@@ -425,7 +425,7 @@ data class PackedAtlas(
 	val placementByLayerId: Map<String, AtlasPlacement>,
 	/** The common scale of every unlocked tile ([AtlasLayout]): 1 unless the budget forced the textures smaller. */
 	val fit: Float = 1f,
-	/** Why the layout departs from the request: a fit below 1, locks or pins that did not fit, pages beyond the budget. */
+	/** Why the layout departs from the request: a fit below 1, locks or pins that did not fit, pages beyond the budget. Logged only. */
 	val notices: List<String> = emptyList(),
 	/** The mesh footprints the stored arrangement gave tiles; a tile without one owns its whole rectangle. */
 	val footprints: Map<String, io.github.psd2live.project.TextureFootprint> = emptyMap(),
