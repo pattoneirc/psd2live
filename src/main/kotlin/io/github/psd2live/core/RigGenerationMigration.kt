@@ -100,10 +100,8 @@ internal object RigGenerationMigration {
         val authored = if (full.rigEdits.importedCmo3 == null) pipeline.buildPreview(source, withoutLateForms, segment(progress, 0.4, 0.5))
             else Cmo3ModelImport.paintingPreview(pipeline, source, withoutLateForms).also { progress.update("Prepared authored generation bindings", 0.5) }
         val stable = remeshed.rigEdits.splitDrawableIds + authored.rig.layerIdByDrawableId.entries.associate { it.value to it.key }
-        fun generated(input: SourceArt, config: PipelineConfig, start: Double, end: Double): BuiltRig = pipeline.buildPreview(input,
-            config.copy(generationSource = null, meshSource = null, parentOverrides = emptyMap(), deletedLayerIds = emptySet(),
-                rigEdits = RigEditOverlay.Empty.copy(splitDrawableIds = stable, splitBaselineLayerIds = config.rigEdits.splitBaselineLayerIds,
-                    calibrationLayerIds = config.rigEdits.calibrationLayerIds, skeleton = config.rigEdits.skeleton)), segment(progress, start, end)).rig
+        fun generated(input: SourceArt, config: PipelineConfig, start: Double, end: Double): BuiltRig =
+            generatedRig(pipeline, input, config, stable, segment(progress, start, end))
         val priorInput = current.config.generationSource?.let { RigGenerationSource.geometrySource(current.analysis.source, it, current.config.rigEdits) } ?: current.analysis.source
         val priorGenerated = canvasUvs(generated(priorInput, current.config, 0.5, 0.6))
         val savedPrevious = RigGenerationJournal.latest(current.config.rigEdits)
@@ -205,6 +203,35 @@ internal object RigGenerationMigration {
         progress.update("Prepared generation migration", 1.0)
         return remeshed.copy(rigEdits = overlay.copy(authoringJournal = overlay.authoringJournal + transition),
             deletedLayerIds = requested.deletedLayerIds)
+    }
+
+    /**
+     * The automatic rig of [input] under [config] with no authored edits: what a generation transition compares the
+     * authored model against. Without version 2 `art_primitive` records this is the plain generation, as it always
+     * was. With them the build carries those records, so the base resolves the layer set the document shows - split
+     * parts generated on their recorded meshes, the superseded originals only as stubs - and the result is the base's
+     * [BuiltRig.resolvedPuppet] (stubs removed, parts in place, no authored layer), its layer map following suit.
+     */
+    internal fun generatedRig(pipeline: PSD2LivePipeline, input: SourceArt, config: PipelineConfig, stable: Map<String, String>,
+                              progress: ProgressListener): BuiltRig {
+        val resolved = ArtPrimitiveV2.resolve(config.rigEdits)
+        val records = if (resolved.isEmpty()) emptyList() else config.rigEdits.authoringJournal.filter(ArtPrimitiveV2::isV2)
+        val preview = pipeline.buildPreview(input,
+            config.copy(generationSource = null, meshSource = null, parentOverrides = emptyMap(), deletedLayerIds = emptySet(),
+                rigEdits = RigEditOverlay.Empty.copy(splitDrawableIds = stable, splitBaselineLayerIds = config.rigEdits.splitBaselineLayerIds,
+                    calibrationLayerIds = config.rigEdits.calibrationLayerIds, skeleton = config.rigEdits.skeleton,
+                    authoringJournal = records)), progress)
+        if (resolved.isEmpty()) return preview.rig
+        // Only the generated base: replaying the records would add their authored layers, which the transition
+        // keeps as the residual of the authored model.
+        val base = preview.baseRig
+        val stubs = base.primitiveSkins.stubs.mapTo(HashSet()) { it.raw }
+        return base.copy(puppet = base.resolvedPuppet(),
+            layerIdByDrawableId = base.layerIdByDrawableId - stubs + resolved.parts.associate { it.drawableId.raw to it.layerId },
+            sourceBoundsByDrawableId = base.sourceBoundsByDrawableId - stubs,
+            pageByDrawableId = base.pageByDrawableId - stubs + resolved.parts.mapNotNull { part ->
+                base.primitiveSkins.drawables[part.drawableId]?.let { part.drawableId.raw to it.texturePage }
+            })
     }
 
     private fun canvasUvs(rig: BuiltRig): PuppetModel = rig.puppet.copy(drawables = rig.puppet.drawables.map { drawable ->

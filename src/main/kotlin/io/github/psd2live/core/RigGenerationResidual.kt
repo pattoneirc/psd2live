@@ -80,6 +80,75 @@ internal object RigGenerationResidual {
         })
     }
 
+    /**
+     * What the user changed on drawable [id]'s geometry: per cell, the [authored] local positions minus the [generated]
+     * drawable's world positions brought into the authored local frame, over the union of the authored grid's axes and
+     * the generated drawable's own and ancestor axes (parameters live in [authored]). [sources] moves the residual
+     * onto another vertex inventory (one entry per target vertex, [VertexSource.FromOld] or
+     * [VertexSource.BarycentricOf] into this drawable); null keeps this drawable's vertices. Null when nothing differs.
+     * Adding the result to a generated grid over the same frame gives back the authored shape.
+     */
+    fun geometryDelta(authored: PuppetModel, generated: PuppetModel, id: DrawableId, sources: List<VertexSource>? = null,
+                      checkpoint: () -> Unit = {}): KeyformGrid<MeshDeltaForm>? {
+        val actual = authored.drawables.single { it.id == id }
+        val base = generated.drawables.single { it.id == id }
+        val mesh = requireNotNull(actual.mesh)
+        require(base.mesh?.vertexCount == mesh.vertexCount) { "Generation residual needs the same vertices on both drawables" }
+        val live = authored.parameters.associateBy { it.id }
+        val axes = unionAxes((actual.geometryGrid?.axes.orEmpty() + geometryAxes(generated, base)).filter { it.parameterId in live })
+        val mapping = requireNotNull(drawableSpaceMapping(authored, emptyMap(), id))
+        val indices = (0 until mesh.vertexCount).toSet()
+        val count = sources?.size ?: mesh.vertexCount
+        var changed = false
+        val cells = coordinates(axes, count * 2).map { coordinate ->
+            checkpoint()
+            val pose = live.mapValues { it.value.default } + axes.indices.associate { axes[it].parameterId to axes[it].keys[coordinate[it]] }
+            val before = world(generated, base, pose)
+            val generatedLocal = mapping.worldToLocalLinearized(before, mesh.positions, before, indices)
+            val own = local(authored, actual, pose)
+            val delta = FloatArray(own.size) { own[it] - generatedLocal[it] }
+            val moved = if (sources == null) delta else transfer(delta, sources)
+            if (moved.any { kotlin.math.abs(it) > 1e-6f }) changed = true
+            KeyformCell(coordinate, MeshDeltaForm(moved))
+        }
+        return if (changed) KeyformGrid(axes, cells) else null
+    }
+
+    /**
+     * What the user changed on a drawable's channels: per channel and cell, [actual] minus [generated] (scalars and
+     * colours as differences; flags as `true` where the authored flag differs from the generated one, applied as an
+     * exclusive or). Axes are the union of both drawables' channel axes that are parameters of [current]. Adding the
+     * result to a generated drawable's channels over the same axes gives back the authored values.
+     */
+    fun channelsDelta(current: PuppetModel, actual: Drawable, generated: Drawable, checkpoint: () -> Unit = {}): ChannelGrids {
+        val live = current.parameters.associateBy { it.id }
+        val channelIds = actual.channelGrids.gridsByChannel.keys + generated.channelGrids.gridsByChannel.keys
+        return ChannelGrids(channelIds.associateWith { channel ->
+            val axes = unionAxes((actual.channelGrids[channel]?.axes.orEmpty() + generated.channelGrids[channel]?.axes.orEmpty())
+                .filter { it.parameterId in live })
+            val cells = coordinates(axes, 4).map { coordinate ->
+                checkpoint()
+                val pose = axes.indices.associate { axes[it].parameterId to axes[it].keys[coordinate[it]] }
+                fun parameter(id: ParameterId) = pose[id] ?: live[id]?.default ?: 0f
+                fun scalar(d: Drawable) = d.channelGrids.scalarAt(channel,
+                    if (channel == FormChannel.DRAW_ORDER) d.drawOrder else d.opacity, paramValue = ::parameter)
+                fun color(d: Drawable) = d.channelGrids.colorAt(channel,
+                    if (channel == FormChannel.MULTIPLY_COLOR) d.multiplyColor else d.screenColor, paramValue = ::parameter)
+                val value = when (channel.valueKind) {
+                    ChannelValueKind.SCALAR -> ChannelValue.Scalar(scalar(actual) - scalar(generated))
+                    ChannelValueKind.COLOR -> {
+                        val a = color(actual); val b = color(generated)
+                        ChannelValue.Color(ColorRgb(a.red - b.red, a.green - b.green, a.blue - b.blue))
+                    }
+                    ChannelValueKind.FLAG -> ChannelValue.Flag(actual.channelGrids.flagAt(channel, false, paramValue = ::parameter) !=
+                        generated.channelGrids.flagAt(channel, false, paramValue = ::parameter))
+                }
+                KeyformCell(coordinate, value)
+            }
+            KeyformGrid(axes, cells)
+        })
+    }
+
     /** All current knot values survive; generated near-duplicates use the existing knot. */
     private fun unionAxes(input: List<KeyformAxis>): List<KeyformAxis> = input.groupBy { it.parameterId }.map { (id, axes) ->
         val values = mutableListOf<Float>()

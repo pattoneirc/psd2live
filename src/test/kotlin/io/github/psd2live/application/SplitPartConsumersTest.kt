@@ -68,4 +68,66 @@ class SplitPartConsumersTest {
 		val fresh = WorkspacePreviewBuilder().build(candidate.document)
 		assertEquals(ContentHash.of(RigIrCompiler.compile(fresh)), ContentHash.of(RigIrCompiler.compile(rebuilt)))
 	}
+
+	/** A face or body setting goes through the generation transition; the split parts keep their records and the result rebuilds. */
+	@Test fun aGenerationTransitionAfterASplitKeepsItsParts() {
+		val split = splitLegs()
+		val model = split.capture.model
+		val pipeline = PSD2LivePipeline()
+		val requested = model.config.copy(bodyStrength = 0.5f, headTurnStrength = 0.5f)
+		assertTrue(RigGenerationMigration.changed(model, requested))
+		val rebuilt = pipeline.rebuildPreview(model, requested)
+		assertTrue(rebuilt.config.rigEdits.authoringJournal.any { it["op"]?.jsonPrimitive?.contentOrNull == RigGenerationJournal.OP })
+		val parts = rebuilt.rig.layerIdByDrawableId.filterValues { it in split.partLayers }.keys
+		assertEquals(model.rig.layerIdByDrawableId.filterValues { it in split.partLayers }.keys, parts)
+		val fresh = PSD2LivePipeline().buildPreview(model.analysis.source, rebuilt.config)
+		assertEquals(ContentHash.of(RigIrCompiler.compile(fresh)), ContentHash.of(RigIrCompiler.compile(rebuilt)))
+	}
+
+	/** Without version 2 records a migration build is the plain generation, whatever the journal holds. */
+	@Test fun migrationBuildsIgnoreVersionOneRecords() {
+		val split = splitLegs()
+		val model = split.capture.model
+		assertTrue(ArtPrimitiveV2.resolve(model.config.rigEdits).isEmpty())
+		val pipeline = PSD2LivePipeline()
+		val stable = model.rig.layerIdByDrawableId.entries.associate { it.value to it.key }
+		val generated = RigGenerationMigration.generatedRig(pipeline, model.analysis.source, model.config, stable) { _, _ -> }
+		val plain = pipeline.buildPreview(model.analysis.source, model.config.copy(generationSource = null, meshSource = null,
+			parentOverrides = emptyMap(), deletedLayerIds = emptySet(), rigEdits = RigEditOverlay.Empty.copy(splitDrawableIds = stable,
+				splitBaselineLayerIds = model.config.rigEdits.splitBaselineLayerIds, calibrationLayerIds = model.config.rigEdits.calibrationLayerIds,
+				skeleton = model.config.rigEdits.skeleton)))
+		assertEquals(ContentHash.of(RigIrCompiler.compile(plain)),
+			ContentHash.of(RigIrCompiler.compile(plain.analysis, plain.atlas, generated, plain.config)))
+		assertEquals(plain.rig.layerIdByDrawableId, generated.layerIdByDrawableId)
+	}
+
+	/**
+	 * With version 2 records the migration builds see the resolved layer set: parts on their recorded meshes, no
+	 * superseded original, so a face or body change reaches the parts like any other mesh.
+	 */
+	@org.junit.jupiter.api.Disabled("Needs the resolved base generation (workstream A) and the v2 record writer (workstream B)")
+	@Test fun migrationBuildsResolveVersionTwoRecords() {
+		val previous = System.getProperty(ArtPrimitiveV2.FLAG_PROPERTY)
+		System.setProperty(ArtPrimitiveV2.FLAG_PROPERTY, "true")
+		try {
+			val split = splitLegs()
+			val model = split.capture.model
+			val record = ArtPrimitiveJournal.commands(model.config.rigEdits).single()
+			assertTrue(ArtPrimitiveV2.isV2(record))
+			val resolved = ArtPrimitiveV2.resolve(model.config.rigEdits)
+			val pipeline = PSD2LivePipeline()
+			val stable = model.rig.layerIdByDrawableId.entries.associate { it.value to it.key }
+			val generated = RigGenerationMigration.generatedRig(pipeline, model.analysis.source, model.config, stable) { _, _ -> }
+			val ids = generated.puppet.drawables.mapTo(HashSet()) { it.id }
+			assertTrue(resolved.parts.all { it.drawableId in ids }, "every part is in the resolved migration build")
+			assertTrue(resolved.stubDrawables.none { it in ids }, "no superseded original is")
+			for (part in resolved.parts) assertEquals(part.layerId, generated.layerIdByDrawableId[part.drawableId.raw])
+
+			val rebuilt = pipeline.rebuildPreview(model, model.config.copy(bodyStrength = 0.5f, headTurnStrength = 0.5f))
+			val fresh = PSD2LivePipeline().buildPreview(model.analysis.source, rebuilt.config)
+			assertEquals(ContentHash.of(RigIrCompiler.compile(fresh)), ContentHash.of(RigIrCompiler.compile(rebuilt)))
+		} finally {
+			if (previous == null) System.clearProperty(ArtPrimitiveV2.FLAG_PROPERTY) else System.setProperty(ArtPrimitiveV2.FLAG_PROPERTY, previous)
+		}
+	}
 }
