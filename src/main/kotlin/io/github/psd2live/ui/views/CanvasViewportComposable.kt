@@ -1226,7 +1226,12 @@ fun CanvasViewportComposable(
 						if (meshFocusOnly) {
 							// Edit mode draws its meshes on the editor overlay - every edited mesh in one style,
 							// glued points merged - so the guide adds nothing there. Deform keeps the active mesh.
-							if (selectedId != null && editor.hierarchyMode != EditHierarchyMode.EDIT) {
+							// Deform and Simulate draw a mesh target on the overlay too. A second copy from the GPU frame
+							// trails it by a frame during a drag, and shows as bright wires that fade as the pointer slows.
+							val overlayDrawsMesh = editor.hierarchyMode == EditHierarchyMode.EDIT ||
+								((editor.hierarchyMode == EditHierarchyMode.DEFORM || editor.hierarchyMode == EditHierarchyMode.SIMULATE) &&
+									editor.target()?.kind == "mesh")
+							if (selectedId != null && !overlayDrawsMesh) {
 								for (drawable in model.rig.puppet.drawables) {
 									if (model.rig.layerIdByDrawableId[drawable.id.raw] == selectedId) wire(drawable, selected = true, dimmed = false)
 								}
