@@ -168,6 +168,15 @@ private fun StartSection(
 	}
 }
 
+/** The start screen's updates: the tutorial each one opens and its `canvas.start.update.<key>` strings. */
+internal val StartCanvasUpdates = listOf(
+	TutorialId.TOOL_DETAILS to "tools",
+	TutorialId.DEFORM_MODE to "deform",
+	TutorialId.WORKSPACE to "texture",
+	TutorialId.PROJECT_HISTORY to "regenerate",
+	TutorialId.LIVE2D_BRIDGE to "export",
+)
+
 @Composable
 private fun UpdatesSection(
 	enabled: Boolean,
@@ -181,13 +190,7 @@ private fun UpdatesSection(
 			color = LocalToolColors.current.textMuted,
 			modifier = Modifier.padding(bottom = 1.dp),
 		)
-		listOf(
-			TutorialId.TOOL_DETAILS to "tools",
-			TutorialId.DEFORM_MODE to "deform",
-			TutorialId.WORKSPACE to "texture",
-			TutorialId.PROJECT_HISTORY to "regenerate",
-			TutorialId.LIVE2D_BRIDGE to "export",
-		).forEach { (tutorial, key) ->
+		StartCanvasUpdates.forEach { (tutorial, key) ->
 			FeatureUpdateRow(
 				title = tr("canvas.start.update.$key.title"),
 				description = tr("canvas.start.update.$key.desc"),

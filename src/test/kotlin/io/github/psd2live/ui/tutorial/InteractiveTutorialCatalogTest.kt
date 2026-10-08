@@ -211,7 +211,7 @@ class InteractiveTutorialCatalogTest {
 			javaClass.getResourceAsStream("/i18n/$name.properties")!!.reader(Charsets.UTF_8).use(props::load)
 			name to props
 		}
-		val keys = listOf("simulation", "skeleton", "animation", "workspace")
+		val keys = io.github.psd2live.ui.views.StartCanvasUpdates.map { it.second }
 		bundles.forEach { (bundleName, props) ->
 			keys.forEach { key ->
 				val title = props.getProperty("canvas.start.update.$key.title")
