@@ -651,45 +651,7 @@ fun AppTitleBar(
 				}
 			}
 
-			// 3. Language Menu
-			TitleBarMenuItem(
-				title = tr("menu.language"),
-				leadingIcon = { tint -> IconLanguage(Modifier.size(13.dp), tint) },
-				isOpen = activeMenu == "language",
-				onToggle = {
-					activeSubmenu = null
-					activeMenu = if (activeMenu == "language") null else "language"
-				},
-				onHoverWhenActive = {
-					if (activeMenu != null && activeMenu != "language") {
-						activeMenu = "language"
-						activeSubmenu = null
-					}
-				},
-			) {
-				AppSeamlessDropdownMenu(
-					expanded = activeMenu == "language",
-					onDismissRequest = {
-						activeMenu = null
-						activeSubmenu = null
-					},
-					modifier = Modifier.widthIn(min = 140.dp, max = 200.dp),
-				) {
-					for (lang in I18n.supportedLanguages) {
-						AppMenuItem(
-							text = tr(lang.displayNameKey),
-							isChecked = lang == currentLanguage,
-							onClick = {
-								activeMenu = null
-								activeSubmenu = null
-								onSetLanguage(lang)
-							},
-						)
-					}
-				}
-			}
-
-			// 4. Settings Menu — a direct entry rather than a menu: it opens the preferences
+			// 3. Settings Menu — a direct entry rather than a menu: it opens the preferences
 			// window on click, so it has no dropdown of its own.
 			TitleBarMenuItem(
 				title = tr("menu.settings"),
@@ -708,7 +670,7 @@ fun AppTitleBar(
 				},
 			) {}
 
-			// 5. Help Menu
+			// 4. Help Menu
 			TitleBarMenuItem(
 				title = tr("menu.help"),
 				isOpen = activeMenu == "help",
@@ -887,6 +849,19 @@ fun AppTitleBar(
 					}
 				}
 			}
+			TitleBarLanguageButton(
+				currentLanguage = currentLanguage,
+				expanded = activeMenu == "language",
+				onToggle = {
+					activeSubmenu = null
+					activeMenu = if (activeMenu == "language") null else "language"
+				},
+				onDismiss = {
+					activeMenu = null
+					activeSubmenu = null
+				},
+				onSetLanguage = onSetLanguage,
+			)
 			TitleBarThemeToggle(
 				darkTheme = darkTheme,
 				onClick = onToggleTheme,
@@ -981,13 +956,11 @@ private fun TitleBarMenuItem(
 	onToggle: () -> Unit,
 	onHoverWhenActive: () -> Unit,
 	modifier: Modifier = Modifier,
-	leadingIcon: (@Composable (tint: Color) -> Unit)? = null,
 	content: @Composable () -> Unit,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	var isHovered by remember { mutableStateOf(false) }
-	val foreground = if (isOpen) colors.selectionText else colors.textPrimary
 
 	Box(
 		modifier = modifier
@@ -1012,17 +985,11 @@ private fun TitleBarMenuItem(
 			.padding(horizontal = 10.dp),
 		contentAlignment = Alignment.Center,
 	) {
-		Row(verticalAlignment = Alignment.CenterVertically) {
-			if (leadingIcon != null) {
-				leadingIcon(foreground)
-				Spacer(Modifier.width(5.dp))
-			}
-			Text(
-				text = title,
-				style = typography.body.copy(fontSize = 11.5.sp),
-				color = foreground,
-			)
-		}
+		Text(
+			text = title,
+			style = typography.body.copy(fontSize = 11.5.sp),
+			color = if (isOpen) colors.selectionText else colors.textPrimary,
+		)
 		content()
 	}
 }
@@ -1038,13 +1005,15 @@ private fun AppSeamlessDropdownMenu(
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier,
     tutorialOverlay: (@Composable () -> Unit)? = null,
+    /** Lines the menu's right edge up with the anchor's, for buttons at the right end of the bar. */
+    alignEnd: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     if (!expanded) return
     val colors = LocalToolColors.current
     val density = LocalDensity.current
     val titleBarHeightPx = with(density) { 32.dp.roundToPx() }
-    val positionProvider = remember(tutorialOverlay != null, titleBarHeightPx) {
+    val positionProvider = remember(tutorialOverlay != null, titleBarHeightPx, alignEnd) {
         object : androidx.compose.ui.window.PopupPositionProvider {
             override fun calculatePosition(
                 anchorBounds: androidx.compose.ui.unit.IntRect,
@@ -1052,7 +1021,10 @@ private fun AppSeamlessDropdownMenu(
                 layoutDirection: androidx.compose.ui.unit.LayoutDirection,
                 popupContentSize: androidx.compose.ui.unit.IntSize,
             ): IntOffset = if (tutorialOverlay != null) IntOffset.Zero
-                else IntOffset(anchorBounds.left, anchorBounds.top + titleBarHeightPx)
+                else IntOffset(
+                    if (alignEnd) anchorBounds.right - popupContentSize.width else anchorBounds.left,
+                    anchorBounds.top + titleBarHeightPx,
+                )
         }
     }
     Popup(
@@ -1420,6 +1392,81 @@ private fun TitleBarLayoutToggle(
 				}
 
 				drawPath(frame, color = outline, style = Stroke(stroke))
+			}
+		}
+	}
+}
+
+/**
+ * Language choice as a globe beside the theme toggle rather than a text menu: it stays recognizable
+ * after a switch to a language one cannot read, and the options name themselves in their own language.
+ */
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
+@Composable
+private fun TitleBarLanguageButton(
+	currentLanguage: AppLanguage,
+	expanded: Boolean,
+	onToggle: () -> Unit,
+	onDismiss: () -> Unit,
+	onSetLanguage: (AppLanguage) -> Unit,
+) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	var isHovered by remember { mutableStateOf(false) }
+
+	TooltipArea(
+		tooltip = {
+			if (!expanded) Surface(
+				color = colors.panelElevated,
+				shape = RoundedCornerShape(3.dp),
+				border = BorderStroke(1.dp, colors.border),
+				elevation = 4.dp,
+			) {
+				Text(
+					text = tr("menu.language"),
+					style = typography.caption.copy(fontSize = 10.sp),
+					color = colors.textPrimary,
+					modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+				)
+			}
+		},
+		delayMillis = 400,
+	) {
+		Box(
+			modifier = Modifier
+				.width(30.dp)
+				.fillMaxHeight()
+				.background(if (expanded) colors.selection else Color.Transparent)
+				.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
+				.onPointerEvent(PointerEventType.Enter) { isHovered = true }
+				.onPointerEvent(PointerEventType.Exit) { isHovered = false }
+				.clickable(onClick = onToggle),
+			contentAlignment = Alignment.Center,
+		) {
+			IconLanguage(
+				modifier = Modifier.size(14.dp),
+				tint = when {
+					expanded -> colors.selectionText
+					isHovered -> colors.textPrimary
+					else -> colors.textMuted
+				},
+			)
+			AppSeamlessDropdownMenu(
+				expanded = expanded,
+				onDismissRequest = onDismiss,
+				modifier = Modifier.widthIn(min = 140.dp, max = 200.dp),
+				alignEnd = true,
+			) {
+				for (language in I18n.supportedLanguages) {
+					AppMenuItem(
+						text = tr(language.displayNameKey),
+						isChecked = language == currentLanguage,
+						onClick = {
+							onDismiss()
+							onSetLanguage(language)
+						},
+					)
+				}
 			}
 		}
 	}

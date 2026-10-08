@@ -283,7 +283,6 @@ private fun SettingsSidebar(
 		for (section in SettingsSection.entries) {
 			SettingsSidebarRow(
 				label = tr(section.labelKey),
-				showLanguageIcon = section == SettingsSection.LANGUAGE,
 				isSelected = section == selected,
 				onClick = { onSelect(section) },
 			)
@@ -296,7 +295,6 @@ private fun SettingsSidebarRow(
 	label: String,
 	isSelected: Boolean,
 	onClick: () -> Unit,
-	showLanguageIcon: Boolean = false,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
@@ -329,28 +327,20 @@ private fun SettingsSidebarRow(
 			.padding(start = 12.dp, end = 8.dp),
 		contentAlignment = Alignment.CenterStart,
 	) {
-		val foreground = when {
-			isSelected -> colors.selectionText
-			isHovered -> colors.textPrimary
-			else -> colors.textMuted
-		}
-		Row(verticalAlignment = Alignment.CenterVertically) {
-			Text(
-				text = label,
-				style = typography.body.copy(
-					fontSize = 11.5.sp,
-					fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-				),
-				color = foreground,
-				maxLines = 1,
-				overflow = TextOverflow.Ellipsis,
-				modifier = Modifier.weight(1f, fill = false),
-			)
-			if (showLanguageIcon) {
-				Spacer(Modifier.width(6.dp))
-				IconLanguage(Modifier.size(12.dp), foreground)
-			}
-		}
+		Text(
+			text = label,
+			style = typography.body.copy(
+				fontSize = 11.5.sp,
+				fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+			),
+			color = when {
+				isSelected -> colors.selectionText
+				isHovered -> colors.textPrimary
+				else -> colors.textMuted
+			},
+			maxLines = 1,
+			overflow = TextOverflow.Ellipsis,
+		)
 	}
 }
 

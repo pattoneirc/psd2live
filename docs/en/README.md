@@ -39,7 +39,7 @@ PSD2Live recognizes parts from layer names and generates meshes, a deformer hier
 
 ![Animation workspace: motion list, preview canvas and parameters, with the animation editor showing nine parameter tracks of the idle motion](../imgs/animation.webp)
 
-<sub>Screenshots show the Chinese interface; switch languages from the Language menu.</sub>
+<sub>Screenshots show the Chinese interface; switch languages with the globe button at the top right.</sub>
 
 ## Download
 
