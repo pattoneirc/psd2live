@@ -28,18 +28,25 @@ Saves write v2. Each history revision is split into content-addressed document n
 | `auxiliary/tasks.json` | Agent task records and events |
 | `workspace.json` | Durable UI layout, camera, selection, parameter preview, annotations and logs |
 | `images/<hash>.png` | Log images |
-| `rig/` | Optional, each revision's authored rig (see "Authored rig" below) |
+| `rig/objects/` | Rig objects: those checkpoint records name (required by revisions with checkpoints) and those of each revision's authored rig |
+| `rig/revisions/` | Optional, each revision's authored rig index (see "Authored rig" below) |
 | `cache/head/` | Optional, disposable cache for rebuilding the head revision (see "Head cache" below) |
 
 Document node, override and clip files are named by the SHA-256 of their bytes, checked on open. Splitting is lossless: opening joins every revision's complete document from its index, so revision IDs, node IDs and branches are unchanged. The complete rig model is never stored; a revision with an authored rig builds from it on open, any other from source, settings and edits. Auxiliary entries depend on features used; `cache/` holds only disposable rebuild caches and takes part in no identity.
 
+### Checkpoints
+
+The journal entry `rig_checkpoint` (`{op, v:1, authored:{header, frame, deformers, meshes}, issues}`) stores the authored rig as data at its place in the journal: `authored` is an authored-rig index as below (header and object hashes), `issues` what the regeneration merge that wrote it could not carry over cleanly (`{kind, target, detail}`; design in Chinese: [materialized rig](../../zh/spec/MATERIALIZED_RIG.md)). Replay starts from the last checkpoint: its authored rig (re-bound through canvas texture coordinates when the atlas changed) and the entries after it; the entries before it are history and no longer replay. The application writes a checkpoint when an edit changes what generation produces; users do not edit it directly.
+
+Checkpoint objects belong to the document: the working store writes them to `<project>/rig-objects/` before the snapshots that name them, and a save archives them in `rig/objects/`.
+
 ### Authored rig
 
-`rig/` holds each revision's authored rig: the generated base (with the skeleton bake) after the legacy static edits and the whole journal, before swings, simulation write-back and override merging (design in Chinese: [materialized rig](../../zh/spec/MATERIALIZED_RIG.md)).
+`rig/revisions/` holds each revision's authored rig: the generated base (with the skeleton bake) after the legacy static edits and the whole journal, before swings, simulation write-back and override merging (design in Chinese: [materialized rig](../../zh/spec/MATERIALIZED_RIG.md)).
 
 | Path | Content |
 | --- | --- |
-| `rig/objects/<sha256>.bin` | One rig object (`RigIrObjects`): the frame (everything but deformers and meshes), one deformer or one mesh, named by the SHA-256 of its bytes and shared between revisions |
+| `rig/objects/<sha256>.bin` | One rig object (`RigIrObjects`): the frame (everything but deformers and meshes), one deformer or one mesh, named by the SHA-256 of its bytes and shared between revisions and checkpoints |
 | `rig/revisions/<revision>.json` | `{header, frame, deformers:[...], meshes:[...]}`: the header and the object hashes in rig order |
 
 - Objects use the binary form of the neutral IR (`RigIrBinary`, floats bit for bit) with a magic number, encoding version and object kind; reading accepts every version from `RigIrObjects.MIN_VERSION` on, a new IR field being read only from the version that added it.
@@ -47,7 +54,7 @@ Document node, override and clip files are named by the SHA-256 of their bytes, 
 - The revision key in a file name is the document's revision ID (`WorkspaceRevisions.of`), the key builds look it up by.
 - The binding key digests the atlas placements, page sizes and texture layer rectangles the generated base was bound to. On open the current build packs the revision's atlas and uses the stored rig only under an equal key (its texture coordinates address the same places); otherwise, or when an entry is unreadable or fails its checksum, the revision generates and replays as before.
 - A save writes the authored rigs this process built for its revisions and those read from the opened archive; other revisions get none. `-Dpsd2live.materializedRigs=false` turns reading and writing off.
-- The folder lives outside `history/` and `document/` and enters no revision ID or document node; archives without it open as before. Earlier v2 builds unpack it and never read it, so they still open such archives; their next save drops it. Imported CMO3 models write no authored rig.
+- Revision indexes enter no revision ID or document node, and a revision without one builds as before: from its journal's last checkpoint when it has one, otherwise by generation and replay. Imported CMO3 models write no authored rig.
 
 ### Head cache
 
@@ -73,8 +80,9 @@ A node or revision index moves to a newer schema only when it uses a newer field
 | Node 2 | a `source` or extra source-art node with a layer `rect`; `layers` with `textureOverrides`; `settings` with `atlas` or `atlasArrangement` | see texture fields below |
 | Revision 1 | the journal names no payload node | — |
 | Revision 2 | the journal names payload nodes, listed under `payloads` | `{"$payload": "<sha256>"}` journal entries |
+| Revision 3 | the journal holds `rig_checkpoint` records | the index lists the rig objects they name under `rig`, kept in the archive's `rig/objects/`; it may list `payloads` too |
 
-Builds that read only schema 1 reject a schema-2 node or revision instead of dropping the new fields. This build reads node and revision schemas 1–2 and still rejects higher ones. A schema-2 revision lists at least one payload, and its journal may name only payloads it lists. When saving, a revision that already has a schema-2 node moves authored journal entries of 512 characters or more out into payload nodes (the reference in the journal node is under 80 characters), writes each payload once, and gets a schema-2 index; builds that read only schema 1 cannot open such a revision anyway. Documents without newer fields still write only schema 1, with byte-identical nodes and indexes. Each revision of a long history no longer stores a whole journal, so archive size and save time no longer grow with the square of the revision count.
+Builds that read only schema 1 reject a schema-2 node or revision instead of dropping the new fields. This build reads node schemas 1–2 and revision schemas 1–3 and still rejects higher ones. A schema-3 index must list `rig`; opening checks that `rig/objects/` holds every listed object and refuses the archive when one is missing. Builds without schema 3 cannot build such a revision, so they refuse it. A schema-2 revision lists at least one payload, and its journal may name only payloads it lists. When saving, a revision that already has a schema-2 node moves authored journal entries of 512 characters or more out into payload nodes (the reference in the journal node is under 80 characters), writes each payload once, and gets a schema-2 index; builds that read only schema 1 cannot open such a revision anyway. Documents without newer fields still write only schema 1, with byte-identical nodes and indexes. Each revision of a long history no longer stores a whole journal, so archive size and save time no longer grow with the square of the revision count.
 
 ### Texture fields
 

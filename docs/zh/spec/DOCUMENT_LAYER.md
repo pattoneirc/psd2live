@@ -16,6 +16,7 @@
 | 重放检查点 | `core/ReplayCheckpoints` | 按基础 Rig 实例与日志前缀内容缓存重放的中间模型；追加只重放新条目，撤销命中已有检查点 |
 | 生成器复用 | `core/DocumentGenerators`（`GeneratorReuse`） | 摆动与模拟声明对象级读取；读取不变时把上次输出作为补丁套用，不重新生成 |
 | 拆分物化 | `core/ArtPrimitiveJournal`、`application/WorkspaceArtPrimitives` | 拆分把原图层的当前状态写成部件的 `art_primitive` 记录，原图层离开源图；见[拆分物化](#拆分物化画元记录-art_primitive) |
+| 作者态 Rig 与固化点 | `core/RigEditOverlay`（`replayAuthored`/`finish`）、`core/RigCheckpoint`、`core/RigRegeneration`、`project/MaterializedRigStore` | 重放分为作者态阶段与收尾阶段；作者态 Rig 按修订保存并直接用于构建；生成结果在日志之下变化时三方合并并写固化点，见[固化点](#固化点)与[固化 Rig](MATERIALIZED_RIG.md) |
 | 工程格式 v2 | `project/ProjectFormatV2` | 每个修订拆为按内容寻址、带 schema 版本的文档节点；v1 打开后在下次保存时迁移，见[工程格式](PROJECT_FORMAT.md) |
 
 `format-compile` 中的四个框架部分为 MIT，不依赖任何 GPL 模块。
@@ -76,6 +77,18 @@
 
 追加 200 条几何编辑后，单次提交从约 98 ms 降到约 46 ms，提交内的重建从约 79 ms 降到约 23 ms；剩下的主要是 moc3 打包和几何安全检查，不再随日志长度增长。
 
+
+## 固化点
+
+日志重放的前提是条目写下时所面对的生成结果不变。改变生成输入的编辑（头发模拟开关、骨架、拆分改变的框架等）使基础 Rig 变化后，旧条目不再在新结果上重放，而是合并后保存为数据：
+
+- **触发**（`WorkspacePreviewBuilder.build`，`RigRegenerationCheckpoint.checkpointed`）：新文档延续当前文档（`RigEditOverlay.continues`：日志以当前日志开头，旧格式静态字段相同），且不能走追加路径。生成新文档的基础 Rig，取旧条目所见的部分（`BuiltRig.resolvedPuppet(records)`：边界之前的 v2 拆分记录的部件就位，之后记录的乘客保留），与当前基础 Rig 的 `resolvedPuppet()` 按中立 IR 比较；不同则以当前基础为 G、新基础为 G′、当前作者态 Rig 为 M 合并（`RigRegeneration.merge`，G 与 M 先重新绑定到新纹理集），在当前日志末尾、本次编辑的新条目之前插入 `rig_checkpoint`。相同则照常重放。
+- **记录**（`RigCheckpoint`）：作者态 Rig 的索引（对象在 `RigObjects`，随文档持久化）与合并问题。模型预设开启头发模拟时在预设内部同样合并并写固化点，再按合并后的 Rig 计算权重。
+- **重放**：`replayAuthored` 从最后一个固化点开始，其 Rig 经 `reboundTo` 绑定到基础 Rig 的纹理集，再重放之后的条目（照常使用重放检查点）；`authoredRig` 的网格映射取自固化点头部。之后没有 `art_primitive` 记录时，构建直接由固化点进行（`RigEditOverlay.authoredFromCheckpoint`、`materializedPreview(rebind = true)`），不生成基础 Rig。
+- **提交**：运行时把重建插入的固化点并入提交的文档（`WorkspaceRuntime.adopted`）；批量成员由前一个候选构建（`rebuildFrom`），合并的 M 是前一个候选的作者态。
+- **收尾阶段**照常扫描整条日志：生成结果覆盖与延后的面板编辑不受固化点影响。
+- **报告**：最后一个固化点的问题经 `RegenerationQuality` 进入 `workspace_inspect` 的 `quality.regeneration`。
+- 生成的模型启用骨架后不再在日志中重采样顶点组（合并迁移它们）；导入 CMO3 的模型没有生成结果可合并，仍按原方式处理。
 
 ## 生成结果覆盖
 
@@ -370,4 +383,4 @@
 
 - 分类修改的剩余耗时在分析：生成迁移与拆分基线对新栅格重复运行 `CharacterAnalyzer.analyze`（逐层分类约 0.5 s/次），以及迁移内的多次完整构建；可按图层元数据与栅格摘要缓存分类结果。
 - 以混合形写回的模拟关键形的覆盖；覆盖报告并入统一质量检验框架后改用其规则注册表与栅栏。
-- 打开工程时直接读取固化结果（设计中的“声明式文档层”终态）：当前 v2 仍保存可重放的文档并在打开时重建，可选头部缓存只跳过骨架烘焙，见[工程格式](PROJECT_FORMAT.md)；设计见[固化 Rig](MATERIALIZED_RIG.md)。
+- 打开工程时直接读取固化结果：已实现作者态 Rig 的保存与读取、固化点与再生成合并；仍待完成的部分见[固化 Rig · 实现进度](MATERIALIZED_RIG.md#10-实现进度)。
