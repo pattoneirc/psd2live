@@ -109,47 +109,40 @@ internal object GeneratedOverrides {
 	}
 
 	/**
-	 * Compiled [journal] entries of a generated [model] as the journal replays them, before the generators run: each
-	 * `canvas_geometry` edit and Bezier record without the parameters a generator adds that it was made at the
-	 * default of (see the single-entry form below). The points are unchanged: at those defaults the generated rig
-	 * shows the geometry the journal does.
+	 * Compiled [journal] entries recorded on the finished rig [shown], as the journal replays them on [authored] - the
+	 * rig before the generators add their parameters and axes. A key leaves out each axis a generator adds at its
+	 * default (a parameter [authored] does not have, or an axis the target has in [shown] and not in [authored]), so it
+	 * lands on the rest cell the generator builds from; a viewing pose leaves out every parameter at its default, which
+	 * reads the same left out. The points are unchanged: at those defaults [shown] shows the geometry [authored] does.
 	 */
-	fun journalOnly(model: PuppetModel, overlay: RigEditOverlay, journal: List<JsonObject>, skins: PrimitiveSkins = PrimitiveSkins.None): List<JsonObject> {
-		val graph by lazy { DocumentGenerators.graph(overlay, primitives = skins) }
-		return journal.map { command ->
-			val op = command["op"]?.jsonPrimitive?.contentOrNull
-			if (op == RigBezierJournal.OP || op == "canvas_geometry") journalOnly(graph, model, command, skins) else command
-		}
-	}
-
-	/**
-	 * [command] (a `canvas_geometry` edit or a Bezier record) as the journal replays it, before the generators run:
-	 * without the parameters a generator adds that it was made at the default of. Its key leaves out a generated axis
-	 * there, so it lands on the rest cell the generator builds from; the viewing pose leaves out every parameter at
-	 * its default, which reads the same left out. Either would otherwise name a parameter the replay has not got yet.
-	 */
-	private fun journalOnly(graph: io.github.psd2live.format.compile.document.GeneratorGraph, model: PuppetModel, command: JsonObject,
-							skins: PrimitiveSkins): JsonObject {
-		val bezier = command["op"]?.jsonPrimitive?.contentOrNull == RigBezierJournal.OP
-		val kind = if (bezier) "warp" else kindOf(command) ?: return command
-		val id = command.getValue("id").jsonPrimitive.content
-		val defaults = model.parameters.associate { it.id.raw to it.default }
+	fun journalOnly(shown: PuppetModel, authored: PuppetModel, journal: List<JsonObject>): List<JsonObject> {
+		val defaults = shown.parameters.associate { it.id.raw to it.default }
+		val present = authored.parameters.mapTo(HashSet()) { it.id.raw }
+		fun axes(model: PuppetModel, kind: String, id: String): Set<String> = when (kind) {
+			"warp" -> (model.deformers.firstOrNull { it.id.raw == id } as? Deformer.Warp)?.geometryGrid
+			else -> model.drawables.firstOrNull { it.id.raw == id }?.geometryGrid
+		}?.axes?.mapTo(HashSet()) { it.parameterId.raw }.orEmpty()
 		fun atDefault(parameterId: String, value: JsonElement) =
 			defaults[parameterId]?.let { abs(value.jsonPrimitive.float - it) <= org.umamo.runtime.eval.EPS_KEY } == true
-		fun generated(parameterId: String) =
-			(if (kind == "mesh") skins.owner(DrawableId(id), ParameterId(parameterId)) else null) != null ||
-				DocumentGenerators.owner(graph, DocumentGenerators.keyform(kind, id, parameterId)) != null
-		fun cleaned(edit: JsonObject): JsonObject {
-			val key = edit["key"]?.jsonObject ?: return edit
-			val keptKey = JsonObject(key.filter { (parameterId, value) -> !(atDefault(parameterId, value) && generated(parameterId)) })
-			val keptPose = edit["pose"]?.jsonObject?.let { pose -> JsonObject(pose.filter { (parameterId, value) -> !atDefault(parameterId, value) }) }
-			if (keptKey.size == key.size && keptPose?.size == edit["pose"]?.jsonObject?.size) return edit
-			return JsonObject(edit + ("key" to keptKey) + (keptPose?.let { mapOf("pose" to it) } ?: emptyMap()))
+		return journal.map { command ->
+			val bezier = command["op"]?.jsonPrimitive?.contentOrNull == RigBezierJournal.OP
+			if (!bezier && command["op"]?.jsonPrimitive?.contentOrNull != "canvas_geometry") return@map command
+			val kind = if (bezier) "warp" else kindOf(command) ?: return@map command
+			val id = command.getValue("id").jsonPrimitive.content
+			val added by lazy { axes(shown, kind, id) - axes(authored, kind, id) }
+			fun generated(parameterId: String) = parameterId !in present || parameterId in added
+			fun cleaned(edit: JsonObject): JsonObject {
+				val key = edit["key"]?.jsonObject ?: return edit
+				val keptKey = JsonObject(key.filter { (parameterId, value) -> !(atDefault(parameterId, value) && generated(parameterId)) })
+				val keptPose = edit["pose"]?.jsonObject?.let { pose -> JsonObject(pose.filter { (parameterId, value) -> !atDefault(parameterId, value) }) }
+				if (keptKey.size == key.size && keptPose?.size == edit["pose"]?.jsonObject?.size) return edit
+				return JsonObject(edit + ("key" to keptKey) + (keptPose?.let { mapOf("pose" to it) } ?: emptyMap()))
+			}
+			val outer = cleaned(command)
+			if (!bezier) return@map outer
+			val geometry = command["geometry"]?.takeIf { it != JsonNull }?.jsonObject ?: return@map outer
+			JsonObject(outer + ("geometry" to cleaned(geometry)))
 		}
-		val outer = cleaned(command)
-		if (!bezier) return outer
-		val geometry = command["geometry"]?.takeIf { it != JsonNull }?.jsonObject ?: return outer
-		return JsonObject(outer + ("geometry" to cleaned(geometry)))
 	}
 
 	/** The coordinate of the cell at exactly [key] in [grid] (every axis keyed, at one of its keys), or null. */

@@ -61,22 +61,43 @@ class CanvasGeometryJournalTest {
 		RigBezierJournal.replay(model, record)
 	}
 
+	/** [model] as the generators finish it: [parameter] (added unless the authored rig has it) keys mesh m beside P. */
+	private fun generated(model: PuppetModel, parameter: Parameter): PuppetModel {
+		val mesh = model.drawables.single()
+		val grid = mesh.geometryGrid!!
+		val axes = grid.axes + KeyformAxis(parameter.id, floatArrayOf(parameter.min, parameter.default, parameter.max))
+		val cells = grid.cells.flatMap { cell -> (0..2).map { j -> KeyformCell(cell.coordinate + j, cell.form) } }
+		return model.copy(parameters = model.parameters.filterNot { it.id == parameter.id } + parameter,
+			drawables = listOf(mesh.copy(geometryGrid = KeyformGrid(axes, cells))))
+	}
+
 	@Test fun anEditAtTheDefaultOfAGeneratedAxisReplaysBeforeTheAxisExists() {
-		// A baked simulation adds ParamSimS_1 to the mesh after the journal replays; an edit made with it at its default
-		// keeps it out of its key and pose, and replays on the rig without it as the same edit.
+		// A baked simulation adds ParamSimS_1 and its axis on the mesh after the journal replays; an edit made with it at
+		// its default keeps it out of its key and pose, and replays on the rig without it as the same edit.
 		val model = model()
-		val bake = io.github.psd2live.core.sim.SimBakeResult("f", mapOf("m" to 36), emptyList(), listOf(io.github.psd2live.core.sim.SimBakedMode(
-			io.github.psd2live.core.sim.SimBakedAxis("ParamSimS_1", floatArrayOf(-1f, 1f), emptyMap()), 1f, 1f)))
-		val overlay = RigEditOverlay(simEdits = listOf(io.github.psd2live.core.sim.RigSimEdit("s", "S", io.github.psd2live.core.sim.SimKind.CLOTH, listOf("m"), bake = bake)))
-		val generated = model.copy(parameters = model.parameters + Parameter(ParameterId("ParamSimS_1"), "Sim", -1f, 1f, 0f))
 		val shown = RigGeometryTools.geometry(model, "mesh", "m", mapOf("P" to 1f)).points
 		val moved = shown.copyOf().also { it[14] += 0.05f }
 		val sim = mapOf("P" to 1f, "ParamSimS_1" to 0f)
-		val cleaned = GeneratedOverrides.journalOnly(generated, overlay, listOf(command("mesh", "m", sim, moved, sim))).single()
+		val generated = generated(model, Parameter(ParameterId("ParamSimS_1"), "Sim", -1f, 1f, 0f))
+		val cleaned = GeneratedOverrides.journalOnly(generated, model, listOf(command("mesh", "m", sim, moved, sim))).single()
 		assertEquals(setOf("P"), cleaned.getValue("key").jsonObject.keys)
 		assertEquals(setOf("P"), cleaned.getValue("pose").jsonObject.keys)
 		assertContentEquals(meshCell(CanvasEdits.apply(model, command("mesh", "m", mapOf("P" to 1f), moved)), 1),
 			meshCell(RigAuthoringJournal.apply(model, cleaned), 1))
+	}
+
+	@Test fun onlyTheAxesTheGeneratorsAddLeaveTheKey() {
+		// Q exists before the generators; one of them keys the mesh on it, so Q at its default leaves the mesh's key. The
+		// warp has no Q axis in either rig: a Q in its key is the user's and stays.
+		val q = Parameter(ParameterId("Q"), "Q", -1f, 1f, 0f)
+		val model = model().let { it.copy(parameters = it.parameters + q) }
+		val generated = generated(model, q)
+		val key = mapOf("P" to 1f, "Q" to 0f)
+		val mesh = RigGeometryTools.geometry(model, "mesh", "m", mapOf("P" to 1f)).points
+		val lattice = RigGeometryTools.geometry(model, "warp", "w", mapOf("P" to 1f)).points
+		val (onMesh, onWarp) = GeneratedOverrides.journalOnly(generated, model, listOf(command("mesh", "m", key, mesh), command("warp", "w", key, lattice)))
+		assertEquals(setOf("P"), onMesh.getValue("key").jsonObject.keys)
+		assertEquals(setOf("P", "Q"), onWarp.getValue("key").jsonObject.keys)
 	}
 
 	@Test fun aSparseMeshMoveCompilesToTheMovedVerticesOnly() {

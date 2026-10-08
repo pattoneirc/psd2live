@@ -192,7 +192,8 @@ internal object WorkspaceDocumentEdits {
     fun journal(document: WorkspaceDocument, model: RigPreviewModel, edits: JsonArray): WorkspaceDocument {
         val (_, compiled) = RigAuthoringJournal.compile(model.rig.puppet,
             GeneratedOverrides.capture(model.rig.puppet, document.rigEdits, edits, model.primitiveSkins))
-        val journal = GeneratedOverrides.journalOnly(model.rig.puppet, document.rigEdits, compiled, model.primitiveSkins)
+        // Recorded on the shown rig, they replay on the authored one, before the generators.
+        val journal = GeneratedOverrides.journalOnly(model.rig.puppet, model.authored.rig.puppet, compiled)
         return document.copy(rigEdits = document.rigEdits.copy(authoringJournal = document.rigEdits.authoringJournal + journal))
     }
 
