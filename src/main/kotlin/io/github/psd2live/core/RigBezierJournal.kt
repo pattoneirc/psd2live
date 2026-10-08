@@ -67,10 +67,8 @@ internal object RigBezierJournal {
     fun materialize(model: PuppetModel, id: String, key: Map<String, Float>, pose: Map<String, Float>, controls: Controls,
                     changeGeometry: Boolean = true, preserveChildren: Boolean = false): JsonObject {
         RigWarpTopology.checkpoint()
-        // Only what moves the geometry is recorded: a parameter at its default reads the same left out, and the shown
-        // pose also holds parameters the generators add after the journal replays (simulation presets), unknown there.
-        val defaults = model.parameters.associate { it.id.raw to it.default }
-        val pose = pose.filter { (id, value) -> id in key || defaults[id]?.let { it != value } ?: false }
+        // Only what the warp's own geometry reads is recorded, as for any geometry edit.
+        val pose = RigGeometryTools.referencePose(model, "warp", id, key, pose)
         val geometry = RigGeometryTools.geometry(model, "warp", id, pose)
         val blend = key.keys.any { name -> model.parameters.any { it.id.raw == name && it.kind == ParameterKind.BLEND_SHAPE } }
         require(key.isEmpty() || blend || geometry.axes.all { it.parameterId.raw in key }) { "Include every bound geometry axis in coordinate" }

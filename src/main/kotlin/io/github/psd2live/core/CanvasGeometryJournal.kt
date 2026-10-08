@@ -71,11 +71,28 @@ internal object CanvasGeometryJournal {
         points(command, if (isEncoded(command)) reference(model, command) else FloatArray(0))
 
     /**
+     * [command] with its viewing pose reduced to what the target's geometry reads ([RigGeometryTools.referencePose]),
+     * which shows the same geometry. An empty pose reads the key instead; a key it empties holds only defaults, the
+     * same geometry again.
+     */
+    private fun withReferencePose(model: org.umamo.runtime.model.PuppetModel, command: JsonObject): JsonObject {
+        val pose = command["pose"] as? JsonObject ?: return command
+        val kind = command["kind"]?.jsonPrimitive?.contentOrNull ?: return command
+        val id = command["id"]?.jsonPrimitive?.contentOrNull ?: return command
+        val key = (command["key"] as? JsonObject)?.let { raw -> runCatching { raw.mapValues { it.value.jsonPrimitive.float } }.getOrNull() } ?: return command
+        val values = runCatching { pose.mapValues { it.value.jsonPrimitive.float } }.getOrNull() ?: return command
+        val reduced = RigGeometryTools.referencePose(model, kind, id, key, values)
+        if (reduced.size == values.size) return command
+        return JsonObject(command + ("pose" to JsonObject(reduced.mapValues { JsonPrimitive(it.value) })))
+    }
+
+    /**
      * [command] as version 2 against [model], or [command] itself when it is already encoded or cannot be
      * resolved (apply then reports the same error it always did).
      */
-    fun encode(model: org.umamo.runtime.model.PuppetModel, command: JsonObject): JsonObject {
-        if (isEncoded(command)) return command
+    fun encode(model: org.umamo.runtime.model.PuppetModel, shown: JsonObject): JsonObject {
+        if (isEncoded(shown)) return shown
+        val command = withReferencePose(model, shown)
         val raw = command["points"] as? JsonArray ?: return command
         val points = runCatching { raw.map { it.jsonPrimitive.float }.toFloatArray() }.getOrNull() ?: return command
         if (points.isEmpty() || points.size % 2 != 0 || !points.all(Float::isFinite)) return command

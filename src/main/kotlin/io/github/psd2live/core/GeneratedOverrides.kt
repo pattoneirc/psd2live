@@ -112,8 +112,9 @@ internal object GeneratedOverrides {
 	 * Compiled [journal] entries recorded on the finished rig [shown], as the journal replays them on [authored] - the
 	 * rig before the generators add their parameters and axes. A key leaves out each axis a generator adds at its
 	 * default (a parameter [authored] does not have, or an axis the target has in [shown] and not in [authored]), so it
-	 * lands on the rest cell the generator builds from; a viewing pose leaves out every parameter at its default, which
-	 * reads the same left out. The points are unchanged: at those defaults [shown] shows the geometry [authored] does.
+	 * lands on the rest cell the generator builds from. The viewing pose already holds only what the target reads, away
+	 * from its default ([RigGeometryTools.referencePose]). The points are unchanged: at those defaults [shown] shows the
+	 * geometry [authored] does.
 	 */
 	fun journalOnly(shown: PuppetModel, authored: PuppetModel, journal: List<JsonObject>): List<JsonObject> {
 		val defaults = shown.parameters.associate { it.id.raw to it.default }
@@ -134,9 +135,7 @@ internal object GeneratedOverrides {
 			fun cleaned(edit: JsonObject): JsonObject {
 				val key = edit["key"]?.jsonObject ?: return edit
 				val keptKey = JsonObject(key.filter { (parameterId, value) -> !(atDefault(parameterId, value) && generated(parameterId)) })
-				val keptPose = edit["pose"]?.jsonObject?.let { pose -> JsonObject(pose.filter { (parameterId, value) -> !atDefault(parameterId, value) }) }
-				if (keptKey.size == key.size && keptPose?.size == edit["pose"]?.jsonObject?.size) return edit
-				return JsonObject(edit + ("key" to keptKey) + (keptPose?.let { mapOf("pose" to it) } ?: emptyMap()))
+				return if (keptKey.size == key.size) edit else JsonObject(edit + ("key" to keptKey))
 			}
 			val outer = cleaned(command)
 			if (!bezier) return@map outer

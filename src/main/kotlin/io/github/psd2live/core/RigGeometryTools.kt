@@ -18,6 +18,31 @@ internal object RigGeometryTools {
         val rows: Int?, val columns: Int?, val axes: List<KeyformAxis>, val keyCount: Int,
         val name: String, val parent: String?, val rotationAngle: Float? = null)
 
+    /**
+     * [pose] reduced to what [kind] [id]'s [geometry] reads, as Cubism keeps an edit to the object's own keyform: its
+     * keyform axes, its blend shapes' parameters and limits, and [key]'s parameters, each away from its default (left
+     * out, a parameter reads its default). The geometry at the result is the geometry at [pose]; a parameter that only
+     * moves the target through its parents - a swing or simulation the generators add after the journal - is not
+     * recorded. [pose] itself when the target is not in [model].
+     */
+    fun referencePose(model: PuppetModel, kind: String, id: String, key: Map<String, Float>, pose: Map<String, Float>): Map<String, Float> {
+        fun BlendShapeBinding<*>.reads() = listOf(parameterId.raw) + limits.map { it.parameterId.raw }
+        val reads: List<String> = when (kind) {
+            "warp" -> (model.deformers.singleOrNull { it.id.raw == id } as? Deformer.Warp)?.let { warp ->
+                warp.geometryGrid?.axes.orEmpty().map { it.parameterId.raw } + warp.blendShapes.flatMap { it.reads() } }
+            "rotation" -> (model.deformers.singleOrNull { it.id.raw == id } as? Deformer.Rotation)?.let { rotation ->
+                rotation.geometryGrid?.axes.orEmpty().map { it.parameterId.raw } + rotation.blendShapes.flatMap { it.reads() } }
+            "mesh" -> model.drawables.singleOrNull { it.id.raw == id }?.let { drawable ->
+                drawable.geometryGrid?.axes.orEmpty().map { it.parameterId.raw } + drawable.blendShapes.flatMap { it.reads() } }
+            else -> null
+        } ?: return pose
+        val kept = reads.toHashSet() + key.keys
+        val defaults = model.parameters.associate { it.id.raw to it.default }
+        return pose.filter { (parameterId, value) ->
+            parameterId in kept && defaults[parameterId]?.let { abs(value - it) <= org.umamo.runtime.eval.EPS_KEY } != true
+        }
+    }
+
     fun geometry(model: PuppetModel, kind: String, id: String, pose: Map<String, Float>): Geometry {
         val params = model.parameters.associateBy { it.id.raw }
         val defaults = model.parameters.associate { it.id to it.default }

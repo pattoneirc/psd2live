@@ -79,11 +79,12 @@ class CanvasGeometryJournalTest {
 		val moved = shown.copyOf().also { it[14] += 0.05f }
 		val sim = mapOf("P" to 1f, "ParamSimS_1" to 0f)
 		val generated = generated(model, Parameter(ParameterId("ParamSimS_1"), "Sim", -1f, 1f, 0f))
-		val cleaned = GeneratedOverrides.journalOnly(generated, model, listOf(command("mesh", "m", sim, moved, sim))).single()
+		val compiled = RigAuthoringJournal.compile(generated, JsonArray(listOf(command("mesh", "m", sim, moved, sim)))).second
+		val cleaned = GeneratedOverrides.journalOnly(generated, model, compiled).single()
 		assertEquals(setOf("P"), cleaned.getValue("key").jsonObject.keys)
 		assertEquals(setOf("P"), cleaned.getValue("pose").jsonObject.keys)
-		assertContentEquals(meshCell(CanvasEdits.apply(model, command("mesh", "m", mapOf("P" to 1f), moved)), 1),
-			meshCell(RigAuthoringJournal.apply(model, cleaned), 1))
+		assertClose(meshCell(CanvasEdits.apply(model, command("mesh", "m", mapOf("P" to 1f), moved)), 1),
+			meshCell(RigAuthoringJournal.apply(model, cleaned), 1), 1e-5f)
 	}
 
 	@Test fun onlyTheAxesTheGeneratorsAddLeaveTheKey() {
@@ -93,11 +94,29 @@ class CanvasGeometryJournalTest {
 		val model = model().let { it.copy(parameters = it.parameters + q) }
 		val generated = generated(model, q)
 		val key = mapOf("P" to 1f, "Q" to 0f)
-		val mesh = RigGeometryTools.geometry(model, "mesh", "m", mapOf("P" to 1f)).points
-		val lattice = RigGeometryTools.geometry(model, "warp", "w", mapOf("P" to 1f)).points
-		val (onMesh, onWarp) = GeneratedOverrides.journalOnly(generated, model, listOf(command("mesh", "m", key, mesh), command("warp", "w", key, lattice)))
-		assertEquals(setOf("P"), onMesh.getValue("key").jsonObject.keys)
-		assertEquals(setOf("P", "Q"), onWarp.getValue("key").jsonObject.keys)
+		val onMesh = command("mesh", "m", key, RigGeometryTools.geometry(model, "mesh", "m", mapOf("P" to 1f)).points)
+		val onWarp = command("warp", "w", key, RigGeometryTools.geometry(model, "warp", "w", mapOf("P" to 1f)).points)
+		val (mesh2, warp2) = GeneratedOverrides.journalOnly(generated, model, listOf(onMesh, onWarp))
+		assertEquals(setOf("P"), mesh2.getValue("key").jsonObject.keys)
+		assertEquals(setOf("P", "Q"), warp2.getValue("key").jsonObject.keys)
+	}
+
+	@Test fun aParameterThatMovesTheTargetOnlyThroughItsParentIsNotRecorded() {
+		// A swing keys the warp above the mesh and is shown away from its default; the mesh's own geometry never reads
+		// it, so the edit leaves it out and replays on the rig the generators have not run on yet - as Cubism keeps an
+		// edit in the object's own keyform whatever pose its parents are in.
+		val model = model()
+		val swing = Parameter(ParameterId("ParamSwing"), "Swing", -1f, 1f, 0f)
+		val warp = model.deformers.single() as Deformer.Warp
+		val grid = warp.geometryGrid!!
+		val generated = model.copy(parameters = model.parameters + swing, deformers = listOf(warp.copy(geometryGrid = KeyformGrid(
+			grid.axes + KeyformAxis(swing.id, floatArrayOf(-1f, 1f)), grid.cells.flatMap { cell -> (0..1).map { j -> KeyformCell(cell.coordinate + j, cell.form) } }))))
+		val shown = RigGeometryTools.geometry(generated, "mesh", "m", mapOf("P" to 1f, "ParamSwing" to 0.5f)).points
+		val moved = shown.copyOf().also { it[20] += 0.04f }
+		val edit = command("mesh", "m", mapOf("P" to 1f), moved, mapOf("P" to 1f, "ParamSwing" to 0.5f))
+		val compiled = RigAuthoringJournal.compile(generated, JsonArray(listOf(edit))).second.single()
+		assertEquals(setOf("P"), compiled.getValue("pose").jsonObject.keys)
+		assertClose(meshCell(RigAuthoringJournal.apply(generated, compiled), 1), meshCell(RigAuthoringJournal.apply(model, compiled), 1), 1e-6f)
 	}
 
 	@Test fun aSparseMeshMoveCompilesToTheMovedVerticesOnly() {
