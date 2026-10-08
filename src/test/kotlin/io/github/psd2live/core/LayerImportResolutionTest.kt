@@ -88,7 +88,8 @@ class LayerImportResolutionTest {
 			layer("body", 0, LayerBounds(10, 20, 40, 56), body),
 			layer("pupil", 1, LayerBounds(70, 30, 32, 32), pupil),
 		), emptyList())
-		val config = PipelineConfig(atlasSize = 2048, meshSpacing = 8, meshOnly = true)
+		// Traced from the canvas view, a dense layer meshes exactly like its canvas-resolution twin.
+		val config = PipelineConfig(atlasSize = 2048, meshSpacing = 8, meshOnly = true, meshTrace = MeshTrace.CANVAS)
 		return WorkspaceDocument(source, emptyMap(), emptySet(), emptyMap(), emptyMap(), config.rigEdits, WorkspaceSettingsCodec.encode(config))
 	}
 

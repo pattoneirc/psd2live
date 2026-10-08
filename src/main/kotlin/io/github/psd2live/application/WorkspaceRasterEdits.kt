@@ -95,7 +95,8 @@ internal object WorkspaceRasterEdits {
         // The generation input with this layer's unpainted pixels: a layer added after the input was frozen
         // would otherwise generate from the painted ones, regenerating a kept mesh or the base a rebuild migrates.
         val generation = if (document.rigEdits.importedCmo3 != null) document.generationSource ?: document.source
-            else RigGenerationSource.pinned(document.generationSource, document.source, layer, document.rigEdits)
+            else RigGenerationSource.pinned(document.generationSource, document.source, layer, document.rigEdits,
+                WorkspaceSettingsCodec.decode(document.settings).meshTrace)
         if (!rebuild && document.rigEdits.importedCmo3 == null) {
             // A repaint that keeps every mesh commits pixels only: no journal record, no mesh input. The new rig,
             // atlas and bundle are the rebuild's, which reads the frozen generation input below, so geometry

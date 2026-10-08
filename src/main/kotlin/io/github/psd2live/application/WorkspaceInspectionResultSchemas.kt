@@ -78,7 +78,7 @@ internal object WorkspaceSettingsResultTypes {
         "exportMotions", "motionBasic", "motionIdle", "motionBlink", "motionNod", "motionShake", "motionSkeleton", "generatePhysics",
         "physicsFrontHair", "physicsBackHair", "physicsEyeJelly", "hairSimulationFront", "hairSimulationBack", "exportCmo3", "exportMoc3", "exportJson",
         "exportHiddenParts", "exportHiddenDrawables", "exportGuideImageParts", "exportIncludePhysics", "exportIncludeUserData", "exportIncludeDisplayInfo")
-    val settings = s.obj(booleanFields.associateWith { s.boolean() } +
+    private val settingFields = booleanFields.associateWith { s.boolean() } +
         listOf("atlasSize", "meshSpacing", "texturePadding", "alphaThreshold").associateWith { s.integer() } +
         listOf("meshOuterMargin", "meshEdgeWidth", "meshMaxEdgeDistance", "meshInteriorDensity", "headStrength", "bodyStrength", "mouthThickness").associateWith { s.number() } +
         mapOf("textureUpscale" to upscale, "meshEdgeMode" to meshFields.getValue("edgeMode"), "meshFillAlgorithm" to meshFields.getValue("fillAlgorithm"),
@@ -86,5 +86,8 @@ internal object WorkspaceSettingsResultTypes {
             "meshFillParameters" to fill, "meshOverrides" to s.dictionary(s.obj(meshFields)), "drawOrderOverrides" to s.dictionary(s.number()),
             "rigTuning" to s.obj(RigTuning.fields.associate { it.id to s.number() }), "mouthShape" to s.choices("flat", "smile", "w", "custom"),
             "mouthCurve" to s.array(s.obj(mapOf("x" to s.number(), "y" to s.number()))), "mouthColor" to s.nullable(s.integer(0, 0xFFFFFF)),
-            "runtimeTarget" to s.choices(*RuntimeTarget.entries.map { it.name }.toTypedArray()), "exportPixelsPerUnit" to s.nullable(s.number())))
+            "runtimeTarget" to s.choices(*RuntimeTarget.entries.map { it.name }.toTypedArray()), "exportPixelsPerUnit" to s.nullable(s.number()),
+            "meshTrace" to s.choices(*io.github.psd2live.core.MeshTrace.entries.map { it.name }.toTypedArray()))
+    /** A canvas-traced project leaves the trace out, as projects saved before it did. */
+    val settings = s.obj(settingFields, settingFields.keys - "meshTrace")
 }

@@ -24,11 +24,12 @@ class WorkspaceUnpinnedPaintTest {
      * A document whose generation input was frozen before the "added" layer existed; a [dense] one holds two
      * raster pixels per canvas unit on a fractional rectangle.
      */
-    private fun document(dense: Boolean): WorkspaceDocument {
+    private fun document(dense: Boolean, trace: MeshTrace = MeshTrace.TEXTURE): WorkspaceDocument {
         val body = layer("body", 0, LayerBounds(10, 20, 40, 56), opaque(40, 56))
         val added = if (dense) layer("added", 1, LayerBounds(64, 16, 48, 48), opaque(94, 94), LayerCanvasRect(64.5f, 16.5f, 47f, 47f))
             else layer("added", 1, LayerBounds(64, 16, 48, 48), opaque(48, 48))
-        val config = PipelineConfig(atlasSize = 2048, meshSpacing = 8, meshOnly = true, generatePhysics = false, exportMoc3 = false)
+        val config = PipelineConfig(atlasSize = 2048, meshSpacing = 8, meshOnly = true, generatePhysics = false, exportMoc3 = false,
+            meshTrace = trace)
         return WorkspaceDocument(WorkspaceSourceArt(128, 96, listOf(body, added), emptyList()), emptyMap(), emptySet(),
             mapOf("added" to LayerClassificationOverride(tag = SemanticTag.OBJECTS)), emptyMap(), config.rigEdits,
             WorkspaceSettingsCodec.encode(config), generationSource = WorkspaceSourceArt(128, 96, listOf(body), emptyList()))
@@ -43,18 +44,20 @@ class WorkspaceUnpinnedPaintTest {
         requireNotNull(model.rig.puppet.drawables.single { model.rig.layerIdByDrawableId[it.id.raw] == "added" }.mesh)
 
     @Test fun aRepaintWithoutRebuildKeepsTheMeshOfALayerMissingFromTheGenerationInput() = runBlocking<Unit> {
-        for (dense in listOf(false, true)) {
-            val document = document(dense)
+        for (trace in MeshTrace.entries) for (dense in listOf(false, true)) {
+            val document = document(dense, trace)
             val model = builder.build(document)
             val painted = WorkspaceRasterEdits.prepare(document, model, erased(dense))
             val pinned = assertNotNull(painted.generationSource).layers.single { it.id.raw == "added" }
             assertEquals(LayerBounds(64, 16, 48, 48), pinned.bounds)
-            assertEquals(48, pinned.raster.width, "pinned at canvas resolution")
+            // Pinned as its trace reads it: the canvas view, or the texture at its own density over its integer
+            // bounds with its rectangle folded in.
+            assertEquals(if (dense && trace == MeshTrace.TEXTURE) 96 else 48, pinned.raster.width, "pinned as $trace traces it")
             if (!dense) assertContentEquals(document.source.layers.single { it.id.raw == "added" }.raster.rgba, pinned.raster.rgba)
             assertEquals(if (dense) 40 else 20, painted.source.layers.single { it.id.raw == "added" }.raster.width)
             val after = builder.build(painted)
-            assertContentEquals(mesh(model).positions, mesh(after).positions, "dense=$dense")
-            assertContentEquals(mesh(model).indices, mesh(after).indices, "dense=$dense")
+            assertContentEquals(mesh(model).positions, mesh(after).positions, "$trace dense=$dense")
+            assertContentEquals(mesh(model).indices, mesh(after).indices, "$trace dense=$dense")
         }
     }
 

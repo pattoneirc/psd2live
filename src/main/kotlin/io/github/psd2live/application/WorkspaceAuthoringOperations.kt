@@ -185,6 +185,12 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
             put("description", "Unit of every mesh length: DOCUMENT is pixels of the document scaled to a " +
                 "${io.github.psd2live.core.MeshResolution.REFERENCE_SIDE} px long side (same mesh at any resolution); PIXELS is source pixels")
         })
+        put("meshTrace", buildJsonObject {
+            put("type", "string"); put("enum", JsonArray(io.github.psd2live.core.MeshTrace.entries.map { JsonPrimitive(it.name) }))
+            put("description", "What mesh outlines are traced from: TEXTURE traces each layer's own pixels (alpha reduced by " +
+                "maximum, up to ${io.github.psd2live.core.MeshResolution.MAX_DETAIL.toInt()}x finer than a mesh unit), so strokes thinner " +
+                "than a canvas pixel stay inside the mesh; CANVAS traces the layer averaged to canvas resolution, as projects saved before it")
+        })
         put("runtimeTarget", string()); put("textureUpscale", upscaleSettings)
         put("meshFillParameters", fillParameterFields)
         put("rigTuning", rigTuningFields)

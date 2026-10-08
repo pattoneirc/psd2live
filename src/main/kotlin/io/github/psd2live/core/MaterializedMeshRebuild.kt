@@ -30,8 +30,10 @@ internal object MaterializedMeshRebuild {
             val previous = model.drawables.singleOrNull { it.id == id } ?: continue
             if (previous.mesh == null) continue
             val layerId = current.rig.layerIdByDrawableId[raw] ?: continue
-            val layer = meshSources[layerId] ?: desiredLayers[layerId]?.source ?: source.layers.singleOrNull { it.id.raw == layerId }
-                ?: current.analysis.layers.singleOrNull { it.source.id.raw == layerId }?.source ?: continue
+            // Meshed at canvas resolution like a generated layer: a source layer denser than its canvas rectangle is
+            // read through its canvas view ([CanvasDensity]), never as if each texture pixel were a canvas unit.
+            val layer = CanvasDensity.canvasLayer(meshSources[layerId] ?: desiredLayers[layerId]?.source ?: source.layers.singleOrNull { it.id.raw == layerId }
+                ?: current.analysis.layers.singleOrNull { it.source.id.raw == layerId }?.source ?: continue)
             val input = object : SourceArt by source { override val layers = listOf(layer) }
             val classified = desiredLayers[layerId]?.copy(source = layer) ?: if (layerId in config.layerOverrides) CharacterAnalyzer.classify(layer, config) else
                 current.analysis.layers.singleOrNull { it.source.id.raw == layerId }?.copy(source = layer)

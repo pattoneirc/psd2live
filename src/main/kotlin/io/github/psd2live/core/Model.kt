@@ -112,6 +112,22 @@ enum class MeshUnits {
 	DOCUMENT,
 }
 
+/** What a layer's mesh outline is traced from ([MeshResolution.input]). */
+enum class MeshTrace {
+	/**
+	 * The layer resampled to one pixel per canvas unit, traced at the mesh unit, as projects saved before the
+	 * texture trace: a raster denser than its canvas rectangle is averaged down first, so a stroke thinner than a
+	 * canvas unit can fade below the alpha threshold and fall outside the mesh.
+	 */
+	CANVAS,
+	/**
+	 * The layer's own pixels, their alpha reduced by maximum (so nothing painted is lost) to a working
+	 * resolution up to [MeshResolution.MAX_DETAIL] times finer than a mesh unit: the outline follows the drawn
+	 * edge while vertex spacing and every tolerance stay in mesh units.
+	 */
+	TEXTURE,
+}
+
 /**
  * [edgeRatio]: first interior spacing over the contour spacing, so the fill never repeats the contour row.
  * [gradation]: spacing growth per pixel of depth, up to the interior density.
@@ -172,6 +188,8 @@ data class PipelineConfig(
 	val meshOverrides: Map<String, MeshSettings> = emptyMap(),
 	/** The unit of every mesh length above and of [meshOverrides]. */
 	val meshUnits: MeshUnits = MeshUnits.DOCUMENT,
+	/** What mesh outlines are traced from; projects saved before it trace the canvas view. */
+	val meshTrace: MeshTrace = MeshTrace.TEXTURE,
 	val alphaThreshold: Int = 8,
 	val headTurnStrength: Float = 1f,
 	val bodyStrength: Float = 1f,

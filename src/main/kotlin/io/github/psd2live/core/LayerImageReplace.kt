@@ -53,7 +53,8 @@ internal object LayerImageReplace {
 		val source = WorkspaceSourceArt(document.source.widthPx, document.source.heightPx,
 			layers.mapIndexed { i, old -> if (i == index) replaced else old }, document.source.groups)
 		return document.copy(source = source,
-			generationSource = RigGenerationSource.pinned(document.generationSource, document.source, layer, document.rigEdits))
+			generationSource = RigGenerationSource.pinned(document.generationSource, document.source, layer, document.rigEdits,
+				io.github.psd2live.project.WorkspaceSettingsCodec.decode(document.settings).meshTrace))
 	}
 
 	/** [raster] centred on transparent pixels so its aspect ratio becomes [aspect] (width over height). */

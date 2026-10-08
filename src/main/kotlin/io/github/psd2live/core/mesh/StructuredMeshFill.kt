@@ -558,7 +558,7 @@ internal object StructuredMeshFill {
 		val boundary = SegmentIndex(rows.map { ids -> ids.map { points[it] } }, spacing)
 		val m = bases.size
 		val amounts = DoubleArray(m) { j ->
-			min(nominal[j], 0.45 * boundary.rayDistance(bases[j], normals[j].first, normals[j].second))
+			min(nominal[j], 0.45 * boundary.rayDistance(bases[j], normals[j].first, normals[j].second, nominal[j] / 0.45 * 1.01 + 1e-6))
 		}
 		val arcs = DoubleArray(m) { distance(bases[it], bases[(it + 1) % m]) }
 		EdgeBandBuilder.minSmooth(amounts, arcs, 0.4)

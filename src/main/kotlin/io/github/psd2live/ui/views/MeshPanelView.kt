@@ -231,6 +231,14 @@ private fun MeshUnitsToggle(
 			color = colors.textMuted,
 		)
 	}
+	CompactCheckbox(
+		checked = state.meshTrace == io.github.psd2live.core.MeshTrace.TEXTURE,
+		onCheckedChange = { viewModel.setMeshTrace(if (it) io.github.psd2live.core.MeshTrace.TEXTURE else io.github.psd2live.core.MeshTrace.CANVAS) },
+		label = tr("mesh.settings.traceTexture"),
+		enabled = enabled,
+	)
+	if (showHints) Text(tr("mesh.settings.traceHint", MeshResolution.MAX_DETAIL.toInt().toString()),
+		style = typography.caption.copy(fontSize = 9.sp), color = colors.textMuted)
 }
 
 @Composable

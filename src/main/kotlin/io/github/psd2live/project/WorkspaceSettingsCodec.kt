@@ -109,6 +109,8 @@ internal object WorkspaceSettingsCodec {
         put("textureUpscale", Json.encodeToJsonElement(config.textureUpscale))
         put("meshSpacing", config.meshSpacing)
         put("meshUnits", config.meshUnits.name)
+        // Absent means the canvas trace, so the settings of projects saved before it keep their exact text.
+        if (config.meshTrace != io.github.psd2live.core.MeshTrace.CANVAS) put("meshTrace", config.meshTrace.name)
         put("meshOuterMargin", config.meshOuterMargin)
         put("meshEdgeMode", config.meshEdgeMode.name)
         put("meshEdgeWidth", config.meshEdgeWidth)
@@ -183,6 +185,10 @@ internal object WorkspaceSettingsCodec {
         meshUnits = value["meshUnits"]?.jsonPrimitive?.contentOrNull
             ?.let { runCatching { io.github.psd2live.core.MeshUnits.valueOf(it) }.getOrNull() }
             ?: if ("meshSpacing" in value) io.github.psd2live.core.MeshUnits.PIXELS else base.meshUnits,
+        // Complete settings without a trace were saved before the texture trace, or chose the canvas one.
+        meshTrace = value["meshTrace"]?.jsonPrimitive?.contentOrNull
+            ?.let { runCatching { io.github.psd2live.core.MeshTrace.valueOf(it) }.getOrNull() }
+            ?: if ("meshSpacing" in value) io.github.psd2live.core.MeshTrace.CANVAS else base.meshTrace,
         meshOuterMargin = value["meshOuterMargin"]?.jsonPrimitive?.floatOrNull ?: base.meshOuterMargin,
         meshEdgeMode = value["meshEdgeMode"]?.jsonPrimitive?.contentOrNull?.let { runCatching { io.github.psd2live.core.MeshEdgeMode.valueOf(it) }.getOrNull() } ?: base.meshEdgeMode,
         meshEdgeWidth = value["meshEdgeWidth"]?.jsonPrimitive?.floatOrNull ?: value["meshInnerMargin"]?.jsonPrimitive?.floatOrNull?.let { (value["meshOuterMargin"]?.jsonPrimitive?.floatOrNull ?: base.meshOuterMargin) + it } ?: base.meshEdgeWidth,

@@ -2942,6 +2942,20 @@ class PSD2LiveViewModel : AutoCloseable {
 		editorChanged()
 	}
 
+	/** Switches what mesh outlines are traced from; the meshes are rebuilt like any global mesh change. */
+	fun setMeshTrace(trace: io.github.psd2live.core.MeshTrace) {
+		if (state.value.meshTrace == trace) return
+        workspaceBackend?.takeUnless { editorSessions.anyOpen }?.let { workspace ->
+            val port: io.github.psd2live.application.WorkspaceSettingsPort = workspace
+            runWorkspaceCommand { state -> port.updateProjectSettings(state,
+                kotlinx.serialization.json.buildJsonObject { put("meshTrace", trace.name) }) }
+            return
+        }
+		updateState { it.copy(meshTrace = trace) }
+		schedulePreviewRebuild()
+		editorChanged()
+	}
+
 	fun setPartMeshSettings(layerId: String, settings: MeshSettings) {
 		clearMeshSettingsPreviewState(layerId)
         workspaceBackend?.let { workspace ->

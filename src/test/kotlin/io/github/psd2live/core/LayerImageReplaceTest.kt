@@ -44,13 +44,13 @@ class LayerImageReplaceTest {
 		LayerId(id), id, "", SourceLayerKind.Raster, true, order, bounds, 1f, false, LayerBlend.Normal, ChannelMask.ALL,
 		raster, null, null, false)
 
-	private fun document(atlas: JsonObject? = null): WorkspaceDocument {
+	private fun document(atlas: JsonObject? = null, trace: MeshTrace = MeshTrace.TEXTURE): WorkspaceDocument {
 		val body = LayerRaster(40, 56, ByteArray(40 * 56 * 4) { if (it % 4 == 3) -1 else 120 })
 		val source = WorkspaceSourceArt(128, 96, listOf(
 			layer("body", 0, LayerBounds(10, 20, 40, 56), body),
 			layer("pupil", 1, LayerBounds(70, 30, 32, 32), disc(32)),
 		), emptyList())
-		val config = PipelineConfig(atlasSize = 2048, meshSpacing = 8, meshOnly = true)
+		val config = PipelineConfig(atlasSize = 2048, meshSpacing = 8, meshOnly = true, meshTrace = trace)
 		val settings = WorkspaceSettingsCodec.encode(config).let { if (atlas == null) it else JsonObject(it + (WorkspaceSettingsCodec.ATLAS to atlas)) }
 		return WorkspaceDocument(source, emptyMap(), emptySet(), emptyMap(), emptyMap(), config.rigEdits, settings)
 	}
@@ -142,18 +142,28 @@ class LayerImageReplaceTest {
 	}
 
 	@Test fun aDenseLayerIsMeshedAtCanvasResolution() = runBlocking {
-		val plain = document()
-		// The same layer authored at 32x: its canvas view is the 32-pixel disc again, so the mesh is too.
-		val dense = plain.copy(source = WorkspaceSourceArt(plain.source.widthPx, plain.source.heightPx, plain.source.layers.map {
-			if (it.id.raw != "pupil") it else (it as WorkspaceSourceLayer).copy(raster = upscaled(it.raster, 32))
-		}, plain.source.groups))
-		val builder = WorkspacePreviewBuilder()
-		val a = builder.build(plain); val b = builder.build(dense)
-		assertContentEquals(pupil(a).mesh!!.positions, pupil(b).mesh!!.positions)
-		assertContentEquals(pupil(a).mesh!!.indices, pupil(b).mesh!!.indices)
-		assertEquals(a.analysis.layers.single { it.source.id.raw == "pupil" }.bounds, b.analysis.layers.single { it.source.id.raw == "pupil" }.bounds)
-		assertEquals(1024, b.atlas.placementByLayerId.getValue("pupil").width)
-		assertEquals(1024, b.rig.puppet.atlas.tiles.single { it.name == "pupil" }.width)
+		for (trace in MeshTrace.entries) {
+			val plain = document(trace = trace)
+			// The same layer authored at 32x: its canvas view is the 32-pixel disc again, so the canvas trace meshes
+			// it alike; the texture trace reads its blocks finer, still in canvas units around the same disc.
+			val dense = plain.copy(source = WorkspaceSourceArt(plain.source.widthPx, plain.source.heightPx, plain.source.layers.map {
+				if (it.id.raw != "pupil") it else (it as WorkspaceSourceLayer).copy(raster = upscaled(it.raster, 32))
+			}, plain.source.groups))
+			val builder = WorkspacePreviewBuilder()
+			val a = builder.build(plain); val b = builder.build(dense)
+			if (trace == MeshTrace.CANVAS) {
+				assertContentEquals(pupil(a).mesh!!.positions, pupil(b).mesh!!.positions)
+				assertContentEquals(pupil(a).mesh!!.indices, pupil(b).mesh!!.indices)
+			} else {
+				val canvas = org.umamo.render.restMeshesToCanvasSpace(b.rig.puppet).drawables.single { it.name == "pupil" }.mesh!!.positions
+				for (i in canvas.indices step 2) {
+					assertTrue(canvas[i] in 68f..104f && canvas[i + 1] in 28f..64f, "texture-traced vertex (${canvas[i]}, ${canvas[i + 1]}) left the disc")
+				}
+			}
+			assertEquals(a.analysis.layers.single { it.source.id.raw == "pupil" }.bounds, b.analysis.layers.single { it.source.id.raw == "pupil" }.bounds)
+			assertEquals(1024, b.atlas.placementByLayerId.getValue("pupil").width)
+			assertEquals(1024, b.rig.puppet.atlas.tiles.single { it.name == "pupil" }.width)
+		}
 	}
 
 	@Test fun containKeepsTheAspectRatioOnTransparentPixels() {

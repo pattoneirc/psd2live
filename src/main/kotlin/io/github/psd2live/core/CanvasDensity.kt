@@ -30,6 +30,7 @@ import java.util.WeakHashMap
 internal object CanvasDensity {
 	private data class Key(val bounds: LayerBounds, val rect: LayerCanvasRect?)
 	private val proxies = Collections.synchronizedMap(WeakHashMap<ByteArray, Pair<Key, LayerRaster>>())
+	private val aligned = Collections.synchronizedMap(WeakHashMap<ByteArray, Pair<Key, LayerRaster>>())
 
 	/** Whether [layer]'s raster is not its integer bounds at one pixel per canvas unit. */
 	fun dense(layer: SourceLayer): Boolean {
@@ -58,6 +59,26 @@ internal object CanvasDensity {
 			((bounds.left - space.left) * space.scaleX).toDouble(), space.scaleX.toDouble(),
 			((bounds.top - space.top) * space.scaleY).toDouble(), space.scaleY.toDouble())
 		return LayerRaster(bounds.width, bounds.height, rgba)
+	}
+
+	/**
+	 * [layer]'s raster laid at its own density over its integer bounds, its float rectangle folded in: the raster
+	 * itself when its rectangle is its bounds, else resampled so its pixel grid starts at the bounds' corner. It is
+	 * what the texture trace meshes ([MeshResolution.input]), and exactly what a saved generation input - bounds
+	 * and raster, no rectangle - can hold of a dense layer, so a pinned layer meshes like the layer it pins.
+	 */
+	fun alignedRaster(layer: SourceLayer): LayerRaster {
+		val rect = layer.storedCanvasRect ?: return layer.raster
+		val key = Key(layer.bounds, rect)
+		aligned[layer.raster.rgba]?.takeIf { it.first == key }?.let { return it.second }
+		val space = LayerSpace.of(layer)
+		val bounds = layer.bounds
+		val width = Math.round(bounds.width * space.scaleX.toDouble()).toInt().coerceAtLeast(1)
+		val height = Math.round(bounds.height * space.scaleY.toDouble()).toInt().coerceAtLeast(1)
+		val rgba = RasterResample.resample(layer.raster.rgba, layer.raster.width, layer.raster.height, width, height,
+			(bounds.left - space.left) * space.scaleX.toDouble(), space.scaleX.toDouble() * bounds.width / width,
+			(bounds.top - space.top) * space.scaleY.toDouble(), space.scaleY.toDouble() * bounds.height / height)
+		return LayerRaster(width, height, rgba).also { aligned[layer.raster.rgba] = key to it }
 	}
 }
 

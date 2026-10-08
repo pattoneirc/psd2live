@@ -492,7 +492,7 @@ object RigBuilder {
 		meshOuterMargin = config.meshOuterMargin, meshEdgeMode = config.meshEdgeMode, meshEdgeWidth = config.meshEdgeWidth,
 		meshMaxEdgeDistance = config.meshMaxEdgeDistance, meshInteriorDensity = config.meshInteriorDensity,
 		meshFillAlgorithm = config.meshFillAlgorithm, meshSuppressBoundaryDiagonals = config.meshSuppressBoundaryDiagonals,
-		meshFillParameters = config.meshFillParameters, meshUnits = config.meshUnits, alphaThreshold = config.alphaThreshold,
+		meshFillParameters = config.meshFillParameters, meshUnits = config.meshUnits, meshTrace = config.meshTrace, alphaThreshold = config.alphaThreshold,
 		headTurnStrength = config.headTurnStrength, bodyStrength = config.bodyStrength, rigTuning = config.rigTuning,
 		meshOnly = config.meshOnly, generateDeformers = config.generateDeformers, featureDisplacementEnabled = config.featureDisplacementEnabled,
 		mouthOutlineEnabled = config.mouthOutlineEnabled, mouthShape = config.mouthShape, mouthCurve = config.mouthCurve,
@@ -565,6 +565,12 @@ object RigBuilder {
 		resolution: PrimitiveResolution,
 	): List<ClassifiedLayer> {
 		val unitScale = MeshResolution.unitScale(config, analysis.source)
+		// Generate the layers' meshes side by side first; the footprints below, and the mesh stage, read them cached.
+		meshCache?.prefetch(layers.mapNotNull { layer ->
+			if (resolution.partByLayer[layer.source.id.raw] != null || layer.opaquePixels <= 0 ||
+				layer.semantic.tag in setOf(SemanticTag.TOOTH_T, SemanticTag.TOOTH_B)) null
+			else MeshResolution.input(layer.source, config.meshTrace, unitScale) to meshSettings(layer, config).first
+		}, config.alphaThreshold)
 		return layers.map { layer ->
 			val pinned = resolution.partByLayer[layer.source.id.raw]
 			val footprint = (if (pinned != null) pinnedFootprint(pinned) else meshFootprint(layer, config, meshCache, unitScale)) ?: return@map layer
@@ -619,10 +625,10 @@ object RigBuilder {
 			return rectangle()
 		}
 		val (settings, _) = meshSettings(layer, config)
-		fun generate() = adaptiveFootprint(if (meshCache != null) meshCache.generate(width, height, source.raster.rgba, config.alphaThreshold, settings, unitScale)
-			else AdaptiveMeshGenerator.generate(width, height, source.raster.rgba, config.alphaThreshold, settings, unitScale), source, ::rectangle)
+		val input = MeshResolution.input(source, config.meshTrace, unitScale)
+		fun generate() = adaptiveFootprint(MeshResolution.mesh(input, config.alphaThreshold, settings, meshCache), source, ::rectangle)
 		val stages = stagesOf(meshCache) ?: return generate()
-		val key = FootprintKey(width, height, RasterDigest.of(source.raster.rgba), source.bounds.left, source.bounds.top,
+		val key = FootprintKey(width, height, input.key, source.bounds.left, source.bounds.top,
 			config.alphaThreshold, settings, unitScale)
 		return stages.get(RigStageCache.FOOTPRINT, 512, key) { Footprint(generate()) }.value
 	}
@@ -631,7 +637,7 @@ object RigBuilder {
 	private fun stagesOf(meshCache: PreviewMeshCache?): RigStageCache? = meshCache?.stages?.takeIf { RigStageCache.enabled }
 
 	/** A layer's mesh footprint inputs: its pixels, where they sit, and the mesh settings and scale they mesh at. */
-	private data class FootprintKey(val width: Int, val height: Int, val digest: String, val left: Int, val top: Int,
+	private data class FootprintKey(val width: Int, val height: Int, val input: List<Any>, val left: Int, val top: Int,
 	                                val alphaThreshold: Int, val settings: MeshSettings, val unitScale: Float)
 
 	/** A kept footprint, null for a layer whose mesh has no triangles. */
@@ -1717,7 +1723,8 @@ object RigBuilder {
 		}
 		val stages = stagesOf(meshCache) ?: return build()
 		val eyes = rigLayer.semantic.tag == SemanticTag.EYEWHITE || rigLayer.semantic.tag == SemanticTag.EYELASH
-		val key = MeshKey(layer.meta(), layer.source.raster.width, layer.source.raster.height, RasterDigest.of(layer.source.raster.rgba),
+		val key = MeshKey(layer.meta(), layer.source.raster.width, layer.source.raster.height,
+			MeshResolution.input(layer.source, config.meshTrace, MeshResolution.unitScale(config, context.analysis.source)).key,
 			rigLayer.bounds, rigLayer.centroidX, rigLayer.centroidY, parentId, parentFrame, headSpace,
 			if (eyes) faceSignature(context.faceRig) else null, matchingEyeWhiteBounds(rigLayer, context.eyeWhiteLayers),
 			MeshResolution.unitScale(config, context.analysis.source), meshConfig, config.meshOverrides[layer.source.id.raw],
@@ -1787,7 +1794,7 @@ object RigBuilder {
 	}
 
 	private data class MeshKey(
-		val layer: LayerMeta, val width: Int, val height: Int, val digest: String,
+		val layer: LayerMeta, val width: Int, val height: Int, val input: List<Any>,
 		val rigBounds: Bounds, val rigCentroidX: Float, val rigCentroidY: Float,
 		val parent: DeformerId?, val parentFrame: Bounds, val headSpace: HeadCoordinateSpace?,
 		val face: List<Any?>?, val eyeWhites: List<Bounds>, val unitScale: Float,
@@ -2591,8 +2598,6 @@ object RigBuilder {
 		meshCache: PreviewMeshCache?,
 		unitScale: Float,
 	): MeshData {
-		val width = max(1, layer.source.raster.width)
-		val height = max(1, layer.source.raster.height)
 		val (settings, unitSpacing) = meshSettings(layer, config)
 		val effectiveSpacing = unitSpacing * unitScale
 
@@ -2601,8 +2606,7 @@ object RigBuilder {
 		if (layer.semantic.tag in setOf(SemanticTag.TOOTH_T, SemanticTag.TOOTH_B)) {
 			return buildRectangularFallbackMesh(layer, parentFrame, headSpace, effectiveSpacing)
 		}
-		val adaptive = if (meshCache != null) meshCache.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings, unitScale)
-		else AdaptiveMeshGenerator.generate(width, height, layer.source.raster.rgba, config.alphaThreshold, settings, unitScale)
+		val adaptive = MeshResolution.mesh(MeshResolution.input(layer.source, config.meshTrace, unitScale), config.alphaThreshold, settings, meshCache)
 		if (adaptive != null) {
 			val positions = FloatArray(adaptive.positions.size)
 			val canvas = FloatArray(adaptive.positions.size)

@@ -89,12 +89,15 @@ internal object EdgeBandBuilder {
 			var scale = DoubleArray(count)
 			var rows: List<List<Point>>? = null
 			var unfolded: List<List<Point>>? = null
+			// Room beyond the whole band width changes nothing below (the outer row never exceeds [outward] and
+			// shifts never exceed it), so rays only need to look that far.
+			val reach = (outward + inward) / THICKNESS_SHARE * 1.01 + 1e-6
 			for (attempt in 0..FOLD_ITERATIONS) {
 				for (k in 0 until count) {
 					val p = loop[k]
-					roomIn[k] = THICKNESS_SHARE * ownIndex.rayDistance(p, nx[k], ny[k])
-					var out = THICKNESS_SHARE * ownIndex.rayDistance(p, -nx[k], -ny[k])
-					if (neighborIndex != null) out = min(out, THICKNESS_SHARE * neighborIndex.rayDistance(p, -nx[k], -ny[k]))
+					roomIn[k] = THICKNESS_SHARE * ownIndex.rayDistance(p, nx[k], ny[k], reach)
+					var out = THICKNESS_SHARE * ownIndex.rayDistance(p, -nx[k], -ny[k], reach)
+					if (neighborIndex != null) out = min(out, THICKNESS_SHARE * neighborIndex.rayDistance(p, -nx[k], -ny[k], reach))
 					roomOut[k] = out
 				}
 				val out = DoubleArray(count) { max(min(outward, roomOut[it]), minOutward) * shrink[it] }

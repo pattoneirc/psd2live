@@ -24,12 +24,89 @@ internal fun orient(loop: List<Point>, positive: Boolean): List<Point> =
 internal fun inDomain(point: Point, loops: List<List<Point>>): Boolean =
 	pointInPolygon(point, loops.first()) && loops.drop(1).none { pointInPolygon(point, it) }
 
-internal fun loopsTouch(a: List<Point>, b: List<Point>): Boolean = a.indices.any { i ->
-	b.indices.any { j ->
+/**
+ * Whether a segment of [a] crosses or touches a segment of [b]. Only segment pairs whose bounding boxes meet can
+ * touch, so the pairs are found through a grid over [b] ([SegmentGrid]); the answer is the all-pairs one.
+ */
+internal fun loopsTouch(a: List<Point>, b: List<Point>): Boolean {
+	if (a.isEmpty() || b.isEmpty()) return false
+	val grid = SegmentGrid(b)
+	return a.indices.any { i ->
 		val p = a[i]; val q = a[(i + 1) % a.size]
-		val r = b[j]; val s = b[(j + 1) % b.size]
-		segmentsProperlyIntersect(p, q, r, s) || pointOnSegment(p, r, s) ||
-			pointOnSegment(q, r, s) || pointOnSegment(r, p, q) || pointOnSegment(s, p, q)
+		grid.any(p, q) { j ->
+			val r = b[j]; val s = b[(j + 1) % b.size]
+			segmentsProperlyIntersect(p, q, r, s) || pointOnSegment(p, r, s) ||
+				pointOnSegment(q, r, s) || pointOnSegment(r, p, q) || pointOnSegment(s, p, q)
+		}
+	}
+}
+
+/**
+ * A closed loop's segments bucketed by bounding box, each box widened by a tolerance larger than any the
+ * segment predicates allow. Two segments that can cross or touch share a bucket, so a query visits every
+ * candidate pair at least once - possibly more than once, which a yes/no question does not mind.
+ */
+internal class SegmentGrid(private val loop: List<Point>) {
+	private val minX: Double
+	private val minY: Double
+	private val cell: Double
+	private val columns: Int
+	private val rows: Int
+	private val buckets: Array<IntArray>
+
+	init {
+		var lowX = Double.POSITIVE_INFINITY; var lowY = Double.POSITIVE_INFINITY
+		var highX = Double.NEGATIVE_INFINITY; var highY = Double.NEGATIVE_INFINITY
+		var length = 0.0
+		for (i in loop.indices) {
+			val p = loop[i]
+			lowX = min(lowX, p.x); lowY = min(lowY, p.y); highX = max(highX, p.x); highY = max(highY, p.y)
+			length += distance(p, loop[(i + 1) % loop.size])
+		}
+		minX = lowX - SLACK; minY = lowY - SLACK
+		val extent = max(highX - lowX, highY - lowY) + SLACK * 2
+		// About two average segments per cell, and never more than 64 x 64 cells.
+		cell = max(length / loop.size.coerceAtLeast(1) * 2.0, extent / 64.0).coerceAtLeast(1e-3)
+		columns = (floor((highX + SLACK - minX) / cell).toInt() + 1).coerceIn(1, 65)
+		rows = (floor((highY + SLACK - minY) / cell).toInt() + 1).coerceIn(1, 65)
+		val counts = IntArray(columns * rows)
+		forEachSegmentCell { _, c -> counts[c]++ }
+		val lists = Array(counts.size) { IntArray(counts[it]) }
+		val fill = IntArray(counts.size)
+		forEachSegmentCell { s, c -> lists[c][fill[c]++] = s }
+		buckets = lists
+	}
+
+	private inline fun forEachSegmentCell(action: (Int, Int) -> Unit) {
+		for (s in loop.indices) {
+			val a = loop[s]; val b = loop[(s + 1) % loop.size]
+			val x0 = column(min(a.x, b.x) - SLACK); val x1 = column(max(a.x, b.x) + SLACK)
+			val y0 = row(min(a.y, b.y) - SLACK); val y1 = row(max(a.y, b.y) + SLACK)
+			for (y in y0..y1) for (x in x0..x1) action(s, y * columns + x)
+		}
+	}
+
+	private fun column(x: Double) = floor((x - minX) / cell).toInt().coerceIn(0, columns - 1)
+	private fun row(y: Double) = floor((y - minY) / cell).toInt().coerceIn(0, rows - 1)
+
+	/** Whether [test] holds for a segment index of the loop whose widened box meets segment [p]-[q]'s. */
+	inline fun any(p: Point, q: Point, test: (Int) -> Boolean): Boolean = anyNear(min(p.x, q.x), min(p.y, q.y), max(p.x, q.x), max(p.y, q.y), test)
+
+	@PublishedApi internal inline fun anyNear(lowX: Double, lowY: Double, highX: Double, highY: Double, test: (Int) -> Boolean): Boolean {
+		val x0 = columnOf(lowX - SLACK); val x1 = columnOf(highX + SLACK)
+		val y0 = rowOf(lowY - SLACK); val y1 = rowOf(highY + SLACK)
+		for (y in y0..y1) for (x in x0..x1) for (s in bucket(y * columnCount + x)) if (test(s)) return true
+		return false
+	}
+
+	@PublishedApi internal val columnCount: Int get() = columns
+	@PublishedApi internal fun columnOf(x: Double) = column(x)
+	@PublishedApi internal fun rowOf(y: Double) = row(y)
+	@PublishedApi internal fun bucket(index: Int): IntArray = buckets[index]
+
+	companion object {
+		/** Wider than every tolerance of [pointOnSegment] and [segmentsProperlyIntersect]. */
+		const val SLACK = 1e-5
 	}
 }
 
@@ -91,16 +168,19 @@ internal fun distanceSquaredToLoop(point: Point, loop: List<Point>): Double {
 	return best
 }
 
+/** Whether two non-adjacent segments of [loop] properly cross; candidate pairs come from a [SegmentGrid]. */
 internal fun hasSelfIntersection(loop: List<Point>): Boolean {
 	if (loop.size < 4) return false
+	val grid = SegmentGrid(loop)
 	for (first in loop.indices) {
 		val firstNext = (first + 1) % loop.size
-		for (second in first + 1 until loop.size) {
+		if (grid.any(loop[first], loop[firstNext]) { second ->
+			if (second <= first) return@any false
 			val secondNext = (second + 1) % loop.size
-			if (first == second || firstNext == second || secondNext == first) continue
-			if (first == 0 && secondNext == 0) continue
-			if (segmentsProperlyIntersect(loop[first], loop[firstNext], loop[second], loop[secondNext])) return true
-		}
+			if (firstNext == second || secondNext == first) return@any false
+			if (first == 0 && secondNext == 0) return@any false
+			segmentsProperlyIntersect(loop[first], loop[firstNext], loop[second], loop[secondNext])
+		}) return true
 	}
 	return false
 }
@@ -239,14 +319,27 @@ internal class SegmentIndex(loops: List<List<Point>>, cellHint: Double) {
 		return sqrt(best)
 	}
 
-	/** Nearest hit of a ray against every indexed segment, skipping segments touching [origin]. */
-	fun rayDistance(origin: Point, dx: Double, dy: Double): Double {
+	/**
+	 * Nearest hit of a ray against every indexed segment, skipping segments touching [origin]. A hit farther
+	 * than [limit] may be reported as any value beyond it: only the segments whose cells reach within [limit]
+	 * of [origin] are tried, and those include every segment the ray meets that close.
+	 */
+	fun rayDistance(origin: Point, dx: Double, dy: Double, limit: Double = Double.POSITIVE_INFINITY): Double {
 		var best = Double.POSITIVE_INFINITY
-		for (s in starts.indices) {
+		fun test(s: Int) {
 			val a = starts[s]; val b = ends[s]
-			if (distanceSquaredToSegment(origin, a, b) < 1e-10) continue
+			if (distanceSquaredToSegment(origin, a, b) < 1e-10) return
 			best = min(best, raySegmentDistance(origin, dx, dy, a, b))
 		}
+		if (!limit.isFinite()) {
+			for (s in starts.indices) test(s)
+			return best
+		}
+		if (starts.isEmpty() || origin.x + limit < minX || origin.y + limit < minY ||
+			origin.x - limit > minX + columns * cell || origin.y - limit > minY + rows * cell) return best
+		val x0 = column(origin.x - limit); val x1 = column(origin.x + limit)
+		val y0 = row(origin.y - limit); val y1 = row(origin.y + limit)
+		for (y in y0..y1) for (x in x0..x1) for (s in buckets[y * columns + x]) test(s)
 		return best
 	}
 }

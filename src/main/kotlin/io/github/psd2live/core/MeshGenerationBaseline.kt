@@ -10,7 +10,9 @@ internal object MeshGenerationBaseline {
     private val legacyFields = setOf("meshSpacing", "meshOuterMargin", "meshEdgeMode", "meshEdgeWidth",
         "meshMaxEdgeDistance", "meshInteriorDensity", "meshFillAlgorithm", "meshSuppressBoundaryDiagonals",
         "meshFillParameters", "meshOverrides", "alphaThreshold")
-    private val fields = legacyFields + "meshUnits"
+    private val unitFields = legacyFields + "meshUnits"
+    /** A texture-traced baseline also records its trace; a canvas-traced one leaves it out, as before it existed. */
+    private val fields = unitFields + "meshTrace"
 
     fun present(overlay: RigEditOverlay) = overlay.authoringJournal.any { it["op"]?.jsonPrimitive?.contentOrNull == OP }
 
@@ -47,9 +49,12 @@ internal object MeshGenerationBaseline {
     private fun settings(command: JsonObject): JsonObject {
         require(command.keys == setOf("op", "settings")) { "Invalid mesh generation baseline" }
         return command.getValue("settings").jsonObject.also {
-            require(it.keys == fields || it.keys == legacyFields) { "Invalid mesh generation baseline settings" }
+            require(it.keys == fields || it.keys == unitFields || it.keys == legacyFields) { "Invalid mesh generation baseline settings" }
             it["meshUnits"]?.jsonPrimitive?.content?.let { units ->
                 require(MeshUnits.entries.any { value -> value.name == units }) { "Invalid baseline mesh units" }
+            }
+            it["meshTrace"]?.jsonPrimitive?.content?.let { trace ->
+                require(MeshTrace.entries.any { value -> value.name == trace }) { "Invalid baseline mesh trace" }
             }
         }
     }

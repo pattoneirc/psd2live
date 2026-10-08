@@ -141,18 +141,22 @@ internal object RigGenerationSource {
      * layers whose geometry other records own (depth-split fronts, art primitive layers, partition pieces)
      * keep their own rules. Without a saved input the whole [current] source becomes it, as before.
      *
-     * The layer is pinned as analysis reads it, at one pixel per canvas unit over its integer bounds: the saved
-     * input keeps a layer's bounds and raster but not its float rectangle, so a denser raster or a fractional
-     * rectangle would otherwise generate a slightly different mesh than the one it has.
+     * The layer is pinned as its [trace] meshes it, over its integer bounds: the saved input keeps a layer's bounds
+     * and raster but not its float rectangle, so a denser raster or a fractional rectangle would otherwise generate
+     * a slightly different mesh than the one it has. The canvas trace reads it at one pixel per canvas unit; the
+     * texture trace reads its texture at its own density ([CanvasDensity.alignedRaster]).
      */
-    internal fun pinned(reference: SourceArt?, current: SourceArt, layer: SourceLayer, overlay: RigEditOverlay): SourceArt {
+    internal fun pinned(reference: SourceArt?, current: SourceArt, layer: SourceLayer, overlay: RigEditOverlay, trace: MeshTrace): SourceArt {
         reference ?: return current
         val id = layer.id.raw
         if (reference.layers.any { it.id.raw == id } || id in DepthSplit.frontLayerIds(overlay) ||
             id in ArtPrimitiveJournal.ownedLayers(overlay) || id in ArtPrimitiveJournal.supersededLayers(overlay) ||
             PrimitiveResolution.of(overlay).isPartLayer(id) || id in partitionCoverage(overlay)) return reference
         return io.github.psd2live.project.WorkspaceSourceArt(reference.widthPx, reference.heightPx,
-            reference.layers + io.github.psd2live.project.WorkspaceSourceLayer.copyOf(CanvasDensity.canvasLayer(layer), layer.order),
+            reference.layers + if (trace == MeshTrace.TEXTURE && CanvasDensity.dense(layer))
+                (io.github.psd2live.project.WorkspaceSourceLayer.copyOf(layer, layer.order) as io.github.psd2live.project.WorkspaceSourceLayer)
+                    .copy(raster = CanvasDensity.alignedRaster(layer), rect = null)
+            else io.github.psd2live.project.WorkspaceSourceLayer.copyOf(CanvasDensity.canvasLayer(layer), layer.order),
             reference.groups)
     }
 
