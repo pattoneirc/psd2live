@@ -51,7 +51,7 @@ The catalog has 19 topics. The beginner path contains the 18 lessons below; the 
 | 5 | Parameters and keyforms | Drag sliders or XY controls; right-click a key mark to snap. Move to the target key before editing its keyform. |
 | 6 | Select mode | Select objects with the canvas tools or hierarchy; selection alone changes no geometry. |
 | 7 | Create deformers | Select a target, use the toolbar's Create group or the tree context menu, adjust the placement preview and confirm. |
-| 8 | Deform mode | Edit points or use brushes at the current parameter pose; check the L1 / L2 editing level. |
+| 8 | Deform mode | Edit points or use brushes at the current parameter pose; on a warp deformer switch between the Vertices and Bezier levels (keys 1 / 2); meshes pick points by vertex, edge or face. |
 | 9 | Edit mode | Subdivide, connect, cut or remove mesh elements; inspect existing poses afterward. |
 | 10 | Paint mode | Select a layer, paint pixels and use session-local undo. Apply or discard the session. |
 | 11 | Inspector | Edit properties for the selected object: name, ownership, masks, drawing order, opacity and colors. |
@@ -60,7 +60,7 @@ The catalog has 19 topics. The beginner path contains the 18 lessons below; the 
 | 14 | Animation editor | Tune generated motions with each preset's knobs; edit parameter tracks and keyframes on the timeline with auto-keying, default Bezier easing, track key marks, and shared poses across canvases. |
 | 15 | Physics canvas | Configure inputs, pendulums and outputs, then calibrate output scale against the observed range. |
 | 16 | Cloth and hair simulation | Generate hair and clothing simulation in the model presets' Physics & Simulation group (first if there is none) and learn the hair modes and clothing options; then inspect bodies in the Simulation panel, paint and understand pin, stiffness, shape, mass and damping weights in Simulate mode, set glue, material presets and values, inputs and outputs and bake options, and bake into parameters, keyforms and a Cubism pendulum; only the bake exports. |
-| 17 | Project and history | Save the project, search nodes in the compact history tree, highlight branch paths, or double-click to check out; includes a dedicated History workspace preset. |
+| 17 | Project and history | Save the project, search nodes in the compact history tree, highlight branch paths, or double-click to check out; includes a dedicated History workspace preset; File > Open Recent reopens recent projects and PSDs; Tools > Update Generated Rig merges your edits onto what this version generates. |
 | 18 | Texture upscaling | Configure the local backend, choose 2× / 4× and check edges, transparency and exports. |
 
 ## Important distinctions

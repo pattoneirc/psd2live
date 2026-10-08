@@ -45,6 +45,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import io.github.psd2live.ui.state.RecentFileKind
+import io.github.psd2live.ui.state.rememberExistingRecentFiles
 import io.github.psd2live.ui.tutorial.LocalTutorialTargets
 import io.github.psd2live.ui.tutorial.TutorialId
 import io.github.psd2live.ui.tutorial.TutorialOverlay
@@ -126,6 +128,10 @@ fun AppTitleBar(
     onReplaceCmo3: () -> Unit = {},
     onNewCmo3: () -> Unit = {},
     onOpenProject: () -> Unit,
+	/** Recently opened projects and PSDs, newest first; File > Open Recent lists those that still exist. */
+	recentFiles: List<String> = emptyList(),
+	onOpenRecent: (String) -> Unit = {},
+	onClearRecent: () -> Unit = {},
     onSaveProject: () -> Unit,
     onSaveProjectAs: () -> Unit,
     projectTitle: String,
@@ -270,6 +276,39 @@ fun AppTitleBar(
 				) {
 					// Project
 					AppMenuItem(text = tr("project.open"), shortcut = keymap.labelFor(ShortcutAction.OPEN_PROJECT), enabled = !isBusy, onHover = { activeSubmenu = null }, onClick = { activeMenu = null; onOpenProject() })
+					val recent = rememberExistingRecentFiles(recentFiles)
+					AppSubmenuItem(
+						text = tr("menu.file.recent"),
+						isOpen = activeSubmenu == "recent",
+						onOpen = { activeSubmenu = "recent" },
+						onDismiss = { if (activeSubmenu == "recent") activeSubmenu = null },
+					) {
+						if (recent.isNullOrEmpty()) {
+							AppMenuItem(text = tr(if (recent == null) "menu.file.recent.checking" else "menu.file.recent.empty"), enabled = false, onClick = {})
+						} else {
+							recent.forEach { file ->
+								AppMenuItem(
+									text = file.name,
+									// The folder tells apart files of one name; the start screen shows the whole path.
+									shortcut = file.directory.substringAfterLast('\\').substringAfterLast('/'),
+									enabled = !isBusy,
+									icon = { tint ->
+										when (file.kind) {
+											RecentFileKind.PROJECT -> IconFolder(Modifier.size(14.dp), tint)
+											RecentFileKind.PSD -> GridIcon(Modifier.size(14.dp), tint) { document() }
+										}
+									},
+									onClick = { activeMenu = null; activeSubmenu = null; onOpenRecent(file.path) },
+								)
+							}
+						}
+						AppMenuSeparator()
+						AppMenuItem(
+							text = tr("menu.file.recent.clear"),
+							enabled = recentFiles.isNotEmpty(),
+							onClick = { activeMenu = null; activeSubmenu = null; onClearRecent() },
+						)
+					}
 					AppMenuItem(text = tr("project.save"), shortcut = keymap.labelFor(ShortcutAction.SAVE_PROJECT), enabled = hasInput, onHover = { activeSubmenu = null }, onClick = { activeMenu = null; onSaveProject() })
 					AppMenuItem(text = tr("project.saveAs"), shortcut = keymap.labelFor(ShortcutAction.SAVE_PROJECT_AS), enabled = hasInput, onHover = { activeSubmenu = null }, onClick = { activeMenu = null; onSaveProjectAs() })
 

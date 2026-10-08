@@ -2915,6 +2915,11 @@ class PSD2LiveViewModel : AutoCloseable {
 		}
 	}
 
+	fun clearRecentFiles() {
+		AppSettings.clearRecentFiles()
+		updateState { it.copy(recentFiles = AppSettings.recentFiles()) }
+	}
+
 	fun setOutputPath(path: String) {
 		val trimmed = path.trim()
 		if (trimmed.isNotBlank()) {
