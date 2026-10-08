@@ -44,6 +44,7 @@ For hands-on learning, open **Help → Tutorials…** (`F1`). Chinese is the pri
 | 运行时 | Rust 运行时、`.p2lrt` 格式、网页播放器与 Godot 节点 | [打开](zh/spec/RUNTIME.md) | 中文 | 中文 |
 | `.p2lrt` 2.0 格式 | 分块容器、核心层与扩展层、演进规则 | [打开](zh/spec/P2LRT_V2.md) | 中文 | 中文 |
 | 文档层 | 生成器依赖图、生成结果覆盖、缓存、逐层尺寸与拆分物化 | [打开](zh/spec/DOCUMENT_LAYER.md) | 中文 | 中文 |
+| 固化 Rig（设计中） | 以固化 Rig 为权威数据的工程模型、再生成合并与分阶段计划 | [打开](zh/spec/MATERIALIZED_RIG.md) | 中文 | 中文 |
 | 运行时与导出边界 | 数据流、格式支持范围、交付检查 | [打开](zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md) | 中文 | 中文 |
 | 网格拓扑与图层拆分 | 自适应网格生成、填充算法、两种拆分 | [打开](zh/spec/MESH_TOPOLOGY_AND_SPLIT.md) | 中文 | 中文 |
 | 绘画系统 | 绘画会话、组件分工、提交与网格迁移 | [打开](zh/spec/PAINT_SYSTEM_ARCHITECTURE_AND_PRD.md) | 中文 | 中文 |
