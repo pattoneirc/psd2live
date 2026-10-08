@@ -49,6 +49,8 @@ PSD2Live 根据图层名称识别部件，自动生成网格、变形器层级�
 | Linux x86_64 | Deb | 自带运行时与 Cubism 原生预览，需要 X11 / GLX（XWayland 可用） |
 | macOS 及其他 | 暂无安装包 | 安装 JDK 21 后[从源码运行](#从源码构建) |
 
+Windows 卸载默认保留设置与工作区数据；在卸载向导中选择「Remove」并勾选「Also delete my PSD2Live data」可一并删除。已保存的工程文件始终保留。
+
 Linux 原生预览不支持无 XWayland 的纯 Wayland、aarch64 和 musl（如 Alpine），这些环境会自动回退到内置渲染。详见 [Cubism Native 预览](docs/zh/guide/CUBISM_SDK_SETUP.md)。
 
 ## 快速开始

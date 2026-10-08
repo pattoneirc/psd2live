@@ -27,6 +27,7 @@ On Windows, `run-gui.bat` in the repository root also starts the GUI. Without ar
 | `--input <path>` | required | Layered input PSD |
 | `--output <path>` | `psd2live-output` next to the PSD | Output directory |
 | `--lang <zh\|en\|ja>` | system language | Log language |
+| `--clear-user-data` | — | On its own: deletes the current user's settings, workspace store, and the runtimes and caches under `~/.psd2live`, then exits; while the editor runs it deletes nothing and returns 1. The Windows uninstaller runs it when asked to delete user data |
 | `--atlas <size>` | 4096 | Texture atlas size |
 | `--mesh-spacing <px>` | 64 | Mesh spacing |
 | `--mesh-pixels` | off | Measure mesh lengths in source pixels instead of pixels of the document scaled to a 2048 px long side |

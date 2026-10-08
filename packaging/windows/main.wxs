@@ -156,7 +156,39 @@
       <!-- The installed version's folder is not empty, but replacing it is what an upgrade does: skip the
            "folder is not empty" question there (JpCheckInstallDir runs at 3, the next dialog opens at 5). -->
       <Publish Dialog="InstallDirDlg" Control="Next" Property="INSTALLDIR_VALID" Value="1" Order="4">PSD2LIVE_PREVIOUS_INSTALLDIR AND INSTALLDIR ~= PSD2LIVE_PREVIOUS_INSTALLDIR</Publish>
+
+      <!-- PSD2Live: Remove in the maintenance dialog asks whether to delete the user's data as well (the
+           strings are in PSD2LiveStrings.wxl). These NewDialog events come last, so they win over WixUI's. -->
+      <Dialog Id="PSD2LiveRemoveDataDlg" Width="370" Height="270" Title="!(loc.PSD2LiveRemoveDataDlg_Title)">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
+        </Control>
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="MaintenanceTypeDlg">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="!(loc.PSD2LiveRemoveDataDlgDescription)"/>
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="!(loc.PSD2LiveRemoveDataDlgTitle)"/>
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)"/>
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0"/>
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0"/>
+        <Control Id="ClearData" Type="CheckBox" X="20" Y="60" Width="330" Height="18" Property="PSD2LIVE_CLEAR_DATA" CheckBoxValue="1" Text="!(loc.PSD2LiveRemoveDataDlgCheckBox)"/>
+        <Control Id="Details" Type="Text" X="37" Y="82" Width="313" Height="90" Text="!(loc.PSD2LiveRemoveDataDlgDetails)"/>
+      </Dialog>
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="PSD2LiveRemoveDataDlg" Order="10">1</Publish>
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="PSD2LiveRemoveDataDlg" Order="10">WixUI_InstallMode = "Remove"</Publish>
     </UI>
+
+    <!-- PSD2Live: deleting the user's data is the app's own job (its clear-user-data option, which leaves it alone while
+         the editor runs), done as that user before the files go. PSD2LIVE_CLEAR_DATA=1 asks for it on the
+         command line too; a plain uninstall and the uninstall of an upgrade keep the data. WixUI hides Modify in
+         Apps & features, the way to the dialog above, so the product is registered with it. -->
+    <Property Id="PSD2LIVE_CLEAR_DATA" Secure="yes"/>
+    <CustomAction Id="PSD2LiveClearUserData" Directory="INSTALLDIR" ExeCommand="&quot;[INSTALLDIR]PSD2Live.exe&quot; --clear-user-data"
+      Execute="deferred" Impersonate="yes" Return="ignore"/>
+    <SetProperty Action="PSD2LiveAllowModify" Id="ARPNOMODIFY" Value="[PSD2LIVE_NO_VALUE]" Before="CostInitialize" Sequence="execute"/>
 
     <InstallExecuteSequence>
       <Custom Action="JpSetARPINSTALLLOCATION" After="CostFinalize">Not Installed</Custom>
@@ -179,6 +211,7 @@
       <?ifndef JpAllowDowngrades ?>
       <Custom Action="JpDisallowDowngrade" After="JpFindRelatedProducts">JP_DOWNGRADABLE_FOUND</Custom>
       <?endif?>
+      <Custom Action="PSD2LiveClearUserData" Before="RemoveFiles">REMOVE~="ALL" AND PSD2LIVE_CLEAR_DATA="1" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <RemoveExistingProducts After="InstallExecute"/><!-- PSD2Live: Before="CostInitialize" in jpackage -->
       <Custom Action="JpFindRelatedProducts" After="FindRelatedProducts"/>
     </InstallExecuteSequence>

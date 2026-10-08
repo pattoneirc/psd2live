@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PSD2Live: strings of main.wxs, in English, the language build.gradle.kts has jpackage build installers in (every culture of a resource-dir .wxl joins the installer's cultures, first in name order). -->
+<WixLocalization Culture="en-us" xmlns="http://schemas.microsoft.com/wix/2006/localization" Codepage="1252">
+  <String Id="PSD2LiveRemoveDataDlg_Title">[ProductName] Setup</String>
+  <String Id="PSD2LiveRemoveDataDlgTitle">{\WixUI_Font_Title}Remove [ProductName]</String>
+  <String Id="PSD2LiveRemoveDataDlgDescription">Choose whether your data goes too.</String>
+  <String Id="PSD2LiveRemoveDataDlgCheckBox">Also delete my [ProductName] data</String>
+  <String Id="PSD2LiveRemoveDataDlgDetails">Settings, the workspace store (working copies and edit history of opened projects) and downloaded runtimes and models of the current Windows user. Saved projects (.psd2live) and files you put in the installation folder are kept. Nothing is deleted while [ProductName] is running.</String>
+</WixLocalization>

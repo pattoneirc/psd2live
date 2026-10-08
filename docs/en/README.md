@@ -51,6 +51,8 @@ Get the latest version from [Releases](https://github.com/tsunehimatoi/psd2live/
 | Linux x86_64 | Deb | Bundles the runtime and Cubism native preview; requires X11 / GLX (XWayland works) |
 | macOS and others | No package yet | Install JDK 21 and [run from source](#build-from-source) |
 
+Uninstalling on Windows keeps your settings and workspace data; to delete them too, choose Remove in the uninstall wizard and tick "Also delete my PSD2Live data". Saved project files are always kept.
+
 The Linux native preview does not support pure Wayland without XWayland, aarch64 or musl (e.g. Alpine); those environments fall back to the built-in renderer. See [Cubism native preview](guide/CUBISM_SDK_SETUP.md).
 
 ## Quick start

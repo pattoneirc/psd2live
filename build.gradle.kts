@@ -259,7 +259,8 @@ compose.desktop {
 
 // Windows installers (packageExe, packageMsi): jpackage packs the app image with the WiX project in
 // packaging/windows, whose main.wxs adds to the JDK's template that an install remembers its folder (an
-// upgrade or reinstall goes back there) and that a reinstall of the same version replaces it. Compose's own
+// upgrade or reinstall goes back there), that a reinstall of the same version replaces it, and that removing it
+// from the maintenance dialog can delete the user's data too. Compose's own
 // Exe/Msi tasks always hand jpackage an emptied resource directory, so they cannot carry it.
 if (hostOs == "windows") afterEvaluate {
 	val distributions = compose.desktop.application.nativeDistributions
@@ -277,6 +278,9 @@ if (hostOs == "windows") afterEvaluate {
 			inputs.dir(appImage); inputs.dir(resources)
 			outputs.dir(dest)
 			executable = File(createDistributable.get().javaHome.get(), "bin/jpackage.exe").path
+			// jpackage builds the installer in its own locale's language; English everywhere, the language of the
+			// strings packaging/windows adds (PSD2LiveStrings.wxl), so a build looks the same on any machine.
+			args("-J-Duser.language=en", "-J-Duser.country=US")
 			args("--type", type, "--app-image", appImage.get().asFile, "--resource-dir", resources, "--dest", dest.get().asFile, "--temp", temp,
 				"--name", distributions.packageName!!, "--app-version", distributions.packageVersion!!,
 				"--vendor", distributions.vendor!!, "--description", distributions.description!!, "--copyright", distributions.copyright!!,

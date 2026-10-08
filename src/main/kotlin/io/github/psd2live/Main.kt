@@ -37,6 +37,11 @@ fun main(arguments: Array<String>) {
 		runGui()
 		return
 	}
+	if (arguments.first() == "--clear-user-data") {
+		if (UserData().clear()) return
+		System.err.println(tr("app.alreadyRunning"))
+		exitProcess(1)
+	}
 	if (arguments.first() == "export" || arguments.first() == "targets") {
 		exitProcess(ExportCli.run(arguments.toList()))
 	}

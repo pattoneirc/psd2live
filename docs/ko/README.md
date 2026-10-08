@@ -51,6 +51,8 @@ PSD2Live는 레이어 이름으로 파츠를 인식해 메시, 디포머 계층,
 | Linux x86_64 | Deb | 런타임과 Cubism 네이티브 미리보기 포함, X11 / GLX 필요(XWayland 사용 가능) |
 | macOS 및 기타 | 설치 패키지 없음 | JDK 21을 설치한 뒤 [소스에서 실행](#소스에서-빌드) |
 
+Windows에서 제거해도 설정과 작업 공간 데이터는 남습니다. 함께 삭제하려면 제거 마법사에서 「Remove」를 선택하고 「Also delete my PSD2Live data」를 체크하세요. 저장한 프로젝트 파일은 항상 남습니다.
+
 Linux 네이티브 미리보기는 XWayland 없는 순수 Wayland, aarch64, musl(Alpine 등)을 지원하지 않으며, 이런 환경에서는 내장 렌더러로 자동 전환됩니다. 자세한 내용은 [Cubism 네이티브 미리보기](../en/guide/CUBISM_SDK_SETUP.md)(영어)를 참고하세요.
 
 ## 빠른 시작

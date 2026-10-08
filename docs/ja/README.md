@@ -51,6 +51,8 @@ PSD2Live はレイヤー名からパーツを判定し、メッシュ、デフ�
 | Linux x86_64 | Deb | ランタイムと Cubism ネイティブプレビューを同梱。X11 / GLX が必要（XWayland 可） |
 | macOS ほか | パッケージなし | JDK 21 を入れて[ソースから実行](#ソースからのビルド) |
 
+Windows でアンインストールしても設定とワークスペースのデータは残ります。一緒に削除するには、アンインストールウィザードで「Remove」を選び「Also delete my PSD2Live data」にチェックを入れてください。保存したプロジェクトファイルは常に残ります。
+
 Linux のネイティブプレビューは、XWayland のない Wayland、aarch64、musl（Alpine など）には対応していません。その場合は内蔵レンダラーに自動で切り替わります。詳しくは [Cubism ネイティブプレビュー](guide/CUBISM_SDK_SETUP.md)を参照してください。
 
 ## はじめに
