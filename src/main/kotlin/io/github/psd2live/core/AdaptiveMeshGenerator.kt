@@ -127,6 +127,7 @@ internal object AdaptiveMeshGenerator {
 		fillParameters = settings.fillParameters,
 		unitScale = unitScale,
 		detail = detail,
+		wrap = settings.wrap,
 	)
 
 	fun generate(
@@ -144,6 +145,7 @@ internal object AdaptiveMeshGenerator {
 		fillParameters: MeshFillParameters = MeshFillParameters(),
 		unitScale: Float = 1f,
 		detail: Float = 1f,
+		wrap: Float = 0f,
 	): Result? {
 		if (width <= 0 || height <= 0 || width.toLong() * height * 4 > rgba.size ||
 			!spacing.isFinite() || !interiorSpacing.isFinite() ||
@@ -156,17 +158,19 @@ internal object AdaptiveMeshGenerator {
 		MeshResolution.reduce(width, height, rgba, if (traceDetail > 1f) unitScale / traceDetail else unitScale)?.let { reduced ->
 			val unit = unitScale.toDouble() / reduced.scale
 			return working(reduced.width, reduced.height, reduced.rgba, alphaThreshold, spacing * unit, interiorSpacing * unit,
-				outerMargin * unit, edgeMode, edgeWidth * unit, fillAlgorithm, suppressBoundaryDiagonals, fillParameters, unit)
+				outerMargin * unit, edgeMode, edgeWidth * unit, fillAlgorithm, suppressBoundaryDiagonals, fillParameters, unit,
+				MeshWrap.radius(wrap, unit))
 				?.scaledBy(reduced.scale)
 		}
 		val unit = if (traceDetail > 1f) max(1.0, unitScale.toDouble()) else 1.0
 		return working(width, height, rgba, alphaThreshold, spacing * unit, interiorSpacing * unit, outerMargin * unit,
-			edgeMode, edgeWidth * unit, fillAlgorithm, suppressBoundaryDiagonals, fillParameters, unit)
+			edgeMode, edgeWidth * unit, fillAlgorithm, suppressBoundaryDiagonals, fillParameters, unit, MeshWrap.radius(wrap, unit))
 	}
 
 	/**
 	 * The mesh of [rgba] at its own pixels, the working pixels: [unit] of them make one mesh unit, and every
-	 * length - the settings' and the generator's own tolerances - is in working pixels.
+	 * length - the settings' and the generator's own tolerances - is in working pixels. A [wrapRadius] above zero
+	 * closes the mask at that radius before tracing ([MeshWrap]).
 	 */
 	private fun working(
 		width: Int,
@@ -182,6 +186,7 @@ internal object AdaptiveMeshGenerator {
 		suppressBoundaryDiagonals: Boolean,
 		fillParameters: MeshFillParameters,
 		unit: Double,
+		wrapRadius: Double = 0.0,
 	): Result? {
 		val threshold = alphaThreshold.coerceIn(1, 255)
 		val hardened = AlphaEdgePreprocessor.process(width, height, rgba, threshold)
@@ -194,6 +199,8 @@ internal object AdaptiveMeshGenerator {
 			if (sourceAlpha < threshold) geometryRgba[offset] = 0
 			else if (sourceAlpha >= (hardened?.hardThreshold ?: threshold)) geometryRgba[offset] = -1
 		}
+		// Wrapping only adds to the traced mask, so whatever the source paints stays inside the mesh.
+		if (wrapRadius > 0.0) MeshWrap.close(width, height, geometryRgba, wrapRadius)
 		// One-pixel tolerance can simplify a one-pixel rectangle into a triangle, clipping half
 		// of a hairline before meshing even starts. Keep subpixel contour accuracy here.
 		val alpha = analyzeAlpha(width, height, geometryRgba, 1, contourEpsilon = 0.35f) ?: return null

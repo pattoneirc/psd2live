@@ -128,7 +128,7 @@ internal object WorkspaceDocumentEdits {
         require(document.source.layers.any { it.id.raw == id } && id !in document.deletedLayerIds) { "Layer not found: $id" }
         if (reset) return document.copy(meshOverrides = document.meshOverrides - id)
         val change = requireNotNull(changes)
-        val allowed = setOf("outerMargin", "edgeMode", "edgeWidth", "maxEdgeDistance", "interiorDensity", "fillAlgorithm", "suppressBoundaryDiagonals", "fillParameters")
+        val allowed = setOf("outerMargin", "edgeMode", "edgeWidth", "maxEdgeDistance", "interiorDensity", "fillAlgorithm", "suppressBoundaryDiagonals", "fillParameters", "wrap")
         require(change.keys.all { it in allowed }) { "Unknown layer mesh setting" }
         val base = document.meshOverrides[id] ?: document.config().defaultMeshSettings(model.analysis.layers.firstOrNull { it.source.id.raw == id }?.semantic?.tag)
         fun number(key: String, fallback: Float, range: ClosedFloatingPointRange<Float>) = change[key]?.jsonPrimitive?.float
@@ -139,7 +139,8 @@ internal object WorkspaceDocumentEdits {
             number("interiorDensity", base.interiorDensity, 6f..128f),
             change["fillAlgorithm"]?.jsonPrimitive?.content?.let(MeshFillAlgorithm::valueOf) ?: base.fillAlgorithm,
             change["suppressBoundaryDiagonals"]?.jsonPrimitive?.boolean ?: base.suppressBoundaryDiagonals,
-            change["fillParameters"]?.jsonObject?.let { WorkspaceSettingsCodec.mergeFillParameters(base.fillParameters, it) } ?: base.fillParameters)
+            change["fillParameters"]?.jsonObject?.let { WorkspaceSettingsCodec.mergeFillParameters(base.fillParameters, it) } ?: base.fillParameters,
+            number("wrap", base.wrap, io.github.psd2live.core.MeshWrap.range))
         return if (settings == base) document else document.copy(meshOverrides = document.meshOverrides + (id to settings))
     }
 

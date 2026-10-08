@@ -31,6 +31,7 @@ Windows 也可以直接运行根目录的 `run-gui.bat`。不带参数启动 GUI
 | `--atlas <size>` | 4096 | 纹理图集尺寸 |
 | `--mesh-spacing <px>` | 64 | 网格间距 |
 | `--mesh-pixels` | 关闭 | 按源像素而非长边缩放到 2048 px 的文档像素计算网格长度 |
+| `--mesh-wrap <单位>` | 0 | 包裹拓扑：闭合窄于此值（网格单位）的轮廓缝隙，细小凸起共用一个包络 |
 | `--head-strength <value>` | 1.0 | 头部形变幅度 |
 | `--body-strength <value>` | 1.0 | 身体形变幅度 |
 | `--mesh-only` | 关闭 | 仅生成网格 |
@@ -126,7 +127,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `OpenPerfTool.profile` | 打开工程的耗时：在带自动骨架、两个摆动和一个已烘焙模拟的工程上，分别保存带与不带头部缓存的归档，各在空骨架缓存下打开 3 次，测量解包/种入与头部重建，并核对两者重建的模型相同 | `open-perf/report.json`、`report.md` |
 | `SavePerfTool.profile` | 保存现实规模的生成工程的耗时（`PSD2LIVE_SAVE_LAYERS`、`PSD2LIVE_SAVE_SIZE`、`PSD2LIVE_SAVE_REVISIONS`）：同一捕获保存 3 次，重开后保存 2 次，再打开 1 次 | `save-perf/report.txt` |
 | `RigSourcePerfTool.profile` | 大图（示例放大 `PSD2LIVE_SCALE` 倍，默认 3）带生成输入时重建中按像素计的阶段：每第 3 层裁小几像素（需补齐到固定矩形）、每第 5 层为 2 倍密度；冷构建、热重建、绘制后重建的分阶段耗时，以及冷合成图集页与预览 PNG 编码 | `rig-source-perf/report.txt` |
-| `MeshTraceTool` | 合成图层（1024² 贴图上带睫毛的眼睛、头发细束、画布分辨率图层、6000 与 2048 文档中的图层）分别以画布描轮廓与贴图描轮廓生成网格，并排渲染（灰为贴图 alpha、蓝为网格、红为网格外的不透明贴图像素），报告顶点数、耗时、`detail`、网格外像素与网格面积 | `mesh-trace/<用例>.png`、`report.txt` |
+| `MeshTraceTool` | 合成图层（1024² 贴图上带睫毛的眼睛、头发细束、画布分辨率图层、6000 与 2048 文档中的图层）分别以画布描轮廓与贴图描轮廓生成网格，并排渲染（灰为贴图 alpha、蓝为网格、红为网格外的不透明贴图像素），报告顶点数、耗时、`detail`、网格外像素与网格面积；`wrap` 以贴图描轮廓在包裹 0–32 下为睫毛、头发细束与手生成网格，报告顶点数、轮廓环数、耗时与网格外像素 | `mesh-trace/<用例>.png`、`report.txt`；`mesh-wrap/<用例>.png`、`report.txt` |
 | `Cmo3HiresTool` | 高密度图层写入 `.cmo3` 的调研：把 tml 的一个眼部图层栅格放大 4 倍（中间三分之一带一像素棋盘格），按基线、图层保持画布分辨率仅纹理集高清、图层高清加模型图像缩放仿射（图层矩形取栅格尺寸或画布尺寸）、整个分层图像放大 4 倍各写一份，并用读取器回读放置链；文件供在 Cubism Editor 中人工检查 | `cmo3-hires/*.cmo3`、`report.txt`、`README.txt` |
 
 | 环境变量 | 作用 |

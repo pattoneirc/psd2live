@@ -33,6 +33,9 @@ import kotlin.test.Test
  * trace ([MeshTrace]), side by side, and reports their vertices, time and how much opaque texture each leaves
  * outside the mesh. Writes build/tools/mesh-trace/<case>.png (texture alpha in grey, the mesh in blue, opaque
  * texture pixels outside it in red) and report.txt.
+ *
+ * [wrap] meshes lashes, hair strands and a hand under the texture trace at several wrap sizes ([MeshSettings.wrap])
+ * into build/tools/mesh-wrap/.
  */
 class MeshTraceTool {
 	private class Case(val name: String, val layer: WorkspaceSourceLayer, val unitScale: Float, val settings: MeshSettings)
@@ -94,14 +97,15 @@ class MeshTraceTool {
 
 	private class Run(val mesh: AdaptiveMeshGenerator.Result?, val millis: Double, val detail: Float)
 
-	private fun run(case: Case, trace: MeshTrace): Run {
+	private fun run(case: Case, trace: MeshTrace, wrap: Float = case.settings.wrap): Run {
 		val view = CanvasDensity.canvasLayer(case.layer)
 		val input = MeshResolution.input(view, trace, case.unitScale)
-		repeat(2) { MeshResolution.mesh(input, 8, case.settings, null) }
+		val settings = case.settings.copy(wrap = wrap)
+		repeat(2) { MeshResolution.mesh(input, 8, settings, null) }
 		val started = System.nanoTime()
 		val runs = 5
 		var mesh: AdaptiveMeshGenerator.Result? = null
-		repeat(runs) { mesh = MeshResolution.mesh(input, 8, case.settings, null) }
+		repeat(runs) { mesh = MeshResolution.mesh(input, 8, settings, null) }
 		return Run(mesh, (System.nanoTime() - started) / 1e6 / runs, input.detail)
 	}
 
@@ -185,6 +189,52 @@ class MeshTraceTool {
 		g.drawString("${(mesh?.positions?.size ?: 0) / 2} vertices, ${"%.1f".format(run.millis)} ms, detail ${"%.2f".format(run.detail)}", 6, size + 33)
 		g.dispose()
 		return image
+	}
+
+	/** A palm with five fingers a few mesh units apart: a wrap wider than their gaps fuses them. */
+	private fun hand(u: Double, v: Double): Boolean {
+		val dx = (u - 0.5) / 0.3; val dy = (v - 0.72) / 0.22
+		if (dx * dx + dy * dy <= 1.0) return true
+		val tips = listOf(0.15 to 0.42, 0.37 to 0.12, 0.5 to 0.08, 0.63 to 0.12, 0.76 to 0.26)
+		val roots = listOf(0.3, 0.37, 0.5, 0.63, 0.72)
+		return tips.indices.any { k -> nearSegment(u, v, roots[k], 0.62, tips[k].first, tips[k].second, 0.045) }
+	}
+
+	private val wrapCases = listOf(
+		Case("lashes-1024-on-64", layer("eye", LayerBounds(0, 0, 64, 64), raster(1024, 1024) { u, v -> eye(u, v, 0.004) }),
+			1f, MeshSettings(maxEdgeDistance = 12f, interiorDensity = 18f)),
+		Case("lashes-512-on-160", layer("eye", LayerBounds(0, 0, 160, 160), raster(512, 512) { u, v -> eye(u, v, 0.008) }),
+			1f, MeshSettings(maxEdgeDistance = 12f, interiorDensity = 18f)),
+		Case("hair-1024-on-128", layer("hair", LayerBounds(0, 0, 128, 128), raster(1024, 1024, ::hair)),
+			1f, MeshSettings(maxEdgeDistance = 16f, interiorDensity = 26f)),
+		Case("hand-512-on-128", layer("hand", LayerBounds(0, 0, 128, 128), raster(512, 512, ::hand)),
+			1f, MeshSettings(maxEdgeDistance = 12f, interiorDensity = 18f)),
+	)
+
+	@Test fun wrap() {
+		requireTools()
+		val out = output("mesh-wrap")
+		val wraps = listOf(0f, 2f, 4f, 8f, 16f, 32f)
+		val lines = ArrayList<String>()
+		lines += "%-22s %6s %8s %6s %9s %10s %12s".format("case", "wrap", "vertices", "loops", "ms", "uncovered", "mesh area")
+		for (case in wrapCases) {
+			val runs = wraps.map { it to run(case, MeshTrace.TEXTURE, it) }
+			for ((wrap, run) in runs) {
+				val (missing, area) = coverage(case, run.mesh)
+				lines += "%-22s %6.1f %8d %6d %9.2f %10d %12.1f".format(case.name, wrap, (run.mesh?.positions?.size ?: 0) / 2,
+					run.mesh?.boundaryLoops?.size ?: 0, run.millis, missing, area)
+				println(lines.last())
+			}
+			val panels = runs.map { (wrap, run) -> panel(case, run, "${case.name} - wrap ${"%.0f".format(wrap)}", 360) }
+			val sheet = BufferedImage(panels.sumOf { it.width }, panels.maxOf { it.height }, BufferedImage.TYPE_INT_RGB)
+			val g = sheet.createGraphics()
+			var x = 0
+			for (panel in panels) { g.drawImage(panel, x, 0, null); x += panel.width }
+			g.dispose()
+			ImageIO.write(sheet, "png", File(out, "${case.name}.png"))
+		}
+		File(out, "report.txt").writeText(lines.joinToString("\n", postfix = "\n"))
+		println("wrote ${out.absolutePath}")
 	}
 
 	@Test fun compare() {

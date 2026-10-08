@@ -481,6 +481,7 @@ internal class WorkspaceStore(
 					put("fillAlgorithm", s.fillAlgorithm.name)
 					put("suppressBoundaryDiagonals", s.suppressBoundaryDiagonals)
 					put("fillParameters", io.github.psd2live.project.WorkspaceSettingsCodec.encodeFillParameters(s.fillParameters))
+					if (s.wrap != 0f) put("wrap", s.wrap)
 				})
 			}
 		}
@@ -748,6 +749,7 @@ internal class WorkspaceStore(
 					?: io.github.psd2live.core.MeshFillAlgorithm.GRADED_POISSON,
 				suppressBoundaryDiagonals = obj["suppressBoundaryDiagonals"]?.jsonPrimitive?.booleanOrNull ?: false,
 				fillParameters = io.github.psd2live.project.WorkspaceSettingsCodec.decodeFillParameters(obj["fillParameters"]),
+				wrap = io.github.psd2live.project.WorkspaceSettingsCodec.decodeWrap(obj["wrap"]),
 			)
 		}
 		return WorkspaceDocument(

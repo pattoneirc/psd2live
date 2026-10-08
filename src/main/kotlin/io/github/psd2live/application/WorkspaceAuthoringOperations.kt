@@ -191,6 +191,12 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
                 "maximum, up to ${io.github.psd2live.core.MeshResolution.MAX_DETAIL.toInt()}x finer than a mesh unit), so strokes thinner " +
                 "than a canvas pixel stay inside the mesh; CANVAS traces the layer averaged to canvas resolution, as projects saved before it")
         })
+        put("meshWrap", buildJsonObject {
+            put("type", "number"); put("minimum", 0); put("maximum", io.github.psd2live.core.MeshWrap.range.endInclusive)
+            put("description", "Wrap topology, in mesh units: gaps and notches of a layer's outline narrower than this are closed " +
+                "before tracing, so fine protrusions such as lashes or strand tips share one envelope; 0 (default) traces the drawn edge. " +
+                "Every painted pixel stays inside the mesh. Layers with a layer_mesh override keep their own wrap")
+        })
         put("runtimeTarget", string()); put("textureUpscale", upscaleSettings)
         put("meshFillParameters", fillParameterFields)
         put("rigTuning", rigTuningFields)
@@ -208,6 +214,8 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
                 put("fillAlgorithm", choices(*io.github.psd2live.core.MeshFillAlgorithm.entries.map { it.name }.toTypedArray()))
                 put("suppressBoundaryDiagonals", boolean())
                 put("fillParameters", fillParameterFields)
+                put("wrap", buildJsonObject { put("type", "number"); put("minimum", 0); put("maximum", io.github.psd2live.core.MeshWrap.range.endInclusive)
+                    put("description", "Wrap topology in mesh units: outline gaps narrower than this are closed; 0 traces the drawn edge") })
             }))
         }, listOf("state", "layer_id"), true) { a ->
         workspace.setLayerMeshSettings(a.text("state"), a.text("layer_id"), a["changes"]?.jsonObject,

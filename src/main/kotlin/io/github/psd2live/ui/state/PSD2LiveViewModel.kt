@@ -2908,6 +2908,7 @@ class PSD2LiveViewModel : AutoCloseable {
                 put("meshSpacing", settings.maxEdgeDistance.toInt().coerceIn(16, 128)); put("meshInteriorDensity", settings.interiorDensity.coerceIn(6f, 128f))
                 put("meshFillAlgorithm", settings.fillAlgorithm.name); put("meshSuppressBoundaryDiagonals", settings.suppressBoundaryDiagonals)
                 put("meshFillParameters", io.github.psd2live.project.WorkspaceSettingsCodec.encodeFillParameters(settings.fillParameters))
+                put("meshWrap", settings.wrap.coerceIn(io.github.psd2live.core.MeshWrap.range))
             }) }
             return
         }
@@ -2922,6 +2923,7 @@ class PSD2LiveViewModel : AutoCloseable {
 				meshFillAlgorithm = settings.fillAlgorithm,
 				meshSuppressBoundaryDiagonals = settings.suppressBoundaryDiagonals,
 				meshFillParameters = settings.fillParameters,
+				meshWrap = settings.wrap.coerceIn(io.github.psd2live.core.MeshWrap.range),
 			)
 		}
 		schedulePreviewRebuild()
@@ -5624,6 +5626,7 @@ class PSD2LiveViewModel : AutoCloseable {
         put("maxEdgeDistance", settings.maxEdgeDistance); put("interiorDensity", settings.interiorDensity)
         put("fillAlgorithm", settings.fillAlgorithm.name); put("suppressBoundaryDiagonals", settings.suppressBoundaryDiagonals)
         put("fillParameters", io.github.psd2live.project.WorkspaceSettingsCodec.encodeFillParameters(settings.fillParameters))
+        put("wrap", settings.wrap)
     }
 
     private fun runWorkspaceCommand(after: suspend () -> Unit = {}, action: suspend (String) -> WorkspaceMutationResult) {

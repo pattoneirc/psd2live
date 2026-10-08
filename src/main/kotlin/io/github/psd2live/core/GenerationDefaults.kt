@@ -12,7 +12,7 @@ fun PipelineConfig.defaultMeshSettings(tag: SemanticTag?): MeshSettings {
     return MeshSettings(meshOuterMargin, if (tag == SemanticTag.FACE) MeshEdgeMode.DOUBLE else meshEdgeMode,
         meshEdgeWidth, kotlin.math.max(12f, meshMaxEdgeDistance * density),
         kotlin.math.max(12f, meshInteriorDensity * density), meshFillAlgorithm,
-        meshSuppressBoundaryDiagonals, meshFillParameters)
+        meshSuppressBoundaryDiagonals, meshFillParameters, meshWrap)
 }
 
 fun minimumAtlasSize(analysis: PipelineAnalysis?, scale: Int, padding: Int): Int {

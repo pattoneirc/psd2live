@@ -26,7 +26,9 @@ internal fun mergeProjectSettings(current: JsonObject, changes: JsonObject): Jso
     // A settings value has a domain type. Integer spelling of a float (2 vs 2.0) must not
     // create another edit when a desktop projection or save serializes that same value.
     val canonical = WorkspaceSettingsCodec.encode(WorkspaceSettingsCodec.decode(merged))
-    return JsonObject(merged + canonical.filterKeys { it in changes })
+    // No wrap is stored as an absent key, so turning it off restores the settings text of before.
+    val absent = if ("meshWrap" in changes && "meshWrap" !in canonical) setOf("meshWrap") else emptySet()
+    return JsonObject(merged + canonical.filterKeys { it in changes } - absent)
 }
 
 private val ranges = mapOf(
@@ -36,6 +38,7 @@ private val ranges = mapOf(
     "texturePadding" to (0.0..32.0), "alphaThreshold" to (0.0..255.0),
     "headStrength" to (0.0..4.0), "bodyStrength" to (0.0..4.0),
     "mouthThickness" to (0.5..8.0), "exportPixelsPerUnit" to (1.0..1000000.0),
+    "meshWrap" to (0.0..io.github.psd2live.core.MeshWrap.range.endInclusive.toDouble()),
 )
 private val integers = setOf("atlasSize", "meshSpacing", "texturePadding", "alphaThreshold")
 private val booleans = setOf(

@@ -308,6 +308,7 @@ internal object WorkspaceStateCodec {
         // difference alone makes every save see a change and commit a spurious history node.
         put("meshUnits", state.meshUnits.name)
         if (state.meshTrace != io.github.psd2live.core.MeshTrace.CANVAS) put("meshTrace", state.meshTrace.name)
+        if (state.meshWrap != 0f) put("meshWrap", state.meshWrap)
         put("meshOuterMargin", state.meshOuterMargin)
         put("meshEdgeMode", state.meshEdgeMode.name)
         put("meshEdgeWidth", state.meshEdgeWidth)
@@ -327,6 +328,7 @@ internal object WorkspaceStateCodec {
                     put("fillAlgorithm", v.fillAlgorithm.name)
                     put("suppressBoundaryDiagonals", v.suppressBoundaryDiagonals)
                     put("fillParameters", encodeFillParameters(v.fillParameters))
+                    if (v.wrap != 0f) put("wrap", v.wrap)
                 })
             }
         }
@@ -430,6 +432,7 @@ internal object WorkspaceStateCodec {
         put("meshFillParameters", encodeFillParameters(state.meshFillParameters))
         put("meshUnits", state.meshUnits.name)
         if (state.meshTrace != io.github.psd2live.core.MeshTrace.CANVAS) put("meshTrace", state.meshTrace.name)
+        if (state.meshWrap != 0f) put("meshWrap", state.meshWrap)
         putJsonObject("meshOverrides") {
             state.meshOverrides.toSortedMap().forEach { (k, v) ->
                 put(k, buildJsonObject {
@@ -441,6 +444,7 @@ internal object WorkspaceStateCodec {
                     put("fillAlgorithm", v.fillAlgorithm.name)
                     put("suppressBoundaryDiagonals", v.suppressBoundaryDiagonals)
                     put("fillParameters", encodeFillParameters(v.fillParameters))
+                    if (v.wrap != 0f) put("wrap", v.wrap)
                 })
             }
         }
@@ -557,6 +561,8 @@ internal object WorkspaceStateCodec {
         meshTrace = value["meshTrace"]?.jsonPrimitive?.contentOrNull
             ?.let { runCatching { io.github.psd2live.core.MeshTrace.valueOf(it) }.getOrNull() }
             ?: if ("meshSpacing" in value) io.github.psd2live.core.MeshTrace.CANVAS else base.meshTrace,
+        meshWrap = value["meshWrap"]?.let(io.github.psd2live.project.WorkspaceSettingsCodec::decodeWrap)
+            ?: if ("meshSpacing" in value) 0f else base.meshWrap,
         meshOverrides = value["meshOverrides"]?.jsonObject?.mapNotNull { (k, v) ->
             val obj = v.jsonObject
             val outerMargin = obj["outerMargin"]?.jsonPrimitive?.floatOrNull ?: 2.0f
@@ -572,7 +578,8 @@ internal object WorkspaceStateCodec {
                 ?.let { runCatching { MeshFillAlgorithm.valueOf(it) }.getOrNull() } ?: MeshFillAlgorithm.GRADED_POISSON
             val suppressBoundaryDiagonals = obj["suppressBoundaryDiagonals"]?.jsonPrimitive?.booleanOrNull ?: false
             k to MeshSettings(outerMargin, edgeMode, edgeWidth, maxEdgeDistance, interiorDensity,
-                fillAlgorithm, suppressBoundaryDiagonals, decodeFillParameters(obj["fillParameters"]))
+                fillAlgorithm, suppressBoundaryDiagonals, decodeFillParameters(obj["fillParameters"]),
+                io.github.psd2live.project.WorkspaceSettingsCodec.decodeWrap(obj["wrap"]))
         }?.toMap() ?: base.meshOverrides,
         texturePadding = value["texturePadding"]?.jsonPrimitive?.int ?: base.texturePadding,
         alphaThreshold = value["alphaThreshold"]?.jsonPrimitive?.int ?: base.alphaThreshold,

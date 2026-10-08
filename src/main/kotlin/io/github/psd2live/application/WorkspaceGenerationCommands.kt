@@ -43,6 +43,7 @@ internal class WorkspaceGenerationCommands(private val runtime: WorkspaceRuntime
                         put("maxEdgeDistance", settings.maxEdgeDistance); put("interiorDensity", settings.interiorDensity)
                         put("fillAlgorithm", settings.fillAlgorithm.name); put("suppressBoundaryDiagonals", settings.suppressBoundaryDiagonals)
                         put("fillParameters", WorkspaceSettingsCodec.encodeFillParameters(settings.fillParameters))
+                        put("wrap", settings.wrap)
                     })
                 }))
             }

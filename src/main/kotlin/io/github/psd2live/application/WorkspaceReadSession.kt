@@ -163,6 +163,7 @@ internal class WorkspaceReadSession(
             put("interiorDensity", settings.interiorDensity); put("fillAlgorithm", settings.fillAlgorithm.name)
             put("suppressBoundaryDiagonals", settings.suppressBoundaryDiagonals)
             put("fillParameters", WorkspaceSettingsCodec.encodeFillParameters(settings.fillParameters))
+            put("wrap", settings.wrap)
         }
     }
 

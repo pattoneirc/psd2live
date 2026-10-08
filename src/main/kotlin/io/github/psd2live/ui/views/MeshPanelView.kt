@@ -141,6 +141,7 @@ private fun GlobalMeshSettingsEditor(
 		fillAlgorithm = state.meshFillAlgorithm,
 		suppressBoundaryDiagonals = state.meshSuppressBoundaryDiagonals,
 		fillParameters = state.meshFillParameters,
+		wrap = state.meshWrap,
 	)
 
 	Column(modifier = Modifier.fillMaxSize()) {
@@ -361,7 +362,8 @@ private fun MeshSettingsFields(
 		algorithm: MeshFillAlgorithm = settings.fillAlgorithm,
 		suppressDiagonals: Boolean = settings.suppressBoundaryDiagonals,
 		fill: MeshFillParameters = settings.fillParameters,
-	) = onChange(MeshSettings(outer, mode, width, edgeDistance, density, algorithm, suppressDiagonals, fill))
+		wrap: Float = settings.wrap,
+	) = onChange(MeshSettings(outer, mode, width, edgeDistance, density, algorithm, suppressDiagonals, fill, wrap))
 
 	Text(
 		tr("mesh.settings.shapeGroup"),
@@ -440,6 +442,42 @@ private fun MeshSettingsFields(
 				height = 20.dp,
 			)
 		}
+	}
+
+	// Wrap topology: gaps narrower than this join the outline, so fine protrusions share one envelope.
+	MeshFormRow(label = tr("mesh.settings.wrap")) {
+		CompactSlider(
+			value = settings.wrap,
+			onValueChange = { patch(wrap = it) },
+			onValueChangeStarted = onGestureStart,
+			onValueChangeFinished = onGestureEnd,
+			valueRange = 0f..32f,
+			enabled = enabled,
+			height = 14.dp,
+			modifier = Modifier.weight(1f),
+		)
+		Spacer(Modifier.width(4.dp))
+		CompactNumberSpinner(
+			onEditStart = { onEditStart("wrap") },
+			onEditEnd = { onEditEnd("wrap") },
+			value = settings.wrap.toDouble(),
+			onValueChange = { patch(wrap = it.toFloat()) },
+			min = io.github.psd2live.core.MeshWrap.range.start.toDouble(),
+			max = io.github.psd2live.core.MeshWrap.range.endInclusive.toDouble(),
+			step = 1.0,
+			decimals = 1,
+			unit = tr("settings.unit.px"),
+			enabled = enabled,
+			modifier = Modifier.width(62.dp),
+			height = 20.dp,
+		)
+	}
+	if (showHints) {
+		Text(
+			tr("mesh.settings.wrapHint"),
+			style = typography.caption.copy(fontSize = 9.sp),
+			color = colors.textMuted,
+		)
 	}
 
 	Text(

@@ -13,6 +13,8 @@ internal object MeshGenerationBaseline {
     private val unitFields = legacyFields + "meshUnits"
     /** A texture-traced baseline also records its trace; a canvas-traced one leaves it out, as before it existed. */
     private val fields = unitFields + "meshTrace"
+    /** A wrapping baseline also records its wrap, under either trace. */
+    private const val WRAP = "meshWrap"
 
     fun present(overlay: RigEditOverlay) = overlay.authoringJournal.any { it["op"]?.jsonPrimitive?.contentOrNull == OP }
 
@@ -20,7 +22,7 @@ internal object MeshGenerationBaseline {
         if (present(overlay)) return overlay
         val marker = buildJsonObject {
             put("op", OP)
-            put("settings", JsonObject(WorkspaceSettingsCodec.encode(config).filterKeys { it in fields }))
+            put("settings", JsonObject(WorkspaceSettingsCodec.encode(config).filterKeys { it in fields || it == WRAP }))
         }
         return overlay.copy(authoringJournal = overlay.authoringJournal + marker)
     }
@@ -40,7 +42,8 @@ internal object MeshGenerationBaseline {
                 mesh.getValue("interiorDensity").jsonPrimitive.float,
                 MeshFillAlgorithm.valueOf(mesh.getValue("fillAlgorithm").jsonPrimitive.content),
                 mesh.getValue("suppressBoundaryDiagonals").jsonPrimitive.boolean,
-                WorkspaceSettingsCodec.decodeFillParameters(mesh.getValue("fillParameters")))
+                WorkspaceSettingsCodec.decodeFillParameters(mesh.getValue("fillParameters")),
+                WorkspaceSettingsCodec.decodeWrap(mesh["wrap"]))
         }
         val basis = if ("meshUnits" in settings) generation else generation.copy(meshUnits = MeshUnits.PIXELS)
         return WorkspaceSettingsCodec.decode(settings, basis).copy(meshOverrides = overrides)
@@ -49,7 +52,8 @@ internal object MeshGenerationBaseline {
     private fun settings(command: JsonObject): JsonObject {
         require(command.keys == setOf("op", "settings")) { "Invalid mesh generation baseline" }
         return command.getValue("settings").jsonObject.also {
-            require(it.keys == fields || it.keys == unitFields || it.keys == legacyFields) { "Invalid mesh generation baseline settings" }
+            val keys = it.keys - WRAP
+            require(keys == fields || keys == unitFields || (keys == legacyFields && WRAP !in it)) { "Invalid mesh generation baseline settings" }
             it["meshUnits"]?.jsonPrimitive?.content?.let { units ->
                 require(MeshUnits.entries.any { value -> value.name == units }) { "Invalid baseline mesh units" }
             }

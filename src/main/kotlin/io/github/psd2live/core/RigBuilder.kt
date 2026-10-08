@@ -492,8 +492,8 @@ object RigBuilder {
 		meshOuterMargin = config.meshOuterMargin, meshEdgeMode = config.meshEdgeMode, meshEdgeWidth = config.meshEdgeWidth,
 		meshMaxEdgeDistance = config.meshMaxEdgeDistance, meshInteriorDensity = config.meshInteriorDensity,
 		meshFillAlgorithm = config.meshFillAlgorithm, meshSuppressBoundaryDiagonals = config.meshSuppressBoundaryDiagonals,
-		meshFillParameters = config.meshFillParameters, meshUnits = config.meshUnits, meshTrace = config.meshTrace, alphaThreshold = config.alphaThreshold,
-		headTurnStrength = config.headTurnStrength, bodyStrength = config.bodyStrength, rigTuning = config.rigTuning,
+		meshFillParameters = config.meshFillParameters, meshUnits = config.meshUnits, meshTrace = config.meshTrace, meshWrap = config.meshWrap,
+		alphaThreshold = config.alphaThreshold, headTurnStrength = config.headTurnStrength, bodyStrength = config.bodyStrength, rigTuning = config.rigTuning,
 		meshOnly = config.meshOnly, generateDeformers = config.generateDeformers, featureDisplacementEnabled = config.featureDisplacementEnabled,
 		mouthOutlineEnabled = config.mouthOutlineEnabled, mouthShape = config.mouthShape, mouthCurve = config.mouthCurve,
 		mouthColor = config.mouthColor, mouthThickness = config.mouthThickness,
@@ -2658,7 +2658,7 @@ object RigBuilder {
 		val settings = MeshSettings(outerMargin, edgeMode, edgeWidth, effectiveSpacing,
 			effectiveInteriorDensity, override?.fillAlgorithm ?: config.meshFillAlgorithm,
 			override?.suppressBoundaryDiagonals ?: config.meshSuppressBoundaryDiagonals,
-			override?.fillParameters ?: config.meshFillParameters)
+			override?.fillParameters ?: config.meshFillParameters, override?.wrap ?: config.meshWrap)
 		return settings to effectiveSpacing
 	}
 

@@ -64,6 +64,7 @@ fun main(arguments: Array<String>) {
 		meshSpacing = options.int("--mesh-spacing", 64),
 		meshUnits = if (options.flags.contains("--mesh-pixels")) io.github.psd2live.core.MeshUnits.PIXELS
 			else io.github.psd2live.core.MeshUnits.DOCUMENT,
+		meshWrap = options.float("--mesh-wrap", 0f).takeIf { it.isFinite() }?.coerceIn(io.github.psd2live.core.MeshWrap.range) ?: 0f,
 		headTurnStrength = options.float("--head-strength", 1f),
 		bodyStrength = options.float("--body-strength", 1f),
 		meshOnly = options.flags.contains("--mesh-only"),
@@ -227,7 +228,7 @@ private data class CliOptions(val values: Map<String, String>, val flags: Set<St
 
 	companion object {
 		private val flagNames = setOf("--no-upscale-neural-alpha", "--upscale-neural-alpha", "--no-physics", "--no-cmo3", "--no-moc3", "--mesh-only", "--no-deformers", "--no-motions", "--no-json")
-		private val valueNames = setOf("--upscale", "--upscale-noise", "--upscale-python", "--nunif-dir", "--upscale-model", "--upscale-tile", "--input", "--output", "--lang", "--atlas", "--mesh-spacing", "--head-strength", "--body-strength")
+		private val valueNames = setOf("--upscale", "--upscale-noise", "--upscale-python", "--nunif-dir", "--upscale-model", "--upscale-tile", "--input", "--output", "--lang", "--atlas", "--mesh-spacing", "--mesh-wrap", "--head-strength", "--body-strength")
 		fun parse(arguments: Array<String>): CliOptions {
 			val values = linkedMapOf<String, String>()
 			val flags = linkedSetOf<String>()

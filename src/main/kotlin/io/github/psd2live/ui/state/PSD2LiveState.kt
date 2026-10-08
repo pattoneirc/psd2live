@@ -447,6 +447,7 @@ data class PSD2LiveState(
 	/** New projects measure mesh lengths at the reference document size; older ones keep source pixels. */
 	val meshUnits: io.github.psd2live.core.MeshUnits = io.github.psd2live.core.MeshUnits.DOCUMENT,
 	val meshTrace: io.github.psd2live.core.MeshTrace = io.github.psd2live.core.MeshTrace.TEXTURE,
+	val meshWrap: Float = 0f,
 	val texturePadding: Int = 2,
 	val alphaThreshold: Int = 8,
 	val headStrength: Float = 1.0f,
@@ -682,6 +683,7 @@ data class PSD2LiveState(
 			meshOverrides = meshOverrides,
 			meshUnits = meshUnits,
 			meshTrace = meshTrace,
+			meshWrap = meshWrap,
 			alphaThreshold = alphaThreshold,
 			headTurnStrength = headStrength,
 			bodyStrength = bodyStrength,

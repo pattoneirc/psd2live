@@ -68,8 +68,10 @@ internal object WorkspaceSettingsResultTypes {
     private val meshFields = mapOf("outerMargin" to s.number(), "edgeMode" to s.choices(*MeshEdgeMode.entries.map { it.name }.toTypedArray()),
         "edgeWidth" to s.number(), "maxEdgeDistance" to s.number(), "interiorDensity" to s.number(),
         "fillAlgorithm" to s.choices(*MeshFillAlgorithm.entries.map { it.name }.toTypedArray()),
-        "suppressBoundaryDiagonals" to s.boolean(), "fillParameters" to fill)
+        "suppressBoundaryDiagonals" to s.boolean(), "fillParameters" to fill, "wrap" to s.number())
     val layerMesh = s.obj(meshFields + ("overridden" to s.boolean()))
+    /** A stored override leaves out a wrap of zero. */
+    private val storedMesh = s.obj(meshFields, meshFields.keys - "wrap")
     private val upscaleFields = mapOf("scale" to s.integer(1, 4), "python" to s.string(), "nunifDirectory" to s.string(),
         "modelDirectory" to s.string(), "tileSize" to s.integer(64, 512), "noiseLevel" to s.integer(-1, 3), "neuralAlpha" to s.boolean())
     // TextureUpscaleConfig serialization intentionally omits default values.
@@ -83,11 +85,12 @@ internal object WorkspaceSettingsResultTypes {
         listOf("meshOuterMargin", "meshEdgeWidth", "meshMaxEdgeDistance", "meshInteriorDensity", "headStrength", "bodyStrength", "mouthThickness").associateWith { s.number() } +
         mapOf("textureUpscale" to upscale, "meshEdgeMode" to meshFields.getValue("edgeMode"), "meshFillAlgorithm" to meshFields.getValue("fillAlgorithm"),
             "meshUnits" to s.choices(*io.github.psd2live.core.MeshUnits.entries.map { it.name }.toTypedArray()),
-            "meshFillParameters" to fill, "meshOverrides" to s.dictionary(s.obj(meshFields)), "drawOrderOverrides" to s.dictionary(s.number()),
+            "meshFillParameters" to fill, "meshOverrides" to s.dictionary(storedMesh), "drawOrderOverrides" to s.dictionary(s.number()),
             "rigTuning" to s.obj(RigTuning.fields.associate { it.id to s.number() }), "mouthShape" to s.choices("flat", "smile", "w", "custom"),
             "mouthCurve" to s.array(s.obj(mapOf("x" to s.number(), "y" to s.number()))), "mouthColor" to s.nullable(s.integer(0, 0xFFFFFF)),
             "runtimeTarget" to s.choices(*RuntimeTarget.entries.map { it.name }.toTypedArray()), "exportPixelsPerUnit" to s.nullable(s.number()),
-            "meshTrace" to s.choices(*io.github.psd2live.core.MeshTrace.entries.map { it.name }.toTypedArray()))
-    /** A canvas-traced project leaves the trace out, as projects saved before it did. */
-    val settings = s.obj(settingFields, settingFields.keys - "meshTrace")
+            "meshTrace" to s.choices(*io.github.psd2live.core.MeshTrace.entries.map { it.name }.toTypedArray()),
+            "meshWrap" to s.number())
+    /** A canvas-traced project leaves the trace out, and one without wrap the wrap, as projects saved before them did. */
+    val settings = s.obj(settingFields, settingFields.keys - "meshTrace" - "meshWrap")
 }

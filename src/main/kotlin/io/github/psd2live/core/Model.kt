@@ -170,6 +170,12 @@ data class MeshSettings(
 	val fillAlgorithm: MeshFillAlgorithm = MeshFillAlgorithm.GRADED_POISSON,
 	val suppressBoundaryDiagonals: Boolean = false,
 	val fillParameters: MeshFillParameters = MeshFillParameters(),
+	/**
+	 * Gaps and notches narrower than this many mesh units are wrapped into the outline ([MeshWrap]): fine
+	 * protrusions such as lashes or strand tips share one envelope instead of an outline each. 0 traces the
+	 * drawn edge as is.
+	 */
+	val wrap: Float = 0f,
 )
 
 data class PipelineConfig(
@@ -190,6 +196,8 @@ data class PipelineConfig(
 	val meshUnits: MeshUnits = MeshUnits.DOCUMENT,
 	/** What mesh outlines are traced from; projects saved before it trace the canvas view. */
 	val meshTrace: MeshTrace = MeshTrace.TEXTURE,
+	/** [MeshSettings.wrap] of every layer without an override; projects saved before it wrap nothing. */
+	val meshWrap: Float = 0f,
 	val alphaThreshold: Int = 8,
 	val headTurnStrength: Float = 1f,
 	val bodyStrength: Float = 1f,

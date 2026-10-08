@@ -111,6 +111,8 @@ internal object WorkspaceSettingsCodec {
         put("meshUnits", config.meshUnits.name)
         // Absent means the canvas trace, so the settings of projects saved before it keep their exact text.
         if (config.meshTrace != io.github.psd2live.core.MeshTrace.CANVAS) put("meshTrace", config.meshTrace.name)
+        // Absent means no wrap, likewise.
+        if (config.meshWrap != 0f) put("meshWrap", config.meshWrap)
         put("meshOuterMargin", config.meshOuterMargin)
         put("meshEdgeMode", config.meshEdgeMode.name)
         put("meshEdgeWidth", config.meshEdgeWidth)
@@ -130,6 +132,7 @@ internal object WorkspaceSettingsCodec {
                     put("fillAlgorithm", v.fillAlgorithm.name)
                     put("suppressBoundaryDiagonals", v.suppressBoundaryDiagonals)
                     put("fillParameters", encodeFillParameters(v.fillParameters))
+                    if (v.wrap != 0f) put("wrap", v.wrap)
                 })
             }
         }
@@ -174,6 +177,10 @@ internal object WorkspaceSettingsCodec {
         put("exportIncludeDisplayInfo", config.exportIncludeDisplayInfo)
         put("exportPixelsPerUnit", config.exportPixelsPerUnit?.let(::JsonPrimitive) ?: JsonNull)
     }
+    /** A stored [io.github.psd2live.core.MeshSettings.wrap]: absent or invalid is no wrap. */
+    fun decodeWrap(value: JsonElement?): Float = (value as? JsonPrimitive)?.floatOrNull
+        ?.takeIf { it.isFinite() }?.coerceIn(io.github.psd2live.core.MeshWrap.range) ?: 0f
+
     /** Decode the existing v1 setting names without constructing UI state. */
     fun decode(value: JsonObject, base: io.github.psd2live.core.PipelineConfig = io.github.psd2live.core.PipelineConfig()): io.github.psd2live.core.PipelineConfig = base.copy(
         atlasSize = value["atlasSize"]?.jsonPrimitive?.intOrNull ?: base.atlasSize,
@@ -189,6 +196,8 @@ internal object WorkspaceSettingsCodec {
         meshTrace = value["meshTrace"]?.jsonPrimitive?.contentOrNull
             ?.let { runCatching { io.github.psd2live.core.MeshTrace.valueOf(it) }.getOrNull() }
             ?: if ("meshSpacing" in value) io.github.psd2live.core.MeshTrace.CANVAS else base.meshTrace,
+        // Complete settings without a wrap wrap nothing.
+        meshWrap = value["meshWrap"]?.let(::decodeWrap) ?: if ("meshSpacing" in value) 0f else base.meshWrap,
         meshOuterMargin = value["meshOuterMargin"]?.jsonPrimitive?.floatOrNull ?: base.meshOuterMargin,
         meshEdgeMode = value["meshEdgeMode"]?.jsonPrimitive?.contentOrNull?.let { runCatching { io.github.psd2live.core.MeshEdgeMode.valueOf(it) }.getOrNull() } ?: base.meshEdgeMode,
         meshEdgeWidth = value["meshEdgeWidth"]?.jsonPrimitive?.floatOrNull ?: value["meshInnerMargin"]?.jsonPrimitive?.floatOrNull?.let { (value["meshOuterMargin"]?.jsonPrimitive?.floatOrNull ?: base.meshOuterMargin) + it } ?: base.meshEdgeWidth,
