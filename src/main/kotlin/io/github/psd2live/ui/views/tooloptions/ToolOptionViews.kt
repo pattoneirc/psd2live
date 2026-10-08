@@ -480,8 +480,8 @@ private fun <T> MenuChoiceRow(editor: CanvasEditor, option: ChoiceOption<T>) {
     val colors = LocalToolColors.current
     val current = option.get(editor)
     Row(Modifier.fillMaxWidth().height(28.dp).padding(start = 9.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(tr(option.labelKey), color = colors.textMuted, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(54.dp))
+        if (option.captioned) Text(tr(option.labelKey), color = colors.textMuted, fontSize = 10.5.sp, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.width(54.dp))
         val choices = option.choices(editor)
         val icons = option.variant && choices.all { choiceHasIcon(it) }
         GlidingSegments(

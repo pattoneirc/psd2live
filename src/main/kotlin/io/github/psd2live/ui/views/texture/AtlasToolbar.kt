@@ -688,13 +688,17 @@ internal fun <T> GlidingSegments(
 					isHovered -> colors.textPrimary
 					else -> colors.textMuted
 				}, tween(80))
+				// Measured outside the tooltip, whose own box would make every segment sit at its origin.
+				Box(
+					Modifier
+						.onGloballyPositioned { bounds[i] = it.positionInParent().x to it.size.width.toFloat() }
+						.onPointerEvent(PointerEventType.Enter) { hovered = i },
+				) {
 				BarTooltip(tooltip(choice)) {
 					Row(
 						Modifier
 							.height(22.dp)
 							.defaultMinSize(minWidth = 24.dp)
-							.onGloballyPositioned { bounds[i] = it.positionInParent().x to it.size.width.toFloat() }
-							.onPointerEvent(PointerEventType.Enter) { hovered = i }
 							.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, enabled = enabled) { onSelect(choice) }
 							.semantics { contentDescription = label(choice) ?: tooltip(choice) ?: "" }
 							.padding(horizontal = if (iconOf != null && label(choice) == null) 5.dp else 7.dp),
@@ -707,6 +711,7 @@ internal fun <T> GlidingSegments(
 						if (text != null) Text(text, color = tint, fontSize = 11.sp, maxLines = 1,
 							fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium)
 					}
+				}
 				}
 			}
 		}

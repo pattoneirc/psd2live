@@ -120,6 +120,8 @@ internal class ChoiceOption<T>(
     val inline: Boolean = true,
     override val place: OptionPlace = OptionPlace.BOTH,
     val variant: Boolean = false,
+    /** Whether a row of it in the menu carries its name; off for choices that name themselves. */
+    val captioned: Boolean = true,
 ) : ToolOption
 
 /** On or off. */

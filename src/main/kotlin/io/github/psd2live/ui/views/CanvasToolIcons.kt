@@ -406,20 +406,35 @@ private fun IconPen.knife() = turned(-45f) {
     fillBox(12f, 7.2f, 5.6f, 3.4f, 1.4f)
 }
 
-/** A triangle whose corners carry falling weights, each dot in the weight colour the canvas paints it. */
+/** A brush whose tip is loaded with weight, in the colour the canvas paints full weight, over a fading stroke. */
 private fun IconPen.weightPaint() {
-    val face = path { m(3f, 14.5f); l(9f, 4f); l(15f, 14.5f); z() }
-    fill(face, soft)
-    outline(face)
-    dot(3f, 14.5f, 2.4f, tone(weightHeatColor(1f)))
-    dot(9f, 4f, 2f, tone(weightHeatColor(0.5f)))
-    dot(15f, 14.5f, 1.6f, tone(weightHeatColor(0f)))
+    dot(3.4f, 14.6f, 1.2f, tone(weightHeatColor(0.25f)))
+    dot(5.6f, 12.4f, 1.6f, tone(weightHeatColor(0.6f)))
+    turned(-45f) {
+        fill(path {
+            m(0.6f, 9f)
+            c(2f, 7.4f, 3.8f, 6.9f, 5.8f, 7.1f)
+            l(5.8f, 10.9f)
+            c(3.8f, 11.1f, 2f, 10.6f, 0.6f, 9f)
+            z()
+        }, tone(weightHeatColor(1f)))
+        box(6.4f, 6.9f, 3f, 4.2f, 0.6f)
+        outline(path { m(10f, 7.6f); l(16.2f, 8.1f); q(17.8f, 9f, 16.2f, 9.9f); l(10f, 10.4f) })
+    }
 }
 
-/** A ramp falling from full to empty along the drag: a wedge, its full end marked in the weight colour. */
+/**
+ * The gradient tool's I: the drag between its two ends, each end a short bar across it - full weight at the start,
+ * none at the end - and the line between running through the weight colours.
+ */
 private fun IconPen.weightGradient() {
-    shape(path { m(2.6f, 4f); l(15.4f, 14f); l(2.6f, 14f); z() })
-    dot(5.2f, 11.2f, 1.8f, tone(weightHeatColor(1f)))
+    val steps = 6
+    for (i in 0 until steps) {
+        val x0 = 3f + i * 12f / steps
+        line(x0, 9f, x0 + 12f / steps, 9f, width = 1.8f, tint = tone(weightHeatColor(1f - (i + 0.5f) / steps)))
+    }
+    line(3f, 4.6f, 3f, 13.4f, width = 1.8f, tint = tone(weightHeatColor(1f)))
+    line(15f, 4.6f, 15f, 13.4f, width = 1.8f, tint = tone(weightHeatColor(0f)))
 }
 
 // --- painting --------------------------------------------------------------------------------------------

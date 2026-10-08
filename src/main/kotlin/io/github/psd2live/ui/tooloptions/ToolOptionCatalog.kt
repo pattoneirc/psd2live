@@ -371,7 +371,8 @@ private val TOPOLOGY_ACTIONS = listOf(
 )
 
 internal val ELEMENT_MODE = ChoiceOption("edit.element", "editor.elementMode", { listOf(0, 1, 2) },
-    { _, i -> tr("editor.${listOf("vertex", "edge", "face")[i]}") }, { it.elementMode }, { e, i -> e.elementMode = i }, place = OptionPlace.TOP)
+    { _, i -> tr("editor.${listOf("vertex", "edge", "face")[i]}") }, { it.elementMode }, { e, i -> e.elementMode = i }, place = OptionPlace.TOP,
+    captioned = false)
 
 private fun MutableList<ToolOption>.addSimulate(editor: CanvasEditor) {
     add(WEIGHT_KIND)

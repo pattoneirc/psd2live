@@ -104,7 +104,7 @@ internal fun BoxScope.CanvasPreviewToolbar(
 			selected = smoothMouseTracking,
 			enabled = enabled && mouseTrackingEnabled,
 			onClick = onToggleSmoothTracking,
-			icon = { tint -> IconMouse(active = smoothMouseTracking, modifier = Modifier.size(14.dp), tint = tint) },
+			icon = { tint -> IconSmoothTracking(tint) },
 		)
 		val physicsOn = physicsEnabled && physicsAvailable
 		RailItem(
@@ -168,3 +168,17 @@ private fun runtimeLabel(runtime: PreviewBackend, advanced: Boolean): String = t
 	advanced -> "preview.runtime.p2lrtAdvanced"
 	else -> "preview.runtime.p2lrtStandard"
 })
+
+/**
+ * Smooth tracking with Body Y: the gaze easing along a soft curve to the pointer, and the body rising and sinking
+ * beside it.
+ */
+@Composable
+private fun IconSmoothTracking(tint: androidx.compose.ui.graphics.Color) =
+	io.github.psd2live.ui.components.GridIcon(Modifier.size(14.dp), tint) {
+		outline(path { m(1.8f, 14.6f); c(4.8f, 14.6f, 5.4f, 5f, 10.2f, 5f) })
+		dot(10.6f, 5f, 2f)
+		line(15.4f, 4.2f, 15.4f, 13.8f)
+		chevron(15.4f, 3.8f, 0f, -1f, 2.4f)
+		chevron(15.4f, 14.2f, 0f, 1f, 2.4f)
+	}
