@@ -206,7 +206,7 @@ internal object SkeletonRig {
 	)
 
 	/** Version of the bake and its key; raise it whenever the bake or what the key covers changes. */
-	const val BAKE_VERSION = "skeleton-3"
+	const val BAKE_VERSION = "skeleton-4"
 
 	private const val CACHE_CAPACITY = 4
 	private val bakes = object : LinkedHashMap<String, Bake>(16, 0.75f, true) {
@@ -1391,7 +1391,8 @@ internal object SkeletonRig {
 		val bindTo = skins.mapIndexed { vertex, skin -> inverse(rest.getValue(deformerOf[skin.to]), canvas[vertex * 2], canvas[vertex * 2 + 1]) }
 		val restAngle = FloatArray(tree.size) { angleOf(rest.getValue(deformerOf[it])) }
 		fun computeDeltas(values: Map<ParameterId, Float>): FloatArray {
-			val posed = if (values.isEmpty()) rest else worlds(base, values, relevant)
+			if (RigBuildProfile.recording) RigBuildProfile.count("skeleton: skin sample")
+			val posed = if (values.isEmpty()) rest else RigBuildProfile.stage("skeleton: skin worlds") { worlds(base, values, relevant) }
 			val homeWorld = posed.getValue(homeId)
 			val out = FloatArray(canvas.size)
 			val scratch = FloatArray(2)
@@ -1438,11 +1439,23 @@ internal object SkeletonRig {
 			return out
 		}
 		// Fitting, grid baking and pose shapes often request the same sample. Cache the solve;
-		// return a copy because additive pose shapes subtract their reference in place.
-		val samples = HashMap<Map<ParameterId, Float>, FloatArray>()
-		fun deltasAt(values: Map<ParameterId, Float>): FloatArray {
+		// return a copy because additive pose shapes subtract their reference in place. Each sample is a
+		// pure function of its parameter values, so [prefetch] solves a batch of them on the common pool
+		// and the bake reads them back in its own order: the result does not depend on the thread count.
+		val caller = Thread.currentThread()
+		val samples = java.util.concurrent.ConcurrentHashMap<Map<ParameterId, Float>, Lazy<FloatArray>>()
+		fun solved(values: Map<ParameterId, Float>): FloatArray {
 			val key = values.filterValues { it != 0f }
-			return samples.getOrPut(key) { computeDeltas(key) }.copyOf()
+			return samples.computeIfAbsent(key) { lazy {
+				if (caller.isInterrupted) throw InterruptedException()
+				computeDeltas(key)
+			} }.value
+		}
+		fun deltasAt(values: Map<ParameterId, Float>): FloatArray = solved(values).copyOf()
+		fun prefetch(batch: Collection<Map<ParameterId, Float>>) {
+			val missing = batch.map { values -> values.filterValues { it != 0f } }.distinct().filter { samples[it]?.isInitialized() != true }
+			if (missing.size > 1 && parallelSamples) missing.parallelStream().forEach { solved(it) }
+			if (caller.isInterrupted) throw InterruptedException()
 		}
 
 		// Each bone keyed as sparsely as its arcs allow; the blend-shape bones add, the rest multiply.
@@ -1455,19 +1468,25 @@ internal object SkeletonRig {
 		// Stance warps use normalized coordinates, while rotation homes use pixels. Measure the
 		// interpolation error in canvas pixels in both cases; a tolerance in normalized space would
 		// accept almost any inverse rotation arc and shrink the proximal limb between its keys.
-		val sides = ranges.mapValues { (id, range) -> fittedSides(range, sampling) { value ->
-			val deltas = deltasAt(mapOf(id to value))
-			FloatArray(deltas.size).also { points ->
-				for (i in deltas.indices step 2) homeRest.apply(restBase[i] + deltas[i], restBase[i + 1] + deltas[i + 1], points, i)
+		val sides = RigBuildProfile.stage("skeleton: skin fit") {
+			fittedSides(ranges, sampling, { batch -> prefetch(batch.map { (id, value) -> mapOf(id to value) }) },
+				if (parallelSamples) Runtime.getRuntime().availableProcessors() else 1) { id, value ->
+				val deltas = solved(mapOf(id to value))
+				FloatArray(deltas.size).also { points ->
+					for (i in deltas.indices step 2) homeRest.apply(restBase[i] + deltas[i], restBase[i + 1] + deltas[i + 1], points, i)
+				}
 			}
-		} }
+		}
 		val axes = gridAxes(sides.filterKeys { it !in blend }, ranges, sampling)
 		val blendAxes = sides.filterKeys { it in blend }.map { (id, side) -> KeyformAxis(id, keysOf(ranges.getValue(id), side.first, side.second)) }
 
-		val skinGrid = if (axes.isEmpty()) null else KeyformGrid(axes, cartesian(axes).map { coordinate ->
-			val values = axes.indices.associate { axes[it].parameterId to axes[it].keys[coordinate[it]] }
-			KeyformCell(coordinate, MeshDeltaForm(deltasAt(values)))
-		})
+		val skinGrid = if (axes.isEmpty()) null else RigBuildProfile.stage("skeleton: skin grid") {
+			val cells = cartesian(axes).map { coordinate ->
+				coordinate to axes.indices.associate { axes[it].parameterId to axes[it].keys[coordinate[it]] }
+			}
+			prefetch(cells.map { it.second })
+			KeyformGrid(axes, cells.map { (coordinate, values) -> KeyformCell(coordinate, MeshDeltaForm(deltasAt(values))) })
+		}
 
 		// Whatever the mesh was keyed on before, carried into the new space and laid under the skin.
 		val parentWorld = drawable.parentDeformerId?.let { rest[it] }
@@ -1500,7 +1519,8 @@ internal object SkeletonRig {
 			blendShapes = blendShapes,
 		)
 		val added = poses.map { KeyformAxis(it.id, it.keys) } + blendAxes
-		val posed = skinned.copy(blendShapes = skinned.blendShapes + additiveShapes(base, skinned, added, ::deltasAt))
+		if (added.isNotEmpty()) prefetch(listOf(emptyMap<ParameterId, Float>()) + added.flatMap { axis -> axis.keys.map { mapOf(axis.parameterId to it) } })
+		val posed = skinned.copy(blendShapes = skinned.blendShapes + RigBuildProfile.stage("skeleton: skin poses") { additiveShapes(base, skinned, added, ::deltasAt) })
 		return base.copy(drawables = base.drawables.map { if (it.id == drawableId) posed else it })
 	}
 
@@ -1511,14 +1531,14 @@ internal object SkeletonRig {
 	 */
 	internal fun corrected(arap: SkeletonArap, jointTemplates: SkeletonJointTemplates, surface: SkeletonSurfaceFairing,
 						   target: FloatArray, seed: FloatArray, angles: FloatArray, carry: List<DoubleArray>): FloatArray {
-		val (guide, guideWeights) = jointTemplates.guide(seed, angles, carry, target)
+		val (guide, guideWeights) = RigBuildProfile.stage("skeleton: skin templates") { jointTemplates.guide(seed, angles, carry, target) }
 		val folding = jointTemplates.folding(angles)
-		val corrected = arap.solve(target, seed, guide, guideWeights, folding)
+		val corrected = RigBuildProfile.stage("skeleton: skin arap") { arap.solve(target, seed, guide, guideWeights, folding) }
 		val closedFold = jointTemplates.folding(angles, closed = true)
 		for (v in 0 until corrected.size / 2) if (closedFold[v]) {
 			corrected[v * 2] = guide[v * 2]; corrected[v * 2 + 1] = guide[v * 2 + 1]
 		}
-		surface.apply(corrected, jointTemplates.fairing(angles))
+		RigBuildProfile.stage("skeleton: skin fairing") { surface.apply(corrected, jointTemplates.fairing(angles)) }
 		return corrected
 	}
 
@@ -1541,12 +1561,15 @@ internal object SkeletonRig {
 		return IntArray(indices.size) { indices[faces[it / 3] * 3 + it % 3] }
 	}
 
+	/** Whether [skinDrawable] solves its samples in parallel; off only to check that it changes nothing. */
+	@Volatile internal var parallelSamples = true
+
 	/** What [skinDrawable] changes on a mesh: the skin, kept by [skinCached]. */
 	private class Skin(val parent: DeformerId?, val mesh: DrawableMesh?, val grid: KeyformGrid<MeshDeltaForm>?,
 					   val blendShapes: List<BlendShapeBinding<MeshForm>>)
 
 	/** Version of [skinKey]; raise it whenever [skinDrawable] or what the key covers changes. */
-	private const val SKIN_VERSION = "skin-1"
+	private const val SKIN_VERSION = "skin-2"
 	private const val SKIN_CAPACITY = 128
 	private val skins = object : LinkedHashMap<String, java.lang.ref.SoftReference<Skin>>(16, 0.75f, true) {
 		override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, java.lang.ref.SoftReference<Skin>>?): Boolean = size > SKIN_CAPACITY
@@ -1734,16 +1757,50 @@ internal object SkeletonRig {
 	 * neighbours of [at] - a mesh's home-space deltas at a value - strays from it by no more than
 	 * the configured tolerance, with keys never closer than the configured minimum step.
 	 */
-	internal fun fittedSides(range: Pair<Float, Float>, sampling: SkeletonSampling, at: (Float) -> FloatArray): Pair<Int, Int> {
-		val memo = HashMap<Float, FloatArray>()
-		fun sample(value: Float) = memo.getOrPut(value) { at(value) }
-		fun side(limit: Float): Int {
+	internal fun fittedSides(range: Pair<Float, Float>, sampling: SkeletonSampling, at: (Float) -> FloatArray): Pair<Int, Int> =
+		fittedSides(mapOf(Unit to range), sampling, {}) { _, value -> at(value) }.getValue(Unit)
+
+	/**
+	 * [fittedSides] of every range in [ranges] at once. Each side checks its key counts from 1 up and the spans
+	 * of a count in order, stopping at the first span that is not straight, exactly as its own search would; the
+	 * sides advance together in waves, and before each wave [prefetch] receives the values its spans read that
+	 * [at] has not given yet, a few spans ahead per side so that the wave has about [width] values to compute.
+	 * The spans read past a failing one are the only extra work, and the result is each side's own.
+	 */
+	internal fun <K> fittedSides(ranges: Map<K, Pair<Float, Float>>, sampling: SkeletonSampling,
+		prefetch: (List<Pair<K, Float>>) -> Unit, width: Int = 1, at: (K, Float) -> FloatArray): Map<K, Pair<Int, Int>> {
+		class Side(val key: K, val limit: Float) {
 			val most = ceil(abs(limit) / sampling.minimumStepDegrees - 1e-6).toInt()
-			return (1..most).firstOrNull { n ->
-				(0 until n).all { i -> straight(sample(limit * i / n), sample(limit * (i + 1) / n), sample(limit * (i + 0.5f) / n), sampling.tolerancePx) }
-			} ?: most
+			var found: Int? = if (most < 1) most else null
+			var n = 1
+			var span = 0
+			fun values(i: Int) = listOf(limit * i / n, limit * (i + 1) / n, limit * (i + 0.5f) / n)
 		}
-		return side(range.first) to side(range.second)
+		val memo = HashMap<Pair<K, Float>, FloatArray>()
+		fun sample(key: K, value: Float) = memo.getOrPut(key to value) { at(key, value) }
+		val sides = ranges.map { (key, range) -> Side(key, range.first) to Side(key, range.second) }
+		val all = sides.flatMap { listOf(it.first, it.second) }
+		while (true) {
+			val open = all.filter { it.found == null }
+			if (open.isEmpty()) break
+			val ahead = maxOf(1, width / (open.size * 3))
+			prefetch(open.flatMap { side ->
+				(side.span until minOf(side.n, side.span + ahead)).flatMap { i -> side.values(i).map { side.key to it } }
+			}.distinct().filter { it !in memo })
+			for (side in open) for (step in 0 until ahead) {
+				val i = side.span
+				val (a, b, middle) = side.values(i)
+				if (straight(sample(side.key, a), sample(side.key, b), sample(side.key, middle), sampling.tolerancePx)) {
+					side.span++
+					if (side.span < side.n) continue
+					side.found = side.n
+				} else if (side.n < side.most) {
+					side.n++; side.span = 0
+				} else side.found = side.most
+				break
+			}
+		}
+		return sides.associate { (low, high) -> low.key to (low.found!! to high.found!!) }
 	}
 
 	/** Whether every vertex of [middle] lies within [tolerance] of halfway between [a] and [b]. */

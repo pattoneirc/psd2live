@@ -109,4 +109,14 @@ class SkeletonIncrementalBakeTest {
 		assertEquals(0, SkeletonRig.skinCacheMisses - misses)
 		assertEquals(digest(cold(posed)), digest(model))
 	}
+
+	@Test fun parallelSamplesBakeTheSameRigAsSequentialOnes() {
+		val was = SkeletonRig.parallelSamples
+		try {
+			SkeletonRig.parallelSamples = false
+			val sequential = cold(arms)
+			SkeletonRig.parallelSamples = true
+			assertEquals(digest(sequential), digest(cold(arms)))
+		} finally { SkeletonRig.parallelSamples = was }
+	}
 }

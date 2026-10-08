@@ -7,15 +7,32 @@ import kotlin.math.hypot
  * 2D vertex-spokes ARAP, Sorkine & Alexa (2007), equations 3, 6 and 9.
  * https://igl.ethz.ch/projects/ARAP/arap_web.pdf
  * The joint band is free; rigid skin regions are Dirichlet handles. The topology and cotangent
- * Laplacian are reused for every bake sample. Local rotations use the closed-form 2D polar fit;
- * the global SPD system is solved with diagonally preconditioned conjugate gradients.
+ * Laplacian are reused for every bake sample. Local rotations use the closed-form 2D polar fit.
+ *
+ * The global SPD system (the free vertices' Laplacian plus the pose's guide penalty on its diagonal) is the
+ * same for every local/global iteration of one solve and for both axes, so each solve factors it once, by an
+ * envelope (skyline) Cholesky factorization in reverse Cuthill-McKee order (George & Liu, Computer Solution of
+ * Large Sparse Positive Definite Systems, 1981, chapters 4 and 5), and every global step is two triangular
+ * solves. The order and the envelope depend only on the mesh and the free set, so they are found once per
+ * mesh. [factored] false solves with diagonally preconditioned conjugate gradients instead, the reference the
+ * factorization is checked against.
  */
-internal class SkeletonArap(private val rest: FloatArray, private val triangles: IntArray, movable: BooleanArray) {
+internal class SkeletonArap(private val rest: FloatArray, private val triangles: IntArray, movable: BooleanArray,
+							private val factored: Boolean = true) {
 	private class Edge(val a: Int, val b: Int, val weight: Double)
 	private val count = rest.size / 2
 	private val edges: List<Edge>
 	private val free = movable.copyOf()
 	private val diagonal = DoubleArray(count)
+	// The edges as arrays, with each edge's rest vector, read by every iteration.
+	private val edgeA: IntArray
+	private val edgeB: IntArray
+	private val edgeWeight: DoubleArray
+	private val edgeX: DoubleArray
+	private val edgeY: DoubleArray
+	/** The order and envelope of the free system, and the weights of its off-diagonal entries in [Envelope]'s link order. */
+	private val envelope: Envelope?
+	private val linkWeights: DoubleArray
 
 	init {
 		val weights = HashMap<Long, Double>()
@@ -52,6 +69,94 @@ internal class SkeletonArap(private val rest: FloatArray, private val triangles:
 			// rather than inventing an attachment or solving a singular translation mode.
 			if (component.all { free[it] }) for (vertex in component) free[vertex] = false
 		}
+		edgeA = IntArray(edges.size) { edges[it].a }
+		edgeB = IntArray(edges.size) { edges[it].b }
+		edgeWeight = DoubleArray(edges.size) { edges[it].weight }
+		edgeX = DoubleArray(edges.size) { (rest[edges[it].a * 2] - rest[edges[it].b * 2]).toDouble() }
+		edgeY = DoubleArray(edges.size) { (rest[edges[it].a * 2 + 1] - rest[edges[it].b * 2 + 1]).toDouble() }
+		val links = edges.filter { free[it.a] && free[it.b] }
+		linkWeights = DoubleArray(links.size) { links[it].weight }
+		envelope = if (factored && free.any { it }) Envelope(count, free, links.map { it.a to it.b }) else null
+	}
+
+	/**
+	 * The free vertices in reverse Cuthill-McKee order and the envelope of the system's lower triangle in that
+	 * order: row k holds columns first[k]..k, packed from offset[k].
+	 */
+	private class Envelope(count: Int, free: BooleanArray, links: List<Pair<Int, Int>>) {
+		val order: IntArray
+		private val first: IntArray
+		private val offset: IntArray
+		private val size: Int
+		private val linkSlot: IntArray
+
+		init {
+			val neighbors = Array(count) { ArrayList<Int>() }
+			for ((a, b) in links) { neighbors[a] += b; neighbors[b] += a }
+			val degree = IntArray(count) { neighbors[it].size }
+			for (list in neighbors) list.sortWith(compareBy<Int> { degree[it] }.thenBy { it })
+			val visited = BooleanArray(count)
+			val sequence = ArrayList<Int>()
+			// Each component breadth first from a vertex of least degree, neighbours by increasing degree, reversed.
+			val starts = (0 until count).filter { free[it] }.sortedWith(compareBy<Int> { degree[it] }.thenBy { it })
+			for (start in starts) if (!visited[start]) {
+				val component = ArrayList<Int>()
+				component += start; visited[start] = true
+				var i = 0
+				while (i < component.size) for (next in neighbors[component[i++]]) if (!visited[next]) { visited[next] = true; component += next }
+				sequence += component.asReversed()
+			}
+			order = sequence.toIntArray()
+			val position = IntArray(count) { -1 }
+			for ((k, vertex) in order.withIndex()) position[vertex] = k
+			first = IntArray(order.size) { k -> minOf(k, neighbors[order[k]].minOfOrNull { position[it] } ?: k) }
+			offset = IntArray(order.size)
+			var total = 0
+			for (k in order.indices) { offset[k] = total - first[k]; total += k - first[k] + 1 }
+			size = total
+			linkSlot = IntArray(links.size) {
+				val a = position[links[it].first]; val b = position[links[it].second]
+				offset[maxOf(a, b)] + minOf(a, b)
+			}
+		}
+
+		/** The Cholesky factor of the system with [diagonal] (by vertex) and the links' -[weights], or null when it is not positive definite. */
+		fun factor(diagonal: (Int) -> Double, weights: DoubleArray): DoubleArray? {
+			val l = DoubleArray(size)
+			for (k in order.indices) l[offset[k] + k] = diagonal(order[k])
+			for (i in weights.indices) l[linkSlot[i]] -= weights[i]
+			for (i in order.indices) {
+				val rowI = offset[i]
+				for (j in first[i] until i) {
+					val rowJ = offset[j]
+					var sum = l[rowI + j]
+					for (k in maxOf(first[i], first[j]) until j) sum -= l[rowI + k] * l[rowJ + k]
+					l[rowI + j] = sum / l[rowJ + j]
+				}
+				var pivot = l[rowI + i]
+				for (k in first[i] until i) pivot -= l[rowI + k] * l[rowI + k]
+				if (!(pivot > 1e-300)) return null
+				l[rowI + i] = kotlin.math.sqrt(pivot)
+			}
+			return l
+		}
+
+		/** Solves L Lᵀ x = [rhs] (by vertex) into [out] (by vertex), writing only the free vertices. */
+		fun solve(l: DoubleArray, rhs: DoubleArray, out: DoubleArray, scratch: DoubleArray) {
+			for (i in order.indices) {
+				val row = offset[i]
+				var sum = rhs[order[i]]
+				for (k in first[i] until i) sum -= l[row + k] * scratch[k]
+				scratch[i] = sum / l[row + i]
+			}
+			for (i in order.indices.reversed()) {
+				val row = offset[i]
+				val value = scratch[i] / l[row + i]
+				scratch[i] = value
+				for (k in first[i] until i) scratch[k] -= l[row + k] * value
+			}
+			for (i in order.indices) out[order[i]] = scratch[i]
+		}
 	}
 
 	fun solve(target: FloatArray, seed: FloatArray = target, guide: FloatArray = seed, guideWeights: DoubleArray = DoubleArray(count), folding: BooleanArray = BooleanArray(count)): FloatArray {
@@ -68,18 +173,22 @@ internal class SkeletonArap(private val rest: FloatArray, private val triangles:
 		val mirrorCross = DoubleArray(count)
 		val bx = DoubleArray(count)
 		val by = DoubleArray(count)
+		val nextX = DoubleArray(count)
+		val nextY = DoubleArray(count)
+		val factor = envelope?.factor({ diagonal[it] + penalty[it] }, linkWeights)
+		val scratch = DoubleArray(envelope?.order?.size ?: 0)
 		repeat(30) {
 			dot.fill(0.0); cross.fill(0.0); mirrorDot.fill(0.0); mirrorCross.fill(0.0); bx.fill(0.0); by.fill(0.0)
-			for (e in edges) {
-				val rx = (rest[e.a * 2] - rest[e.b * 2]).toDouble()
-				val ry = (rest[e.a * 2 + 1] - rest[e.b * 2 + 1]).toDouble()
-				val dx = x[e.a] - x[e.b]; val dy = y[e.a] - y[e.b]
-				val d = e.weight * (rx * dx + ry * dy)
-				val t = e.weight * (rx * dy - ry * dx)
-				dot[e.a] += d; dot[e.b] += d; cross[e.a] += t; cross[e.b] += t
-				val md = e.weight * (rx * dx - ry * dy)
-				val mt = e.weight * (ry * dx + rx * dy)
-				mirrorDot[e.a] += md; mirrorDot[e.b] += md; mirrorCross[e.a] += mt; mirrorCross[e.b] += mt
+			for (e in edgeA.indices) {
+				val a = edgeA[e]; val b = edgeB[e]; val weight = edgeWeight[e]
+				val rx = edgeX[e]; val ry = edgeY[e]
+				val dx = x[a] - x[b]; val dy = y[a] - y[b]
+				val d = weight * (rx * dx + ry * dy)
+				val t = weight * (rx * dy - ry * dx)
+				dot[a] += d; dot[b] += d; cross[a] += t; cross[b] += t
+				val md = weight * (rx * dx - ry * dy)
+				val mt = weight * (ry * dx + rx * dy)
+				mirrorDot[a] += md; mirrorDot[b] += md; mirrorCross[a] += mt; mirrorCross[b] += mt
 			}
 			for (i in 0 until count) {
 				val rotationLength = hypot(dot[i], cross[i])
@@ -92,21 +201,22 @@ internal class SkeletonArap(private val rest: FloatArray, private val triangles:
 				c[i] = if (length > 1e-12) (if (reflected[i]) mirrorDot[i] else dot[i]) / length else 1.0
 				s[i] = if (length > 1e-12) (if (reflected[i]) mirrorCross[i] else cross[i]) / length else 0.0
 			}
-			for (e in edges) {
-				val rx = (rest[e.a * 2] - rest[e.b * 2]).toDouble()
-				val ry = (rest[e.a * 2 + 1] - rest[e.b * 2 + 1]).toDouble()
-				val sa = if (reflected[e.a]) -1 else 1; val sb = if (reflected[e.b]) -1 else 1
-				val dx = e.weight * 0.5 * ((c[e.a] + c[e.b]) * rx - (sa * s[e.a] + sb * s[e.b]) * ry)
-				val dy = e.weight * 0.5 * ((s[e.a] + s[e.b]) * rx + (sa * c[e.a] + sb * c[e.b]) * ry)
-				bx[e.a] += dx; bx[e.b] -= dx; by[e.a] += dy; by[e.b] -= dy
-				if (!free[e.b]) { bx[e.a] += e.weight * x[e.b]; by[e.a] += e.weight * y[e.b] }
-				if (!free[e.a]) { bx[e.b] += e.weight * x[e.a]; by[e.b] += e.weight * y[e.a] }
+			for (e in edgeA.indices) {
+				val a = edgeA[e]; val b = edgeB[e]; val weight = edgeWeight[e]
+				val rx = edgeX[e]; val ry = edgeY[e]
+				val sa = if (reflected[a]) -1 else 1; val sb = if (reflected[b]) -1 else 1
+				val dx = weight * 0.5 * ((c[a] + c[b]) * rx - (sa * s[a] + sb * s[b]) * ry)
+				val dy = weight * 0.5 * ((s[a] + s[b]) * rx + (sa * c[a] + sb * c[b]) * ry)
+				bx[a] += dx; bx[b] -= dx; by[a] += dy; by[b] -= dy
+				if (!free[b]) { bx[a] += weight * x[b]; by[a] += weight * y[b] }
+				if (!free[a]) { bx[b] += weight * x[a]; by[b] += weight * y[a] }
 			}
 			for (i in 0 until count) {
 				bx[i] += penalty[i] * guide[i * 2]; by[i] += penalty[i] * guide[i * 2 + 1]
 			}
-			val nextX = x.copyOf(); val nextY = y.copyOf()
-			global(nextX, bx, penalty); global(nextY, by, penalty)
+			x.copyInto(nextX); y.copyInto(nextY)
+			if (factor != null) { envelope!!.solve(factor, bx, nextX, scratch); envelope.solve(factor, by, nextY, scratch) }
+			else { global(nextX, bx, penalty); global(nextY, by, penalty) }
 			val step = safeStep(x, y, nextX, nextY, folding)
 			var change = 0.0
 			for (i in 0 until count) {

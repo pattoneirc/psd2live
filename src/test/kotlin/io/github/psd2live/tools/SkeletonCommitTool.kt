@@ -9,13 +9,9 @@ import io.github.psd2live.core.*
 import io.github.psd2live.format.compile.document.ContentHash
 import io.github.psd2live.project.MutationAuthor
 import io.github.psd2live.project.WorkspaceDocument
-import io.github.psd2live.project.WorkspaceSourceArt
-import io.github.psd2live.project.WorkspaceSourceLayer
 import io.github.psd2live.targets.cubism.PuppetIr
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
-import org.umamo.format.art.LayerBounds
-import org.umamo.format.art.LayerRaster
 import org.umamo.render.eval.CpuDeformationEvaluator
 import org.umamo.runtime.model.VertexGroup
 import org.umamo.runtime.model.VertexGroupKind
@@ -33,26 +29,6 @@ import kotlin.test.assertEquals
  */
 class SkeletonCommitTool {
 	private fun ms(start: Long) = (System.nanoTime() - start) / 1e6
-
-	/** [sample]'s PSD with every layer and the canvas scaled [factor] times by pixel repetition, written to [out]. */
-	private fun scaled(sample: Sample, factor: Int, out: File): File {
-		val file = File(out, "${sample.name}-x$factor.psd")
-		if (file.isFile) return file
-		val art = org.umamo.format.psd.PsdReader.read(java.nio.file.Files.readAllBytes(sample.path))
-		fun scale(raster: LayerRaster): LayerRaster {
-			val w = raster.width * factor; val h = raster.height * factor
-			val bytes = ByteArray(w * h * 4)
-			for (y in 0 until h) for (x in 0 until w) System.arraycopy(raster.rgba, ((y / factor) * raster.width + x / factor) * 4, bytes, (y * w + x) * 4, 4)
-			return LayerRaster(w, h, bytes)
-		}
-		val layers = art.layers.map { l ->
-			WorkspaceSourceLayer(l.id, l.name, l.groupPath, l.kind, l.visible, l.order,
-				LayerBounds(l.bounds.left * factor, l.bounds.top * factor, l.bounds.width * factor, l.bounds.height * factor),
-				l.opacity, l.clipped, l.blend, l.channelMask, scale(l.raster), null, null, false)
-		}
-		file.writeBytes(org.umamo.format.psd.PsdWriter.write(WorkspaceSourceArt(art.widthPx * factor, art.heightPx * factor, layers, art.groups)))
-		return file
-	}
 
 	private class Session(val runtime: WorkspaceRuntime<RigPreviewModel>, val commands: WorkspaceDocumentCommands)
 
@@ -127,7 +103,7 @@ class SkeletonCommitTool {
 		val sample = Sample.fromEnvironment()
 		val out = output("skeleton-commit")
 		val factor = setting("PSD2LIVE_SCALE", "2").toInt()
-		val path = scaled(sample, factor, out)
+		val path = scaledSample(sample, factor, out)
 		val report = StringBuilder("# skeleton commits on ${sample.name} x$factor\n")
 		val s = session()
 		runBlocking {
@@ -152,6 +128,22 @@ class SkeletonCommitTool {
 				s.op("skeleton_move", buildJsonObject {
 					put("bone_id", "perf_1"); put("end", "tail")
 					putJsonArray("point") { add(bone.tailX + 3f); add(bone.tailY - 2f) }
+				})
+			}
+			// A joint of the limb that skins the largest bound mesh: that mesh, and every other one on its limb, rebake.
+			val limb = run {
+				val c = s.runtime.capture()
+				val sizes = c.model.rig.puppet.drawables.associate { it.id.raw to (it.mesh?.positions?.size ?: 0) / 2 }
+				val bone = c.document.rigEdits.skeleton!!.bones.filter { !it.role.body && !it.role.anchor && it.drawableIds.isNotEmpty() }
+					.maxBy { b -> b.drawableIds.maxOf { sizes[it] ?: 0 } }
+				report.appendLine("limb bone ${bone.id} (${bone.role}): meshes ${bone.drawableIds.map { "$it=${sizes[it]}" }}")
+				bone.id
+			}
+			for (round in 0 until 2) timed("move limb joint $round") {
+				val bone = s.runtime.capture().document.rigEdits.skeleton!!.bone(limb)!!
+				s.op("skeleton_move", buildJsonObject {
+					put("bone_id", limb); put("end", "tail")
+					putJsonArray("point") { add(bone.tailX + 3f * factor); add(bone.tailY - 2f * factor) }
 				})
 			}
 			timed("geometry commit after bones") {
@@ -199,7 +191,7 @@ class SkeletonCommitTool {
 		val sample = Sample.fromEnvironment()
 		val out = output("skeleton-commit")
 		val factor = setting("PSD2LIVE_SCALE", "1").toInt()
-		val path = if (factor == 1) sample.path.toFile() else scaled(sample, factor, out)
+		val path = if (factor == 1) sample.path.toFile() else scaledSample(sample, factor, out)
 		val report = StringBuilder()
 		val s = session()
 		var checks = 0

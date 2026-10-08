@@ -66,4 +66,36 @@ class SkeletonArapTest {
 		val result = solver.solve(mirrored, mirrored, folding = BooleanArray(6) { true })
 		for (i in mirrored.indices) assertEquals(mirrored[i], result[i], .001f, "reflected material coordinate $i")
 	}
+
+	/** The factored global solve gives what the conjugate gradient solve gives, to well under a pixel, on a bending strip. */
+	@Test fun factoredSolveMatchesConjugateGradients() {
+		val columns = 7; val rows = 41
+		val rest = FloatArray(columns * rows * 2) { i -> val v = i / 2; if (i % 2 == 0) (v % columns) * 6f else (v / columns) * 5f }
+		val faces = ArrayList<Int>()
+		for (r in 0 until rows - 1) for (c in 0 until columns - 1) {
+			val a = r * columns + c; val b = a + 1; val d = a + columns; val e = d + 1
+			faces += listOf(a, b, d, b, e, d)
+		}
+		val triangles = faces.toIntArray()
+		val weight = FloatArray(columns * rows) { v -> (((v / columns) * 5f - 70f) / 60f).coerceIn(0f, 1f) }
+		val movable = BooleanArray(weight.size) { weight[it] > 0f && weight[it] < 1f }
+		val factored = SkeletonArap(rest, triangles, movable)
+		val reference = SkeletonArap(rest, triangles, movable, factored = false)
+		for (angle in listOf(-130.0, -45.0, 20.0, 90.0, 140.0)) {
+			val target = FloatArray(rest.size); val seed = FloatArray(rest.size)
+			for (v in weight.indices) {
+				val full = SkeletonIk.rotate(rest[v * 2].toDouble(), rest[v * 2 + 1].toDouble(), 18.0, 100.0, angle)
+				val partial = SkeletonIk.rotate(rest[v * 2].toDouble(), rest[v * 2 + 1].toDouble(), 18.0, 100.0, angle * weight[v])
+				for (axis in 0..1) {
+					target[v * 2 + axis] = (rest[v * 2 + axis] + (full[axis] - rest[v * 2 + axis]) * weight[v]).toFloat()
+					seed[v * 2 + axis] = partial[axis].toFloat()
+				}
+			}
+			val penalty = DoubleArray(weight.size) { v -> 4.0 * weight[v] * (1 - weight[v]) * (1 + v % 3) }
+			val folding = BooleanArray(weight.size) { v -> movable[v] && v % columns < 2 }
+			val expected = reference.solve(target, seed, target, penalty, folding)
+			val actual = factored.solve(target, seed, target, penalty, folding)
+			for (i in expected.indices) assertEquals(expected[i], actual[i], 1e-3f, "coordinate $i at $angle")
+		}
+	}
 }
