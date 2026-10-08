@@ -269,7 +269,6 @@ fun BottomLogDock(
 				) {
 					IconLogAutoScroll(tint = if (autoScroll) colors.accent else colors.textMuted, following = autoScroll)
 				}
-				PanelToolbarSeparator()
 				PanelIconButton(onClick = { viewModel.clearLogs() }, tooltip = tr("log.dock.clear")) {
 					IconLogClear(tint = colors.textPrimary)
 				}
@@ -537,15 +536,20 @@ private fun LogLevelMenu(
 	val counts = remember(entries) {
 		LEVEL_THRESHOLDS.associateWith { threshold -> entries.count { it.level.severity >= threshold.severity } }
 	}
-	Box(modifier = Modifier.fillMaxHeight()) {
-		LogFilterTab(
-			text = "${tr("log.dock.level")}: ${selected.label()} ▾",
-			selected = open,
+	Box(contentAlignment = Alignment.Center) {
+		PanelToolButton(
+			label = tr("log.dock.level"),
+			showLabel = false,
 			onClick = { open = !open },
-		)
+			enabled = true,
+			active = open,
+			tooltip = "${tr("log.dock.level")}: ${selected.label()}",
+		) {
+			IconLogLevel(selected, tint = colors.textPrimary)
+		}
 		if (open) {
 			Popup(
-				alignment = Alignment.BottomStart,
+				alignment = Alignment.BottomEnd,
 				offset = IntOffset(0, 4),
 				onDismissRequest = { open = false },
 				properties = PopupProperties(focusable = true),
@@ -561,6 +565,7 @@ private fun LogLevelMenu(
 							AppMenuItem(
 								text = level.label(),
 								shortcut = "${counts[level] ?: 0}",
+								icon = { tint -> IconLogLevel(level, tint) },
 								isChecked = level == selected,
 								onClick = {
 									onSelect(level)
@@ -571,6 +576,30 @@ private fun LogLevelMenu(
 					}
 				}
 			}
+		}
+	}
+}
+
+/**
+ * The lowest level shown: four bars rising from debug to error, solid from the chosen level up and hollow below it;
+ * the warning and error bars take their colours.
+ */
+@Composable
+private fun IconLogLevel(level: LogLevel, tint: Color) {
+	val colors = LocalToolColors.current
+	val chosen = LEVEL_THRESHOLDS.indexOfFirst { it.severity == level.severity }.coerceAtLeast(0)
+	GridIcon(Modifier.size(13.dp), tint) {
+		val tops = floatArrayOf(11.4f, 8.6f, 5.8f, 2.6f)
+		for (index in 0..3) {
+			val x = 2.2f + index * 3.6f
+			val top = tops[index]
+			val bar = when (index) {
+				2 -> tone(colors.warning)
+				3 -> tone(colors.error)
+				else -> color
+			}
+			if (index >= chosen) fillBox(x, top, 2.6f, 15.6f - top, 0.6f, bar)
+			else box(x, top, 2.6f, 15.6f - top, 0.6f, ICON_FINE, bar.copy(alpha = bar.alpha * 0.5f))
 		}
 	}
 }
