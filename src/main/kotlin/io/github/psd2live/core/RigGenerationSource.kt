@@ -14,8 +14,9 @@ internal object RigGenerationSource {
 
     fun analyze(source: SourceArt, config: PipelineConfig): PipelineAnalysis = AnalysisMemo.get(source, config.generationSource, config, "source") {
         val input = config.generationSource?.let { geometrySource(source, it, config.rigEdits) } ?: source
-        val analysis = CharacterAnalyzer.analyze(input, RigLayerDeletion.generationConfig(config))
-        if (input === source) analysis else analysis.copy(source = source, preview = PreviewRenderer.composite(source))
+        // The analysis stands for the current art, so it composites that, never the generation input.
+        val analysis = CharacterAnalyzer.analyze(input, RigLayerDeletion.generationConfig(config)) { PreviewRenderer.composite(source) }
+        if (input === source) analysis else analysis.copy(source = source)
     }
 
     /**
@@ -47,7 +48,10 @@ internal object RigGenerationSource {
         }.let { Analyses(it, it) }
         val resolution = PrimitiveResolution.of(config.rigEdits)
         val geometryAnalysis = RigBuildProfile.stage("prepare: geometry analyze") {
-            AnalysisMemo.get(input.source, reference, config, "geometry") { CharacterAnalyzer.analyze(geometrySource(input.source, reference, config.rigEdits), config) }
+            // Generation reads no composite: the geometry analysis carries the current art's, as the texture one does.
+            AnalysisMemo.get(input.source, reference, config, "geometry") {
+                CharacterAnalyzer.analyze(geometrySource(input.source, reference, config.rigEdits), config) { input.preview }
+            }
         }
             .let { if (resolution.active) resolvedAnalysis(it, resolution, config) else it }
         val geometry = RigBuildProfile.stage("prepare: geometry mouth lips") { MouthLipLayers.prepare(geometryAnalysis, config) }
@@ -76,7 +80,7 @@ internal object RigGenerationSource {
             val lip = layer.source as? MouthLipLayer
             if (lip != null) {
                 val owner = current[lip.ownerId] ?: lip
-                val visible = (0 until owner.raster.width * owner.raster.height).any { owner.raster.rgba[it * 4 + 3] != 0.toByte() }
+                val visible = visible(owner.raster)
                 val replacement = if (visible) generated[lip.id.raw]?.source else null
                 val source = replacement ?: object : SourceLayer by lip {
                     override val raster = LayerRaster(lip.raster.width, lip.raster.height, ByteArray(lip.raster.rgba.size))
@@ -102,7 +106,7 @@ internal object RigGenerationSource {
         } + generated.values.filter { generatedLayer -> geometry.layers.none { it.source.id == generatedLayer.source.id } }.map { layer ->
             val lip = layer.source as MouthLipLayer
             val owner = current.getValue(lip.ownerId)
-            val visible = (0 until owner.raster.width * owner.raster.height).any { owner.raster.rgba[it * 4 + 3] != 0.toByte() }
+            val visible = visible(owner.raster)
             val source = if (visible) lip else MouthLipLayer(lip.ownerId, lip.side, owner,
                 LayerRaster(lip.raster.width, lip.raster.height, ByteArray(lip.raster.rgba.size)), lip.bounds)
             val covered = creationCoverage[lip.id.raw]?.let { padded(source, it) } ?: source
@@ -284,7 +288,7 @@ internal object RigGenerationSource {
      * same density: the raster is laid over its rectangle inside a transparent raster covering [bounds], so the
      * padded layer keeps its texels and its pixels stay where they were on the canvas.
      */
-    private fun paddedAtDensity(current: SourceLayer, bounds: LayerBounds): SourceLayer {
+    private fun paddedAtDensity(current: SourceLayer, bounds: LayerBounds): LayerRaster {
         val space = LayerSpace.of(current)
         val width = Math.round(bounds.width * space.scaleX.toDouble()).toInt().coerceAtLeast(1)
         val height = Math.round(bounds.height * space.scaleY.toDouble()).toInt().coerceAtLeast(1)
@@ -295,11 +299,20 @@ internal object RigGenerationSource {
         val stepY = space.scaleY.toDouble() * bounds.height / height
         val rgba = io.github.psd2live.format.compile.RasterResample.resample(current.raster.rgba, current.raster.width, current.raster.height,
             width, height, (bounds.left - space.left) * space.scaleX.toDouble(), stepX, (bounds.top - space.top) * space.scaleY.toDouble(), stepY)
-        return object : SourceLayer by current {
-            override val bounds = bounds
-            override val raster = LayerRaster(width, height, rgba)
-        }
+        return LayerRaster(width, height, rgba)
     }
+
+    /** Whether any pixel of [raster] is not fully transparent, by raster array: a rebuild scans only repainted mouths. */
+    private fun visible(raster: LayerRaster): Boolean = visibility[raster.rgba] ?: run {
+        val rgba = raster.rgba
+        var found = false
+        var index = 3
+        val end = raster.width * raster.height * 4
+        while (index < end) { if (rgba[index] != 0.toByte()) { found = true; break }; index += 4 }
+        found.also { visibility[rgba] = it }
+    }
+
+    private val visibility = java.util.Collections.synchronizedMap(java.util.WeakHashMap<ByteArray, Boolean>())
 
     /** Transparent coverage prevents a kept mesh from sampling another layer after a tighter crop. */
     internal fun padded(current: SourceLayer, previous: LayerBounds): SourceLayer {
@@ -309,7 +322,101 @@ internal object RigGenerationSource {
         val bottom = maxOf(current.bounds.top + current.bounds.height, previous.top + previous.height)
         val bounds = LayerBounds(left, top, right - left, bottom - top)
         if (bounds == current.bounds) return current
-        if (CanvasDensity.dense(current)) return paddedAtDensity(current, bounds)
+        val raster = Paddings.get(current, bounds)
+        return object : SourceLayer by current {
+            override val bounds = bounds
+            override val raster = raster
+        }
+    }
+
+    /**
+     * Padded rasters by the raster they pad. Rasters keep their identity across rebuilds, so a rebuild pads only the
+     * layers whose pixels changed and hands every other one the very array it had before - which the memos keyed by
+     * raster identity downstream (classification, canvas proxies, tile digests) then hit as well.
+     */
+    private object Paddings {
+        private data class Key(val bounds: LayerBounds, val space: LayerSpace?, val target: LayerBounds)
+        private val entries = java.util.Collections.synchronizedMap(java.util.WeakHashMap<ByteArray, List<Pair<Key, LayerRaster>>>())
+
+        fun get(current: SourceLayer, bounds: LayerBounds): LayerRaster {
+            val dense = CanvasDensity.dense(current)
+            val key = Key(current.bounds, if (dense) LayerSpace.of(current) else null, bounds)
+            val rgba = current.raster.rgba
+            entries[rgba]?.firstOrNull { it.first == key }?.let { return it.second }
+            val padded = if (dense) paddedAtDensity(current, bounds) else paddedAtCanvas(current, bounds)
+            synchronized(entries) {
+                entries[rgba]?.firstOrNull { it.first == key }?.let { return it.second }
+                entries[rgba] = (listOf(key to padded) + entries[rgba].orEmpty()).take(4)
+            }
+            return padded
+        }
+    }
+
+    /**
+     * [current]'s raster laid over a transparent [bounds]-sized raster at its canvas spot, byte for byte what drawing
+     * it there with Java2D gives ([legacyPadded]): a raster covering its bounds one to one is copied row by row, its
+     * partly transparent pixels through the table of that draw ([SourceOver]). Anything else is drawn as before.
+     */
+    private fun paddedAtCanvas(current: SourceLayer, bounds: LayerBounds): LayerRaster {
+        val source = current.raster
+        val table = SourceOver.table
+        if (table == null || source.width != current.bounds.width || source.height != current.bounds.height || source.width <= 0 || source.height <= 0)
+            return legacyPadded(current, bounds)
+        val rgba = ByteArray(Math.multiplyExact(Math.multiplyExact(bounds.width, bounds.height), 4))
+        val dx = current.bounds.left - bounds.left; val dy = current.bounds.top - bounds.top
+        val input = source.rgba
+        for (y in 0 until source.height) {
+            if (Thread.currentThread().isInterrupted) throw InterruptedException()
+            var from = y * source.width * 4
+            var to = ((y + dy) * bounds.width + dx) * 4
+            for (x in 0 until source.width) {
+                val alpha = input[from + 3].toInt() and 255
+                if (alpha == 255) {
+                    rgba[to] = input[from]; rgba[to + 1] = input[from + 1]; rgba[to + 2] = input[from + 2]; rgba[to + 3] = -1
+                } else if (alpha != 0) {
+                    val row = alpha shl 8
+                    rgba[to] = table[row or (input[from].toInt() and 255)]
+                    rgba[to + 1] = table[row or (input[from + 1].toInt() and 255)]
+                    rgba[to + 2] = table[row or (input[from + 2].toInt() and 255)]
+                    rgba[to + 3] = alpha.toByte()
+                }
+                from += 4; to += 4
+            }
+        }
+        return LayerRaster(bounds.width, bounds.height, rgba)
+    }
+
+    /**
+     * What Java2D's source-over draw gives a colour channel of value v at alpha a over a transparent pixel, at index
+     * a * 256 + v: premultiplied and divided again, so faint pixels lose low bits (and alpha 0 keeps the transparent
+     * pixel). Read off Java2D itself once; null - and [legacyPadded] used - should it ever not be one per-channel
+     * function of (a, v) that keeps alpha.
+     */
+    internal object SourceOver {
+        val table: ByteArray? by lazy {
+            val source = BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB)
+            for (a in 0 until 256) for (v in 0 until 256) source.setRGB(v, a, (a shl 24) or (v shl 16) or ((255 - v) shl 8) or v)
+            val drawn = BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB)
+            val graphics = drawn.createGraphics()
+            try { graphics.drawImage(source, 0, 0, 256, 256, null) } finally { graphics.dispose() }
+            val table = ByteArray(256 * 256)
+            for (a in 0 until 256) for (v in 0 until 256) {
+                val pixel = drawn.getRGB(v, a)
+                if (a == 0) { if (pixel != 0) return@lazy null; continue }
+                if ((pixel ushr 24) != a || (pixel ushr 16 and 255) != (pixel and 255)) return@lazy null
+                if (a == 255 && (pixel and 255) != v) return@lazy null
+                table[(a shl 8) or v] = pixel.toByte()
+            }
+            // Green carried 255 - v: the same function must give it.
+            for (a in 1 until 256) for (v in 0 until 256)
+                if ((drawn.getRGB(v, a) ushr 8 and 255) != (table[(a shl 8) or (255 - v)].toInt() and 255)) return@lazy null
+            table
+        }
+    }
+
+    /** The padding as it was always made: the raster drawn into the larger image with Java2D. */
+    internal fun legacyPadded(current: SourceLayer, bounds: LayerBounds): LayerRaster {
+        val left = bounds.left; val top = bounds.top
         val raster = BufferedImage(current.raster.width, current.raster.height, BufferedImage.TYPE_INT_ARGB)
         for (y in 0 until raster.height) for (x in 0 until raster.width) {
             val offset = (y * raster.width + x) * 4
@@ -329,9 +436,6 @@ internal object RigGenerationSource {
             rgba[offset] = (pixel ushr 16).toByte(); rgba[offset + 1] = (pixel ushr 8).toByte()
             rgba[offset + 2] = pixel.toByte(); rgba[offset + 3] = (pixel ushr 24).toByte()
         }
-        return object : SourceLayer by current {
-            override val bounds = bounds
-            override val raster = LayerRaster(bounds.width, bounds.height, rgba)
-        }
+        return LayerRaster(bounds.width, bounds.height, rgba)
     }
 }

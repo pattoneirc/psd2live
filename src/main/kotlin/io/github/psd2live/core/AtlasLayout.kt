@@ -149,11 +149,15 @@ internal object AtlasLayout {
                 placements, solved.fit, solved.notices, solved.footprints, arrangement != null)
         }
         val byPage = items.groupBy { placements.getValue(it.id).page }
-        val pages = (0 until pageCount).map { index ->
-            if (Thread.currentThread().isInterrupted) throw InterruptedException()
+        // Pages compose independently, in parallel; the list keeps page order. Workers watch the caller's interrupt.
+        val caller = Thread.currentThread()
+        val compose = java.util.stream.IntStream.range(0, pageCount).mapToObj { index ->
+            if (caller.isInterrupted) throw InterruptedException()
             val tiles = byPage[index].orEmpty().map { Tile(it.texture, placements.getValue(it.id), masks[it.id]) }
-            page(pageSize, tiles, previous?.pages?.getOrNull(index))
+            page(pageSize, tiles, previous?.pages?.getOrNull(index), caller)
         }
+        val pages: List<AtlasPage> = (if (pageCount > 1) compose.parallel() else compose).toList()
+        if (caller.isInterrupted) throw InterruptedException()
         return PackedAtlas(pages, placements, solved.fit, solved.notices, solved.footprints, arrangement != null)
     }
 
@@ -435,7 +439,7 @@ internal object AtlasLayout {
      * [base]'s other strips. A tile whose size is not its raster's is resampled ([RasterResample]); its digest
      * and size together still determine its pixels.
      */
-    private fun page(size: Int, tiles: List<Tile>, base: AtlasPage?): AtlasPage {
+    private fun page(size: Int, tiles: List<Tile>, base: AtlasPage?, caller: Thread): AtlasPage {
         val recipe = Recipe(size, tiles.map { tile ->
             TileKey(tile.at.x, tile.at.y, tile.at.width, tile.at.height, digest(tile.texture.raster.rgba), tile.mask?.key ?: "", tile.at.rotation)
         }.sortedWith(compareBy<TileKey> { it.y }.thenBy { it.x }))
@@ -446,16 +450,22 @@ internal object AtlasLayout {
             java.util.BitSet().apply { for (tile in old.tiles + recipe.tiles) if (tile !in kept) tile.rows.let { set(maxOf(0, it.first), maxOf(0, it.last + 1)) } }
         }
         val image = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
+        // The page's own pixels (ARGB, as setRGB stores them on this image type), written directly.
+        val data = (image.raster.dataBuffer as java.awt.image.DataBufferInt).data
         for (tile in tiles) {
-            if (Thread.currentThread().isInterrupted) throw InterruptedException()
+            if (caller.isInterrupted) throw InterruptedException()
             val raster = tile.texture.raster; val at = tile.at
             val rgba = RasterResample.resize(raster.rgba, raster.width, raster.height, at.width, at.height)
             // Direct pixel copy retains RGB even when alpha is zero (Graphics may discard it).
             val pixels = argb(rgba, at.width * at.height)
             val mask = tile.mask
-            if (at.rotation != 0f) writeTurned(image, at, pixels, mask)
-            else if (mask == null) image.setRGB(at.x, at.y, at.width, at.height, pixels, 0, at.width)
-            else writeMasked(image, at, mask) { x, y, length, offset -> image.setRGB(x, y, length, 1, pixels, offset, at.width) }
+            if (at.rotation != 0f) writeTurned(data, size, size, at, pixels, mask)
+            else if (mask == null) {
+                // As setRGB would, refuse a rectangle off the page.
+                if (at.x < 0 || at.y < 0 || at.x + at.width > size || at.y + at.height > size) throw ArrayIndexOutOfBoundsException("Coordinate out of bounds!")
+                for (row in 0 until at.height) System.arraycopy(pixels, row * at.width, data, (at.y + row) * size + at.x, at.width)
+            }
+            else writeMasked(image, at, mask) { x, y, length, offset -> System.arraycopy(pixels, offset, data, y * size + x, length) }
         }
         val page = AtlasPage.composed(image, recipe, base, dirtyRows)
         synchronized(pageCache) { pageCache[recipe] = SoftReference(page) }
@@ -485,9 +495,20 @@ internal object AtlasLayout {
      * alpha so transparent texels lend no colour.
      */
     private fun writeTurned(image: BufferedImage, at: AtlasPlacement, pixels: IntArray, mask: AtlasArrange.Shape?) {
+        val buffer = image.raster.dataBuffer
+        if (image.type == BufferedImage.TYPE_INT_ARGB && buffer is java.awt.image.DataBufferInt && buffer.numBanks == 1 &&
+            buffer.data.size == image.width * image.height) return writeTurned(buffer.data, image.width, image.height, at, pixels, mask)
+        val data = IntArray(image.width * image.height)
+        image.getRGB(0, 0, image.width, image.height, data, 0, image.width)
+        writeTurned(data, image.width, image.height, at, pixels, mask)
+        image.setRGB(0, 0, image.width, image.height, data, 0, image.width)
+    }
+
+    /** [writeTurned] into [data], the ARGB pixels of a [pageWidth] x [pageHeight] page. */
+    private fun writeTurned(data: IntArray, pageWidth: Int, pageHeight: Int, at: AtlasPlacement, pixels: IntArray, mask: AtlasArrange.Shape?) {
         val box = TileTurn.bounds(at.x.toFloat(), at.y.toFloat(), at.width.toFloat(), at.height.toFloat(), at.rotation)
-        val x0 = maxOf(0, kotlin.math.floor(box[0]).toInt()); val x1 = minOf(image.width, kotlin.math.ceil(box[2]).toInt())
-        val y0 = maxOf(0, kotlin.math.floor(box[1]).toInt()); val y1 = minOf(image.height, kotlin.math.ceil(box[3]).toInt())
+        val x0 = maxOf(0, kotlin.math.floor(box[0]).toInt()); val x1 = minOf(pageWidth, kotlin.math.ceil(box[2]).toInt())
+        val y0 = maxOf(0, kotlin.math.floor(box[1]).toInt()); val y1 = minOf(pageHeight, kotlin.math.ceil(box[3]).toInt())
         val w = at.width; val h = at.height
         fun owned(px: Int, py: Int): Boolean {
             if (mask == null) return true
@@ -514,8 +535,8 @@ internal object AtlasLayout {
                 a += alpha; r += (c ushr 16 and 0xff) * alpha; g += (c ushr 8 and 0xff) * alpha; b += (c and 0xff) * alpha
             }
             add(0, 0, (1 - tx) * (1 - ty)); add(1, 0, tx * (1 - ty)); add(0, 1, (1 - tx) * ty); add(1, 1, tx * ty)
-            if (a <= 0f) { image.setRGB(px, py, 0); continue }
-            image.setRGB(px, py, (Math.round(a * 255f).coerceIn(0, 255) shl 24) or (Math.round(r / a).coerceIn(0, 255) shl 16) or
+            if (a <= 0f) { data[py * pageWidth + px] = 0; continue }
+            data[py * pageWidth + px] = ((Math.round(a * 255f).coerceIn(0, 255) shl 24) or (Math.round(r / a).coerceIn(0, 255) shl 16) or
                 (Math.round(g / a).coerceIn(0, 255) shl 8) or Math.round(b / a).coerceIn(0, 255))
         }
     }

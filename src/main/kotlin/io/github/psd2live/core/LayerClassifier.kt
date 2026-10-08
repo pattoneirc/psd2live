@@ -99,9 +99,11 @@ object LayerClassifier {
 		return LayerSemantic(tag, side, variant, normalized, confidence)
 	}
 
+	/** The aliases longest first (a stable sort, so equal lengths keep their order), as [prefixMatch] tries them. */
+	private val aliasesByLength = aliases.entries.sortedByDescending { it.key.length }
+
 	private fun prefixMatch(name: String): SemanticTag? =
-		aliases.entries
-			.sortedByDescending { it.key.length }
+		aliasesByLength
 			.firstOrNull { (alias, _) ->
 				name.startsWith("$alias ") || name.startsWith("$alias-") || name.startsWith("${alias}_") ||
 					(alias.length >= 2 && name.startsWith(alias) && (name.removePrefix(alias).all { it.isDigit() } || name.all { it.code > 127 }))

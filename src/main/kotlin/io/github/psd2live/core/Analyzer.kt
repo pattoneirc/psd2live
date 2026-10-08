@@ -20,18 +20,23 @@ object CharacterAnalyzer {
 		}
 	}
 
-	fun analyze(source: SourceArt, config: PipelineConfig): PipelineAnalysis {
+	/**
+	 * [source] classified and anchored under [config]. [preview] makes the analysis' composite; a caller that
+	 * replaces it (an analysis of a generation input that stands for the current art) passes its own.
+	 */
+	fun analyze(source: SourceArt, config: PipelineConfig,
+	            preview: () -> java.awt.image.BufferedImage = { PreviewRenderer.composite(source) }): PipelineAnalysis {
 		// A depth copy retains its original texture rectangle even when completely erased: its
 		// welded mesh must sample transparent pixels, never a neighbour's tile after a repack.
 		val depthLayerIds = config.rigEdits.authoringJournal.filter {
 			it["op"]?.jsonPrimitive?.contentOrNull == DepthSplit.OP
 		}.mapNotNullTo(HashSet()) { it["layer_id"]?.jsonPrimitive?.contentOrNull }
 		val classifyStart = System.nanoTime()
+		// Layers classify independently (dense ones resample to canvas resolution first); the list keeps source order.
 		val initiallyClassified = source.layers
 			.filter { it.raster.width > 0 && it.raster.height > 0 && it.id.raw !in config.deletedLayerIds }
-			.map { layer ->
-				classify(layer, config)
-			}.map { if (it.source.id.raw in depthLayerIds && it.opaquePixels == 0) it.copy(opaquePixels = 1) else it }
+			.parallelStream().map { layer -> classify(layer, config) }.toList()
+			.map { if (it.source.id.raw in depthLayerIds && it.opaquePixels == 0) it.copy(opaquePixels = 1) else it }
 		// Fresh layers stay intact until the UI offers a named split. Old projects may still
 		// reference generated :r/:l IDs, so retain those identities when they carry edits.
 		val unitScale = MeshResolution.unitScale(config, source)
@@ -65,7 +70,7 @@ object CharacterAnalyzer {
             analyze(baseline, config.copy(deletedLayerIds = emptySet(), rigEdits = config.rigEdits.copy(calibrationLayerIds = emptySet())))
         }
         return PipelineAnalysis(source, layers, calibration?.anchors ?: anchors, warnings,
-            RigBuildProfile.stage("analyze: composite preview") { PreviewRenderer.composite(source) }, calibration)
+            RigBuildProfile.stage("analyze: composite preview") { preview() }, calibration)
 	}
 
 	/** Refit rig anchors after the actual renderable mesh footprints replace pixel alpha boxes. */
