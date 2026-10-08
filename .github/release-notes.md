@@ -1,76 +1,96 @@
-修复 Windows 卸载/升级会清空安装目录的问题，新增韩语界面，网格可以贴合纹理生成，骨架编辑、保存和打开明显加快。
+画布工具全面整理：新增工具选项栏、数字键选项和统一的网格外观；改了生成设置后不再需要重放整条编辑历史，工程打开更快、更稳；运行时模型升级到 2.0，带高级模式、表情与点击区域；GPU 渲染统一到窗口自身的 OpenGL 上下文。
 
 ## ⚠️ 升级须知
 
-- **从 3.0.0 升级前，请先把安装目录里的工程移到别处。** 3.0.0 及更早版本卸载或升级时会删除整个安装目录；本版本已修复，但旧版本的卸载由旧安装包执行，升级时仍会清理旧目录。
-- 带 `-ffmpeg` 与不带的 Windows 安装包可以互相替换，不会同时装上。
+- **工程需要 3.1.0 打开**：在本版本中开启头发模拟、调整骨架、拆分图层等改变生成结果的操作后保存的工程，旧版本无法打开。
+- **运行时模型格式 2.0**：导出的 `.p2lrt` 默认是新格式，旧版网页播放器和 Godot 节点无法读取；需要给旧播放器使用时，在导出设置中勾选「版本 1」。
+- **Windows 界面改用 OpenGL 渲染**。自行构建 Cubism 预览的用户建议重新构建 `native/live2d_renderer`，否则每次修改都会从临时文件重新加载模型。
 
 ## 主要更新
 
 ### 新增
 
-- **韩语界面**：可在设置中选择，命令行用 `--lang ko`。
-- **语言切换**：语言菜单改为标题栏右侧、主题切换旁的地球图标；切换后整个窗口立即换成新语言。
-- **网格贴合纹理**：新工程默认「按贴图像素描出轮廓」，比画布像素还细的笔画也会留在网格内。旧工程保持原有方式和网格不变。
-- **网格包裹**：新增网格设置「包裹」（可全局设置，也可按图层覆盖，命令行 `--mesh-wrap`），把睫毛、发梢、手指等细小突起包进同一个轮廓，顶点明显减少。默认关闭。
-- **卸载时可删除用户数据**：在 Windows 的「卸载或更改程序」中选择删除后，可勾选「同时删除我的 PSD2Live 数据」，默认不勾选。
+- **工具选项栏**：画布左下角显示当前工具的半径、强度、硬度等数值，左右拖动即可调节，单击弹出滑块；右键菜单显示同一组数值和该工具的操作。工具面板只保留高级设置。
+- **数字键选项**：`1`–`5` 选择当前模式或工具的第 n 项，如网格变形器的级别、点 / 边 / 面、笔刷形状、骨骼子工具等。
+- **最近打开**：**文件 → 最近打开** 列出最近的工程与 PSD，不存在的文件不显示，网络盘断开也不卡界面。
+- **更新生成结果**：**工具 → 更新生成结果**（MCP `rig_update_generation`）用当前版本的生成器重新生成，并把你的编辑合并上去；升级程序不会自动改变已保存的生成结果。
+- **创建工具**：选择模式的工具栏新增创建 Warp、Rotation 与变形路径。
+- **变形模式的点 / 边 / 面选择**；**权重笔刷**可选直线和矩形笔尖并旋转；**变换工具**在未选中时可点选或框选。
+- **预览后端可选**：在 Cubism SDK、p2lrt · 标准、p2lrt · 扩展之间切换；没有 Cubism SDK 时自动使用 PSD2Live 运行时。
+- **运行时高级模式**（播放时开启，默认关闭，关闭时与 Cubism 效果一致）：骨骼沿真实弧线蒙皮、已烘焙的布料与头发实时模拟并可加风、可添加圆或胶囊碰撞体。
+- **运行时表情与点击区域**：内置微笑、悲伤、生气、惊讶四种表情和头部、身体点击区域；导出设置可指定部件互斥组，切换时自动淡入淡出；块压缩可选 zstd。网页播放器新增缩放与平移。
+- **识别韩语图层名**：앞머리、눈동자、상의 等韩语图层名和左右标记可自动分类。
 
 ### 改进
 
-- **图标统一**：所有图标按同一套网格重绘，高分屏上线条不再变细。
-- **骨架编辑更快**：只重新烘焙受影响的肢体，并行计算；大尺寸工程上移动手臂关节从约 2–3 秒降到 1 秒以内。
-- **保存与打开更快**：保存时不再重新编码图像，也不再解包整个归档做校验；打开大工程时图像并行解码。
-- **大尺寸工程更流畅**：纹理集的填充、分类和合成，以及指定姿势的 PSD 导出明显加快。
-- **安装与升级**：升级或重装默认装回原来的目录；同版本重新构建的安装包会替换已安装的版本，而不是并存。
+- **统一的网格显示**：各模式下可编辑的点与线采用同一套外观和固定的颜色含义；所有形变笔刷悬停时就标出会受影响的顶点；Warp 控制点改为方点。
+- **统一的 GPU 渲染**：编辑画布、纹理集页面和预览都在窗口自己的 OpenGL 上下文里绘制，平移、缩放和播放不再落后一两帧。
+- **预览帧率跟随显示器**，也可限制为 30 / 60 / 120；多个预览同时可见时不再限制为 30 FPS。工具栏的帧率改称「物理帧率」。
+- **变形级别**改称「顶点」与「贝塞尔」，只在目标为网格变形器时显示；贝塞尔下详细网格变淡。
+- **打开工程更快**：每个历史版本编辑后的模型随工程保存，打开、撤销和切换历史时直接读取。
+- **运行时模型格式 2.0**：分块、可压缩、可校验，带参数分组与吸附值；运行时、网页播放器和 Godot 节点同时读新旧两种格式。
+- 「显示蒙皮权重」移到右下角显示栏；网格统计只在预览画布显示。
 
 ### 修复
 
-- Windows 卸载或升级会清空安装目录。现在只删除安装的文件，新工程的默认位置改为「文档\PSD2Live」。
-- 另存为不再默认指向当前文件，覆盖确认改在窗口内弹出，排队中的另存为不会被 Ctrl+S 变成普通保存，文件选择框不会再跑到主窗口后面。
-- 切换编辑 / 预览模式时视角和画布大小保持不变。
-- 启用骨架后，拆分在手臂悬挂变形器下的部件重放时报错。
-- 绑定到骨骼、又被手动放到其他变形器下的网格，烘焙后位置错乱。
-- 修改已绑定网格的拓扑后，重新打开工程时骨架结果与编辑时不一致。
-- 生成后新加入的图层在重绘后网格被悄悄重新生成，之后重建报错。
-- Cubism 预览偶尔丢失姿势。
+- **改了生成设置后工程打不开或报错**（如「Art primitive parent is missing」）：现在已有编辑合并到新的生成结果上保存，无法干净迁移的内容在质量报告中列出。
+- **模拟与摆动参数**可以像 Cubism 物理输出参数一样被其他网格或 Warp 打键、改名和改范围，此前报「参数不在模型中」或提交后丢失。
+- 模拟网格上用变形笔刷、贝塞尔编辑报「参数不在模型中」；胶水改为在静止形上胶合，不再产生拉扯。
+- 在摆动、模拟生成的关键形上用贝塞尔或 MCP `rig_deform` 报错；无法保存为覆盖的编辑现在当场说明原因。
+- 删除摆动所作用的 Warp 后留下不起作用的摆动；摆动失效时物理面板显示原因。
+- Windows 上单按 Alt 后界面卡住、按键被吞。
+- 工具栏下方的工具穿透到画布、部分右键菜单为空、胶水工具在条件不满足时消失等画布工具问题。
+- 网页播放器和 C 接口播放一段时间后角度等参数漂移到数万。
+- Windows 上保存时被短暂占用的工程文件导致保存失败。
+- 命令行 `--mesh-pixels` 报未知选项。
 
 <details>
 <summary>English</summary>
 
-Fixes Windows uninstall/upgrade wiping the installation folder, adds a Korean interface, lets meshes follow the texture, and makes skeleton editing, saving and opening noticeably faster.
+A thorough pass over the canvas tools: a tool options bar, number-key choices and one look for editable geometry. Changing generation settings no longer replays the whole edit history, so projects open faster and more reliably. The runtime model moves to format 2.0 with an advanced mode, expressions and hit areas, and GPU rendering now happens in the window's own OpenGL context.
 
 ## ⚠️ Upgrade notes
 
-- **Before upgrading from 3.0.0, move any projects out of the installation folder.** 3.0.0 and earlier delete the whole installation folder on uninstall or upgrade. This release fixes that, but the old version's uninstall is run by the old installer, so upgrading still cleans out the old folder.
-- The Windows installers with and without `-ffmpeg` replace each other; they are never installed side by side.
+- **Projects need 3.1.0 to open**: a project saved after an operation that changes the generated result in this release (turning on hair simulation, adjusting the skeleton, splitting layers) cannot be opened by older versions.
+- **Runtime model format 2.0**: exported `.p2lrt` files use the new format by default, which older web players and Godot nodes cannot read. Tick "Version 1" in the export settings when targeting an older player.
+- **The interface now renders with OpenGL on Windows.** If you build the Cubism preview yourself, rebuild `native/live2d_renderer`; otherwise every change reloads the model from a temporary file.
 
 ## Highlights
 
 ### New
 
-- **Korean interface**: selectable in Settings; on the command line use `--lang ko`.
-- **Language switching**: the Language menu is now a globe icon at the right of the title bar, next to the theme toggle; switching redraws the whole window in the new language immediately.
-- **Meshes follow the texture**: new projects default to "Trace outlines from texture pixels", so strokes finer than a canvas pixel still stay inside the mesh. Existing projects keep their previous method and meshes.
-- **Mesh wrap**: a new mesh setting, "Wrap" (global or per-layer override; `--mesh-wrap` on the command line), wraps fine protrusions such as lashes, strand tips and fingers into a single outline, with far fewer vertices. Off by default.
-- **Delete user data on uninstall**: after choosing Remove in Windows "Uninstall or change a program", you can tick "Also delete my PSD2Live data" (unticked by default).
+- **Tool options bar**: the bottom left of the canvas shows the current tool's values (radius, strength, hardness and so on); drag left or right to adjust, click for a slider. The context menu shows the same values and the tool's actions. The tool panel keeps only advanced settings.
+- **Number-key choices**: `1`–`5` pick the n-th choice of the current mode or tool, such as warp deformer levels, vertex / edge / face, brush tips or skeleton sub-tools.
+- **Open Recent**: **File → Open Recent** lists recent projects and PSDs; missing files are hidden, and a disconnected network drive no longer stalls the interface.
+- **Update generated rig**: **Tools → Update Generated Rig** (MCP `rig_update_generation`) regenerates with the current generators and merges your edits onto the result; upgrading the app never changes a saved generated rig by itself.
+- **Create tools**: the Select mode toolbar can create Warps, Rotations and deform paths.
+- **Vertex / edge / face picks in Deform**; the **weight brush** takes line and rectangle tips that can rotate; the **transform tool** clicks or box-selects when nothing is selected.
+- **Choose the preview backend**: Cubism SDK, p2lrt · standard or p2lrt · extended; without the Cubism SDK the preview uses the PSD2Live runtime.
+- **Runtime advanced mode** (switched on at playback, off by default and identical to Cubism when off): skinning along true bone arcs, live baked cloth and hair with wind, and circle or capsule colliders.
+- **Runtime expressions and hit areas**: smile, sad, angry and surprised expressions plus head and body hit areas; export settings can define part pose groups that cross-fade when switched; chunks can be zstd-compressed. The web player gains zoom and pan.
+- **Korean layer names**: names such as 앞머리, 눈동자 and 상의, with their side markers, are classified automatically.
 
 ### Improvements
 
-- **Unified icons**: every icon is redrawn on one shared grid, so lines no longer thin out on high-DPI screens.
-- **Faster skeleton editing**: only the affected limb is rebaked, in parallel; moving an arm joint on a large project drops from about 2–3 seconds to under 1 second.
-- **Faster saving and opening**: saving no longer re-encodes images or unpacks the whole archive to verify it; opening a large project decodes images in parallel.
-- **Smoother large projects**: texture atlas packing, classification and compositing, as well as posed PSD export, are noticeably faster.
-- **Installing and upgrading**: upgrades and reinstalls go back to the original folder by default; a rebuilt installer of the same version replaces the installed one instead of installing alongside it.
+- **One look for editable geometry**: editable points and wires share one appearance with fixed colour meanings in every mode; every deform brush marks the vertices it will move while hovering; warp control points are now squares.
+- **Unified GPU rendering**: the edit canvas, the texture atlas page and the previews draw in the window's own OpenGL context, so panning, zooming and playback no longer lag a frame or two behind.
+- **Preview frame rate follows the display**, or can be capped at 30 / 60 / 120; several visible previews are no longer limited to 30 FPS. The toolbar rate is now called "Physics FPS".
+- **Deform levels** are named "Vertices" and "Bezier" and only show for a warp target; the detailed mesh fades under Bezier.
+- **Faster project opening**: each revision's edited model is saved with the project and read directly when opening, undoing or switching history.
+- **Runtime model format 2.0**: chunked, compressible and checksummed, with parameter groups and snap values; the runtime, web player and Godot node read both formats.
+- "Show skin weights" moves to the display rail at the bottom right; mesh statistics show only on the preview canvas.
 
 ### Fixes
 
-- Uninstalling or upgrading on Windows wiped the installation folder. Now only the installed files are removed, and the default location for new projects is "Documents\PSD2Live".
-- "Save as" no longer defaults to the current file, the overwrite confirmation appears inside the window, a queued "Save as" is no longer turned into a plain save by Ctrl+S, and the file chooser no longer ends up behind the main window.
-- Switching between edit and preview mode keeps the view and canvas size.
-- With the skeleton enabled, replaying a part split under an arm hanging deformer failed.
-- A mesh bound to a bone and then manually placed under another deformer ended up in the wrong place after baking.
-- After changing the topology of a bound mesh, the skeleton result on reopening the project differed from the one while editing.
-- Layers added after generation had their meshes silently regenerated after a repaint, and later rebuilds failed.
-- The Cubism preview occasionally lost the pose.
+- **Projects failing to open or erroring after generation settings changed** (e.g. "Art primitive parent is missing"): existing edits are now merged onto the new generated result and saved, and anything that cannot be carried over cleanly is listed in the quality report.
+- **Simulation and swing parameters** can be keyed by other meshes or Warps, renamed and re-ranged like Cubism physics outputs; before, this reported "parameter not in model" or was lost on commit.
+- Deform brush and Bezier edits on a simulated mesh reported "parameter not in model"; glue now welds at the rest shape and no longer pulls.
+- Bezier or MCP `rig_deform` on keyforms generated by swings or simulations failed; edits that cannot be kept as overrides now say why on the spot.
+- Deleting a Warp a swing moves left a swing that did nothing; a swing that cannot work shows why in the physics panel.
+- A lone Alt on Windows stalled the window and swallowed keys.
+- Canvas tool issues: tools below a long toolbar clicked through to the canvas, some context menus were empty, and the glue tool disappeared when it could not be used.
+- In the web player and C API, angles and other parameters drifted into the tens of thousands after playing for a while.
+- Saving on Windows failed when the replaced project was briefly locked.
+- `--mesh-pixels` on the command line was rejected as unknown.
 
 </details>
