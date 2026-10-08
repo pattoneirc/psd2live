@@ -30,6 +30,21 @@ class StateChangeLogTest {
         assertTrue(historyLogEntries(history("b", *both), history("b", *both)).isEmpty())
     }
 
+    @Test fun aStatusThatEchoesAnEditYieldsToItInEitherOrder() {
+        fun status(text: String) = AppLogEntry(source = LogSource.SYSTEM, level = LogLevel.DEBUG, tag = "Status", message = text)
+        fun edit(text: String) = AppLogEntry(source = LogSource.EDITOR, level = LogLevel.SUCCESS, tag = "Edit", message = text)
+        // Status set first, the commit after it.
+        val statusFirst = listOf(status("Partitioned 6 source layers")).withChangeLog(listOf(edit("Partitioned 6 source layers")))
+        assertEquals(listOf("Edit"), statusFirst.map { it.tag })
+        // The commit first, the status after it.
+        val editFirst = listOf(edit("Applied preset")).withChangeLog(listOf(status("Applied preset")))
+        assertEquals(listOf("Edit"), editFirst.map { it.tag })
+        // Both in one change.
+        assertEquals(listOf("Edit"), emptyList<AppLogEntry>().withChangeLog(listOf(status("Baked"), edit("Baked"))).map { it.tag })
+        // A status of its own stays.
+        assertEquals(listOf("Edit", "Status"), listOf(edit("Baked")).withChangeLog(listOf(status("Ready"))).map { it.tag })
+    }
+
     @Test fun errorsAreLoggedOnceAndStatusAtDebug() {
         val before = PSD2LiveState()
         val error = stateChangeLogEntries(before, before.copy(errorMessage = "disk full")).single()

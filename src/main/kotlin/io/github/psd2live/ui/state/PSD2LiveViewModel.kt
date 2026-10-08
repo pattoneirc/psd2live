@@ -991,7 +991,7 @@ class PSD2LiveViewModel : AutoCloseable {
     /** [this] with the log lines its change from [before] implies; see [stateChangeLogEntries]. */
     private fun PSD2LiveState.withStateChangeLog(before: PSD2LiveState): PSD2LiveState {
         val entries = stateChangeLogEntries(before, this)
-        return if (entries.isEmpty()) this else copy(logEntries = logEntries.appendingLog(entries))
+        return if (entries.isEmpty()) this else copy(logEntries = logEntries.withChangeLog(entries))
     }
 
     internal fun updateCanvasPresentation(
@@ -2090,9 +2090,11 @@ class PSD2LiveViewModel : AutoCloseable {
         val status = tr("status.analysisSummary", preview.analysis.source.widthPx, preview.analysis.source.heightPx,
             preview.analysis.layers.size, recognized)
         applyImportedSource(expected, document, preview, path, path?.fileName?.toString() ?: "Generated artwork", projectId, false, status)
-        if (path != null) updateState { it.withLogs(listOf(tr("log.analysis", preview.analysis.layers.size,
-            preview.analysis.anchors.character.width.toInt(), preview.analysis.anchors.character.height.toInt())) +
-            preview.analysis.warnings.map { warning -> tr("log.warning", warning) }, level = LogLevel.INFO, tag = "Analysis") }
+        if (path != null) updateState { state ->
+            state.withLog(tr("log.analysis", preview.analysis.layers.size,
+                preview.analysis.anchors.character.width.toInt(), preview.analysis.anchors.character.height.toInt()), tag = "Analysis")
+                .withLogs(preview.analysis.warnings.map { warning -> tr("log.warning", warning) }, level = LogLevel.WARNING, tag = "Analysis")
+        }
     }
 
     internal fun applyCmo3Import(expected: PSD2LiveState, document: io.github.psd2live.project.WorkspaceDocument,

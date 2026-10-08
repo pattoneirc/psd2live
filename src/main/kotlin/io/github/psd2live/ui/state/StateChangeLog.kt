@@ -33,6 +33,26 @@ internal fun stateChangeLogEntries(before: PSD2LiveState, after: PSD2LiveState):
 	return entries
 }
 
+/** How many of the newest lines a status may repeat, or be repeated by, before it counts as news. */
+private const val ECHO_WINDOW = 8
+
+private fun AppLogEntry.isStatus() = level == LogLevel.DEBUG && tag == "Status"
+
+/**
+ * [this] log with [entries] appended. The status bar often says what an edit's history summary says, set just before or
+ * after the commit; the edit's line stays and the status line that echoes it goes, whichever came first.
+ */
+internal fun List<AppLogEntry>.withChangeLog(entries: List<AppLogEntry>): List<AppLogEntry> {
+	if (entries.isEmpty()) return this
+	val tail = takeLast(ECHO_WINDOW)
+	val said = entries.filterNot { it.isStatus() }.mapTo(HashSet()) { it.message }
+	val echoes = tail.filter { it.isStatus() && it.message in said }.mapTo(HashSet()) { it.id }
+	val recent = tail.filterNot { it.isStatus() }.mapTo(HashSet()) { it.message } + said
+	val kept = entries.filter { !it.isStatus() || it.message !in recent }
+	val base = if (echoes.isEmpty()) this else filterNot { it.id in echoes }
+	return base.appendingLog(kept)
+}
+
 /** The user's new history nodes, and where HEAD moved when it moved without one: undo, redo or a checkout. */
 internal fun historyLogEntries(before: WorkspaceHistorySnapshot?, after: WorkspaceHistorySnapshot?): List<AppLogEntry> {
 	if (before == null || after == null || before.headNodeId == after.headNodeId) return emptyList()
