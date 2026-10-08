@@ -145,6 +145,19 @@ class GeneratedParameterAdoptionTest {
 		assertEquals(atRest, replayed)
 	}
 
+	@Test fun deletingTheWarpASwingMovesTakesTheSwingWithIt() {
+		val recorded = record({ _ -> buildJsonObject { put("op", "structure"); putJsonArray("edits") { add(buildJsonObject {
+			put("action", "delete"); put("kind", "warp"); put("id", "WarpTail") }) } } })
+		val deleted = SwingAuthoring.deletedDeformers(recorded.journal)
+		assertEquals(setOf("WarpTail"), deleted)
+		val next = SwingAuthoring.withoutTargets(overlay(recorded.journal), deleted)
+		assertTrue(next.swingEdits.isEmpty())
+		assertTrue(next.applyTo(authored()).parameters.none { it.id.raw == swing }, "no swing parameter is left moving nothing")
+		// A swing with another target keeps it.
+		val two = overlay().let { it.copy(swingEdits = it.swingEdits.map { swing -> swing.copy(targets = listOf("WarpTail", "Other")) }) }
+		assertEquals(listOf("Other"), SwingAuthoring.withoutTargets(two, deleted).swingEdits.single().targets)
+	}
+
 	@Test fun editsThatNameNoGeneratedParameterAreRecordedAsBefore() {
 		val recorded = record({ shown -> canvas(shown, "warp", "WarpTail", key("ParamAngleX" to 30f, swing to 0f)) })
 		assertEquals(listOf("canvas_geometry"), ops(recorded))

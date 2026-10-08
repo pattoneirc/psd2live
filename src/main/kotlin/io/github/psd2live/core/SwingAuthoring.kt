@@ -174,6 +174,31 @@ internal object SwingAuthoring {
         return PhysicsAuthoring.forget(overlay.copy(swingEdits = overlay.swingEdits.filterNot { it.id == id }), physicsIds(swing))
     }
 
+    /**
+     * [overlay] after its journal deletes the Warps [deleted]: a swing keeps its other targets, and one left without
+     * any is removed with its pendulums, as deleting an object in Cubism takes its keyforms with it. Without this the
+     * swing would stay, moving nothing, its parameters and pendulums still in the model.
+     */
+    fun withoutTargets(overlay: RigEditOverlay, deleted: Set<String>): RigEditOverlay {
+        if (deleted.isEmpty() || overlay.swingEdits.none { swing -> swing.targets.any { it in deleted } }) return overlay
+        return overlay.swingEdits.fold(overlay) { current, swing ->
+            val kept = swing.targets.filterNot { it in deleted }
+            when {
+                kept.size == swing.targets.size -> current
+                kept.isEmpty() -> remove(current, swing.id)
+                else -> current.copy(swingEdits = current.swingEdits.map { if (it.id == swing.id) swing.copy(targets = kept) else it })
+            }
+        }
+    }
+
+    /** The deformers [journal]'s `structure` entries delete. */
+    fun deletedDeformers(journal: List<JsonObject>): Set<String> = journal
+        .filter { it["op"]?.jsonPrimitive?.contentOrNull == "structure" }
+        .flatMap { (it["edits"] as? JsonArray).orEmpty() }
+        .mapNotNull { it as? JsonObject }
+        .filter { it["action"]?.jsonPrimitive?.contentOrNull == "delete" && it["kind"]?.jsonPrimitive?.contentOrNull in setOf("warp", "rotation") }
+        .mapNotNullTo(HashSet()) { it["id"]?.jsonPrimitive?.contentOrNull }
+
     /** A fresh swing ID and parameter IDs that collide with nothing in [model] or [overlay]. */
     fun freshIds(model: PuppetModel, overlay: RigEditOverlay, base: String, segments: Int): Pair<String, List<String>> {
         val stem = asciiStem(base)

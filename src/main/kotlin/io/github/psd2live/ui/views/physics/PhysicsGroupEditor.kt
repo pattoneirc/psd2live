@@ -272,6 +272,11 @@ internal fun GroupTitle(
 		}
 	}
 	group.issue?.let { Text(issueText(it), style = typography.caption.copy(fontSize = 9.5.sp), color = colors.warning) }
+	// What keeps the swing from moving its Warps (one gone, one with no lattice), as the simulation panel shows its own.
+	val puppet = state.previewModel?.rig?.puppet
+	if (swing != null && puppet != null) remember(puppet, swing) { io.github.psd2live.core.SwingGenerator.issues(puppet, swing) }.forEach {
+		Text(it, style = typography.caption.copy(fontSize = 9.5.sp), color = colors.warning)
+	}
 	group.shadowedBy?.let { Text(tr("physics.replacedBy", it), style = typography.caption.copy(fontSize = 9.5.sp), color = colors.textMuted) }
 	if (!group.enabled) Text(tr("physics.disabledNote"), style = typography.caption.copy(fontSize = 9.5.sp), color = colors.textMuted)
 }

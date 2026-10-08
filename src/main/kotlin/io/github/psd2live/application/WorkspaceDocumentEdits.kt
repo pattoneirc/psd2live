@@ -201,7 +201,9 @@ internal object WorkspaceDocumentEdits {
     fun journal(document: WorkspaceDocument, model: RigPreviewModel, edits: JsonArray): WorkspaceDocument {
         // Recorded on the shown rig, they replay on the authored one, before the generators.
         val journal = JournalRecording.record(model.rig.puppet, model.authored.rig.puppet, document.rigEdits, edits, model.primitiveSkins)
-        return document.copy(rigEdits = document.rigEdits.copy(authoringJournal = document.rigEdits.authoringJournal + journal))
+        // A deleted Warp leaves the swings that moved it in the same step.
+        return document.copy(rigEdits = SwingAuthoring.withoutTargets(document.rigEdits.copy(
+            authoringJournal = document.rigEdits.authoringJournal + journal), SwingAuthoring.deletedDeformers(journal)))
     }
 
     fun paint(document: WorkspaceDocument, model: RigPreviewModel, request: JsonObject,
