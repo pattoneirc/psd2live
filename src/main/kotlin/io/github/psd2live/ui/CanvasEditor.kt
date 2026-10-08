@@ -4543,6 +4543,8 @@ internal class CanvasEditor(
             return
         }
         error = null
+        // Welds are made where the meshes rest; the preview the user confirmed is shown there first.
+        if (viewModel.snapPoseToDefaults { applyGlue() }) return
         commitGlueEdit("brush", glueOutline(pair.first), glueOutline(pair.second))
     }
 
@@ -4561,6 +4563,7 @@ internal class CanvasEditor(
             error = tr("editor.glueNoVertexSelection")
             return
         }
+        if (viewModel.snapPoseToDefaults { glueSelectedVertices() }) return
         commitGlueEdit("brush", hitsA, hitsB)
     }
 
@@ -4571,6 +4574,7 @@ internal class CanvasEditor(
             return
         }
         error = null
+        if (viewModel.snapPoseToDefaults { remergeGlue() }) return
         commitGlueEdit("remerge", emptySet(), emptySet())
     }
 
@@ -4595,7 +4599,6 @@ internal class CanvasEditor(
             put("delta", delta)
             put("hits_a", JsonArray(hitsA.sorted().map(::JsonPrimitive)))
             put("hits_b", JsonArray(hitsB.sorted().map(::JsonPrimitive)))
-            put("pose", JsonObject(pose.mapValues { JsonPrimitive(it.value) }))
         }
         commitWeightOperations(listOf(io.github.psd2live.application.WorkspaceDocumentOperation("canvas_glue_edit", cmd)))
     }
@@ -5176,6 +5179,10 @@ internal class CanvasEditor(
                 error = tr("editor.glueNeedTwo", glueMeshCount())
                 return true
             }
+            // A weld is made where the meshes rest, as Cubism's glue: the pose goes back to its defaults first, so the
+            // stroke picks the vertices it welds. Weights and ungluing change only pairs and work at any pose.
+            val welds = glueSubTool == GlueSubTool.REMERGE || glueSubTool == GlueSubTool.BRUSH && !alt
+            if (welds && viewModel.snapPoseToDefaults { press(pos, viewport, shift, alt, ctrl) }) return true
             glueErasing = alt
             glueStrokeA = emptySet()
             glueStrokeB = emptySet()

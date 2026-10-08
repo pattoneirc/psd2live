@@ -1030,16 +1030,16 @@ class DesktopWorkspace(
     }
 
 	override suspend fun createParameter(request: WorkspaceCreateParameterRequest): WorkspaceMutationResult =
-        mutateParameter(request.expectedState, request.id.trim(), request.taskId, "Created parameter ${request.id.trim()}") { document, parameters ->
-            WorkspaceDocumentEdits.parameter(document, parameters, "create", kotlinx.serialization.json.buildJsonObject {
+        mutateParameter(request.expectedState, request.id.trim(), request.taskId, "Created parameter ${request.id.trim()}") { document, model ->
+            WorkspaceDocumentEdits.parameter(document, model, "create", kotlinx.serialization.json.buildJsonObject {
                 put("parameter_id", request.id); put("name", request.name); put("min", request.min); put("max", request.max)
                 put("default", request.default); put("kind", request.kind); put("repeat", request.repeat)
             })
         }
 
     override suspend fun updateParameter(request: WorkspaceUpdateParameterRequest): WorkspaceMutationResult =
-        mutateParameter(request.expectedState, request.id.trim(), request.taskId, "Updated parameter ${request.id.trim()}") { document, parameters ->
-            WorkspaceDocumentEdits.parameter(document, parameters, "update", kotlinx.serialization.json.buildJsonObject {
+        mutateParameter(request.expectedState, request.id.trim(), request.taskId, "Updated parameter ${request.id.trim()}") { document, model ->
+            WorkspaceDocumentEdits.parameter(document, model, "update", kotlinx.serialization.json.buildJsonObject {
                 put("parameter_id", request.id)
                 request.name?.let { put("name", it) }; request.min?.let { put("min", it) }; request.max?.let { put("max", it) }
                 request.default?.let { put("default", it) }; request.kind?.let { put("kind", it) }; request.repeat?.let { put("repeat", it) }
@@ -1047,16 +1047,16 @@ class DesktopWorkspace(
         }
 
     override suspend fun deleteParameter(parameterId: String, expectedState: String, taskId: String?): WorkspaceMutationResult =
-        mutateParameter(expectedState, parameterId.trim(), taskId, "Deleted parameter ${parameterId.trim()} and collapsed its keyform axes at the previous default") { document, parameters ->
-            WorkspaceDocumentEdits.parameter(document, parameters, "delete", kotlinx.serialization.json.buildJsonObject { put("parameter_id", parameterId) })
+        mutateParameter(expectedState, parameterId.trim(), taskId, "Deleted parameter ${parameterId.trim()} and collapsed its keyform axes at the previous default") { document, model ->
+            WorkspaceDocumentEdits.parameter(document, model, "delete", kotlinx.serialization.json.buildJsonObject { put("parameter_id", parameterId) })
         }
 
     private suspend fun mutateParameter(
         expectedState: String, parameterId: String, taskId: String?, summary: String,
-        mutation: (WorkspaceDocument, List<Parameter>) -> WorkspaceDocument,
+        mutation: (WorkspaceDocument, io.github.psd2live.core.RigPreviewModel) -> WorkspaceDocument,
     ): WorkspaceMutationResult {
         val result = mutateModel(expectedState, taskId, summary, parameterId) { document, model ->
-            mutation(document, model.rig.puppet.parameters)
+            mutation(document, model)
         }
         return result.copy(affectedParameterIds = if (result.applied) listOf(parameterId) else emptyList(),
             affectedObjectIds = emptyList())
