@@ -6024,6 +6024,32 @@ class PSD2LiveViewModel : AutoCloseable {
 		return snapAxesToNearestKeys(axes, onReady)
 	}
 
+	/**
+	 * Glue welds where the meshes rest, as Cubism's glue: when the pose is off its defaults, animates every parameter
+	 * back to its default, as [snapToNearestKeys] does, then invokes [onReady]. Returns true when an animation started;
+	 * false when the pose already rests.
+	 */
+	fun snapPoseToDefaults(onReady: () -> Unit): Boolean {
+		val puppet = _state.value.previewModel?.rig?.puppet ?: return false
+		val pose = _state.value.parameterValues
+		val targets = puppet.parameters.filter { parameter ->
+			pose[parameter.id]?.let { kotlin.math.abs(it - parameter.default) >= org.umamo.runtime.eval.EPS_KEY } == true
+		}.associate { it.id to it.default }
+		if (targets.isEmpty()) return false
+		val expectedState = currentWorkspaceState() ?: return false
+		parameterSnapJob?.cancel()
+		parameterSnapJob = scope.launch {
+			try {
+				animateParameterValues(targets, durationMs = 220L, expectedState)
+				onReady()
+			} catch (failure: Exception) {
+				if (failure is kotlinx.coroutines.CancellationException) throw failure
+				updateState { it.copy(statusText = failure.message ?: "Could not snap pose") }
+			}
+		}
+		return true
+	}
+
 	fun snapAxesToNearestKeys(axes: List<org.umamo.runtime.model.KeyformAxis>, onReady: () -> Unit): Boolean {
 		val puppet = _state.value.previewModel?.rig?.puppet ?: return false
 		if (axes.isEmpty()) return false

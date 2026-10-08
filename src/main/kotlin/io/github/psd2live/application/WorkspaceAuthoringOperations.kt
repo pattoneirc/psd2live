@@ -540,7 +540,6 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
     val canvasBounds = objectSchema(buildJsonObject {
         listOf("x", "y", "w", "h").forEach { put(it, number()) }
     }, listOf("x", "y", "w", "h"))
-    val canvasPose = buildJsonObject { put("type", "object"); put("additionalProperties", number()) }
     val canvasBranches = listOf(
         variant("mode", "warp", buildJsonObject {
             put("state", string()); put("id", string()); put("name", string())
@@ -560,7 +559,7 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
         }, listOf("state", "name")),
         variant("mode", "glue", buildJsonObject {
             put("state", string()); put("id", string()); put("mesh_a", string()); put("mesh_b", string())
-            put("pose", canvasPose); put("distance", number()); put("replace", boolean())
+            put("distance", number()); put("replace", boolean())
         }, listOf("state", "mesh_a", "mesh_b")),
         variant("mode", "topology", buildJsonObject {
             put("state", string()); put("id", string())
@@ -572,7 +571,7 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
             put("edges", arraySchema(arraySchema(integer(0), 2, 2), 0, 65536))
         }, listOf("state", "id", "action", "vertices")),
     )
-    registerJsonOperation("canvas", "Use the canvas editor's persisted algorithms to create a Warp or Rotation, pair Glue vertices at a pose, or edit mesh topology. Glue requires two different art-mesh ids (mesh_a and mesh_b) and fails when a mesh is missing, the ids match, or no vertices fall inside distance. Set replace to update an existing glue on that pair. Topology indices are from the current mesh and require fresh state. Creation accepts an optional stable ID; otherwise one is generated.",
+    registerJsonOperation("canvas", "Use the canvas editor's persisted algorithms to create a Warp or Rotation, pair Glue vertices where both meshes rest (the default pose, as Cubism's glue), or edit mesh topology. Glue requires two different art-mesh ids (mesh_a and mesh_b) and fails when a mesh is missing, the ids match, or no vertices fall inside distance. Set replace to update an existing glue on that pair. Topology indices are from the current mesh and require fresh state. Creation accepts an optional stable ID; otherwise one is generated.",
         buildJsonObject { put("request", oneOf(canvasBranches)) }, listOf("request"), true) { a ->
         val input = a.getValue("request").jsonObject
         validateOperationSchema(input, oneOf(canvasBranches))

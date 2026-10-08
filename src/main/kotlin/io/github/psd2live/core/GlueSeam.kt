@@ -80,7 +80,8 @@ internal fun planGlueWelds(
 internal class GlueWeldResult(val model: PuppetModel, val pairs: List<GluePair>)
 
 /**
- * Welds the stroked vertices of [meshA] and [meshB] into coincident pairs at [pose].
+ * Welds the stroked vertices of [meshA] and [meshB] into coincident pairs at [pose]: the default pose (empty) for every
+ * record the journal compiles now, so a weld does nothing at rest; an older record keeps the pose it was made at.
  *
  * Vertices already listed in [occupiedA] / [occupiedB] are left alone, so a second stroke extends the
  * seam instead of redoing it. Only rest meshes change, and only in ways that keep the picture: vertex
