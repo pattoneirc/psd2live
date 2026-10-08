@@ -2,7 +2,7 @@ package io.github.psd2live.core
 
 import io.github.psd2live.format.compile.document.ContentHash
 import io.github.psd2live.project.WorkspaceSourceArt
-import io.github.psd2live.project.WorkspaceSourceLayer
+import io.github.psd2live.project.islandLayer
 import kotlinx.serialization.json.*
 import org.umamo.format.art.*
 import org.umamo.runtime.model.DrawableId
@@ -14,21 +14,14 @@ import kotlin.test.*
 /**
  * Rule A of version 2 art primitives: the base generates from the resolved layer set - parts on their pinned meshes,
  * superseded layers only as passengers in their slots - and parks the parts for their records. The records here are
- * written by hand (the encoder is another workstream's), with `positions` holding rest canvas positions.
+ * written by hand rather than by [ArtPrimitiveJournal.encodePrimitiveV2], which encodes a part from an authored
+ * partition of the superseded drawable; they take the flat mesh form, `positions` holding rest canvas positions.
  */
 class PrimitiveResolutionTest {
 	private val width = 200
 	private val height = 420
 
-	private fun layer(id: String, order: Int, vararg islands: IntArray): WorkspaceSourceLayer {
-		val rgba = ByteArray(width * height * 4)
-		for (box in islands) for (y in box[1] until box[3]) for (x in box[0] until box[2]) {
-			val offset = (y * width + x) * 4
-			rgba[offset] = 120; rgba[offset + 1] = 90; rgba[offset + 2] = 60; rgba[offset + 3] = 255.toByte()
-		}
-		return WorkspaceSourceLayer(LayerId(id), id, "", SourceLayerKind.Raster, true, order, LayerBounds(0, 0, width, height), 1f, false,
-			LayerBlend.Normal, ChannelMask.ALL, LayerRaster(width, height, rgba), null, null, false)
-	}
+	private fun layer(id: String, order: Int, vararg islands: IntArray) = islandLayer(id, order, width, height, *islands)
 
 	private val legL = intArrayOf(100, 240, 140, 400)
 	private val legR = intArrayOf(60, 240, 80, 400)

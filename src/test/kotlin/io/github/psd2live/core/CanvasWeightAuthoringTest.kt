@@ -36,15 +36,7 @@ class CanvasWeightAuthoringTest {
         }
     }
 
-    @Test fun brushProfilesAndSmoothingMatchTheCanvasMathWithoutUiOwnedExecution() {
-        for (shape in io.github.psd2live.ui.BrushShape.entries) for (falloff in io.github.psd2live.ui.BrushFalloff.entries) {
-            val actual = computeCanvasBrushWeight(CanvasBrushPoint(8f, 9f), CanvasBrushPoint(1f, 2f), CanvasBrushPoint(4f, 5f),
-                11f, 0.3f, CanvasBrushShape.valueOf(shape.name), 37f, 1.7f, CanvasBrushFalloff.valueOf(falloff.name), 193)
-            val expected = io.github.psd2live.ui.computeBrushWeight(androidx.compose.ui.geometry.Offset(8f, 9f),
-                androidx.compose.ui.geometry.Offset(1f, 2f), androidx.compose.ui.geometry.Offset(4f, 5f), 11f, 0.3f, shape,
-                37f, 1.7f, falloff, 193)
-            assertEquals(expected, actual, 0.000001f)
-        }
+    @Test fun smoothingAveragesReachedNeighboursAndInvertingTwiceRestoresTheWeights() {
         val base = floatArrayOf(0f, 0f, 1f, 0.5f)
         val neighbors = listOf(intArrayOf(1), intArrayOf(0, 2), intArrayOf(1), intArrayOf())
         val smoothed = CanvasWeightAuthoring.apply(base, floatArrayOf(0f, 1f, 0f, 0f), CanvasWeightAuthoring.Mode.SMOOTH, 0.5f, neighbors)

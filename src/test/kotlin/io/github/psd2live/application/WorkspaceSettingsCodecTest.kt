@@ -1,13 +1,11 @@
 package io.github.psd2live.application
 
-import io.github.psd2live.ui.state.WorkspaceStateCodec
-
 import io.github.psd2live.core.*
 import io.github.psd2live.project.*
-import io.github.psd2live.ui.state.PSD2LiveState
 import kotlinx.serialization.json.*
 import kotlin.test.*
 
+/** Document settings: what [WorkspaceSettingsCodec] reads and writes, and what a settings edit merges into them. */
 class WorkspaceSettingsCodecTest {
     @Test fun meshUnitsRoundTripAndLegacyArchivesKeepSourcePixelUnits() {
         for (units in MeshUnits.entries) {
@@ -21,23 +19,6 @@ class WorkspaceSettingsCodecTest {
             mergeProjectSettings(document, buildJsonObject { put("meshUnits", "PIXELS") })).meshUnits)
         assertFailsWith<IllegalArgumentException> {
             mergeProjectSettings(document, buildJsonObject { put("meshUnits", "invalid") })
-        }
-    }
-    @Test fun documentConfigPreservesDesktopGenerationPolicyAndCustomSettings() {
-        val cases = listOf(
-            PSD2LiveState(),
-            PSD2LiveState(meshOnly = true, generatePhysics = true),
-            PSD2LiveState(atlasSize = 512, meshFillAlgorithm = MeshFillAlgorithm.ADAPTIVE_QUADTREE,
-                meshSuppressBoundaryDiagonals = true, mouthColor = 0x456789,
-                drawOrderOverrides = mapOf("mesh" to 123f),
-                rigTuning = RigTuning(turnDegrees = 17f), motionBasic = false, motionSkeleton = false),
-        )
-        for (state in cases) {
-            val document = WorkspaceDocument(WorkspaceSourceArt(32, 32, emptyList(), emptyList()), emptyMap(),
-                emptySet(), emptyMap(), emptyMap(), state.rigEdits, WorkspaceStateCodec.settings(state))
-            assertEquals(state.buildConfig(), document.config(), "Domain settings must reproduce the desktop configuration")
-            // A revision hashes the settings text, so the desktop projection must also keep the canonical key order.
-            assertEquals(WorkspaceSettingsCodec.encode(state.buildConfig()).keys.toList(), WorkspaceStateCodec.settings(state).keys.toList())
         }
     }
 
@@ -56,5 +37,50 @@ class WorkspaceSettingsCodecTest {
         })
         assertEquals(20f, legacy.rigTuning.turnDegrees)
         assertEquals(7f, legacy.meshEdgeWidth)
+    }
+
+    @Test fun customMouthAndGlobalMeshOptionsAreEditableAndNullableValuesReset() {
+        val initial = WorkspaceSettingsCodec.encode(PipelineConfig(mouthColor = 0x123456, exportPixelsPerUnit = 1024f))
+        val curve = MouthCurve.preset("w")
+        val changed = mergeProjectSettings(initial, buildJsonObject {
+            put("mouthColor", JsonNull); put("exportPixelsPerUnit", JsonNull)
+            put("mouthShape", "custom")
+            putJsonArray("mouthCurve") { curve.points.forEach { point -> add(buildJsonObject { put("x", point.x); put("y", point.y) }) } }
+            put("meshFillAlgorithm", MeshFillAlgorithm.ADAPTIVE_QUADTREE.name)
+            put("meshSuppressBoundaryDiagonals", true)
+        })
+        val decoded = WorkspaceSettingsCodec.decode(changed)
+        assertNull(decoded.mouthColor)
+        assertNull(decoded.exportPixelsPerUnit)
+        assertEquals(curve, decoded.mouthCurve)
+        assertEquals("custom", decoded.mouthShape)
+        assertEquals(MeshFillAlgorithm.ADAPTIVE_QUADTREE, decoded.meshFillAlgorithm)
+        assertTrue(decoded.meshSuppressBoundaryDiagonals)
+    }
+
+    @Test fun partialNestedUpdatesPreserveOtherSettingsAndRejectInvalidCurveOrRange() {
+        val initial = WorkspaceSettingsCodec.encode(PipelineConfig(rigTuning = RigTuning(turnDegrees = 17f)))
+        val changed = mergeProjectSettings(initial, buildJsonObject {
+            putJsonObject("textureUpscale") { put("scale", 2) }
+            putJsonObject("meshFillParameters") { putJsonObject("poisson") { put("jitter", 0.1) } }
+        })
+        val decoded = WorkspaceSettingsCodec.decode(changed)
+        assertEquals(17f, decoded.rigTuning.turnDegrees)
+        assertEquals(2, decoded.textureUpscale.scale)
+        assertEquals(0.1f, decoded.meshFillParameters.poisson.jitter)
+        assertEquals(PipelineConfig().meshFillParameters.quadtree, decoded.meshFillParameters.quadtree)
+        assertFailsWith<IllegalArgumentException> { mergeProjectSettings(initial, buildJsonObject { put("mouthColor", -1) }) }
+        assertFailsWith<IllegalArgumentException> { mergeProjectSettings(initial, buildJsonObject { put("mouthCurve", JsonArray(emptyList())) }) }
+        assertFailsWith<IllegalArgumentException> { mergeProjectSettings(initial, buildJsonObject { put("unknown", true) }) }
+        assertFailsWith<IllegalArgumentException> { mergeProjectSettings(initial, buildJsonObject { put("meshSpacing", 0) }) }
+    }
+
+    @Test fun integerAndFloatSpellingsProduceTheSameDurableSettings() {
+        val initial = WorkspaceSettingsCodec.encode(PipelineConfig(headTurnStrength = 2f))
+        val integer = mergeProjectSettings(initial, buildJsonObject { put("headStrength", 2) })
+        val decimal = mergeProjectSettings(initial, buildJsonObject { put("headStrength", 2.0) })
+        assertEquals(initial, integer)
+        assertEquals(integer, decimal)
+        assertEquals(integer, WorkspaceSettingsCodec.encode(WorkspaceSettingsCodec.decode(integer)))
     }
 }

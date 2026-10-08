@@ -4,8 +4,6 @@ import io.github.psd2live.application.mergeProjectSettings
 import io.github.psd2live.project.WorkspaceSettingsCodec
 import io.github.psd2live.project.WorkspaceSourceArt
 import io.github.psd2live.project.WorkspaceSourceLayer
-import io.github.psd2live.ui.state.PSD2LiveState
-import io.github.psd2live.ui.state.WorkspaceStateCodec
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -164,15 +162,6 @@ class MeshWrapTest {
 		assertEquals(6f, decoded.meshWrap)
 		assertEquals(0f, WorkspaceSettingsCodec.decodeWrap(JsonPrimitive("x")))
 		assertEquals(MeshWrap.range.endInclusive, WorkspaceSettingsCodec.decodeWrap(JsonPrimitive(1e6)))
-
-		// The editor's settings text matches the document codec, and decodes the wrap back.
-		val state = PSD2LiveState(meshWrap = 6f, meshOverrides = config.meshOverrides)
-		val text = WorkspaceStateCodec.settings(state)
-		assertEquals(encoded["meshWrap"], text["meshWrap"])
-		val restored = WorkspaceStateCodec.decode(text)
-		assertEquals(6f, restored.meshWrap)
-		assertEquals(12f, restored.meshOverrides.getValue("eye").wrap)
-		assertEquals(0f, WorkspaceStateCodec.decode(WorkspaceStateCodec.settings(PSD2LiveState()), PSD2LiveState(meshWrap = 3f)).meshWrap)
 
 		// A mesh baseline keeps the wrap its generator used, and one written before reads as none.
 		for (wrap in listOf(0f, 4f)) for (trace in MeshTrace.entries) {

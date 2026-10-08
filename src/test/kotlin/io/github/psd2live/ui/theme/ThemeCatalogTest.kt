@@ -1,7 +1,7 @@
 package io.github.psd2live.ui.theme
 
 import androidx.compose.ui.graphics.Color
-import java.util.Properties
+import io.github.psd2live.testing.missingMessages
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -77,14 +77,10 @@ class ThemeCatalogTest {
 	}
 
 	@Test
-	fun everyThemeStringExistsInAllBundles() {
+	fun everyThemeStringIsTranslated() {
 		val keys = ThemeCatalog.builtIns.map { it.nameKey } +
 			ColorTokenGroup.entries.map { it.labelKey } +
 			ColorToken.entries.map { it.labelKey }
-		for (bundle in listOf("Messages", "Messages_zh_CN", "Messages_ja", "Messages_ko")) {
-			val properties = Properties()
-			javaClass.getResourceAsStream("/i18n/$bundle.properties")!!.reader(Charsets.UTF_8).use(properties::load)
-			for (key in keys) assertTrue(properties.containsKey(key), "$bundle is missing $key")
-		}
+		assertEquals(emptyList(), missingMessages(keys))
 	}
 }

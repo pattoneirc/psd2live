@@ -4,17 +4,15 @@ import io.github.psd2live.application.WorkspacePreviewBuilder
 import io.github.psd2live.project.WorkspaceDocument
 import io.github.psd2live.project.WorkspaceSettingsCodec
 import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.discRaster
+import io.github.psd2live.project.sourceLayer
 import io.github.psd2live.project.WorkspaceSourceLayer
 import io.github.psd2live.project.config
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import org.junit.jupiter.api.io.TempDir
-import org.umamo.format.art.ChannelMask
-import org.umamo.format.art.LayerBlend
 import org.umamo.format.art.LayerBounds
-import org.umamo.format.art.LayerId
 import org.umamo.format.art.LayerRaster
-import org.umamo.format.art.SourceLayerKind
 import org.umamo.format.moc3.Moc3
 import org.umamo.interop.moc3.import.Moc3Import
 import java.nio.file.Files
@@ -29,26 +27,11 @@ import kotlin.test.assertTrue
 class LayerImageReplaceTest {
 	@TempDir lateinit var temp: Path
 
-	/** A disc of radius [size]/2 at [size] pixels, coloured by position so resampling errors show. */
-	private fun disc(size: Int): LayerRaster = LayerRaster(size, size, ByteArray(size * size * 4).also { rgba ->
-		val r = size / 2f
-		for (y in 0 until size) for (x in 0 until size) {
-			val dx = x + 0.5f - r; val dy = y + 0.5f - r
-			if (dx * dx + dy * dy > r * r * 0.81f) continue
-			val o = (y * size + x) * 4
-			rgba[o] = (40 + 160 * x / size).toByte(); rgba[o + 1] = 60; rgba[o + 2] = (200 - 120 * y / size).toByte(); rgba[o + 3] = -1
-		}
-	})
-
-	private fun layer(id: String, order: Int, bounds: LayerBounds, raster: LayerRaster) = WorkspaceSourceLayer(
-		LayerId(id), id, "", SourceLayerKind.Raster, true, order, bounds, 1f, false, LayerBlend.Normal, ChannelMask.ALL,
-		raster, null, null, false)
-
 	private fun document(atlas: JsonObject? = null, trace: MeshTrace = MeshTrace.TEXTURE): WorkspaceDocument {
 		val body = LayerRaster(40, 56, ByteArray(40 * 56 * 4) { if (it % 4 == 3) -1 else 120 })
 		val source = WorkspaceSourceArt(128, 96, listOf(
-			layer("body", 0, LayerBounds(10, 20, 40, 56), body),
-			layer("pupil", 1, LayerBounds(70, 30, 32, 32), disc(32)),
+			sourceLayer("body", 0, LayerBounds(10, 20, 40, 56), body),
+			sourceLayer("pupil", 1, LayerBounds(70, 30, 32, 32), discRaster(32)),
 		), emptyList())
 		val config = PipelineConfig(atlasSize = 2048, meshSpacing = 8, meshOnly = true, meshTrace = trace)
 		val settings = WorkspaceSettingsCodec.encode(config).let { if (atlas == null) it else JsonObject(it + (WorkspaceSettingsCodec.ATLAS to atlas)) }
@@ -68,7 +51,7 @@ class LayerImageReplaceTest {
 		val builder = WorkspacePreviewBuilder()
 		val before = document()
 		val old = builder.build(before)
-		val replacement = upscaled(disc(32), 32)
+		val replacement = upscaled(discRaster(32), 32)
 		val after = LayerImageReplace.replace(before, "pupil", replacement, LayerImageReplace.Fit.STRETCH)
 		assertEquals(before.source.layers[1].bounds, after.source.layers[1].bounds)
 		val new = builder.build(after)
@@ -129,7 +112,7 @@ class LayerImageReplaceTest {
 	@Test fun aTightBudgetScalesTheDenseTileByOneFit() = runBlocking {
 		val budget = JsonObject(WorkspaceSettingsCodec.encodeAtlasBudget(AtlasBudget(512, 1, 2)))
 		val before = document(budget)
-		val after = LayerImageReplace.replace(before, "pupil", upscaled(disc(32), 32), LayerImageReplace.Fit.STRETCH)
+		val after = LayerImageReplace.replace(before, "pupil", upscaled(discRaster(32), 32), LayerImageReplace.Fit.STRETCH)
 		val model = WorkspacePreviewBuilder().build(after)
 		assertEquals(1, model.atlas.pages.size)
 		assertTrue(model.atlas.fit < 1f)

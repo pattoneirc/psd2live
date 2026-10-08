@@ -1,10 +1,5 @@
-package io.github.psd2live.ui
+package io.github.psd2live.core
 
-import io.github.psd2live.core.RigInformationOverlay
-
-import io.github.psd2live.core.CanvasViewport
-
-import io.github.psd2live.core.DeformPathJournal
 import io.github.psd2live.application.WorkspacePathEdits
 import kotlinx.serialization.json.*
 import org.umamo.format.cmo3.Cmo3

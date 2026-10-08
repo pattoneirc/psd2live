@@ -12,6 +12,8 @@ kotlin {
 dependencies {
 	api(project(":format-compile"))
 	testImplementation(kotlin("test"))
+	// MiniJson, the tests' JSON reader (MIT like this module).
+	testImplementation(testFixtures(project(":targets:spine")))
 }
 
 tasks.withType<Test>().configureEach {

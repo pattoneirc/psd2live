@@ -2,48 +2,17 @@ package io.github.psd2live.agent
 
 import io.github.psd2live.application.*
 import io.github.psd2live.project.*
-import io.modelcontextprotocol.kotlin.sdk.server.ClientConnection
-import io.modelcontextprotocol.kotlin.sdk.server.Server
-import io.modelcontextprotocol.kotlin.sdk.types.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
-import java.io.IOException
 import java.net.ServerSocket
 import kotlin.test.*
 
 class AgentToolProfileTest {
-    private val connection = java.lang.reflect.Proxy.newProxyInstance(ClientConnection::class.java.classLoader,
-        arrayOf(ClientConnection::class.java)) { _, method, _ ->
-        if (method.name == "getSessionId") "test" else error("Unexpected client notification")
-    } as ClientConnection
-
-    private class Backend(private val failures: Int = 0) : WorkspaceBackendStub() {
-        var release = CompletableDeferred(Unit)
-        var exports = 0
-        override fun snapshot() = WorkspaceProjectSnapshot("project", "revision", "head", true, "artwork",
-            4, 4, false, "ready", null, emptyList(), emptyList(), state = "generation:0")
-        override suspend fun exportModel(state: String, outputDirectory: String): JsonObject {
-            exports++
-            release.await()
-            if (exports <= failures) throw IOException("disk full")
-            return buildJsonObject {
-                put("state", state); put("revision", "revision"); put("warnings", JsonArray(emptyList()))
-                putJsonArray("files") { add(buildJsonObject { put("path", "$outputDirectory/model.cmo3"); put("bytes", 42) }) }
-            }
-        }
-    }
-
-    private suspend fun Server.call(tool: String, arguments: JsonObject): CallToolResult =
-        tools.getValue(tool).handler.invoke(connection, CallToolRequest(CallToolRequestParams(tool, arguments)))
-
-    private fun CallToolResult.data() = structuredContent!!.getValue("data").jsonObject
-    private fun CallToolResult.errorCode() = structuredContent!!.getValue("error").jsonObject.getValue("code").jsonPrimitive.content
-
     private val export = buildJsonObject { putJsonObject("request") { put("state", "generation:0"); put("output_directory", "/out") } }
     private val exportCall = JsonObject(export + (OP_FIELD to JsonPrimitive("export_model")))
 
     @Test fun corePublishesFewCompactToolsWithoutOutputSchemas() {
-        val backend = Backend()
+        val backend = ExportingBackend()
         WorkspaceOperations(backend).use { operations ->
             val catalog = AgentToolCatalog(operations.registry, backend, AgentToolProfile.CORE)
             assertEquals(CORE_OPERATIONS + AGENT_TOOL_FAMILIES.map { it.name } + CALL_TOOL, catalog.tools.keys)
@@ -77,7 +46,7 @@ class AgentToolProfileTest {
     }
 
     @Test fun coreDerivesContextWaitsForJobsAndRecoversIdenticalRetries() = runBlocking {
-        val backend = Backend()
+        val backend = ExportingBackend()
         WorkspaceOperations(backend).use { operations ->
             val server = createAgentMcpServer(backend, operations, AgentToolProfile.CORE)
             val first = server.call("project", exportCall)
@@ -92,7 +61,7 @@ class AgentToolProfileTest {
     }
 
     @Test fun anIdenticalCallAfterAFailedJobIsANewAttempt() = runBlocking {
-        val backend = Backend(failures = 1)
+        val backend = ExportingBackend(failures = 1)
         WorkspaceOperations(backend).use { operations ->
             val server = createAgentMcpServer(backend, operations, AgentToolProfile.CORE)
             assertEquals("failed", server.call("project", exportCall).data().getValue("status").jsonPrimitive.content)
@@ -102,7 +71,7 @@ class AgentToolProfileTest {
     }
 
     @Test fun zeroWaitReturnsTheRunningJob() = runBlocking {
-        val backend = Backend().apply { release = CompletableDeferred() }
+        val backend = ExportingBackend(release = CompletableDeferred())
         WorkspaceOperations(backend).use { operations ->
             val server = createAgentMcpServer(backend, operations, AgentToolProfile.CORE)
             val started = server.call("project", JsonObject(exportCall + (WAIT_FIELD to JsonPrimitive(0))))
@@ -116,7 +85,7 @@ class AgentToolProfileTest {
     }
 
     @Test fun familiesPublishFlatSchemasAndRunTheNamedOperationExactly() = runBlocking {
-        val backend = Backend()
+        val backend = ExportingBackend()
         WorkspaceOperations(backend).use { operations ->
             val catalog = AgentToolCatalog(operations.registry, backend, AgentToolProfile.CORE)
             val definitions = operations.registry.definitions()
@@ -142,7 +111,7 @@ class AgentToolProfileTest {
     }
 
     @Test fun workspaceCallReachesUnpublishedOperationsWithTheExactSchema() = runBlocking {
-        val backend = Backend()
+        val backend = ExportingBackend()
         WorkspaceOperations(backend).use { operations ->
             val server = createAgentMcpServer(backend, operations, AgentToolProfile.CORE)
             assertFalse("job_list" in server.tools || "physics_preset_list" in server.tools)
@@ -164,7 +133,7 @@ class AgentToolProfileTest {
             override fun load() = saved
             override fun save(settings: AgentMcpSettings) { saved = settings }
         }
-        AgentMcpController(Backend(), store).use { controller ->
+        AgentMcpController(ExportingBackend(), store).use { controller ->
             val running = assertIs<AgentMcpStatus.Running>(controller.start())
             assertEquals(store.saved.port, running.connection.port)
             assertEquals(AgentToolProfile.CORE, running.connection.profile)

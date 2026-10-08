@@ -1,6 +1,10 @@
 package io.github.psd2live.ui
 
 import androidx.compose.ui.geometry.Offset
+import io.github.psd2live.core.CanvasBrushFalloff
+import io.github.psd2live.core.CanvasBrushPoint
+import io.github.psd2live.core.CanvasBrushShape
+import io.github.psd2live.core.computeCanvasBrushWeight
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -26,6 +30,16 @@ class BrushFalloffTest {
         val random = (0 until 64).map { BrushFalloff.RANDOM.weight(1f, it) }
         assertTrue(random.all { it in 0f..1f } && random.toSet().size > 32)
         assertEquals(BrushFalloff.RANDOM.weight(.7f, 5), BrushFalloff.RANDOM.weight(.7f, 5))
+    }
+
+    @Test fun coreBrushWeightMatchesTheCanvasForEveryShapeAndFalloff() {
+        for (shape in BrushShape.entries) for (falloff in BrushFalloff.entries) {
+            val actual = computeCanvasBrushWeight(CanvasBrushPoint(8f, 9f), CanvasBrushPoint(1f, 2f), CanvasBrushPoint(4f, 5f),
+                11f, 0.3f, CanvasBrushShape.valueOf(shape.name), 37f, 1.7f, CanvasBrushFalloff.valueOf(falloff.name), 193)
+            val expected = computeBrushWeight(Offset(8f, 9f), Offset(1f, 2f), Offset(4f, 5f), 11f, 0.3f, shape,
+                37f, 1.7f, falloff, 193)
+            assertEquals(expected, actual, 0.000001f, "$shape / $falloff")
+        }
     }
 
     @Test fun connectedOnlySkipsAnIslandTheTipStillCovers() {

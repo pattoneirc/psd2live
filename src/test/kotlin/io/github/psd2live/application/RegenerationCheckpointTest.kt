@@ -48,8 +48,8 @@ class RegenerationCheckpointTest {
 	private class Edited(val runtime: WorkspaceRuntime<RigPreviewModel>, val split: WorkspaceCapture<RigPreviewModel>,
 	                     val simulated: WorkspaceCapture<RigPreviewModel>, val parts: List<DrawableId>)
 
-	private fun edited(): Edited = runBlocking {
-		val runtime = runtime()
+	/** The back hair split in two on a fresh [runtime], and the ids of the two parts. */
+	private suspend fun split(runtime: WorkspaceRuntime<RigPreviewModel>): Pair<WorkspaceCapture<RigPreviewModel>, List<DrawableId>> {
 		val document = document()
 		runtime.install(runtime.state.value.state, "project", document, builder.build(document))
 		val start = runtime.capture()
@@ -58,7 +58,13 @@ class RegenerationCheckpointTest {
 				put("layer_id", "hair"); putJsonArray("names") { add("Left"); add("Right") }; putJsonArray("piece_ids") { add("left"); add("right") }
 				putJsonArray("polygon") { listOf(0 to 0, 32 to 0, 32 to 64, 0 to 64).forEach { (x, y) -> add(buildJsonArray { add(x); add(y) }) } }
 			})), "Split", MutationAuthor.USER).commit.capture
-		val parts = ArtPrimitiveJournal.commands(split.document.rigEdits).single().let(ArtPrimitiveJournal::primitives).map { DrawableId(it.getValue("id").jsonPrimitive.content) }
+		return split to ArtPrimitiveJournal.commands(split.document.rigEdits).single().let(ArtPrimitiveJournal::primitives)
+			.map { DrawableId(it.getValue("id").jsonPrimitive.content) }
+	}
+
+	private fun edited(): Edited = runBlocking {
+		val runtime = runtime()
+		val (split, parts) = split(runtime)
 		val simulated = WorkspaceSimulationCommands(runtime).execute(split.projectId, split.state,
 			WorkspaceDocumentOperation("model_apply_preset", buildJsonObject { put("preset", "back_hair") }), "Hair simulation",
 			MutationAuthor.USER, autoBake = false).commit.capture
@@ -82,6 +88,29 @@ class RegenerationCheckpointTest {
 		for (id in edited.parts) {
 			assertEquals("DeformHairBackFollow", puppet.drawables.single { it.id == id }.parentDeformerId?.raw)
 			val want = a.getValue(id); val got = b.getValue(id)
+			want.indices.forEach { assertEquals(want[it], got[it], 1e-3f, "${id.raw}[$it]") }
+		}
+	}
+
+	/**
+	 * A journal without a checkpoint whose setting alone switched the generation, as a document saved before the switch
+	 * checkpointed: the journal replays on the new generation, and the split parts keep their place once the legacy
+	 * sway warp they hang on is gone. (A runtime that rebuilds from the previous model checkpoints the split itself.)
+	 */
+	@Test fun aSettingSwitchedWithoutACheckpointReplaysThePartsInPlace() = runBlocking<Unit> {
+		val (split, parts) = split(WorkspaceRuntime({ builder.build(it) }))
+		assertTrue(split.document.rigEdits.authoringJournal.none(RigCheckpoint::isRecord))
+		assertEquals(listOf("DeformHairBackPhysics", "DeformHairBackPhysics"),
+			split.model.rig.puppet.drawables.filter { it.id in parts }.map { it.parentDeformerId?.raw })
+		val simulated = builder.build(split.document.copy(settings = JsonObject(split.document.settings + ("hairSimulationBack" to JsonPrimitive(true)))))
+		val puppet = simulated.rig.puppet
+		assertTrue(puppet.deformers.none { it.id.raw == "DeformHairBackPhysics" })
+		val evaluator = CpuDeformationEvaluator()
+		val before = evaluator.evaluate(split.model.rig.puppet, emptyMap()).worldPositions
+		val after = evaluator.evaluate(puppet, emptyMap()).worldPositions
+		for (id in parts) {
+			assertTrue(puppet.deformers.any { it.id == puppet.drawables.single { d -> d.id == id }.parentDeformerId }, id.raw)
+			val want = before.getValue(id); val got = after.getValue(id)
 			want.indices.forEach { assertEquals(want[it], got[it], 1e-3f, "${id.raw}[$it]") }
 		}
 	}

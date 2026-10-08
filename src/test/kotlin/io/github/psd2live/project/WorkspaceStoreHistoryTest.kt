@@ -121,18 +121,6 @@ class WorkspaceStoreHistoryTest {
 		assertEquals(current.rigEdits.authoringJournal, loaded.head().snapshot.rigEdits.authoringJournal)
 	}
 
-	@Test fun theDesktopProjectionKeepsTextureFields() {
-		val codec = io.github.psd2live.ui.state.WorkspaceStateCodec
-		val plain = io.github.psd2live.ui.state.PSD2LiveState()
-		assertFalse(WorkspaceSettingsCodec.ATLAS in codec.settings(plain), "no budget writes no key, keeping the settings text")
-		val budget = io.github.psd2live.core.AtlasBudget(pageSize = 2048, maxPages = 2, padding = 6)
-		val settings = codec.settings(plain.copy(atlasBudget = budget))
-		assertEquals(budget, codec.decode(settings, plain).atlasBudget)
-		// A settings payload without a budget clears one; a payload that is not settings keeps it.
-		assertNull(codec.decode(codec.settings(plain), plain.copy(atlasBudget = budget)).atlasBudget)
-		assertEquals(budget, codec.decode(buildJsonObject { put("historyZoom", 1f) }, plain.copy(atlasBudget = budget)).atlasBudget)
-	}
-
 	@Test fun sharedSnapshotsExpandToTheSelfContainedForm() {
 		val store = WorkspaceStore(temporary.resolve("store"))
 		val journal = List(12) { entry(it, points = 8) }

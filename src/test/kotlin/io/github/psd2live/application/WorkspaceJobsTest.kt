@@ -64,10 +64,15 @@ class WorkspaceJobsTest {
     }
 
     @Test fun cancellationAfterDurableCommitRetainsSuccessfulResult() = runBlocking {
+        val operation = "project_export_psd"
+        val output = WorkspaceOperationOutput(buildJsonObject {
+            put("state", "load:0:0"); put("path", "output.psd"); put("bytes", 42); put("layers", 2)
+        })
         WorkspaceJobs().use { jobs ->
             val committed = CompletableDeferred<Unit>()
-            val job = jobs.start("save", "project", "input") {
-                currentCoroutineContext()[WorkspaceJobCompletion]!!.committed(result())
+            // The committed result is validated against the operation's result schema like a returned one.
+            val job = jobs.start(operation, "project", "input", WorkspaceJobResultSchemas.result(operation)) {
+                currentCoroutineContext()[WorkspaceJobCompletion]!!.committed(output)
                 committed.complete(Unit)
                 awaitCancellation()
             }
@@ -75,8 +80,9 @@ class WorkspaceJobsTest {
             jobs.cancel(job.id)
             val completed = jobs.wait(job.id)
             assertEquals(WorkspaceJobStatus.COMPLETED, completed.status)
-            assertEquals(result(), completed.result)
+            assertEquals(output, completed.result)
             assertNull(completed.error)
+            validateOperationSchema(completed.toJson(), WorkspaceJobResultSchemas.snapshot(operation))
         }
     }
 

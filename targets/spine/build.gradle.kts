@@ -2,7 +2,7 @@
 // Must not depend on any GPL module.
 plugins {
 	kotlin("jvm")
-	// Spine pose and binary readers, shared with the root project's fidelity test.
+	// Spine pose and binary readers, and MiniJson, which the DragonBones and glTF target tests share.
 	`java-test-fixtures`
 }
 
