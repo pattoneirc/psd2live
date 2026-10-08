@@ -275,6 +275,33 @@ data class RigEditOverlay(
 		return finish(authored.model, authored.notes)
 	}
 
+	/** The index of the journal's last `rig_checkpoint` record, where replay starts; -1 without one. */
+	internal val checkpointIndex: Int by lazy { RigCheckpoint.latest(authoringJournal) }
+
+	/** The journal entries replay applies: those after the last checkpoint, else all. */
+	internal val afterCheckpoint: List<kotlinx.serialization.json.JsonObject>
+		get() = if (checkpointIndex < 0) authoringJournal else authoringJournal.subList(checkpointIndex + 1, authoringJournal.size)
+
+	/** One journal entry replayed onto [state]; an entry that only addresses parts a later split supersedes is skipped and noted. */
+	private fun replayEntry(state: ReplayState, command: kotlinx.serialization.json.JsonObject, skins: PrimitiveSkins): ReplayState {
+		val model = state.model
+		return try {
+			ReplayState(when (command["op"]?.jsonPrimitive?.contentOrNull) {
+				"structure" -> RigStructureEdits.replay(model, command.getValue("edits").jsonArray.map { it.jsonObject }.filterNot(::generatedPanelEdit))
+				GeneratedOverrides.OP -> model
+				else -> RigAuthoringJournal.replay(model, command, skins)
+			}, state.notes)
+		} catch (failure: java.util.concurrent.CancellationException) {
+			throw failure
+		} catch (failure: RuntimeException) {
+			val stubs = stubTolerance[command] ?: throw failure
+			if (!StubTolerance.onlyStubs(model, command, stubs)) throw failure
+			ReplayState(model, state.notes + SupersededEntryNote(authoringJournal.indexOfFirst { it === command },
+				command["op"]?.jsonPrimitive?.contentOrNull.orEmpty(), StubTolerance.targets(model, command, stubs).sorted(),
+				failure.message ?: failure.javaClass.simpleName))
+		}
+	}
+
 	/** Generated axes do not exist until swing/simulation materialization: panel moves and links that name them. */
 	private val generatedIds: Set<String> by lazy { swingEdits.flatMap { it.parameterIds }.toSet() + simEdits.flatMap { it.outputParameters } }
 
@@ -290,6 +317,17 @@ data class RigEditOverlay(
 	 * writes its keyforms - the state [finish] completes. [skins] are the split parts the skeleton skinned with [base].
 	 */
 	internal fun replayAuthored(base: PuppetModel, skins: PrimitiveSkins = PrimitiveSkins.None): AuthoredReplay {
+		// From the last checkpoint: its stored rig, bound to the base's atlas, then the entries after it.
+		if (checkpointIndex >= 0) {
+			val record = authoringJournal[checkpointIndex]
+			val start = RigCheckpoint.authoredOn(record, base)
+			val notes = RigCheckpoint.decode(record).authored.rig.supersededEntryNotes
+			val legacy = ReplayCheckpoints.Legacy(listOf(RigCheckpoint.OP, record, generatedIds, io.github.psd2live.i18n.I18n.currentLanguage.tag, skins))
+			val replayed = ReplayCheckpoints.replay(start, legacy, afterCheckpoint, start = { ReplayState(start, notes) }) { state, command ->
+				replayEntry(state, command, skins)
+			}
+			return AuthoredReplay(replayed.model, replayed.notes)
+		}
 		val earlyStructureEdits = structureEdits.filterNot(::generatedPanelEdit)
 		// Everything the legacy stage reads, and what decides how the journal's structure edits split.
 		val legacy = ReplayCheckpoints.Legacy(listOf(deletedParameterIds, parameterEdits, warpEdits, structureEdits,
@@ -325,25 +363,39 @@ data class RigEditOverlay(
 				model = applyKeyformDelete(model, delete)
 			}
 			ReplayState(model, emptyList())
-		}) { state, command ->
-			val model = state.model
-			try {
-				ReplayState(when (command["op"]?.jsonPrimitive?.contentOrNull) {
-					"structure" -> RigStructureEdits.replay(model, command.getValue("edits").jsonArray.map { it.jsonObject }.filterNot(::generatedPanelEdit))
-					GeneratedOverrides.OP -> model
-					else -> RigAuthoringJournal.replay(model, command, skins)
-				}, state.notes)
-			} catch (failure: java.util.concurrent.CancellationException) {
-				throw failure
-			} catch (failure: RuntimeException) {
-				val stubs = stubTolerance[command] ?: throw failure
-				if (!StubTolerance.onlyStubs(model, command, stubs)) throw failure
-				ReplayState(model, state.notes + SupersededEntryNote(authoringJournal.indexOfFirst { it === command },
-					command["op"]?.jsonPrimitive?.contentOrNull.orEmpty(), StubTolerance.targets(model, command, stubs).sorted(),
-					failure.message ?: failure.javaClass.simpleName))
-			}
-		}
+		}) { state, command -> replayEntry(state, command, skins) }
 		return AuthoredReplay(replayed.model, replayed.notes)
+	}
+
+	/**
+	 * The authored state from the journal's last checkpoint without the base: its stored rig and the entries after it,
+	 * with the binding key of the atlas it is bound to. Null without a checkpoint, or when an entry after it needs the
+	 * base (an `art_primitive` record places parts the base generated).
+	 */
+	internal fun authoredFromCheckpoint(): Pair<AuthoredRig, String>? {
+		if (checkpointIndex < 0) return null
+		val after = afterCheckpoint
+		if (after.any { it["op"]?.jsonPrimitive?.contentOrNull == ArtPrimitiveJournal.OP }) return null
+		val stored = RigCheckpoint.decode(authoringJournal[checkpointIndex])
+		var model = stored.authored.rig.puppet
+		var notes = stored.authored.rig.supersededEntryNotes
+		for (command in after) replayEntry(ReplayState(model, notes), command, PrimitiveSkins.None).let { model = it.model; notes = it.notes }
+		return AuthoredRig(stored.authored.rig.copy(puppet = model, supersededEntryNotes = notes), stored.authored.visibilityTargets)
+			.withJournalMeshes(after) to stored.bindingKey
+	}
+
+	/**
+	 * Whether this overlay continues [previous]: its journal starts with [previous]'s and everything else the legacy
+	 * stage reads is equal - what a regeneration checkpoint between the two journals needs ([RigRegenerationCheckpoint]).
+	 */
+	internal fun continues(previous: RigEditOverlay): Boolean {
+		if (previous === this) return true
+		val journal = authoringJournal
+		val before = previous.authoringJournal
+		if (journal.size < before.size || (0 until before.size).any { journal[it] !== before[it] && journal[it] != before[it] }) return false
+		return deletedParameterIds == previous.deletedParameterIds && parameterEdits == previous.parameterEdits && warpEdits == previous.warpEdits &&
+			structureEdits == previous.structureEdits && keyformSetEdits == previous.keyformSetEdits && keyformCopyEdits == previous.keyformCopyEdits &&
+			keyformDeleteEdits == previous.keyformDeleteEdits
 	}
 
 	/**
@@ -359,7 +411,7 @@ data class RigEditOverlay(
 		if (deletedParameterIds != previous.deletedParameterIds || parameterEdits != previous.parameterEdits || warpEdits != previous.warpEdits ||
 			structureEdits != previous.structureEdits || keyformSetEdits != previous.keyformSetEdits || keyformCopyEdits != previous.keyformCopyEdits ||
 			keyformDeleteEdits != previous.keyformDeleteEdits || generatedIds != previous.generatedIds) return false
-		return (before.size until journal.size).none { journal[it]["op"]?.jsonPrimitive?.contentOrNull == ArtPrimitiveJournal.OP }
+		return (before.size until journal.size).none { journal[it]["op"]?.jsonPrimitive?.contentOrNull in setOf(ArtPrimitiveJournal.OP, RigCheckpoint.OP) }
 	}
 
 	/**
@@ -473,8 +525,12 @@ internal data class AuthoredRig(val rig: BuiltRig, val visibilityTargets: List<P
 internal fun BuiltRig.authoredRig(overlay: RigEditOverlay): AuthoredRig {
 	if (overlay == RigEditOverlay.Empty) return AuthoredRig(this, emptyList())
 	val replayed = overlay.replayAuthored(puppet, primitiveSkins)
-	return AuthoredRig(copy(puppet = replayed.model, supersededEntryNotes = replayed.notes), emptyList())
-		.withJournalMeshes(overlay.authoringJournal)
+	// After a checkpoint its rig's maps hold every mesh up to it; the base's would miss what it stores.
+	val start = if (overlay.checkpointIndex < 0) AuthoredRig(this, emptyList()) else
+		RigCheckpoint.decode(overlay.authoringJournal[overlay.checkpointIndex]).authored.reboundTo(puppet.atlas, puppet.sources)
+			.let { it.copy(rig = it.rig.copy(primitiveSkins = primitiveSkins)) }
+	return AuthoredRig(start.rig.copy(puppet = replayed.model, supersededEntryNotes = replayed.notes), start.visibilityTargets)
+		.withJournalMeshes(overlay.afterCheckpoint)
 }
 
 /** [commands] - journal entries [rig]'s puppet already holds - recorded in the maps: the meshes they create, split or rebuild. */

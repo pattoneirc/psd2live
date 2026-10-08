@@ -90,6 +90,13 @@ class PSD2LivePipeline {
 		return generationInputs(RigGenerationSource.analyze(source, generation), generation, ProgressListener { _, _ -> }).bindingKey
 	}
 
+	/** The generated base of [source] under [config], deletions not applied, and the binding key of its atlas. */
+	internal fun generatedBaseOf(source: SourceArt, config: PipelineConfig): Pair<BuiltRig, String> {
+		val generation = RigLayerDeletion.generationConfig(config)
+		val inputs = generationInputs(RigGenerationSource.analyze(source, generation), generation, ProgressListener { _, _ -> })
+		return generatedBase(inputs, generation, ProgressListener { _, _ -> }).rig to inputs.bindingKey
+	}
+
 	/** Whether a preview of [config] can come from a stored authored rig: a generated model, not an imported one. */
 	fun materializable(config: PipelineConfig): Boolean = config.rigEdits.importedCmo3 == null
 
@@ -100,19 +107,23 @@ class PSD2LivePipeline {
 	 */
 	internal fun materializedPreview(source: SourceArt, config: PipelineConfig, authored: AuthoredRig, bindingKey: String,
 	                                 progress: ProgressListener = ProgressListener { _, _ -> },
-	                                 previousAtlas: PackedAtlas? = null): RigPreviewModel? {
+	                                 previousAtlas: PackedAtlas? = null, rebind: Boolean = false): RigPreviewModel? {
 		require(materializable(config)) { "This document's preview is not built from an authored rig" }
 		// Deletions after a journal that creates or splits meshes filter the full model, as [buildPreview] does.
 		if (RigLayerDeletion.deferred(config)) return materializedPreview(source, RigLayerDeletion.generationConfig(config), authored, bindingKey,
-			progress, previousAtlas)?.let { RigLayerDeletion.preview(it, config, previousAtlas) }
+			progress, previousAtlas, rebind)?.let { RigLayerDeletion.preview(it, config, previousAtlas) }
 		val analysis = RigBuildProfile.stage("pipeline: analyze") { RigGenerationSource.analyze(source, config) }
 		val inputs = generationInputs(analysis, config, progress, previousAtlas)
-		if (inputs.bindingKey != bindingKey) return null
+		// Another atlas: [rebind] moves the texture coordinates onto it through the canvas (the data is the authored rig);
+		// otherwise the caller builds by generation, which binds exactly.
+		@Suppress("NAME_SHADOWING")
+		val authored = if (inputs.bindingKey == bindingKey) authored else if (!rebind) return null else
+			PuppetSourceAtlas.build(inputs.analyses.textures, inputs.atlas).let { (atlas, sources) -> authored.reboundTo(atlas, sources) }
 		val (atlas, rig) = RigLayerDeletion.compact(inputs.atlas, inputs.visible, inputs.visible,
 			authored.finished(config.rigEdits, config.layerVisibility, config.drawOrderOverrides), config, previousAtlas)
 		val runtimeBundle = buildRuntimeBundle("psd2live-preview", inputs.visible, atlas, rig, config).first
 		return RigPreviewModel(inputs.visible, atlas, rig, config, runtimeBundle,
-			PreviewRigSources.materialized(config.rigEdits, authored, bindingKey) { generatedBase(inputs, config, ProgressListener { _, _ -> }).rig },
+			PreviewRigSources.materialized(config.rigEdits, authored, inputs.bindingKey) { generatedBase(inputs, config, ProgressListener { _, _ -> }).rig },
 			generationAtlas = inputs.atlas.takeIf { it !== atlas })
 	}
 

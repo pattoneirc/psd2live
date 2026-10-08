@@ -498,7 +498,7 @@ class DesktopWorkspace(
 	private val previewBuilder = WorkspacePreviewBuilder()
     private val runtime = WorkspaceRuntime<io.github.psd2live.core.RigPreviewModel>({ document ->
         previewBuilder.build(document, runtimeModel())
-    })
+    }, rebuildFrom = { document, previous -> previewBuilder.build(document, previous) })
     private val simulationWork = object : WorkspaceSimulationWork {
         override fun <T> run(id: String, action: ((Float) -> Unit, () -> Boolean) -> T): T = viewModel.trackSimulationBake(id, action)
     }

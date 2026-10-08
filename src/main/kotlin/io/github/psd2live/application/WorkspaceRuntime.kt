@@ -67,6 +67,11 @@ internal data class WorkspacePreparedDraft<M>(val before: WorkspaceCapture<M>, v
 internal class WorkspaceRuntime<M>(
     private val rebuild: suspend (WorkspaceDocument) -> M,
     private val newId: () -> String = { UUID.randomUUID().toString() },
+    /**
+     * Builds a draft's next candidate from the candidate before it, when the builder can use it: entries added to the
+     * journal act on its rig, and a regeneration merges onto it. [rebuild] otherwise.
+     */
+    private val rebuildFrom: (suspend (WorkspaceDocument, M) -> M)? = null,
 ) {
     private val lock = Any()
     private val instanceId = newId()
@@ -194,9 +199,9 @@ internal class WorkspaceRuntime<M>(
                 val nextRevision = WorkspaceRevisions.of(candidate.document)
                 if (nextRevision != revision) {
                     // Later commands must observe the rig produced by earlier commands in this draft.
-                    model = rebuild(candidate.document)
-                    document = candidate.document
-                    revision = nextRevision
+                    model = rebuildFrom?.invoke(candidate.document, model) ?: rebuild(candidate.document)
+                    document = adopted(candidate.document, model)
+                    revision = WorkspaceRevisions.of(document)
                 }
                 auxiliary = candidate.auxiliary
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
@@ -217,6 +222,7 @@ internal class WorkspaceRuntime<M>(
         checkState(expectedState)
         val before = capture()
         require(before.projectId == projectId) { "Operation targets another project" }
+        val document = adopted(document, model)
         val revision = WorkspaceRevisions.of(document)
         val documentChanged = checkpoint || revision != WorkspaceRevisions.of(before.document)
         if (!documentChanged && (auxiliary == null || auxiliary == before.auxiliary)) return@synchronized WorkspaceCommit(before, false)
@@ -277,6 +283,20 @@ internal class WorkspaceRuntime<M>(
     private fun checkState(expected: String) {
         val actual = mutableState.value.state
         if (expected != actual) throw WorkspaceConflict(expected, actual)
+    }
+
+    /**
+     * [document] with the regeneration checkpoints its rebuilt [model] inserted into the journal
+     * ([io.github.psd2live.core.RigRegenerationCheckpoint]): they are part of the edit that produced the model.
+     */
+    private fun adopted(document: WorkspaceDocument, model: M): WorkspaceDocument {
+        val rebuilt = (model as? io.github.psd2live.core.RigPreviewModel)?.config?.rigEdits?.authoringJournal ?: return document
+        val journal = document.rigEdits.authoringJournal
+        if (rebuilt === journal || rebuilt.size <= journal.size) return document
+        val plain = rebuilt.filterNot(io.github.psd2live.core.RigCheckpoint::isRecord)
+        if (plain.size != journal.filterNot(io.github.psd2live.core.RigCheckpoint::isRecord).size ||
+            plain != journal.filterNot(io.github.psd2live.core.RigCheckpoint::isRecord)) return document
+        return document.copy(rigEdits = document.rigEdits.copy(authoringJournal = rebuilt))
     }
 
     private fun token(): String = "$instanceId:$generation:$version"

@@ -2,6 +2,7 @@ package io.github.psd2live.core
 
 import io.github.psd2live.i18n.tr
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import org.umamo.edit.withDeformerDeleted
 import org.umamo.edit.withParameterDeleted
@@ -124,12 +125,21 @@ data class BuiltRig(
 	 * layers. Migration builds compare it in place of [puppet]. Equal to [puppet] when [primitiveSkins] holds no
 	 * stubs - every document without v2 records.
 	 */
-	fun resolvedPuppet(): PuppetModel {
+	fun resolvedPuppet(): PuppetModel = resolvedPuppet(null)
+
+	/**
+	 * [resolvedPuppet] with only the parts of [records] - version 2 `art_primitive` records - in place, and only what
+	 * they supersede left out: the generated rig as the journal sees it before the later records. All records when null.
+	 */
+	fun resolvedPuppet(records: List<kotlinx.serialization.json.JsonObject>?): PuppetModel {
 		val skins = primitiveSkins
 		if (skins.stubs.isEmpty() && skins.partLayers.isEmpty()) return puppet
-		val stubs = skins.stubs
+		val allowedParts = records?.flatMapTo(HashSet()) { record -> ArtPrimitiveJournal.primitives(record).map { DrawableId(it.getValue("id").jsonPrimitive.content) } }
+		val stubs = if (records == null) skins.stubs else skins.stubs.filterTo(HashSet()) { stub ->
+			records.any { record -> record.getValue("supersedes").jsonArray.any { it.jsonPrimitive.content == stub.raw } }
+		}
 		// Parts textured through this puppet's atlas, as their records place them; a part without a tile keeps canvas units.
-		val parts = skins.parts.filter { it.id !in stubs }.map { part ->
+		val parts = skins.parts.filter { it.id !in stubs && (allowedParts == null || it.id in allowedParts) }.map { part ->
 			val tile = puppet.atlas.tiles.firstOrNull { it.id == part.atlasTileId }
 			val mesh = part.mesh
 			if (tile == null || mesh == null) part else {
@@ -140,7 +150,8 @@ data class BuiltRig(
 		}
 		val partIds = parts.mapTo(HashSet()) { it.id }
 		val kept = puppet.drawables.filterNot { it.id in stubs }.map { drawable ->
-			skins.generatedMasks[drawable.id]?.let { masks -> drawable.copy(maskedBy = masks.filter { it !in stubs }) } ?: drawable
+			skins.generatedMasks[drawable.id]?.takeIf { masks -> allowedParts == null || masks.none { it in skins.drawables && it !in allowedParts } }
+				?.let { masks -> drawable.copy(maskedBy = masks.filter { it !in stubs }) } ?: drawable
 		}
 		val drawables = kept + parts
 		val present = drawables.mapTo(HashSet()) { it.id }

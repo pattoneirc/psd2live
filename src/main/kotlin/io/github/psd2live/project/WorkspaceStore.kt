@@ -117,6 +117,7 @@ internal class WorkspaceStore(
 		val headFile = project.resolve("HEAD.json")
 		val nodesDirectory = project.resolve("history/nodes")
 		if (!Files.isRegularFile(headFile) || !Files.isDirectory(nodesDirectory)) return null
+		io.github.psd2live.core.RigObjects.addFolder(project.resolve(ProjectFormatV2.WORKING_RIG_OBJECTS))
 		val headDocument = readJson(headFile)
         val headId = headDocument.requiredString("headNodeId")
 		val nodeFiles = Files.list(nodesDirectory).use { stream ->
@@ -261,6 +262,8 @@ internal class WorkspaceStore(
 	@Synchronized
 	fun persistHistory(projectId: String, state: WorkspaceHistoryState<WorkspaceDocument>) {
 		val project = projectRoot(projectId)
+		// The rig objects checkpoints name are part of the document: on disk before the snapshot that names them.
+		val rigObjects = project.resolve(ProjectFormatV2.WORKING_RIG_OBJECTS)
 		// A history removed behind the store's back is written again in full.
 		if (!Files.isDirectory(project.resolve("history"))) stored.removeIf { it.startsWith(project) }
 		for (selection in state.selections) {
@@ -269,6 +272,7 @@ internal class WorkspaceStore(
 			if (nodePath in stored) continue
 			val snapshotPath = project.resolve("history/snapshots/${fileKey(selection.node.snapshotHash)}.json")
 			if (!isStored(snapshotPath)) {
+				io.github.psd2live.core.RigObjects.writeTo(rigObjects, io.github.psd2live.core.RigCheckpoint.hashes(selection.snapshot.rigEdits.authoringJournal))
 				val snapshotBytes = shareContent(encodeDocument(selection.snapshot, project), project).toString().encodeToByteArray()
 				writeAtomic(snapshotPath, snapshotBytes, replace = false, pretty = false)
 				stored.add(snapshotPath)

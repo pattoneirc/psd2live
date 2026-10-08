@@ -71,6 +71,29 @@ internal object MaterializedRigCodec {
 		return Decoded(AuthoredRig(rig, visibility), header.getValue("binding_key").jsonPrimitive.content)
 	}
 
+	/**
+	 * [authored] as an index: `{header, frame, deformers:[...], meshes:[...]}`, the objects held in [RigObjects] and
+	 * named by their hashes in rig order.
+	 */
+	fun index(authored: AuthoredRig, bindingKey: String): JsonObject = index(encode(authored, bindingKey))
+
+	fun index(encoded: Encoded): JsonObject = buildJsonObject {
+		put("header", encoded.header)
+		put("frame", RigObjects.put(encoded.objects.frame))
+		put("deformers", JsonArray(encoded.objects.deformers.map { JsonPrimitive(RigObjects.put(it)) }))
+		put("meshes", JsonArray(encoded.objects.meshes.map { JsonPrimitive(RigObjects.put(it)) }))
+	}
+
+	/** Every object hash [index] names. */
+	fun hashes(index: JsonObject): List<String> = listOf(index.getValue("frame").jsonPrimitive.content) +
+		index.getValue("deformers").jsonArray.map { it.jsonPrimitive.content } + index.getValue("meshes").jsonArray.map { it.jsonPrimitive.content }
+
+	/** The authored rig [index] describes, its objects read from [RigObjects]. */
+	fun fromIndex(index: JsonObject): Decoded = decode(index.getValue("header").jsonObject, RigIrObjects.Objects(
+		RigObjects.get(index.getValue("frame").jsonPrimitive.content),
+		index.getValue("deformers").jsonArray.map { RigObjects.get(it.jsonPrimitive.content) },
+		index.getValue("meshes").jsonArray.map { RigObjects.get(it.jsonPrimitive.content) }))
+
 	private fun floats(vararg values: Float) = JsonArray(values.map { JsonPrimitive(java.lang.Float.floatToRawIntBits(it)) })
 
 	/** Floats stored as their raw bits, so a value comes back bit for bit. */

@@ -4,6 +4,7 @@ import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.core.ProgressListener
 import io.github.psd2live.core.RigGenerationMigration
+import io.github.psd2live.core.RigRegenerationCheckpoint
 import io.github.psd2live.core.VertexGroupJournal
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -37,7 +38,8 @@ internal class WorkspacePreviewBuilder {
             val decoded = document.config()
             val config = if ("drawOrderOverrides" in document.settings) decoded
                 else decoded.copy(drawOrderOverrides = current.config.drawOrderOverrides)
-            if (current.config.rigEdits.skeleton != config.rigEdits.skeleton &&
+            // An imported model has no generated rig to merge onto: its groups follow the skeleton's new vertices here.
+            if (config.rigEdits.importedCmo3 != null && current.config.rigEdits.skeleton != config.rigEdits.skeleton &&
                 (current.rig.puppet.vertexGroups.isNotEmpty() || config.rigEdits.authoringJournal.any {
                     it["op"]?.jsonPrimitive?.contentOrNull in setOf(VertexGroupJournal.PUT, VertexGroupJournal.DELETE)
                 })) {
@@ -94,9 +96,30 @@ internal class WorkspacePreviewBuilder {
             // unless the current model updates more cheaply: entries added to its journal act on its authored rig, and
             // with its base at hand any other edit of the overlay replays from the replay checkpoints.
             val cheaper = fast && (current.sources.baseKnown || config.rigEdits.extends(current.config.rigEdits))
-            if (revision != null && !cheaper) MaterializedRigStore.lookup(revision)?.let { stored ->
-                pipeline.materializedPreview(document.source, config, stored.authored, stored.bindingKey, progress, current?.atlas)
-                    ?.let { model -> return@runInterruptible model }
+            if (revision != null && !cheaper) {
+                MaterializedRigStore.lookup(revision)?.let { stored ->
+                    pipeline.materializedPreview(document.source, config, stored.authored, stored.bindingKey, progress, current?.atlas)
+                        ?.let { model -> return@runInterruptible model }
+                }
+                // The journal's checkpoint is the authored rig itself: build from it, re-bound when the atlas moved.
+                config.rigEdits.authoredFromCheckpoint()?.let { (authored, bindingKey) ->
+                    pipeline.materializedPreview(document.source, config, authored, bindingKey, progress, current?.atlas, rebind = true)
+                        ?.let { model ->
+                            MaterializedRigStore.remember(revision, config.rigEdits, model.sources) { model.sources.bindingKey }
+                            return@runInterruptible model
+                        }
+                }
+            }
+            // The generated rig changed under the journal: merge onto the new one and checkpoint, instead of replaying old entries on it.
+            if (current != null && !fast && revision != null && pipeline.materializable(current.config) &&
+                config.rigEdits.continues(current.config.rigEdits)) {
+                RigRegenerationCheckpoint.checkpointed(pipeline, current, config, document.source) { progress.update("Merging regenerated rig", 0.5) }
+                    ?.let { checkpointed ->
+                        val model = pipeline.buildPreview(document.source, checkpointed, progress, current.atlas)
+                        MaterializedRigStore.remember(WorkspaceRevisions.of(document.copy(rigEdits = checkpointed.rigEdits)), checkpointed.rigEdits,
+                            model.sources) { model.sources.bindingKey }
+                        return@runInterruptible model
+                    }
             }
             val model = when {
                 fast -> pipeline.updateRigEdits(current, config)

@@ -43,6 +43,14 @@ internal object ProjectFormatV2 {
 	const val REVISION_SCHEMA = 1
 	/** Schema of a revision index whose journal names payload nodes (listed under `payloads`). */
 	const val REVISION_SCHEMA_PAYLOADS = 2
+	/**
+	 * A revision whose journal holds `rig_checkpoint` records: it lists the rig objects they name under `rig`, which
+	 * the archive holds in `rig/objects/`. Readers of schema 1-2 cannot build it and must refuse it.
+	 */
+	const val REVISION_SCHEMA_RIG = 3
+	/** Where an archive keeps rig objects ([io.github.psd2live.core.RigObjects]); the working store keeps them in [WORKING_RIG_OBJECTS]. */
+	const val RIG_OBJECTS = "rig/objects"
+	const val WORKING_RIG_OBJECTS = "rig-objects"
 	/** Kind and folder of content-addressed payload nodes for large journal entries. */
 	const val PAYLOAD = "payload"
 	/** Key of a journal entry that stands for a payload node: `{"$payload": "<sha256>"}`. */
@@ -84,6 +92,7 @@ internal object ProjectFormatV2 {
 		// Journal chunks and payloads shared by working snapshots are now inside the document nodes.
 		WorkspaceStore.sharedContentFolders.forEach { deleteTree(store.resolve(it)) }
 		moveTree(store.resolve("blobs"), root.resolve("assets"))
+		moveTree(store.resolve(WORKING_RIG_OBJECTS), root.resolve(RIG_OBJECTS))
 		for (folder in auxiliaryFolders) moveTree(store.resolve(folder), root.resolve("auxiliary").resolve(folder))
 		if (Files.isRegularFile(store.resolve("tasks.json"))) move(store.resolve("tasks.json"), root.resolve("auxiliary/tasks.json"))
 		val left = Files.walk(store).use { paths -> paths.filter(Files::isRegularFile).map { store.relativize(it).toString() }.toList() }
@@ -150,12 +159,15 @@ internal object ProjectFormatV2 {
 		}
 		val known = sourceKeys + layerKeys + "settings" + sourceParts.keys + "rigEdits"
 		nodes["document"] = node(root, "document", JsonObject(snapshot.filterKeys { it !in known }))
+		val rigObjects = io.github.psd2live.core.RigCheckpoint.hashes(snapshot["rigEdits"]?.jsonObject?.get(JOURNAL)?.jsonArray.orEmpty()
+			.mapNotNull { it as? JsonObject }).distinct()
 		return buildJsonObject {
-			put("schema", if (payloads.isEmpty()) REVISION_SCHEMA else REVISION_SCHEMA_PAYLOADS)
+			put("schema", when { rigObjects.isNotEmpty() -> REVISION_SCHEMA_RIG; payloads.isEmpty() -> REVISION_SCHEMA; else -> REVISION_SCHEMA_PAYLOADS })
 			put("nodes", JsonObject(nodes.mapValues { JsonPrimitive(it.value) }))
 			overrides?.let { put("overrides", it) }
 			clips?.let { put("clips", it) }
 			if (payloads.isNotEmpty()) putJsonArray("payloads") { payloads.forEach { add(JsonPrimitive(it)) } }
+			if (rigObjects.isNotEmpty()) putJsonArray("rig") { rigObjects.forEach { add(JsonPrimitive(it)) } }
 		}
 	}
 
@@ -212,12 +224,20 @@ internal object ProjectFormatV2 {
 	/** The snapshot a revision [index] names, read from the nodes under [root]. */
 	internal fun join(root: Path, index: JsonObject, cache: MutableMap<String, JsonObject> = HashMap()): JsonObject {
 		val schema = index["schema"]?.jsonPrimitive?.intOrNull
-		require(schema == REVISION_SCHEMA || schema == REVISION_SCHEMA_PAYLOADS) { "Unsupported revision schema" }
+		require(schema in REVISION_SCHEMA..REVISION_SCHEMA_RIG) { "Unsupported revision schema" }
 		val nodes = index.getValue("nodes").jsonObject.mapValues { it.value.jsonPrimitive.content }
 		val unknown = nodes.keys - (listOf("source", "layers", "settings", "rig", "journal", "document") + sourceParts.values).toSet()
 		require(unknown.isEmpty()) { "Unsupported document nodes: $unknown" }
 		val payloads = index["payloads"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet().orEmpty()
-		require((schema == REVISION_SCHEMA_PAYLOADS) == payloads.isNotEmpty()) { "Payloads need revision schema $REVISION_SCHEMA_PAYLOADS" }
+		require(if (schema == REVISION_SCHEMA_RIG) true else (schema == REVISION_SCHEMA_PAYLOADS) == payloads.isNotEmpty()) {
+			"Payloads need revision schema $REVISION_SCHEMA_PAYLOADS"
+		}
+		val rigObjects = index["rig"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
+		require((schema == REVISION_SCHEMA_RIG) == rigObjects.isNotEmpty()) { "Rig objects need revision schema $REVISION_SCHEMA_RIG" }
+		for (hash in rigObjects) {
+			require(hash.matches(Regex("[0-9a-f]{64}"))) { "Invalid rig object name" }
+			require(Files.isRegularFile(root.resolve(RIG_OBJECTS).resolve("$hash.bin"))) { "The archive lacks rig object $hash" }
+		}
 		fun load(folder: String, kind: String, hash: String): JsonObject {
 			val value = cache.getOrPut("$folder/$hash") { read(root, folder, hash) }
 			require(value["schema"]?.jsonPrimitive?.intOrNull in NODE_SCHEMA..NODE_SCHEMA_TEXTURES && value["kind"]?.jsonPrimitive?.contentOrNull == kind) {
