@@ -396,6 +396,7 @@ internal fun DockWorkspaceView(
                     onDispose { session.floatingWindows.remove(id) }
                 }
                 // Match the main window's custom density and theme.
+                androidx.compose.runtime.CompositionLocalProvider(LocalAwtWindow provides window) {
                 CompactToolTheme(
                     colors = state.toolColors,
                     uiScale = AppSettings.uiScale,
@@ -405,6 +406,7 @@ internal fun DockWorkspaceView(
                         DockHeader(id, session, Modifier.fillMaxWidth(), state, viewModel, floating = true, floatingWindow = window)
                         Box(Modifier.weight(1f).fillMaxWidth()) { content(id)() }
                     }
+                }
                 }
             }
         }

@@ -192,17 +192,19 @@ fun FrameWindowScope.PSD2LiveApp(
 	// Which renderers draw this window and the editing canvas: a window composited in software makes every
 	// panel and animation slow on its own, so the log says so instead of leaving it to be guessed.
 	LaunchedEffect(window) {
+		// Canvases draw on the GPU in this window's Skia context when it draws with OpenGL.
+		window?.let(io.github.psd2live.render.SkiaGpu::capturePrimary)
 		val api = window?.let { runCatching { it.renderApi.name }.getOrNull() } ?: return@LaunchedEffect
 		viewModel.addLog(tr("log.renderer.window", api), level = if (api == "SOFTWARE") LogLevel.WARNING else LogLevel.INFO, tag = "Render")
 	}
-	val canvasRenderer by io.github.psd2live.render.CanvasRenderService.status.collectAsState()
+	val canvasRenderer by io.github.psd2live.render.SkiaGpu.status.collectAsState()
 	LaunchedEffect(canvasRenderer) {
 		when (val status = canvasRenderer) {
-			is io.github.psd2live.render.CanvasRenderService.Status.Ready ->
+			is io.github.psd2live.render.SkiaGpu.Status.Ready ->
 				viewModel.addLog(tr("log.renderer.canvasGpu", status.description), tag = "Render")
-			is io.github.psd2live.render.CanvasRenderService.Status.Unavailable ->
+			is io.github.psd2live.render.SkiaGpu.Status.Unavailable ->
 				viewModel.addLog(tr("log.renderer.canvasSoftware", status.reason), level = LogLevel.WARNING, tag = "Render")
-			io.github.psd2live.render.CanvasRenderService.Status.Starting -> Unit
+			io.github.psd2live.render.SkiaGpu.Status.Starting -> Unit
 		}
 	}
 

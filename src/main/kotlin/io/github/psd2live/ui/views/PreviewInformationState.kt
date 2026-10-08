@@ -1,6 +1,6 @@
 package io.github.psd2live.ui.views
 
-import io.github.psd2live.core.CubismSdkFrame
+import io.github.psd2live.core.PreviewFrame
 import io.github.psd2live.core.RigPreviewModel
 import org.umamo.runtime.model.*
 
@@ -15,7 +15,7 @@ import org.umamo.runtime.model.*
 internal fun informationPreviewPose(
     values: Map<ParameterId, Float>,
     previewValues: Map<ParameterId, Float>,
-    frame: CubismSdkFrame?,
+    frame: PreviewFrame?,
     live: Boolean,
 ): Map<ParameterId, Float> =
     if (!live) {

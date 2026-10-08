@@ -18,7 +18,8 @@ import org.umamo.runtime.model.DrawableId
 
 
 /**
- * Draw the editing texture channel on Compose's Skia canvas, without per-triangle Java2D clips.
+ * Draw the editing texture channel on Compose's Skia canvas. A masked part draws into a layer its masks' union
+ * then trims with DST_IN, instead of clipping to a path of every mask triangle.
  * The pages are converted on the first paint: a canvas the GPU draws makes one per atlas and never paints with it.
  */
 internal class SkiaRigPainter(private val atlas: PackedAtlas) : AutoCloseable {
@@ -58,7 +59,8 @@ internal class SkiaRigPainter(private val atlas: PackedAtlas) : AutoCloseable {
         val images = pages.images
         val shaders = pages.shaders
         val byId = model.rig.puppet.drawables.associateBy { it.id }
-        val masks = mutableMapOf<List<DrawableId>, Path?>()
+        val maskPaint = Paint()
+        val solidPaint = Paint().apply { color = 0xFF000000.toInt(); isAntiAlias = false }
         Paint().use { paint ->
             try {
                 for (draw in draws) {
@@ -85,52 +87,62 @@ internal class SkiaRigPainter(private val atlas: PackedAtlas) : AutoCloseable {
                             uvs[index * 2 + 1] = raster[1]
                         }
                     }
-                    val mask = if (draw.maskIds.isNotEmpty()) {
-                        masks.getOrPut(draw.maskIds) {
-                            PathBuilder().use { path ->
-                                var triangles = 0
-                                for (id in draw.maskIds) {
-                                    val maskMesh = byId[id]?.mesh ?: continue
-                                    val points = geometry.worldPositions[id] ?: continue
-                                    for (i in maskMesh.indices.indices step 3) {
-                                        val a = maskMesh.indices[i] * 2
-                                        var b = maskMesh.indices[i + 1] * 2
-                                        var c = maskMesh.indices[i + 2] * 2
-                                        val cross = (points[b] - points[a]) * (points[c + 1] - points[a + 1]) -
-                                            (points[b + 1] - points[a + 1]) * (points[c] - points[a])
-                                        if (cross == 0f) continue
-                                        if (cross < 0f) { val swap = b; b = c; c = swap }
-                                        path.moveTo(viewport.x(points[a]).toFloat(), viewport.yFromWorld(points[a + 1]).toFloat())
-                                        path.lineTo(viewport.x(points[b]).toFloat(), viewport.yFromWorld(points[b + 1]).toFloat())
-                                        path.lineTo(viewport.x(points[c]).toFloat(), viewport.yFromWorld(points[c + 1]).toFloat())
-                                        path.closePath()
-                                        triangles++
-                                    }
-                                }
-                                if (triangles == 0) null else path.detach()
-                            }
-                        }
-                    } else null
+                    val masked = draw.maskIds.isNotEmpty()
                     val saved = canvas.save()
                     try {
-                        mask?.let { canvas.clipPath(it, false) }
+                        if (masked) {
+                            // The part draws into a layer the size of its own triangles; its masks then keep only
+                            // what they cover (DST_IN over their union), as the GPU painter's stencil does.
+                            canvas.saveLayer(bounds(positions), null)
+                        }
                         paint.shader = source?.shader ?: shaders[draw.page]
                         paint.setAlphaf(draw.opacity)
                         canvas.drawVertices(VertexMode.TRIANGLES, positions, null, uvs, null, BlendMode.MODULATE, paint)
                         // Hover annotation: wash the very triangles just drawn with the component colour
                         // instead of boxing them. Re-drawing the mesh keeps the tint on the artwork's own
                         // silhouette — a part lights up rather than growing a rectangle — and because it
-                        // runs inside the same clip, a masked part is tinted only where it actually shows.
+                        // is masked with the part, a masked part is tinted only where it actually shows.
                         if (draw.tintColor != 0) {
                             paint.shader = null
                             paint.color = draw.tintColor
                             paint.setAlphaf(draw.tintAlpha)
                             canvas.drawVertices(VertexMode.TRIANGLES, positions, null, null, null, BlendMode.SRC_OVER, paint)
                         }
+                        if (masked) {
+                            maskPaint.blendMode = BlendMode.DST_IN
+                            canvas.saveLayer(null, maskPaint)
+                            for (id in draw.maskIds) {
+                                val maskMesh = byId[id]?.mesh ?: continue
+                                val points = geometry.worldPositions[id] ?: continue
+                                canvas.drawVertices(VertexMode.TRIANGLES, maskPositions(maskMesh.indices, points, viewport), null, null, null,
+                                    BlendMode.SRC_OVER, solidPaint)
+                            }
+                            canvas.restore()
+                        }
                     } finally { canvas.restoreToCount(saved) }
                 }
-            } finally { masks.values.forEach { it?.close() } }
+            } finally { maskPaint.close(); solidPaint.close() }
         }
+    }
+
+    /** Mask triangles in view pixels, expanded like the part's own. */
+    private fun maskPositions(indices: IntArray, points: FloatArray, viewport: CanvasViewport): FloatArray {
+        val out = FloatArray(indices.size * 2)
+        indices.forEachIndexed { index, vertex ->
+            out[index * 2] = viewport.x(points[vertex * 2]).toFloat()
+            out[index * 2 + 1] = viewport.yFromWorld(points[vertex * 2 + 1]).toFloat()
+        }
+        return out
+    }
+
+    private fun bounds(positions: FloatArray): Rect {
+        var left = Float.POSITIVE_INFINITY; var top = Float.POSITIVE_INFINITY
+        var right = Float.NEGATIVE_INFINITY; var bottom = Float.NEGATIVE_INFINITY
+        for (i in positions.indices step 2) {
+            left = minOf(left, positions[i]); right = maxOf(right, positions[i])
+            top = minOf(top, positions[i + 1]); bottom = maxOf(bottom, positions[i + 1])
+        }
+        return if (left > right) Rect.makeWH(0f, 0f) else Rect.makeLTRB(left - 1f, top - 1f, right + 1f, bottom + 1f)
     }
 
     override fun close() {
@@ -179,8 +191,8 @@ internal class PanShift(val stableKey: List<Any?>, val offsetX: Double, val offs
  * Keeps the unchanged texture pass for this one viewport.
  *
  * A new key is recorded as Skia draw commands and replayed while it keeps changing (a drag, a scrub).
- * Replaying is not free: every textured mesh is sampled from the atlas again and every masked part clips
- * against a path of all its mask's triangles, on each frame the canvas draws, which includes every hover
+ * Replaying is not free: every textured mesh is sampled from the atlas again and every masked part composites
+ * a layer trimmed by its masks, on each frame the canvas draws, which includes every hover
  * and overlay change. So once the same key is drawn twice it is rasterized, and later frames draw one image.
  */
 internal class CachedSkiaPicture : AutoCloseable {

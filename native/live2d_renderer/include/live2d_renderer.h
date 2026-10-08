@@ -27,6 +27,13 @@ typedef void* Live2DModelHandle;
 LIVE2D_API int Live2D_Init();
 
 /**
+ * @brief Present on bridges whose in-memory model creation, after Live2D_Init, uses the caller's current context
+ * instead of switching to the private hidden one. Older bridges create every in-memory model on the hidden context.
+ * @return 1.
+ */
+LIVE2D_API int Live2D_UsesCallerContext();
+
+/**
  * @brief Initialize a private hidden-window OpenGL context for offscreen rendering.
  * @return 1 on success, 0 on failure. Use Live2D_GetLastError for details.
  */

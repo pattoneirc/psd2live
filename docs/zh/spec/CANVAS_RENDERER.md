@@ -1,7 +1,7 @@
 # 画布渲染器重写：架构设计
 
-状态：P0–P2 已实现，P4 大部分完成（见第 9 节）
-范围：编辑画布（选择 / 变形 / 编辑 / 绘画 / 模拟）的贴图与辅助层绘制；预览画布的 Cubism 原生路径不在本次范围内。
+状态：P0–P2 已实现，P4 大部分完成（见第 9 节）；独立 GL 线程与回读已由第 10 节的统一渲染器取代
+范围：编辑画布（选择 / 变形 / 编辑 / 绘画 / 模拟）的贴图与辅助层绘制，以及预览画布（第 10 节）。
 
 ## 1. 结论
 
@@ -68,6 +68,8 @@ UI 线程（Compose）                                  渲染线程（GL 3.3 co
 
 ### 4.1 上下文与线程：`GlHost`
 
+> 已取代：渲染改在窗口自己的 Skia 上下文中进行，见第 10.1 节。`GlHost` 只留在测试源码中。
+
 - 新增依赖 `org.lwjgl:lwjgl-glfw`（及各平台 natives，与现有 `lwjgl`、`lwjgl-opengl` 同一 BOM）。
 - 用一个**隐藏的 GLFW 窗口**创建 3.3 core 上下文，只用它的 FBO，不显示。
 - 一个专用线程（`psd2live-canvas-gl`）独占这个上下文，全部 GL 调用都在这里；对外只暴露投递任务的接口，与 `CubismSdkPreviewSession` 的原生线程模式一致。
@@ -120,6 +122,8 @@ UI 线程（Compose）                                  渲染线程（GL 3.3 co
 - **姿势快照幽灵**：同一模型的第二份几何以 0.6 不透明度画进一个离屏纹理，再合成到主目标，避免重叠部件互相叠暗。
 
 ### 4.4 输出与显示：`Readback` + `CanvasFramePresenter`
+
+> 已取代：帧不再回读，也不再重投影，见第 10.1、10.2 节。
 
 - **渲染目标**：每个画布一个 FBO（颜色 + 深度 / 模板），按历史最大尺寸只增不减分配。HiDPI 下按设备像素渲染；MSAA 可选，默认 4×，解析到单采样纹理后回读。
 - **回读**：三个 PBO 轮转，第 N 帧发起 `glReadPixels` 到 PBO，第 N+1 帧映射取回第 N 帧，不阻塞 GPU。行顺序在着色器投影里直接翻转，省掉 CPU 翻行。
@@ -238,3 +242,51 @@ UI 侧新增 `ui/views/CanvasFramePresenter.kt`（显示与重投影）和 `ui/C
 | P6 纹理集实时编辑 | 完成 | 参照 umamo 的放置手柄：手势期间只改页面上的放置，不重建模型；手势状态不再按快照记忆（处理器保留首次组合时的状态对象，按快照记忆会让首次提交后的每次角点缩放都不显示）。纹理编辑进入视图模型的串行队列（`queueTextureEdits`），每条在前一条留下的版本上执行，不再以“另一项编辑仍在应用”拒绝；排队中的结果以 `TextureWorkspaceState.pending` 立即显示在页面与尺寸卡片上，落地后由新快照接替。只改纹理布局的重建复用上一版本的两次角色分析（`RigGenerationSource.AnalysisMemo`，以源图实例与去掉纹理布局后的配置为键）。`AtlasWindowPerfTool`（真实窗口，star_lan）：单次提交 140–225 ms 降至 80–160 ms，六次连续拖动无一被拒 |
 
 启动日志会写出窗口与编辑画布各自的渲染方式（例如 `窗口渲染：SOFTWARE_FAST`、`编辑画布渲染：GPU（…）`）。若窗口为 SOFTWARE，整个界面由 CPU 合成，各面板与动画都会变慢，这与画布渲染器无关，需要从显卡驱动或 Skiko 的渲染后端设置入手。
+
+## 10. 统一渲染器（现行）
+
+第 4.1、4.4 节的独立 GL 线程（`GlHost`）、PBO 回读与镜头重投影已被取代。编辑画布、纹理集页面和两种预览后端共用一个渲染器，全部在**窗口自己的 Skia OpenGL 上下文**里、在绘制窗口的线程上运行，画进 Skia 持有的纹理，Compose 在同一帧画出。没有第二个上下文、没有上下文间共享与同步、没有任何像素离开 GPU。
+
+### 10.1 上下文与轮次
+
+- Windows 上 `SkiaGpu.requestOpenGl()` 在创建窗口前让 Skiko 使用 OpenGL（默认是 Direct3D）；用户显式设置的 `skiko.renderApi` / `SKIKO_RENDER_API` 保持不变。Linux 上 Skiko 本来就用 OpenGL。窗口不是 OpenGL（macOS、软件渲染）时画布走软件路径，预览报告原因。
+- `SkiaGpu.of(window)` 从窗口的 `SkiaLayer` 读出 Skiko OpenGL 重绘器的上下文句柄与绘制它的 `DirectContext`（反射，Skiko 未公开），得到 `WindowGpu`。每个窗口（主窗口、浮动停靠窗口）各有一个，资源互不共享。
+- **轮次**（`WindowGpu.turn`）：只在该上下文正当前时执行（`wglGetCurrentContext` / `glXGetCurrentContext` 比对），开始和结束都把 Skia 留下而绘制方不会自己复位的状态恢复为 GL 默认值（模板裁剪测试、采样器对象、像素缓冲、行长度、默认顶点数组上的缓冲与属性等），结束时 `DirectContext.resetGLAll()` 让 Skia 重新设置自己的状态。
+- 轮次出现在两处：画布绘制时（`CanvasGpu.draw`、预览画布的 `drain`），以及包在窗口渲染委托外层、每帧 Compose 绘制之前执行的投递任务（`WindowGpu.post`，用于加载、释放和不由画布触发的工作）。
+- `GpuTarget`：每个视图一张只增不减的纹理（Skia 以 `Image.adoptTextureFrom`、`TOP_LEFT` 接管）加深度模板缓冲。内容在左上角、首行在上；按 GL 习惯自下而上绘制的（Cubism）先画进场景缓冲，再用 `glBlitFramebuffer` 垂直翻转拷入。每帧覆盖同一张纹理：上一帧对它的采样在同一上下文中更早提交，GPU 按序执行，无需围栏。
+
+### 10.2 编辑画布与纹理集页面
+
+`CanvasGpu.draw(window, viewId, key, scene)` 在画布的绘制里同步执行：键未变就直接返回上一帧，不碰 GL；键变了才构建场景、在轮次中由 `GlCanvasRenderer.draw` 画进视图纹理，当帧画出。没有排队、回读和重投影，平移缩放即时就是精确帧。`GlCanvasRenderer.render`（离屏帧缓冲 + 读回）只留给测试在无窗口的上下文（测试源码中的 `GlHost`）上与软件绘制对照。
+
+### 10.3 预览后端
+
+预览画布有两个后端，在预览左侧工具栏最上面的「运行时」一项（Cubism SDK / p2lrt · 标准 / p2lrt · 扩展）或左下状态胶囊的菜单里选择（应用设置，不随工程保存）：
+
+| 后端 | 模型 | 求值与绘制 |
+| --- | --- | --- |
+| Cubism SDK | 导出的 moc3（`CubismRuntimeBundle`） | 官方 Cubism 5-r.5 运行时（`CubismSdkPreviewSession`） |
+| PSD2Live 运行时（p2lrt） | 导出的 `.p2lrt`（`RigIrCompiler.compile(simulations = true)`） | `runtime/` 求值，`P2lrtGlRenderer` 绘制（`P2lrtPreviewSession`） |
+
+- 两者都只渲染工作区时钟给出的完整姿势，不运行自己的动作或拖动；p2lrt 的扩展（高级）模式在每个视图的模型上开启 `p2l_set_advanced` 的功能。实时模拟与碰撞由**物理开关**控制，与播放无关：物理开启时以 `p2l_update` 按帧时间推进（暂停时也继续摆动，帧泵不进入静止等待），运行时自己的物理同时运行；物理关闭时关掉模拟与碰撞，显示烘焙的摆动，只保留蒙皮与精确链接，以 `p2l_evaluate` 求值。
+- `PreviewSessions` 把两者放在同一个接口后：Cubism 库起不来时自动改用 p2lrt 并写日志；两者都不可用时，画布才用编辑画布的绘制路径兜底。
+- 原生调用都是 `GpuExecutor` 的任务：应用里在窗口轮次中执行（`PrimaryGpuExecutor`、`WindowGpu.post`），测试里在普通线程上执行。帧泵每帧请求一帧后递增画布读取的计数，画布绘制时先 `drain` 执行本帧的渲染任务，再画该视图的纹理，所以显示的是刚请求的那一帧。
+- Cubism 在主窗口上下文中以 `Live2D_Init` 初始化，以 `Live2D_Draw` 画进当前帧缓冲。框架的着色器等状态只存在于一个上下文，所以浮动窗口里的预览画布由 p2lrt 绘制。Cubism 的渲染器从客户端内存取顶点，需要兼容配置的上下文（Skia 在 Windows 上是传统兼容上下文）；核心配置下报告错误而不绘制。
+- 原生桥接：旧版 `Live2D_CreateModelFromMemory` 总是切换到桥接自己的隐藏上下文，模型会落到错误的上下文里。重新构建的桥接导出 `Live2D_UsesCallerContext`，`Live2D_Init` 之后内存加载也使用调用方上下文；旧桥接在此模式下改为从临时文件加载（`Live2D_CreateModel`），每次重载都完整重建。
+- p2lrt 的编译在独立线程上进行；网格与贴图页按上下文上传（`GpuResources.service`），每个视图一个运行时实例。
+
+### 10.4 帧率
+
+预览的帧泵在每个显示刷新（`withFrameNanos`）请求一帧；帧率上限是应用设置（跟随显示器 / 30 / 60 / 120，默认跟随显示器），与工程的物理帧率无关，物理在其固定步长之间插值。多个预览同时可见时不再限制为每个 30 FPS。
+
+### 10.5 p2lrt 的绘制规则
+
+与网页播放器一致：按 `p2l_render_order` 由后到前；贴图预乘上传并生成 mipmap，片元先还原直通色再乘乘算色、叠屏幕色，按网格透明度输出预乘色；遮罩写模板（纹素透明度 ≥ 0.5 才算覆盖，反向遮罩取不等）；混合按 Cubism 的预乘组合（普通、加算、乘算，扩展模式退回最接近的基本模式）；网格要求时剔除背面。相机沿用 Cubism 的取景参数（画布高度占短边 × `scale`，偏移为裁剪空间单位），两种后端取景一致。
+
+### 10.6 编辑画布软件路径的遮罩
+
+`SkiaRigPainter` 的遮罩不再把遮罩网格的全部三角形拼成路径再裁剪：被遮罩的部件画进一个以其三角形包围盒为界的图层，遮罩网格的并集以 `DST_IN` 图层合成上去，效果与 GPU 路径的模板缓冲相同（按几何覆盖）。
+
+### 10.7 验证
+
+`PreviewWindowTool` 打开真实窗口：编辑画布与两种预览后端都在窗口的 Skia 上下文中出帧，帧从 GPU 读出核对（只读视图纹理，不截屏）；在 RTX 4080 笔记本上两种后端播放时都超过 100 FPS，无帧率锁。工具带看门狗，窗口卡住两分钟即转储线程并退出。

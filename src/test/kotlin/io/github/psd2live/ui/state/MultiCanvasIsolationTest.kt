@@ -3,7 +3,7 @@ package io.github.psd2live.ui.state
 import io.github.psd2live.core.RigInformationOverlay
 
 import io.github.psd2live.ui.CanvasTool
-import io.github.psd2live.core.CubismSdkFrame
+import io.github.psd2live.core.PreviewFrame
 import io.github.psd2live.core.StandardParameters
 import java.awt.image.BufferedImage
 import java.nio.file.Path
@@ -344,8 +344,8 @@ class MultiCanvasIsolationTest {
             val firstFlow = vm.sdkFrameFor(firstKey)
             val secondFlow = vm.sdkFrameFor(secondKey)
             val parameter = org.umamo.runtime.model.ParameterId("pose")
-            fun frame(key: String, value: Float) = CubismSdkFrame(
-                BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB),
+            fun frame(key: String, value: Float) = PreviewFrame(
+                1, 1,
                 mapOf(parameter to value),
                 viewId = key,
             )
@@ -629,8 +629,8 @@ class MultiCanvasIsolationTest {
             val flow = vm.sdkFrameFor(previewKey)
             vm.setCanvasMode(id, CanvasMode.EDIT)
             val before = vm.state.value
-            vm.acceptSdkFrame(CubismSdkFrame(
-                BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB), emptyMap(), viewId = previewKey,
+            vm.acceptSdkFrame(PreviewFrame(
+                1, 1, emptyMap(), viewId = previewKey,
             ))
             assertSame(before, vm.state.value)
             assertNull(flow.value)

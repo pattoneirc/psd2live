@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.psd2live.core.PreviewBackend
 import io.github.psd2live.core.RigEditOverlay
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.IconMouse
@@ -28,8 +29,9 @@ import io.github.psd2live.ui.views.texture.FloatingMenu
 import io.github.psd2live.ui.views.texture.FloatingMenuRadio
 
 /**
- * Preview-tab twin of the edit left toolbar: play/pause, mouse tracking, physics and the project's frame
- * rate live on the canvas instead of the docks, so the artist can reach them without leaving the viewport.
+ * Preview-tab twin of the edit left toolbar: the runtime that draws the preview, play/pause, mouse tracking,
+ * physics and the project's frame rate live on the canvas instead of the docks, so the artist can reach them
+ * without leaving the viewport.
  */
 @Composable
 internal fun BoxScope.CanvasPreviewToolbar(
@@ -39,22 +41,52 @@ internal fun BoxScope.CanvasPreviewToolbar(
 	physicsEnabled: Boolean,
 	physicsAvailable: Boolean,
 	fps: Int,
+	/** The runtime drawing the preview, and whether p2lrt runs in its advanced mode. */
+	runtime: PreviewBackend,
+	advanced: Boolean,
+	/** Whether the PSD2Live runtime library is present; without it only Cubism can be picked. */
+	p2lrtAvailable: Boolean,
 	enabled: Boolean,
 	onToggleAnimation: () -> Unit,
 	onToggleMouseTracking: () -> Unit,
 	onToggleSmoothTracking: () -> Unit,
 	onTogglePhysics: () -> Unit,
 	onSelectFps: (Int) -> Unit,
+	/** Picks the runtime; [advanced] only matters for p2lrt. */
+	onSelectRuntime: (backend: PreviewBackend, advanced: Boolean) -> Unit,
 	modifier: Modifier = Modifier,
 ) {
 	var fpsMenu by remember { mutableStateOf(false) }
-	// An open rate menu keeps the toolbar open under it.
+	var runtimeMenu by remember { mutableStateOf(false) }
+	// An open menu keeps the toolbar open under it.
 	CanvasOptionsRail(
 		modifier = modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 44.dp),
 		leading = true,
 		expandedWidth = 156.dp,
-		pinned = fpsMenu,
+		pinned = fpsMenu || runtimeMenu,
 	) {
+		val p2lrtShown = runtime == PreviewBackend.P2LRT
+		Box {
+			RailItem(
+				label = runtimeLabel(runtime, advanced),
+				selected = false,
+				enabled = enabled,
+				onClick = { runtimeMenu = true },
+				icon = { tint ->
+					// C for Cubism, P for p2lrt, P+ in its advanced mode.
+					Text(if (!p2lrtShown) "C" else if (advanced) "P+" else "P", color = tint,
+						fontSize = if (p2lrtShown && advanced) 9.5.sp else 10.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+				},
+			)
+			FloatingMenu(expanded = runtimeMenu, onDismiss = { runtimeMenu = false }, width = 180.dp) {
+				FloatingMenuRadio(tr("preview.runtime.cubism"), selected = !p2lrtShown,
+					onSelect = { runtimeMenu = false; onSelectRuntime(PreviewBackend.CUBISM, advanced) })
+				FloatingMenuRadio(tr("preview.runtime.p2lrtStandard"), selected = p2lrtShown && !advanced, enabled = p2lrtAvailable,
+					onSelect = { runtimeMenu = false; onSelectRuntime(PreviewBackend.P2LRT, false) })
+				FloatingMenuRadio(tr("preview.runtime.p2lrtAdvanced"), selected = p2lrtShown && advanced, enabled = p2lrtAvailable,
+					onSelect = { runtimeMenu = false; onSelectRuntime(PreviewBackend.P2LRT, true) })
+			}
+		}
 		RailItem(
 			label = tr(if (animationEnabled) "preview.idle.on" else "preview.idle.off"),
 			selected = animationEnabled,
@@ -135,3 +167,9 @@ internal fun BoxScope.PreviewModeBar(editor: io.github.psd2live.ui.CanvasEditor,
 
 @Composable
 private fun fpsLabel(fps: Int): String = if (fps > 0) "$fps FPS" else tr("preview.fps.unlimited")
+
+private fun runtimeLabel(runtime: PreviewBackend, advanced: Boolean): String = tr(when {
+	runtime == PreviewBackend.CUBISM -> "preview.runtime.cubism"
+	advanced -> "preview.runtime.p2lrtAdvanced"
+	else -> "preview.runtime.p2lrtStandard"
+})

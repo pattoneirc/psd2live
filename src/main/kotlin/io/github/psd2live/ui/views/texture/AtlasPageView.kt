@@ -76,7 +76,8 @@ import io.github.psd2live.ui.components.IconLock
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.core.CanvasViewport
 import io.github.psd2live.core.TileTurn
-import io.github.psd2live.render.CanvasRenderService
+import io.github.psd2live.render.CanvasGpu
+import io.github.psd2live.ui.views.drawGpuFrame
 import io.github.psd2live.ui.BoundingBox
 import io.github.psd2live.ui.BoundingHandle
 import io.github.psd2live.ui.CanvasCursors
@@ -170,7 +171,6 @@ internal object AtlasPageProbe {
 	/** Draws that showed a tile a gesture lifts, and of those the ones whose GPU frame already had it lifted. */
 	val liftedDraws = java.util.concurrent.atomic.AtomicInteger()
 	val liftedGpuFrames = java.util.concurrent.atomic.AtomicInteger()
-	val liftedScenes: MutableSet<Any> = java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(java.util.WeakHashMap()))
 }
 
 /** Page-to-view mapping: a texture pixel (x, y) shows at (left + x * scale, top + y * scale). */
@@ -252,17 +252,15 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 	// The GPU renderer draws the page's texels and wireframes when it can, as it does the edit canvas's artwork; the
 	// Compose drawing below stays the fallback. An upscaled page needs the live page image to cut its tiles from.
 	val softwareCanvas by AppSettings.softwareCanvasFlow.collectAsState()
-	LaunchedEffect(softwareCanvas) { if (!softwareCanvas) CanvasRenderService.ensureStarted() }
-	val gpuStatus by CanvasRenderService.status.collectAsState()
+	val awtWindow = io.github.psd2live.ui.views.LocalAwtWindow.current
+	val gpuPrimary by io.github.psd2live.render.SkiaGpu.primaryFlow.collectAsState()
+	val gpuAvailable = remember(gpuPrimary, awtWindow) { CanvasGpu.available(awtWindow) }
 	val livePage = remember(state.previewModel, snapshot, page) {
 		if (!snapshot.upscaled) null else state.previewModel?.atlas?.takeIf(snapshot::matches)?.pages?.getOrNull(page)?.image
 	}
-	val gpuReady = !softwareCanvas && gpuStatus is CanvasRenderService.Status.Ready && (!snapshot.upscaled || livePage != null)
+	val gpuReady = !softwareCanvas && gpuAvailable && (!snapshot.upscaled || livePage != null)
 	val renderKey = remember { "atlas-page-" + java.util.UUID.randomUUID() }
-	DisposableEffect(renderKey) { onDispose { CanvasRenderService.release(renderKey) } }
-	val gpuFrame by remember(renderKey) { CanvasRenderService.frames(renderKey) }.collectAsState()
-	val gpuImage = remember(gpuFrame) { gpuFrame?.bitmap?.takeIf { !it.isClosed }?.asComposeImageBitmap() }
-	val gpuSubmission = remember(renderKey) { AtlasSceneSubmission(renderKey) }
+	DisposableEffect(renderKey) { onDispose { CanvasGpu.release(renderKey) } }
 	val tileImages = rememberTileImages(snapshot, enabled = !gpuReady)
 	val pageImage = rememberPageImage(state, snapshot, page, enabled = snapshot.upscaled && !gpuReady)
 	val masks = remember(snapshot, tiles) { tiles.filter { it.shaped }.associate { it.layerId to maskPath(snapshot.shape(it, it.x, it.y)) } }
@@ -693,27 +691,14 @@ private fun AtlasPageCanvas(state: PSD2LiveState, vm: PSD2LiveViewModel, snapsho
 					val viewport = CanvasViewport(transform.scale.toDouble(), transform.left.toDouble(), transform.top.toDouble(),
 						pageInfo.width.toFloat(), pageInfo.height.toFloat())
 					val liftedKey = tiles.mapNotNull { tile -> moved(tile)?.let { tile.layerId to it } }
-					gpuSubmission.submit(listOf(snapshot, page, w, h, viewport, texture.showPage, texture.heatmap, texture.showMeshes, meshes,
+					// Drawn here, in the window's Skia context, for this very frame: no queue, no read-back, no reprojection.
+					CanvasGpu.draw(awtWindow, renderKey, listOf(snapshot, page, w, h, viewport, texture.showPage, texture.heatmap, texture.showMeshes, meshes,
 						selected, liftedKey, livePage, tiles, colors.accent, colors.textPrimary)) {
 						atlasScene(AtlasSceneInput(snapshot, tiles, w, h, viewport, texture.showPage, texture.heatmap,
 							meshes?.takeIf { texture.showMeshes }, maskCells, selected, livePage,
 							colors.textPrimary.copy(alpha = 0.35f).toArgb(), colors.accent.copy(alpha = 0.9f).toArgb()), ::moved)
-							.also { if (liftedKey.isNotEmpty()) AtlasPageProbe.liftedScenes += it }
-					}
-					val frame = gpuFrame
-					if (liftedKey.isNotEmpty()) {
-						if (frame != null && frame.scene in AtlasPageProbe.liftedScenes) AtlasPageProbe.liftedGpuFrames.incrementAndGet()
-					}
-					val image = gpuImage
-					if (frame != null && image != null && !frame.bitmap.isClosed) {
-						// The frame may be a step behind the camera: move it to where the camera is now, so a pan or zoom
-						// follows the pointer at once and the exact frame replaces it when it lands.
-						val k = (viewport.scale / frame.viewport.scale).toFloat()
-						val tx = (viewport.offsetX - frame.viewport.offsetX * k).toFloat()
-						val ty = (viewport.offsetY - frame.viewport.offsetY * k).toFloat()
-						if (k == 1f && tx == 0f && ty == 0f) drawImage(image)
-						else withTransform({ translate(tx, ty); scale(k, k, pivot = Offset.Zero) }) { drawImage(image) }
-					}
+							.also { if (liftedKey.isNotEmpty()) AtlasPageProbe.liftedGpuFrames.incrementAndGet() }
+					}?.let { drawGpuFrame(it) }
 				} else withTransform({ translate(transform.left, transform.top); scale(transform.scale, transform.scale, Offset.Zero) }) {
 					if (texture.showPage && tileImages.isEmpty() && pageImage != null && overlay.isEmpty()) {
 						// Upscaled pages hold pixels no layer raster has; they are drawn as they are.

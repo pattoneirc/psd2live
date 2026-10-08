@@ -55,12 +55,6 @@ internal class AtlasScene(
 	val overlay: OverlayScene,
 ) : GpuScene
 
-/**
- * A finished frame: premultiplied RGBA pixels, top row first, and the camera they were drawn with, so the
- * presenter can move it with the camera until the next one arrives.
- */
-internal class RenderedFrame(val bitmap: Bitmap, val width: Int, val height: Int, val viewport: CanvasViewport, val scene: GpuScene)
-
 /** Premultiplied RGBA pixels for the [width] x [height] area at ([x], [y]) of a paint session's raster. */
 internal class PaintUpload(val x: Int, val y: Int, val width: Int, val height: Int, val rgba: ByteArray)
 

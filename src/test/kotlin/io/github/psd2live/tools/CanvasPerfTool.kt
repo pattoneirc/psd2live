@@ -7,7 +7,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
-import io.github.psd2live.render.CanvasRenderService
+import io.github.psd2live.render.CanvasGpu
+import io.github.psd2live.render.SkiaGpu
 import io.github.psd2live.ui.state.AppSettings
 import io.github.psd2live.ui.state.CanvasMode
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -39,6 +40,7 @@ class CanvasPerfTool {
 
 	@Test fun profile() {
 		requireTools()
+		SkiaGpu.requestOpenGl()
 		val sample = Sample.fromEnvironment()
 		val out = output("canvas-perf")
 		val savedSoftware = AppSettings.softwareCanvas
@@ -73,9 +75,8 @@ class CanvasPerfTool {
 				val state = viewModel.state.value
 				viewModel.updateEditViewOptions(state.activeCanvas.id, state.activeWorkspace.id) { it.copy(showMesh = true, showWarp = true, showRotation = true) }
 			}
-			CanvasRenderService.ensureStarted()
-			waitFor(30, "GPU renderer") { CanvasRenderService.status.value !is CanvasRenderService.Status.Starting }
-			report.appendLine("GPU: ${CanvasRenderService.status.value}")
+			waitFor(30, "GPU renderer") { SkiaGpu.status.value !is SkiaGpu.Status.Starting }
+			report.appendLine("GPU: ${SkiaGpu.status.value}")
 			Thread.sleep(2000)
 			val bounds = window.get()!!.bounds
 			val robot = Robot().apply { autoDelay = 0 }

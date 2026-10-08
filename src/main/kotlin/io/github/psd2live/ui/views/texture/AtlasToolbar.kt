@@ -318,6 +318,7 @@ internal fun AccentButton(label: String?, onClick: () -> Unit, enabled: Boolean 
 /**
  * A menu dropping from a bar control, in the mode menu's style: frosted, scaling in from its anchor's corner.
  * Put it in the anchor's Box; [alignment] TopStart drops it under the anchor's left edge, TopEnd under its right.
+ * [rise] opens it above the anchor instead, for controls at the bottom of a canvas (align the Box BottomStart).
  */
 @Composable
 internal fun FloatingMenu(
@@ -325,6 +326,7 @@ internal fun FloatingMenu(
 	onDismiss: () -> Unit,
 	width: Dp = 220.dp,
 	alignment: Alignment = Alignment.TopStart,
+	rise: Boolean = false,
 	content: @Composable ColumnScope.() -> Unit,
 ) {
 	val visibility = remember { MutableTransitionState(false) }
@@ -344,13 +346,13 @@ internal fun FloatingMenu(
 			}, "scale") { if (it) 1f else 0.92f }
 			val lift by transition.animateFloat({
 				if (false isTransitioningTo true) tween(100, easing = FastOutSlowInEasing) else tween(80, easing = FastOutLinearInEasing)
-			}, "lift") { if (it) 0f else -6f }
+			}, "lift") { if (it) 0f else if (rise) 6f else -6f }
 			Column(
 				Modifier
 					.graphicsLayer {
 						this.alpha = alpha; scaleX = scale; scaleY = scale
 						translationY = lift * density.density
-						transformOrigin = TransformOrigin(if (alignment == Alignment.TopEnd) 0.88f else 0.12f, 0f)
+						transformOrigin = TransformOrigin(if (alignment == Alignment.TopEnd || alignment == Alignment.BottomEnd) 0.88f else 0.12f, if (rise) 1f else 0f)
 					}
 					.width(width)
 					.frostedGlass(RoundedCornerShape(7.dp), isHovered = true, elevation = 12.dp, baseColor = colors.panelElevated, alpha = 0.9f)
@@ -363,7 +365,7 @@ internal fun FloatingMenu(
 	}
 	Popup(
 		alignment = alignment,
-		offset = with(density) { IntOffset(0, 28.dp.roundToPx()) },
+		offset = with(density) { IntOffset(0, (if (rise) -28 else 28).dp.roundToPx()) },
 		onDismissRequest = onDismiss,
 		properties = PopupProperties(focusable = true),
 		content = body,

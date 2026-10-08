@@ -9,7 +9,6 @@ import io.github.psd2live.core.TileTurn
 import androidx.compose.ui.geometry.Offset
 import io.github.psd2live.core.CanvasViewport
 import io.github.psd2live.render.AtlasScene
-import io.github.psd2live.render.CanvasRenderService
 import io.github.psd2live.render.FillBatch
 import io.github.psd2live.render.ImageTexture
 import io.github.psd2live.render.LineBatch
@@ -154,15 +153,4 @@ internal fun atlasScene(input: AtlasSceneInput, moved: (WorkspaceAtlasTile) -> T
 		if (input.meshes != null) wires(tile, frame, input.accentColor)
 	}
 	return AtlasScene(input.width, input.height, input.viewport, OverlayScene(items))
-}
-
-/** Hands the GPU renderer a new atlas scene only when what it shows changed; redraws in between submit nothing. */
-internal class AtlasSceneSubmission(private val viewId: String) {
-	private var key: List<Any?>? = null
-
-	fun submit(key: List<Any?>, scene: () -> AtlasScene) {
-		if (this.key == key) return
-		this.key = key
-		CanvasRenderService.submit(viewId, scene())
-	}
 }

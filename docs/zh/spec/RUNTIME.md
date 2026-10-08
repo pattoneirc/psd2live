@@ -17,6 +17,8 @@
 
 编辑器的导出烘焙（Spine、DragonBones、glTF）在运行时库可用时经 `NativeGeometryEvaluator` 求值，否则使用引擎求值器；两者逐姿势一致。编辑器软件预览（`RigCanvasSupport.evaluate`）同样经 `NativePreview` 使用运行时：首次遇到某个预览模型时由引擎作答并在后台编译，之后的帧走运行时；拖动中的临时模型不等待编译，失败或 `-Dpsd2live.preview.runtime=false` 时保持引擎。在带骨架的 tml 上单次求值约 0.5 毫秒，与引擎相当（JNA 调用与结果转换抵消了原生速度）。
 
+预览画布可以选用运行时作为预览后端（「PSD2Live 运行时（p2lrt）」，见 [CANVAS_RENDERER.md](CANVAS_RENDERER.md#103-预览后端)）：后台把预览模型编译为 `.p2lrt`（含模拟），运行时按工作区时钟给出的完整姿势求值，`P2lrtGlRenderer` 按网页播放器的规则在窗口自己的 Skia OpenGL 上下文中绘制。扩展（高级）模式开启时每个视图的模型开启蒙皮与精确链接；实时模拟与碰撞由预览的物理开关控制（开启时以 `p2l_update` 按帧时间推进，暂停也不停；关闭时显示烘焙摆动），运行时的程序化行为保持关闭。Cubism SDK 不可用时预览自动改用它。
+
 ## `.p2lrt` 格式
 
 小端二进制，是编译后 IR 的紧凑表示：画布、参数、变形器（父级在前）、部件、网格、Glue、绘制树、贴图页、物理组、动作片段和参数角色（如 EyeBlink、LipSync）。引用一律为索引。

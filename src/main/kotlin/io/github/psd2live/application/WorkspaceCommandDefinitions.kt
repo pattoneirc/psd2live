@@ -715,7 +715,7 @@ private fun registerCatalogPhysicsCommands(catalog: WorkspaceCommands, physics: 
 
     catalog.register(
         name = "physics_config",
-        description = "Set the physics evaluation order and/or rate. Cubism runs groups in order and a later group reads an earlier group's outputs in the same step; order lists group IDs to run first, the rest follow in their current order. fps is the project's one frame rate: the preview and physics step at it and physics3.json and the CMO3 declare it (default 60; 0 is unlimited: the preview follows the display and no Fps is declared).",
+        description = "Set the physics evaluation order and/or rate. Cubism runs groups in order and a later group reads an earlier group's outputs in the same step; order lists group IDs to run first, the rest follow in their current order. fps is the project's physics rate: physics steps at it and physics3.json and the CMO3 declare it (default 60; 0 is unlimited: physics steps with each rendered frame and no Fps is declared). The preview's own frame rate is a user setting and follows the display by default.",
         inputSchema = WorkspaceCommandSchema(properties = buildJsonObject {
             putJsonObject("order") { put("type", "array"); putJsonObject("items") { put("type", "string") } }
             putJsonObject("fps") { put("type", "integer"); put("minimum", 0); put("maximum", 240) }

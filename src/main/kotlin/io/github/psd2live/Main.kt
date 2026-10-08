@@ -32,6 +32,8 @@ import androidx.compose.ui.window.rememberWindowState
 
 fun main(arguments: Array<String>) {
 	System.setProperty("sun.java2d.uiScale.enabled", "true")
+	// Canvases draw on the GPU in Skia's own OpenGL context, so Skia must draw the window with OpenGL.
+	io.github.psd2live.render.SkiaGpu.requestOpenGl()
 	configureLanguage(arguments)
 	if (arguments.isEmpty()) {
 		runGui()
@@ -149,13 +151,15 @@ private fun runGui() {
 					undecorated = true,
 					transparent = transparent,
 				) {
-					PSD2LiveApp(
-						viewModel = viewModel,
-						window = window,
-						windowState = windowState,
-						onCloseRequest = closeApp,
-						agentMcp = agentMcp,
-					)
+					androidx.compose.runtime.CompositionLocalProvider(io.github.psd2live.ui.views.LocalAwtWindow provides window) {
+						PSD2LiveApp(
+							viewModel = viewModel,
+							window = window,
+							windowState = windowState,
+							onCloseRequest = closeApp,
+							agentMcp = agentMcp,
+						)
+					}
 				}
 			}
 		}

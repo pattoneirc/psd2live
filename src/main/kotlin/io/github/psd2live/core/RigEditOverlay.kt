@@ -389,7 +389,7 @@ data class RigEditOverlay(
 		const val DEFAULT_PHYSICS_FPS = 60
 		// Before [Empty], which checks against it while the companion initializes.
 		val PHYSICS_FPS_RANGE = 1..240
-		/** No fixed rate: the preview follows the display and physics steps with each frame. */
+		/** No fixed rate: physics steps with each rendered frame. */
 		const val UNLIMITED_FPS = 0
 		/** The rates the preview toolbar offers. */
 		val FPS_CHOICES = listOf(30, 60, 90, 120, UNLIMITED_FPS)
