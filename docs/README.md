@@ -44,27 +44,25 @@ For hands-on learning, open **Help → Tutorials…** (`F1`). Chinese is the pri
 | 运行时 | Rust 运行时、`.p2lrt` 格式、网页播放器与 Godot 节点 | [打开](zh/spec/RUNTIME.md) | 中文 | 中文 |
 | `.p2lrt` 2.0 格式 | 分块容器、核心层与扩展层、演进规则 | [打开](zh/spec/P2LRT_V2.md) | 中文 | 中文 |
 | 文档层 | 生成器依赖图、生成结果覆盖、缓存、逐层尺寸与拆分物化 | [打开](zh/spec/DOCUMENT_LAYER.md) | 中文 | 中文 |
-| 固化 Rig（设计中） | 以固化 Rig 为权威数据的工程模型、再生成合并与分阶段计划 | [打开](zh/spec/MATERIALIZED_RIG.md) | 中文 | 中文 |
+| 固化 Rig | 按修订保存的固化 Rig、检查点、再生成合并与实现进度 | [打开](zh/spec/MATERIALIZED_RIG.md) | 中文 | 中文 |
 | 运行时与导出边界 | 数据流、格式支持范围、交付检查 | [打开](zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md) | 中文 | 中文 |
 | 网格拓扑与图层拆分 | 自适应网格生成、填充算法、两种拆分 | [打开](zh/spec/MESH_TOPOLOGY_AND_SPLIT.md) | 中文 | 中文 |
 | 绘画系统 | 绘画会话、组件分工、提交与网格迁移 | [打开](zh/spec/PAINT_SYSTEM_ARCHITECTURE_AND_PRD.md) | 中文 | 中文 |
 | 画布渲染器 | 编辑画布的 GPU 绘制架构与进度 | [打开](zh/spec/CANVAS_RENDERER.md) | 中文 | 中文 |
-| 骨骼工具盘点 | 骨骼模式的现有能力与缺口 | [打开](zh/spec/SKELETON_TOOL_INVENTORY.md) | 中文 | 中文 |
-| 人体关节蒙皮调研 | 关节弯曲塑形的文献结论与实现选择 | [打开](zh/spec/HUMAN_JOINT_SKINNING_RESEARCH.md) | 中文 | 中文 |
-| 默认动画重构计划 | 解剖模型、动作合成、待机与跟踪的分阶段计划和进度 | [打开](zh/spec/DEFAULT_ANIMATION_PRESET_REFACTOR_PLAN.md) | 中文 | 中文 |
+| 归档 | 已完成的计划、调研与盘点（默认动画重构、人体关节蒙皮调研、骨骼工具盘点），不代表当前实现 | [打开](zh/spec/archive/) | 中文 | 中文 |
 
 ## Agent（MCP）
 
 | 文档 | 内容 |
 | --- | --- |
-| [MCP 使用与接口](zh/agent/MCP_AUTHORING.md) | 接入方式、183 项公开操作、原子批量与试运行、调用示例、状态与历史 |
+| [MCP 使用与接口](zh/agent/MCP_AUTHORING.md) | 接入方式、188 项公开操作、原子批量与试运行、调用示例、状态与历史 |
 | [Agent 设计与验收](zh/agent/AGENT_DESIGN.md) | 分工边界、工具设计原则、任务验收步骤 |
-| [UI / MCP 能力对照](zh/agent/UI_MCP_PARITY_ISSUE_13.md) | 每项能力在界面与 MCP 中的入口 |
 | [能力实测](zh/STATUS.md) | 真实任务的实测记录与记录格式 |
-| [2026-09-13 调研（归档）](zh/agent/archive/AGENT_RESEARCH_2026-09-13.md) | 历史背景，不代表当前接口 |
+| [归档](zh/agent/archive/) | 2026-09-13 调研、应用层重构记录与 UI / MCP 对照表，历史背景，不代表当前接口 |
 
 ## 其他
 
+- [路线图](zh/ROADMAP.md) · [能力实测](zh/STATUS.md)
 - [示例素材与输出](../examples/readme.md)
 - [原生桥接构建脚本](../native/README.md)
 - [第三方组件声明](../THIRD_PARTY_NOTICES.md)

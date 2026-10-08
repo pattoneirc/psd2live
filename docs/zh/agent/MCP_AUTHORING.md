@@ -1,6 +1,6 @@
 # MCP 使用与接口
 
-[文档目录](../../README.md) · [设计与验收](AGENT_DESIGN.md) · [UI / MCP 双向清单](UI_MCP_PARITY_ISSUE_13.md) · [能力实测](../STATUS.md)
+[文档目录](../../README.md) · [设计与验收](AGENT_DESIGN.md) · [能力实测](../STATUS.md)
 
 公开定义位于应用层 [WorkspaceAuthoringOperations.kt](../../../src/main/kotlin/io/github/psd2live/application/WorkspaceAuthoringOperations.kt) 、[WorkspaceDocumentBatch.kt](../../../src/main/kotlin/io/github/psd2live/application/WorkspaceDocumentBatch.kt)、[WorkspaceAuxiliaryOperations.kt](../../../src/main/kotlin/io/github/psd2live/application/WorkspaceAuxiliaryOperations.kt) 和 [WorkspaceOperations.kt](../../../src/main/kotlin/io/github/psd2live/application/WorkspaceOperations.kt)，MCP 绑定见 [AgentToolCatalog.kt](../../../src/main/kotlin/io/github/psd2live/agent/AgentToolCatalog.kt)。工具使用 `domain_operation` 名称；旧的分支工具已删除，没有兼容别名。用 `workspace_list_operations` 分页发现能力，再用 `workspace_get_operation` 读取单项完整 schema。
 
@@ -163,7 +163,7 @@ CMO3 导入共用独立应用层导入器，GUI 入口确认后携带可信用�
 {"request":{"request_id":"export-001","project_id":"project-id-from-inspect","state":"opaque-state-from-inspect","output_directory":"D:/exports/model"}}
 ```
 
-所有修改操作都要求 `request_id`；工作区修改还要求 `project_id` 与 `state`。`workspace_inspect` 总是返回当前状态，包括未加载时的状态令牌。创建或导入空工作区时 `project_id` 为 `null`。`state` 是包含加载代次与持久版本的不透明令牌，重开同一历史节点后也会变化，不能填写历史 HEAD。文档写入返回自己的提交令牌及 `history_node_id`；无变化不建立节点。共享上下文由注册表发布并校验，提交端再次检查；请求等待断线不取消进程持有的执行。参数快照与历史注释已使用同一应用命令和持久版本，不追加 Rig 历史节点。GUI 和 MCP 的显式 pose 修改也推进状态，播放/物理求值帧及快照悬停不推进状态。GUI 改参数时先在本地显示，再按顺序提交；提交落地前 `scope=preview` 仍返回已提交的姿态。此时 MCP 先提交姿态或其他修改，GUI 排队中的修改会按冲突回滚到已提交姿态。剩余辅助状态迁移范围见 [重构验收进度](REFACTOR_PROGRESS.md)。
+所有修改操作都要求 `request_id`；工作区修改还要求 `project_id` 与 `state`。`workspace_inspect` 总是返回当前状态，包括未加载时的状态令牌。创建或导入空工作区时 `project_id` 为 `null`。`state` 是包含加载代次与持久版本的不透明令牌，重开同一历史节点后也会变化，不能填写历史 HEAD。文档写入返回自己的提交令牌及 `history_node_id`；无变化不建立节点。共享上下文由注册表发布并校验，提交端再次检查；请求等待断线不取消进程持有的执行。参数快照与历史注释已使用同一应用命令和持久版本，不追加 Rig 历史节点。GUI 和 MCP 的显式 pose 修改也推进状态，播放/物理求值帧及快照悬停不推进状态。GUI 改参数时先在本地显示，再按顺序提交；提交落地前 `scope=preview` 仍返回已提交的姿态。此时 MCP 先提交姿态或其他修改，GUI 排队中的修改会按冲突回滚到已提交姿态。
 
 `physics_simulate/simulation_simulate` 启动前核对请求的工程与状态，并捕获一次独立查询会话。后续修改或重开工程不改变此次采样；completed 的 `result` 包含原采样诊断及捕获时的 `project_id/state/revision`。用 `job_get/job_wait` 查询，用 `job_cancel` 中断校准、静置及逐帧求解；取消等待或断线仍让任务继续，原请求重试取回同一任务。它们保持 `read_only:true`，不增加历史、不改变持久版本，也不能加入文档批量。`simulation_simulate` 的 `hold/release` 各为 0–20 秒。
 
@@ -217,7 +217,7 @@ GUI 参数定义、文件夹位置和参数关键点可组合为一次共享提�
 
 参数定义现在按实际编辑顺序写入 journal，删除会读取此前关键形及最后一次默认值；旧工程静态参数覆盖保持兼容读取，不改写历史。透明度和颜色等纯通道修改也会持久化，重复捕获已存在且相同的关键点不追加历史。
 
-当前 85 项支持批量（包含素材图层添加、配准定位、确认、图片定位/取消及六项纹理编辑）：设置、图层分类/网格配置、源图多边形/连通块/深度拆分及软删除/恢复、参数定义、独立 Warp 创建、Rig 变形/关键形/结构/外观/顶点组、六种源图绘画、七种骨架修改、六种动作修改、四种画布编辑、路径 put/delete/deform、摇摆 put/delete、物理 put/delete/config/fit，以及 simulation put/delete/bake/clear_bake 和 model_apply_preset。设置、分类、网格配置、源图拆分、图片定位/取消、图层软删除/恢复、独立 Warp、绘画、物理、模拟与预设的单项调用使用后台任务；批量直接执行同一应用层候选，拆分、绘画、烘焙和拟合进度包含所在批量成员，准备期间可取消整批，不嵌套成员的单项任务；`classic_front_hair/classic_back_hair` 支持 `sway:false`，移除模拟后关闭该类传统摆动。发现工具返回 `batchable:true` 才表示支持；GUI 字段完成已接入异步候选队列，生成设置/分类/网格草稿转换为共享纯候选，其余业务准备和文档命令仍在迁移，见 [验收进度](REFACTOR_PROGRESS.md)。
+当前 88 项支持批量（包含素材图层添加、配准定位、确认、图片定位/取消及六项纹理编辑）：设置、图层分类/网格配置、源图多边形/连通块/深度拆分及软删除/恢复、参数定义、独立 Warp 创建、Rig 变形/关键形/结构/外观/顶点组、六种源图绘画、七种骨架修改、六种动作修改、四种画布编辑、路径 put/delete/deform、摇摆 put/delete、物理 put/delete/config/fit，以及 simulation put/delete/bake/clear_bake 和 model_apply_preset。设置、分类、网格配置、源图拆分、图片定位/取消、图层软删除/恢复、独立 Warp、绘画、物理、模拟与预设的单项调用使用后台任务；批量直接执行同一应用层候选，拆分、绘画、烘焙和拟合进度包含所在批量成员，准备期间可取消整批，不嵌套成员的单项任务；`classic_front_hair/classic_back_hair` 支持 `sway:false`，移除模拟后关闭该类传统摆动。发现工具返回 `batchable:true` 才表示支持；GUI 字段完成已接入异步候选队列，生成设置/分类/网格草稿转换为共享纯候选。
 
 素材图层添加支持导入模型及自建父变形器。应用候选将源画布几何转换到实际父级的中性坐标，并保存网格创建记录；重新配准使用原处理像素，原位替换创建几何而保留对象 ID 和父级。已有专属绑定或遮罩依赖仍拒绝单层定位。素材图层保持素材的原分辨率：裁剪透明边缘后，像素直接成为图层栅格，素材放置或配准给出的画布矩形成为图层矩形（`canvasUnitsPerPixelX/Y` 为实际比值），例如 1024 像素素材配准到 32 单位区域即 32 单位、1024 像素的图层。平移/缩放（含显式镜像，仅翻转行列）的配准不经过插值；只有带旋转的配准按素材自身密度栅格化到外包框。素材清单与图层都保存原始像素，不再缩回画布分辨率。分配前检查坐标、外包框 16MP 与栅格 16MP 及密度上限，准备阶段响应取消；GUI 连续放置经独立应用会话，保存排除预览并等待正式确认。
 
@@ -510,7 +510,7 @@ View 从模型数据渲染 PNG，不依赖桌面截图。`canvas_rect` 给出画
 
 普通透明图层首次绘制可见像素时自动创建网格，无须先传 `rebuild_mesh:true`。嘴部首次绘画也创建派生嘴唇及其生成关键形。单项和批量任务完成结果的 `changed` 包含新对象的 `mesh:<id>` 等句柄，可继续编辑；相同请求重试取回同一任务，不重复创建或追加历史。完全擦空即使传入重建标志也保留网格及绑定。
 
-生成嘴唇跟随显式重建或首次创建时保存的轮廓和颜色，后续保留网格绘画不重新生成派生贴图。GUI 冻结像素与 MCP 手势通过独立 `WorkspaceRasterCommands` 共用文档候选、重建及状态检查；创建数据进入有序日志，保存重开和导出重新解析当前贴图。准备过程中报告进度并检查取消，提交前取消保留原像素和历史；成功提交后的迟到取消或刷新失败仍保留完整完成结果。断线或取消等待不会停止任务。新网格的单层设置更新同样写入文档，保留 ID、重绑路径及权重。复杂父级/完整分类迁移及导入无网格对象仍待完成，见 [验收进度](REFACTOR_PROGRESS.md)。
+生成嘴唇跟随显式重建或首次创建时保存的轮廓和颜色，后续保留网格绘画不重新生成派生贴图。GUI 冻结像素与 MCP 手势通过独立 `WorkspaceRasterCommands` 共用文档候选、重建及状态检查；创建数据进入有序日志，保存重开和导出重新解析当前贴图。准备过程中报告进度并检查取消，提交前取消保留原像素和历史；成功提交后的迟到取消或刷新失败仍保留完整完成结果。断线或取消等待不会停止任务。新网格的单层设置更新同样写入文档，保留 ID、重绑路径及权重。复杂父级/完整分类迁移及导入无网格对象仍待完成。
 
 `layer_soft_delete` 与 `layer_restore` 都返回进程任务，支持原子批量；通过 `job_wait/job_get` 的 `result` 读取实际状态、历史节点和受影响图层。`layer_restore` 可传 1–256 个唯一 `layer_ids`，省略时恢复全部（被拆分取代的原图层不在其中，指定它会报错并列出部件）；恢复活动图层、重复删除及无删除内容时恢复属于无变化，不追加历史。GUI 删除和“恢复全部”使用同一应用命令。删除保留像素和编辑日志；含新建网格记录的工程先完整重放，再过滤已删除图层及派生嘴唇，当前模型清理其遮罩引用、Glue、路径和权重，恢复重新取得保存的绑定。删除期间的全局网格设置变更也持久化隐藏网格的新几何及重绑数据。提交前取消或冲突保留原状态，CAS 后的迟到取消或刷新失败保留成功；旧历史节点不改写。
 
