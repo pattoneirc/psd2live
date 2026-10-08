@@ -23,6 +23,9 @@ import io.github.psd2live.format.model.RigIR as Ir
  * new vertices through texture coordinates. An object the user created stays, re-homed when its parent vanished; one
  * the user deleted stays deleted; one the generators dropped goes unless the user changed it. Nothing fails: what does
  * not carry over cleanly is kept as the user had it, or dropped, and reported as an [Issue].
+ *
+ * G and G' are generated rigs as the document shows them before its edits: [BuiltRig.resolvedPuppet], with the parts of
+ * version 2 splits in place of what they supersede, so a part the generators skin or re-parent is a generated object.
  */
 internal object RigRegeneration {
 	enum class IssueKind(val code: String) {
@@ -91,7 +94,9 @@ internal object RigRegeneration {
 			model = withMasks(model)
 			// Generated deformers the user left that the generators dropped: their user children re-home upward, rest pose baked.
 			for (id in deformers.vanished) {
-				val children = model.deformers.filter { it.parent == id }.map { it.id.raw } + model.drawables.filter { it.parentDeformerId == id }.map { it.id.raw }
+				// A child the generators dropped too is no user object moving up.
+				val children = model.deformers.filter { it.parent == id && it.id !in deformers.vanished }.map { it.id.raw } +
+					model.drawables.filter { it.parentDeformerId == id }.map { it.id.raw }
 				// Unwrapping maps the children through the deformer's one unkeyed form: its rest pose, as the generators dropped its motion.
 				model = model.copy(deformers = model.deformers.map { if (it.id == id) resting(it, model.parameters) else it }).withDeformerDeleted(id)
 				children.forEach { issue(IssueKind.REHOMED, it, id.raw) }
