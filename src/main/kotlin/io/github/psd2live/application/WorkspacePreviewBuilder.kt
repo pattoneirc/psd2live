@@ -97,8 +97,10 @@ internal class WorkspacePreviewBuilder {
             // with its base at hand any other edit of the overlay replays from the replay checkpoints.
             val cheaper = fast && (current.sources.baseKnown || config.rigEdits.extends(current.config.rigEdits))
             if (revision != null && !cheaper) {
+                // A stored rig is the revision's data: on an atlas this build packs differently it moves onto the new
+                // tiles rather than giving way to a replay this build may not reproduce.
                 MaterializedRigStore.lookup(revision)?.let { stored ->
-                    pipeline.materializedPreview(document.source, config, stored.authored, stored.bindingKey, progress, current?.atlas)
+                    pipeline.materializedPreview(document.source, config, stored.authored, stored.bindingKey, progress, current?.atlas, rebind = true)
                         ?.let { model -> return@runInterruptible model }
                 }
                 // The journal's checkpoint is the authored rig itself: build from it, re-bound when the atlas moved.
