@@ -3143,6 +3143,12 @@ internal class CanvasEditor(
         clearHover()
     }
 
+    /**
+     * Whether the deform levels apply to the target in hand: only a warp has a lattice of its own for each, its grid
+     * points at level 1 and its Bezier handles at level 2; everything else deforms alike at either.
+     */
+    fun deformLevelsShown(): Boolean = hierarchyMode == EditHierarchyMode.DEFORM && target()?.kind == "warp"
+
     @JvmName("changeEditLevel")
     fun setEditLevel(level: Int) {
         editLevel = level

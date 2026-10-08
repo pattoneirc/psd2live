@@ -72,26 +72,26 @@ internal val SKELETON_WEIGHT_STRENGTH = SliderOption("skeleton.weightStrength", 
 internal val SKELETON_WEIGHT_VALUE = SliderOption("skeleton.weightValue", "skeleton.weights.value", OptionUnit.PERCENT, wholeRange,
     { it.skeletonWeightReplaceValue }, { e, v -> e.skeletonWeightReplaceValue = v })
 
-// ─── Variants: the flavour of the tool in hand, first in the bar ───────────
+// ─── Variants: the flavour of the tool in hand - toolbar rows, and chips in the context menu ───
 
 internal val BRUSH_TIP = ChoiceOption("variant.brushTip", "editor.brushShape", { BrushShape.entries }, { _, s -> tr(s.labelKey) },
-    { it.brushShape }, { e, s -> e.brushShape = s }, variant = true)
+    { it.brushShape }, { e, s -> e.brushShape = s }, variant = true, place = OptionPlace.MENU)
 
 internal val PAINT_SHAPE_KIND = ChoiceOption("variant.paintShape", "editor.tool.paint_shape", { io.github.psd2live.ui.PaintShape.entries },
-    { _, s -> tr(s.labelKey) }, { it.paintShape }, { e, s -> e.selectPaintShape(s) }, variant = true)
+    { _, s -> tr(s.labelKey) }, { it.paintShape }, { e, s -> e.selectPaintShape(s) }, variant = true, place = OptionPlace.MENU)
 
 internal val GLUE_SUB = ChoiceOption("variant.glue", "editor.tool.glue", { GlueSubTool.entries },
     { _, s -> tr(io.github.psd2live.ui.GLUE_SUB_TOOL_LABELS.first { it.first == s }.second) }, { it.glueSubTool }, { e, s -> e.glueSubTool = s },
-    variant = true)
+    variant = true, place = OptionPlace.MENU)
 
 internal val SKELETON_EDIT_SUB = ChoiceOption("variant.skeletonEdit", "editor.tool.skeleton_edit", { SkeletonEditSubTool.entries },
-    { _, s -> tr(s.labelKey) }, { it.skeletonEditSubTool }, { e, s -> e.skeletonEditSubTool = s }, variant = true)
+    { _, s -> tr(s.labelKey) }, { it.skeletonEditSubTool }, { e, s -> e.skeletonEditSubTool = s }, variant = true, place = OptionPlace.MENU)
 
 internal val SKELETON_POSE_SUB = ChoiceOption("variant.skeletonPose", "editor.tool.skeleton_pose", { SkeletonPoseSubTool.entries },
-    { _, s -> tr(s.labelKey) }, { it.skeletonPoseSubTool }, { e, s -> e.skeletonPoseSubTool = s }, variant = true)
+    { _, s -> tr(s.labelKey) }, { it.skeletonPoseSubTool }, { e, s -> e.skeletonPoseSubTool = s }, variant = true, place = OptionPlace.MENU)
 
 internal val WEIGHT_KIND = ChoiceOption("variant.weightKind", "editor.weightKind", { io.github.psd2live.ui.PAINTED_GROUP_KINDS },
-    { _, k -> tr("sim.group.${k.jsonName}") }, { it.weightGroupKind }, { e, k -> e.weightGroupKind = k }, variant = true)
+    { _, k -> tr("sim.group.${k.jsonName}") }, { it.weightGroupKind }, { e, k -> e.weightGroupKind = k }, variant = true, place = OptionPlace.MENU)
 
 // ─── Paint ──────────────────────────────────────────────────────────────────
 
@@ -210,18 +210,18 @@ internal fun CanvasEditor.stepOption(role: OptionRole, up: Boolean): Boolean {
 }
 
 /**
- * Picks choice [n] (1-based) of the mode or tool in hand - the number keys: Deform's levels, Edit's vertex, edge and
- * face; otherwise the variants the toolbar lists under the tool: the brush tips, the glue and skeleton sub-tools, the vertex group kinds and the
+ * Picks choice [n] (1-based) of the mode or tool in hand - the number keys: a warp's deform levels, Simulate's group
+ * kinds, Edit's vertex, edge and face; otherwise the variants the toolbar lists under the tool: the brush tips, the glue and skeleton sub-tools, the vertex group kinds and the
  * paint shapes. Says whether there was a choice [n] to pick.
  */
 internal fun CanvasEditor.pickVariant(n: Int): Boolean {
     fun <T> pick(choices: List<T>, take: (T) -> Unit): Boolean = choices.getOrNull(n - 1)?.let { take(it); true } ?: false
     return when {
-        hierarchyMode == EditHierarchyMode.DEFORM -> pick(listOf(1, 2, 3)) { setEditLevel(it) }
+        deformLevelsShown() -> pick(listOf(1, 2)) { setEditLevel(it) }
         hierarchyMode == EditHierarchyMode.SIMULATE -> pick(io.github.psd2live.ui.PAINTED_GROUP_KINDS) { weightGroupKind = it }
         // Edit's point tools take Blender's 1 2 3: vertex, edge and face.
         hierarchyMode == EditHierarchyMode.EDIT && (tool in SELECTION_TOOLS || tool == CanvasTool.TRANSFORM) -> pick(listOf(0, 1, 2)) { elementMode = it }
-        tool in DEFORM_BRUSH_TOOLS -> pick(BrushShape.entries) { brushShape = it }
+        tool in DEFORM_BRUSH_TOOLS || tool == CanvasTool.WEIGHT_PAINT -> pick(BrushShape.entries) { brushShape = it }
         tool == CanvasTool.GLUE -> pick(GlueSubTool.entries) { glueSubTool = it }
         tool == CanvasTool.SKELETON_EDIT -> pick(SkeletonEditSubTool.entries) { skeletonEditSubTool = it }
         tool == CanvasTool.SKELETON_POSE -> pick(SkeletonPoseSubTool.entries) { skeletonPoseSubTool = it }
@@ -373,10 +373,12 @@ private fun MutableList<ToolOption>.addSimulate(editor: CanvasEditor) {
     add(WEIGHT_KIND)
     when (editor.tool) {
         CanvasTool.WEIGHT_PAINT -> {
+            add(BRUSH_TIP)
             add(WEIGHT_MODE)
             add(BRUSH_RADIUS)
             add(BRUSH_STRENGTH)
             add(BRUSH_HARDNESS)
+            if (editor.brushShape != BrushShape.CIRCLE) add(BRUSH_ANGLE)
         }
         CanvasTool.WEIGHT_GRADIENT -> {
             add(WEIGHT_MODE)

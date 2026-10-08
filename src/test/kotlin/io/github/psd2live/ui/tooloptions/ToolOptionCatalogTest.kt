@@ -128,11 +128,23 @@ class ToolOptionCatalogTest {
     }
 
     @Test fun numberKeysPickTheChoicesOfTheModeOrToolInHand() = editor { editor ->
+        // Deform keys levels only on a warp; on a mesh the keys reach the brush tip.
         editor.hierarchyMode = EditHierarchyMode.DEFORM
         editor.tool = CanvasTool.BRUSH
+        assertFalse(editor.deformLevelsShown())
+        val level = editor.editLevel
         assertTrue(editor.pickVariant(3))
-        assertEquals(3, editor.editLevel)
+        assertEquals(BrushShape.RECTANGLE, editor.brushShape)
+        assertEquals(level, editor.editLevel)
         assertFalse(editor.pickVariant(4))
+
+        // Simulate's keys pick the group kind; the weight brush shares the deform brush's tip.
+        editor.hierarchyMode = EditHierarchyMode.SIMULATE
+        editor.tool = CanvasTool.WEIGHT_PAINT
+        assertTrue(editor.pickVariant(2))
+        assertEquals(io.github.psd2live.ui.PAINTED_GROUP_KINDS[1], editor.weightGroupKind)
+        editor.brushShape = BrushShape.LINE
+        assertTrue(toolOptions(editor).any { it === BRUSH_ANGLE }, "a turned tip has its angle")
 
         editor.hierarchyMode = EditHierarchyMode.EDIT
         assertTrue(editor.pickVariant(2))
@@ -196,16 +208,12 @@ class ToolOptionCatalogTest {
         assertEquals(setOf(BRUSH_FALLOFF.id), foldedGroups(editor, menuOptions(editor)))
     }
 
-    @Test fun everyActionHasAnIconAndVariantsLeadTheBar() = editor { editor ->
+    @Test fun everyActionHasAnIconAndVariantsStayOnTheToolbar() = editor { editor ->
         everyState(editor) { where ->
             for (action in toolOptions(editor).filterIsInstance<ActionOption>()) assertNotNull(action.icon, "${action.id} has no icon at $where")
-            val bar = barOptions(editor)
-            val variant = bar.indexOfFirst { it is ChoiceOption<*> && it.variant }
-            if (variant >= 0) assertTrue(bar.take(variant).all { it is NoteOption }, "the variant is not first in the bar at $where")
+            // A tool's variants are rows under it on the toolbar; the bar keeps to the values that tune it.
+            assertTrue(barOptions(editor).none { it is ChoiceOption<*> && it.variant }, "a variant in the bar at $where")
         }
-        editor.hierarchyMode = EditHierarchyMode.DEFORM
-        editor.tool = CanvasTool.BRUSH
-        assertSame(BRUSH_TIP, barOptions(editor).first())
         editor.hierarchyMode = EditHierarchyMode.SKELETON
         editor.tool = CanvasTool.SKELETON_POSE
         assertTrue(toolOptions(editor).none { it is ToggleOption }, "skin weights are a display toggle, not a tool option")

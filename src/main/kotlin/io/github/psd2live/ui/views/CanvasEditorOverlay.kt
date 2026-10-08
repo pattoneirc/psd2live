@@ -1550,17 +1550,13 @@ internal fun BoxScope.CanvasEditorOverlay(
         if (editor.hierarchyMode == EditHierarchyMode.PAINT) editor.ensurePaintSession()
     }
 
-    // The tool in hand's settings and actions, under the mode bar; the palette makes room under it.
-    var optionsBarHeight by remember { mutableStateOf(0) }
-    ToolOptionsBar(editor, focus, onHeight = { optionsBarHeight = it })
-    val density = LocalDensity.current
-    val paletteTop by animateDpAsState(
-        targetValue = if (optionsBarHeight > 0) 42.dp + with(density) { optionsBarHeight.toDp() } + 4.dp else 44.dp,
-        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
-    )
+    // The tool in hand's settings and actions at the bottom left, over the stats pill while the canvas shows it.
+    val statsShown = editor.skeletonDraft == null && editor.placement == null && viewModel.swingSession == null
+    val optionsBottom by animateDpAsState(if (statsShown) 38.dp else 8.dp, tween(durationMillis = 200, easing = FastOutSlowInEasing))
+    ToolOptionsBar(editor, focus, bottom = optionsBottom)
 
     // Left Animated Hover Toolbar (edit / deform / paint tools)
-    CanvasToolBar(editor = editor, keymap = keymap, focus = focus, top = paletteTop)
+    CanvasToolBar(editor = editor, keymap = keymap, focus = focus)
 
     // Top Left Hierarchy / Layer Mode Toolbar
     var modeBarWidth by remember { mutableStateOf(0) }
@@ -2193,7 +2189,6 @@ private fun BoxScope.CanvasToolBar(
     editor: CanvasEditor,
     keymap: Keymap,
     focus: () -> Unit,
-    top: Dp,
 ) {
     val rows = toolbarRows(editor.hierarchyMode)
     val shown = rows.flatten().toSet()
@@ -2210,10 +2205,10 @@ private fun BoxScope.CanvasToolBar(
     CanvasOptionsRail(
         modifier = Modifier
             .align(Alignment.TopStart)
-            .padding(start = 8.dp, top = top)
+            .padding(start = 8.dp, top = 44.dp)
             .tutorialTarget(TutorialTargetId.CANVAS_TOOLBAR),
         leading = true,
-        expandedWidth = 156.dp,
+        expandedWidth = 140.dp,
         scrollable = true,
     ) {
         // Every tool is walked in one fixed order, each row's visibility following the mode. Walking the mode's own
@@ -2236,7 +2231,7 @@ private fun BoxScope.CanvasToolBar(
                         ToolIcon(
                             tool = tool,
                             color = color,
-                            brushShape = if (tool == CanvasTool.BRUSH) editor.brushShape else null,
+                            brushShape = if (tool == CanvasTool.BRUSH || tool == CanvasTool.WEIGHT_PAINT) editor.brushShape else null,
                             paintShape = if (tool == CanvasTool.PAINT_SHAPE) editor.paintShape else null,
                             skeletonEditSubTool = if (tool == CanvasTool.SKELETON_EDIT) editor.skeletonEditSubTool else null,
                         )
@@ -2245,6 +2240,68 @@ private fun BoxScope.CanvasToolBar(
                         editor.activateTool(tool)
                         focus()
                     },
+                )
+            }
+        }
+
+        // A tool's variants unfold under it while it is in hand - Glue's sub-tools, the skeleton tools' sub-tools,
+        // the brushes' tips, the paint shape's faces and the vertex groups the weight tools write - each with the
+        // number key that picks it.
+        RailVariants(editor.tool == CanvasTool.GLUE, GLUE_SUB_TOOL_LABELS.map { it.first }, { editor.glueSubTool == it },
+            { tr(GLUE_SUB_TOOL_LABELS.first { p -> p.first == it }.second) }, { color, sub -> GlueSubToolIcon(subTool = sub, color = color) },
+            keys = { pickKey(keymap, it) }) { sub ->
+            editor.glueSubTool = sub
+            editor.activateTool(CanvasTool.GLUE)
+            focus()
+        }
+        RailVariants(editor.tool == CanvasTool.SKELETON_EDIT && CanvasTool.SKELETON_EDIT in shown, SkeletonEditSubTool.entries,
+            { editor.skeletonEditSubTool == it }, { tr(it.labelKey) }, { color, sub -> SkeletonEditSubToolIcon(subTool = sub, color = color) },
+            keys = { pickKey(keymap, it) }) { sub -> editor.skeletonEditSubTool = sub; focus() }
+        RailVariants(editor.tool == CanvasTool.SKELETON_POSE && CanvasTool.SKELETON_POSE in shown, SkeletonPoseSubTool.entries,
+            { editor.skeletonPoseSubTool == it }, { tr(it.labelKey) }, { color, sub -> SkeletonPoseSubToolIcon(sub, color) },
+            keys = { pickKey(keymap, it) }) { sub -> editor.skeletonPoseSubTool = sub; focus() }
+        // The deform brushes and the weight brush share their tip. The number keys reach it only where nothing
+        // else of the mode answers to them (Deform's levels on a warp, Simulate's group kinds).
+        val tipKeys = editor.hierarchyMode != EditHierarchyMode.SIMULATE && !editor.deformLevelsShown()
+        RailVariants(editor.tool in DEFORM_BRUSH_TOOLS || editor.tool == CanvasTool.WEIGHT_PAINT, BrushShape.entries,
+            { editor.brushShape == it }, { tr(it.labelKey) }, { color, shape -> BrushShapeIcon(shape = shape, color = color) },
+            keys = { if (tipKeys) pickKey(keymap, it) else "" }) { shape -> editor.brushShape = shape; focus() }
+        // The shape tool's three faces live under it the way the deform brush carries its tips.
+        RailVariants(editor.hierarchyMode == EditHierarchyMode.PAINT && editor.tool == CanvasTool.PAINT_SHAPE, PaintShape.entries,
+            { editor.paintShape == it }, { tr(it.labelKey) }, { color, shape -> PaintShapeIcon(shape = shape, color = color) },
+            keys = { keymap.labelFor(PaintShape.entries[it].action).orEmpty() }) { shape -> editor.selectPaintShape(shape); focus() }
+        // Picking a group kind is picking which group of the mesh the weight strokes write.
+        RailVariants(editor.hierarchyMode == EditHierarchyMode.SIMULATE, PAINTED_GROUP_KINDS, { editor.weightGroupKind == it },
+            { tr("sim.group.${it.jsonName}") }, { _, kind -> VertexGroupKindIcon(kind = kind, color = vertexGroupKindColor(kind)) },
+            keys = { pickKey(keymap, it) }) { kind ->
+            editor.weightGroupKind = kind
+            if (editor.tool !in WEIGHT_TOOLS) editor.activateTool(CanvasTool.WEIGHT_PAINT)
+            focus()
+        }
+    }
+}
+
+/** The variants of the tool in hand as rows under the palette, behind a rule, sliding in and out with the tool. */
+@Composable
+private fun <T> CanvasRailScope.RailVariants(
+    visible: Boolean,
+    choices: List<T>,
+    selected: (T) -> Boolean,
+    label: (T) -> String,
+    icon: @Composable (Color, T) -> Unit,
+    keys: (Int) -> String,
+    onPick: (T) -> Unit,
+) {
+    RailRows(visible) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            RailDivider(strong = true)
+            choices.forEachIndexed { i, choice ->
+                RailItem(
+                    label = label(choice),
+                    selected = selected(choice),
+                    keyLabel = keys(i),
+                    icon = { color -> icon(color, choice) },
+                    onClick = { onPick(choice) },
                 )
             }
         }
@@ -2305,8 +2362,9 @@ private fun BoxScope.HierarchyModeBar(
         )
 
         // 1 2 3 deformation level expansion animation
+        // Only a warp keys its levels apart - 1 its grid points, 2 its Bezier handles - so only a warp shows them.
         AnimatedVisibility(
-            visible = editor.hierarchyMode == EditHierarchyMode.DEFORM,
+            visible = editor.deformLevelsShown(),
             enter = expandHorizontally(
                 animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                 expandFrom = Alignment.Start,
@@ -2321,7 +2379,7 @@ private fun BoxScope.HierarchyModeBar(
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 BarDivider()
-                (1..3).map { lvl ->
+                (1..2).map { lvl ->
                     val key = pickKey(editor.state.keymap, lvl - 1)
                     lvl to (tr("editor.level.$lvl") + " · " + tr("editor.level.$lvl.desc") + if (key.isEmpty()) "" else "  ($key)")
                 }.forEach { (lvl, tooltip) ->

@@ -547,6 +547,7 @@ internal fun BarValueChip(
 	enabled: Boolean = true,
 	tooltip: String? = null,
 	onCommit: () -> Unit = {},
+	rise: Boolean = false,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
@@ -593,15 +594,15 @@ internal fun BarValueChip(
 						}
 					}
 					.semantics { contentDescription = "$label $display" }
-					.padding(horizontal = 7.dp),
+					.padding(horizontal = 5.dp),
 				verticalAlignment = Alignment.CenterVertically,
 			) {
-				Text(label, color = if (enabled) colors.textMuted else colors.textMuted.copy(alpha = 0.5f), fontSize = 10.5.sp, maxLines = 1)
-				Spacer(Modifier.width(5.dp))
+				Text(label, color = if (enabled) colors.textMuted else colors.textMuted.copy(alpha = 0.5f), fontSize = 10.sp, maxLines = 1)
+				Spacer(Modifier.width(4.dp))
 				Text(display, color = if (enabled) colors.textPrimary else colors.textMuted, style = typography.monoSmall.copy(fontSize = 10.sp), maxLines = 1)
 			}
 		}
-		FloatingMenu(open, { open = false; commit() }, width = 200.dp) {
+		FloatingMenu(open, { open = false; commit() }, width = 200.dp, alignment = if (rise) Alignment.BottomStart else Alignment.TopStart, rise = rise) {
 			FloatingMenuSlider(label, value, onValueChange, valueRange, display, logarithmic, enabled)
 		}
 	}

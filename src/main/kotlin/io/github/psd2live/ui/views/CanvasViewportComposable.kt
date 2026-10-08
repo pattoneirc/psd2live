@@ -161,7 +161,7 @@ private const val PAUSED_PHYSICS_POLL_MILLIS = 16L
 private const val ZOOM_DRAG_NOTCH_PX = 24f
 
 /** The tools whose tip has an angle a wheel notch can turn. */
-private val ANGLED_BRUSH_TOOLS = setOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE)
+private val ANGLED_BRUSH_TOOLS = setOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE, CanvasTool.WEIGHT_PAINT)
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable

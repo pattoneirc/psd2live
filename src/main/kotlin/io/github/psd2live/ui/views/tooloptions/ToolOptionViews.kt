@@ -1,10 +1,14 @@
 package io.github.psd2live.ui.views.tooloptions
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -25,12 +29,16 @@ import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.delay
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -106,25 +114,20 @@ internal fun toolOptionsBarShown(editor: CanvasEditor): Boolean =
     editor.hierarchyMode == EditHierarchyMode.PAINT || barOptions(editor).isNotEmpty()
 
 /**
- * The tool options bar: under the mode bar, the settings and actions of the tool in hand, as [barOptions] lists
- * them - Photoshop's options bar in the canvas's frosted style. It leads with the tool's variant (its tip, its
- * sub-tool, the group it paints), and paint mode with its colours.
- * [onHeight] reports the bar's height so the tool palette can make room under it.
+ * The tool options bar: at the bottom left of the canvas, [bottom] above its edge, the settings and actions of the
+ * tool in hand as [barOptions] lists them - Photoshop's options bar in the canvas's frosted style. Paint mode leads
+ * with its colours. Its menus open upwards, away from the edge.
  */
 @Composable
-internal fun BoxScope.ToolOptionsBar(editor: CanvasEditor, focus: () -> Unit, onHeight: (Int) -> Unit = {}) {
+internal fun BoxScope.ToolOptionsBar(editor: CanvasEditor, focus: () -> Unit, bottom: androidx.compose.ui.unit.Dp = 8.dp) {
     val options = barOptions(editor)
     val painting = editor.hierarchyMode == EditHierarchyMode.PAINT
-    if (!painting && options.isEmpty()) {
-        LaunchedEffect(Unit) { onHeight(0) }
-        return
-    }
+    if (!painting && options.isEmpty()) return
     val colors = LocalToolColors.current
     FloatingBar(
         Modifier
-            .align(Alignment.TopStart)
-            .padding(start = 8.dp, top = 42.dp, end = 56.dp)
-            .onSizeChanged { onHeight(it.height) }
+            .align(Alignment.BottomStart)
+            .padding(start = 8.dp, bottom = bottom, end = 56.dp)
             .tutorialTarget(TutorialTargetId.TOOL_OPTIONS_BAR),
     ) {
         Row(
@@ -147,11 +150,7 @@ internal fun BoxScope.ToolOptionsBar(editor: CanvasEditor, focus: () -> Unit, on
                     modifier = Modifier.padding(end = 2.dp))
                 if (options.isNotEmpty()) BarDivider()
             }
-            options.forEachIndexed { i, option ->
-                BarOption(editor, option, focus)
-                // The variant is the tool's own face, kept apart from the values that tune it.
-                if (option is ChoiceOption<*> && option.variant && i < options.lastIndex) BarDivider()
-            }
+            options.forEach { option -> BarOption(editor, option, focus) }
         }
     }
 }
@@ -170,6 +169,7 @@ private fun BarOption(editor: CanvasEditor, option: ToolOption, focus: () -> Uni
             scrub = { start, dx -> option.scrubbed(start, dx, editor.brushSizeLimit) },
             logarithmic = option.logarithmic,
             onCommit = focus,
+            rise = true,
         )
         is ChoiceOption<*> -> BarChoice(editor, option, focus)
         is ToggleOption -> BarChip(tr(option.labelKey), selected = option.get(editor), onClick = {
@@ -219,7 +219,7 @@ private fun <T> BarChoice(editor: CanvasEditor, option: ChoiceOption<T>, focus: 
     Box {
         BarChip("${tr(option.labelKey)}  ${option.label(editor, current)}", selected = false, onClick = { open = !open },
             chevron = true, open = open, icon = if (choiceHasIcon(current)) { tint -> ChoiceIcon(current, tint) } else null)
-        FloatingMenu(open, { open = false }) {
+        FloatingMenu(open, { open = false }, alignment = Alignment.BottomStart, rise = true) {
             choices.forEach { choice ->
                 FloatingMenuRadio(option.label(editor, choice), selected = choice == current,
                     onSelect = { option.set(editor, choice); open = false; focus() },
@@ -275,23 +275,31 @@ internal fun ToolOptionMenu(editor: CanvasEditor, onDismiss: () -> Unit, onActio
     val open = entries.filterIsInstance<MenuEntry.Level>().firstOrNull { it.id == openId }
     Row(verticalAlignment = Alignment.Top) {
         Column(Modifier.width(236.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            entries.forEach { entry ->
-                when (entry) {
-                    // A plain row closes the second level the pointer has left, the way a cascading menu does.
-                    is MenuEntry.Single -> Box(Modifier.onPointerEvent(PointerEventType.Enter) { openId = null }) {
-                        MenuOption(editor, entry.option, onDismiss, onAction)
+            entries.forEachIndexed { i, entry ->
+                Box(Modifier.arrival(i)) {
+                    when (entry) {
+                        // A plain row closes the second level the pointer has left, the way a cascading menu does.
+                        is MenuEntry.Single -> Box(Modifier.onPointerEvent(PointerEventType.Enter) { openId = null }) {
+                            MenuOption(editor, entry.option, onDismiss, onAction)
+                        }
+                        is MenuEntry.Level -> FloatingMenuSubmenuRow(
+                            label = entry.label,
+                            open = openId == entry.id,
+                            onOpen = { openId = entry.id },
+                            trailing = entry.trailing ?: entry.options.count { it is ActionOption }.takeIf { it > 0 }?.toString(),
+                            icon = entry.icon?.let { icon -> { tint -> OptionIconView(icon, tint) } },
+                        )
                     }
-                    is MenuEntry.Level -> FloatingMenuSubmenuRow(
-                        label = entry.label,
-                        open = openId == entry.id,
-                        onOpen = { openId = entry.id },
-                        trailing = entry.trailing ?: entry.options.count { it is ActionOption }.takeIf { it > 0 }?.toString(),
-                        icon = entry.icon?.let { icon -> { tint -> OptionIconView(icon, tint) } },
-                    )
                 }
             }
         }
-        AnimatedVisibility(open != null, enter = expandHorizontally() + fadeIn(), exit = shrinkHorizontally() + fadeOut()) {
+        // The second level appears at its full width, fading and sliding in from the menu's side: animating the
+        // width instead would move the popup's frame every frame.
+        AnimatedVisibility(
+            open != null,
+            enter = fadeIn(tween(120, easing = LinearOutSlowInEasing)) + slideInHorizontally(tween(120, easing = FastOutSlowInEasing)) { -it / 12 },
+            exit = fadeOut(tween(80, easing = FastOutLinearInEasing)),
+        ) {
             val rule = colors.border.copy(alpha = 0.5f)
             Column(
                 Modifier
@@ -302,12 +310,32 @@ internal fun ToolOptionMenu(editor: CanvasEditor, onDismiss: () -> Unit, onActio
                 verticalArrangement = Arrangement.spacedBy(1.dp),
             ) {
                     val level = open ?: return@Column
-                    FloatingMenuSection(level.label)
-                    val choice = level.choice
-                    if (choice != null) MenuChoiceRadios(editor, choice)
-                    else level.options.forEach { MenuOption(editor, it, onDismiss, onAction) }
+                    // Keyed by the group, so switching groups brings the new rows in one after another again.
+                    key(level.id) {
+                        FloatingMenuSection(level.label)
+                        val choice = level.choice
+                        if (choice != null) MenuChoiceRadios(editor, choice)
+                        else level.options.forEachIndexed { i, option ->
+                            Box(Modifier.arrival(i)) { MenuOption(editor, option, onDismiss, onAction) }
+                        }
+                    }
             }
         }
+    }
+}
+
+/** A menu row arriving the way the mode menu's do: [index] five milliseconds after the first, sliding in from its side. */
+@Composable
+private fun Modifier.arrival(index: Int): Modifier {
+    val arrival = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        delay(index * 5L)
+        arrival.animateTo(1f, tween(90, easing = FastOutSlowInEasing))
+    }
+    val density = LocalDensity.current
+    return graphicsLayer {
+        alpha = arrival.value
+        translationX = (1f - arrival.value) * -8f * density.density
     }
 }
 

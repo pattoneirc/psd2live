@@ -416,16 +416,10 @@ private fun IconPen.weightPaint() {
     dot(15f, 14.5f, 1.6f, tone(weightHeatColor(0f)))
 }
 
-/** A ramp from full to empty along the drag, in the weight colours, with the drag's two ends. */
+/** A ramp falling from full to empty along the drag: a wedge, its full end marked in the weight colour. */
 private fun IconPen.weightGradient() {
-    val bands = 5
-    for (i in 0 until bands) {
-        fillBox(2.6f + i * 2.56f, 5f, 2.56f, 8f, 0f, tone(weightHeatColor(1f - i / (bands - 1f)), 0.75f))
-    }
-    box(2.6f, 5f, 12.8f, 8f, 0.8f)
-    line(3.6f, 9f, 14.4f, 9f, width = 1.1f)
-    dot(3.6f, 9f, 1.8f)
-    ring(14.4f, 9f, 1.6f, width = 1.1f)
+    shape(path { m(2.6f, 4f); l(15.4f, 14f); l(2.6f, 14f); z() })
+    dot(5.2f, 11.2f, 1.8f, tone(weightHeatColor(1f)))
 }
 
 // --- painting --------------------------------------------------------------------------------------------
