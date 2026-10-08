@@ -475,83 +475,66 @@ internal fun BoxScope.CanvasEditorOverlay(
                 editor.ensureBezierState()
                 val bState = editor.bezierState
                 if (bState != null) {
-                    // Faint underlying lattice lines
+                    // The lattice the curves bend, faint and neutral: it is there for reference and takes no edits.
                     val columns = target.geometry.columns!! + 1
+                    val lattice = colors.textPrimary.copy(alpha = 0.12f)
                     pts.indices.flatMap { i ->
                         listOfNotNull(
                             if (i % columns < columns - 1) i to i + 1 else null,
                             if (i + columns < pts.size) i to i + columns else null
                         )
-                    }.forEach { (a, b) ->
-                        drawLine(colors.accent.copy(alpha = 0.22f), pts[a], pts[b], 1f)
-                    }
+                    }.forEach { (a, b) -> drawLine(lattice, pts[a], pts[b], 0.8f) }
 
-                    // Cubic Bezier boundary and internal curves
+                    fun screenOf(x: Float, y: Float) = editor.screen(floatArrayOf(x, y), target, viewport)[0]
+                    // Each curve over a dark halo, so it reads on light and dark art alike.
+                    fun curve(p0: Offset, c0: Offset, c1: Offset, p1: Offset) {
+                        val path = Path().apply { moveTo(p0.x, p0.y); cubicTo(c0.x, c0.y, c1.x, c1.y, p1.x, p1.y) }
+                        drawPath(path, Color.Black.copy(alpha = 0.45f), style = Stroke(3.6f))
+                        drawPath(path, BezierCurveColor, style = Stroke(1.6f))
+                    }
                     for (r in 0..bState.bezierRows) {
                         for (c in 0 until bState.bezierCols) {
                             val a0 = bState.anchors[r to c] ?: continue
                             val a1 = bState.anchors[r to (c + 1)] ?: continue
-                            val h0 = bState.handles[Triple(r, c, BezierHandleDir.RIGHT)]
-                            val h1 = bState.handles[Triple(r, c + 1, BezierHandleDir.LEFT)]
-                            val p0 = editor.screen(floatArrayOf(a0.x, a0.y), target, viewport)[0]
-                            val p1 = editor.screen(floatArrayOf(a1.x, a1.y), target, viewport)[0]
-                            val c0 = h0?.let { editor.screen(floatArrayOf(it.x, it.y), target, viewport)[0] } ?: (p0 + (p1 - p0) / 3f)
-                            val c1 = h1?.let { editor.screen(floatArrayOf(it.x, it.y), target, viewport)[0] } ?: (p1 - (p1 - p0) / 3f)
-                            val curvePath = Path().apply {
-                                moveTo(p0.x, p0.y)
-                                cubicTo(c0.x, c0.y, c1.x, c1.y, p1.x, p1.y)
-                            }
-                            drawLine(Color.Black.copy(alpha = 0.35f), p0, p1, 1f)
-                            drawPath(curvePath, colors.accent, style = Stroke(2f))
+                            val p0 = screenOf(a0.x, a0.y)
+                            val p1 = screenOf(a1.x, a1.y)
+                            val c0 = bState.handles[Triple(r, c, BezierHandleDir.RIGHT)]?.let { screenOf(it.x, it.y) } ?: (p0 + (p1 - p0) / 3f)
+                            val c1 = bState.handles[Triple(r, c + 1, BezierHandleDir.LEFT)]?.let { screenOf(it.x, it.y) } ?: (p1 - (p1 - p0) / 3f)
+                            curve(p0, c0, c1, p1)
                         }
                     }
                     for (r in 0 until bState.bezierRows) {
                         for (c in 0..bState.bezierCols) {
                             val a0 = bState.anchors[r to c] ?: continue
                             val a1 = bState.anchors[(r + 1) to c] ?: continue
-                            val h0 = bState.handles[Triple(r, c, BezierHandleDir.BOTTOM)]
-                            val h1 = bState.handles[Triple(r + 1, c, BezierHandleDir.TOP)]
-                            val p0 = editor.screen(floatArrayOf(a0.x, a0.y), target, viewport)[0]
-                            val p1 = editor.screen(floatArrayOf(a1.x, a1.y), target, viewport)[0]
-                            val c0 = h0?.let { editor.screen(floatArrayOf(it.x, it.y), target, viewport)[0] } ?: (p0 + (p1 - p0) / 3f)
-                            val c1 = h1?.let { editor.screen(floatArrayOf(it.x, it.y), target, viewport)[0] } ?: (p1 - (p1 - p0) / 3f)
-                            val curvePath = Path().apply {
-                                moveTo(p0.x, p0.y)
-                                cubicTo(c0.x, c0.y, c1.x, c1.y, p1.x, p1.y)
-                            }
-                            drawPath(curvePath, colors.accent, style = Stroke(2f))
+                            val p0 = screenOf(a0.x, a0.y)
+                            val p1 = screenOf(a1.x, a1.y)
+                            val c0 = bState.handles[Triple(r, c, BezierHandleDir.BOTTOM)]?.let { screenOf(it.x, it.y) } ?: (p0 + (p1 - p0) / 3f)
+                            val c1 = bState.handles[Triple(r + 1, c, BezierHandleDir.TOP)]?.let { screenOf(it.x, it.y) } ?: (p1 - (p1 - p0) / 3f)
+                            curve(p0, c0, c1, p1)
                         }
                     }
 
-                    // Tangent handle stems and end markers
+                    // Tangent handles: amber stems ending in small hollow rings, lit when hovered or held.
                     bState.handles.forEach { (key, handle) ->
                         val anchor = bState.anchors[key.first to key.second] ?: return@forEach
-                        val ap = editor.screen(floatArrayOf(anchor.x, anchor.y), target, viewport)[0]
-                        val hp = editor.screen(floatArrayOf(handle.x, handle.y), target, viewport)[0]
-                        val isHovered = editor.hoveredBezierHandle == key
-                        val isActive = editor.activeBezierHandle == key
-                        drawLine(colors.textPrimary.copy(alpha = 0.55f), ap, hp, 1.2f)
-                        if (isHovered || isActive) {
-                            drawCircle(Color.White, 6.5f, hp, style = Stroke(1.8f))
-                            drawCircle(colors.accent, 4.5f, hp)
-                        } else {
-                            drawCircle(colors.windowBackground, 4.5f, hp)
-                            drawCircle(Color(0xFFE5A823), 3f, hp)
-                        }
+                        val ap = screenOf(anchor.x, anchor.y)
+                        val hp = screenOf(handle.x, handle.y)
+                        val lit = editor.hoveredBezierHandle == key || editor.activeBezierHandle == key
+                        drawLine(BezierHandleColor.copy(alpha = if (lit) 1f else 0.7f), ap, hp, 1.1f)
+                        drawCircle(Color.Black.copy(alpha = 0.55f), if (lit) 6f else 4.6f, hp)
+                        if (lit) drawCircle(BezierHandleColor, 4.4f, hp)
+                        else drawCircle(BezierHandleColor, 3f, hp, style = Stroke(1.4f))
                     }
 
-                    // Bezier anchor points
+                    // Anchors: white with the curve's colour round them, larger when hovered or held.
                     bState.anchors.forEach { (key, anchor) ->
-                        val ap = editor.screen(floatArrayOf(anchor.x, anchor.y), target, viewport)[0]
-                        val isHovered = editor.hoveredBezierAnchor == key
-                        val isActive = editor.activeBezierAnchor == key
-                        if (isHovered || isActive) {
-                            drawCircle(Color.White, 8.5f, ap, style = Stroke(2f))
-                            drawCircle(colors.accent, 5.5f, ap)
-                        } else {
-                            drawCircle(colors.windowBackground, 5.5f, ap)
-                            drawCircle(colors.accent, 4f, ap)
-                        }
+                        val ap = screenOf(anchor.x, anchor.y)
+                        val lit = editor.hoveredBezierAnchor == key || editor.activeBezierAnchor == key
+                        val r = if (lit) 5.6f else 4.2f
+                        drawCircle(Color.Black.copy(alpha = 0.55f), r + 1.8f, ap)
+                        drawCircle(if (lit) BezierCurveColor else Color.White, r, ap)
+                        drawCircle(if (lit) Color.White else BezierCurveColor, r, ap, style = Stroke(1.5f))
                     }
                 }
             } else {
@@ -2381,10 +2364,10 @@ private fun BoxScope.HierarchyModeBar(
                 BarDivider()
                 (1..2).map { lvl ->
                     val key = pickKey(editor.state.keymap, lvl - 1)
-                    lvl to (tr("editor.level.$lvl") + " · " + tr("editor.level.$lvl.desc") + if (key.isEmpty()) "" else "  ($key)")
+                    lvl to (tr("editor.level.$lvl.desc") + if (key.isEmpty()) "" else "  ($key)")
                 }.forEach { (lvl, tooltip) ->
                     BarChip(
-                        label = "$lvl",
+                        label = tr("editor.level.$lvl"),
                         selected = editor.editLevel == lvl,
                         tooltip = tooltip,
                         onClick = {
@@ -3036,3 +3019,9 @@ private val uniqueEdgeCache = java.util.WeakHashMap<IntArray, List<org.umamo.edi
 private fun cachedUniqueEdges(indices: IntArray): List<org.umamo.edit.MeshElement.Edge> =
     uniqueEdgeCache.getOrPut(indices) { MeshTopology.uniqueEdges(indices) }
 
+
+/** The Bezier level's curves and anchor rings, apart from the lattice's accent so the two never read as one. */
+private val BezierCurveColor = Color(0xFF5CC8F0)
+
+/** The Bezier level's tangent handles and their stems. */
+private val BezierHandleColor = Color(0xFFF2B84B)

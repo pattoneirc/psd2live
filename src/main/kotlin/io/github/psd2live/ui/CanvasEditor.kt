@@ -3155,6 +3155,9 @@ internal class CanvasEditor(
     @JvmName("changeEditLevel")
     fun setEditLevel(level: Int) {
         editLevel = level
+        // The lattice's points take no edits at the Bezier level, so a selection of them would only be moved by
+        // the transform box unseen.
+        if (level == 2 && target()?.kind == "warp") selection = emptyMap()
         if (level == 2 && hierarchyMode == EditHierarchyMode.DEFORM) {
             ensureBezierState()
         }
@@ -5221,6 +5224,10 @@ internal class CanvasEditor(
                 }
             }
         }
+        // At the Bezier level a warp is edited through its anchors and handles alone; the lattice under them is
+        // shown for reference and takes no edits.
+        val bezierOnly = hierarchyMode == EditHierarchyMode.DEFORM && editLevel == 2 && target()?.kind == "warp" &&
+            tool !in CREATION_TOOLS
 
         // 2b. A corner badge picks the deformer it belongs to, in every mode.
         //
@@ -5241,6 +5248,7 @@ internal class CanvasEditor(
                 return true
             }
         }
+        if (bezierOnly) return true
 
         // 2c. The subdivide brush. It takes every edge whose two ends fall inside the radius, which is
         //     the same rule the panel button uses, so the two entry points cannot disagree. The mesh is
@@ -5280,7 +5288,11 @@ internal class CanvasEditor(
             return true
         }
 
-        if (tool == CanvasTool.TRANSFORM) {
+        // With nothing selected the transform tool has no box to hold, so it picks the way the select tool does:
+        // a click takes what is under it, a drag frames a selection - and the box appears on it.
+        val transformPicks = tool == CanvasTool.TRANSFORM && transformFrame(viewport) == null
+        val selects = tool == CanvasTool.SELECT || transformPicks
+        if (tool == CanvasTool.TRANSFORM && !transformPicks) {
             val frame = transformFrame(viewport) ?: return true
             val handle = transformHandleAt(pos, frame)
             if (handle == BoundingHandle.NONE) return true
@@ -5302,7 +5314,7 @@ internal class CanvasEditor(
         }
 
         // Select picks objects or starts a marquee; only Transform drags the object box.
-        if (hierarchyMode == EditHierarchyMode.SELECT && tool == CanvasTool.SELECT) {
+        if (hierarchyMode == EditHierarchyMode.SELECT && selects) {
             // A bone sits over the art it moves, so it is tried first: clicking one picks the skeleton.
             objectModeBoneHit(pos, viewport)?.let { hit ->
                 selectSkeleton(hit.boneId)
@@ -5338,7 +5350,7 @@ internal class CanvasEditor(
             }
         }
 
-        if (editsMeshes() && (tool == CanvasTool.SELECT || tool in DEFORM_BRUSH_TOOLS)) {
+        if (editsMeshes() && (selects || tool in DEFORM_BRUSH_TOOLS)) {
             clearPathPointSelection()
             return pressEditMeshes(pos, viewport, shift, alt)
         }
@@ -5347,7 +5359,7 @@ internal class CanvasEditor(
         // Mesh / topology gestures are separate from path handles — drop any lingering path-point grab.
         clearPathPointSelection()
         val brush = tool in DEFORM_BRUSH_TOOLS
-        if (hierarchyMode == EditHierarchyMode.DEFORM && (brush || tool == CanvasTool.SELECT)) {
+        if (hierarchyMode == EditHierarchyMode.DEFORM && (brush || selects)) {
             if (viewModel.snapToNearestKeys(editTarget.kind, editTarget.id) {
                 press(pos, viewport, shift, alt, ctrl)
             }) return true
@@ -5406,7 +5418,7 @@ internal class CanvasEditor(
         if (alt && picked.isNotEmpty() && editTarget.kind != "rotation") dragging = false
         // Edge and face picks on a rest mesh drag through the transform gesture too, which is what moves
         // the glued partners of the vertices they cover instead of tearing them off.
-        if (tool == CanvasTool.SELECT && picked.isNotEmpty() && !alt && editsMeshGeometry()) {
+        if (selects && picked.isNotEmpty() && !alt && editsMeshGeometry()) {
             val source = state.previewModel?.rig?.puppet ?: return true
             beginTransformDrag(source, transformTargets(source), BoundingHandle.BODY, transformFrame(viewport), viewport)
         }

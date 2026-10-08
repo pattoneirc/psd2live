@@ -120,6 +120,7 @@ import io.github.psd2live.ui.views.texture.FloatingMenuSection
 import io.github.psd2live.ui.views.texture.FloatingMenuSlider
 import io.github.psd2live.ui.views.texture.FloatingMenuSubmenuRow
 import io.github.psd2live.ui.views.texture.FloatingMenuSwitch
+import io.github.psd2live.ui.views.texture.GlidingSegments
 import io.github.psd2live.ui.views.texture.LocalMenuGlide
 import io.github.psd2live.ui.views.vertexGroupKindColor
 import org.umamo.runtime.model.VertexGroupKind
@@ -224,10 +225,8 @@ private fun <T> BarChoice(editor: CanvasEditor, option: ChoiceOption<T>, focus: 
         return
     }
     if (option.inline) {
-        choices.forEach { choice ->
-            BarChip(option.label(editor, choice), selected = choice == current, tooltip = tr(option.labelKey),
-                onClick = { option.set(editor, choice); focus() })
-        }
+        GlidingSegments(choices, current, { option.set(editor, it); focus() }, label = { option.label(editor, it) },
+            tooltip = { tr(option.labelKey) })
         return
     }
     var open by remember { mutableStateOf(false) }
@@ -306,7 +305,7 @@ internal fun ToolOptionMenu(editor: CanvasEditor, onDismiss: () -> Unit, onActio
         GlidingColumn(
             modifier = Modifier.width(236.dp),
             count = entries.size,
-            highlights = { i -> (entries[i] as? MenuEntry.Single)?.option.let { it !is NoteOption && it !is SectionOption } },
+            highlights = { i -> (entries[i] as? MenuEntry.Single)?.option.let { rowHighlights(it) } },
             // A plain row closes the second level the pointer has left, the way a cascading menu does.
             onHover = { i -> if (entries[i] is MenuEntry.Single) openId = null },
         ) { i ->
@@ -341,7 +340,7 @@ internal fun ToolOptionMenu(editor: CanvasEditor, onDismiss: () -> Unit, onActio
                         .padding(start = 4.dp)
                         .width(196.dp),
                     count = rows + 1,
-                    highlights = { i -> i > 0 && (choice != null || level.options[i - 1].let { it !is NoteOption && it !is SectionOption }) },
+                    highlights = { i -> i > 0 && (choice != null || rowHighlights(level.options[i - 1])) },
                 ) { i ->
                     when {
                         i == 0 -> FloatingMenuSection(level.label)
@@ -352,6 +351,18 @@ internal fun ToolOptionMenu(editor: CanvasEditor, onDismiss: () -> Unit, onActio
             }
         }
     }
+}
+
+/**
+ * Whether a menu row takes the gliding row highlight: a row that does one thing does - an action, a switch, a
+ * folded group; a caption or a note does not, and neither does a row of controls of its own (a slider, a row of
+ * choices), whose controls answer the pointer themselves.
+ */
+private fun rowHighlights(option: ToolOption?): Boolean = when (option) {
+    null -> true
+    is NoteOption, is SectionOption, is SliderOption -> false
+    is ChoiceOption<*> -> !(option.inline || option.variant)
+    else -> true
 }
 
 /**
@@ -471,19 +482,17 @@ private fun <T> MenuChoiceRow(editor: CanvasEditor, option: ChoiceOption<T>) {
     Row(Modifier.fillMaxWidth().height(28.dp).padding(start = 9.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(tr(option.labelKey), color = colors.textMuted, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.width(54.dp))
-        Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            option.choices(editor).forEachIndexed { i, choice ->
-                val icon = option.variant && choiceHasIcon(choice)
-                BarChip(
-                    if (icon) null else option.label(editor, choice),
-                    selected = choice == current,
-                    tooltip = if (icon) option.label(editor, choice) + variantKey(editor, i) else null,
-                    icon = if (icon) { tint -> ChoiceIcon(choice, tint) } else null,
-                    onClick = { option.set(editor, choice) },
-                )
-            }
-        }
+        val choices = option.choices(editor)
+        val icons = option.variant && choices.all { choiceHasIcon(it) }
+        GlidingSegments(
+            choices = choices,
+            selected = current,
+            onSelect = { option.set(editor, it) },
+            label = { if (icons) null else option.label(editor, it) },
+            tooltip = { choice -> if (icons) option.label(editor, choice) + variantKey(editor, choices.indexOf(choice)) else null },
+            iconOf = if (icons) { choice, tint -> ChoiceIcon(choice, tint) } else null,
+            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+        )
     }
 }
 

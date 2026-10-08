@@ -81,6 +81,10 @@ import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.theme.frostedGlass
+import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.layout.onGloballyPositioned
 import kotlin.math.exp
 import kotlin.math.ln
 
@@ -617,6 +621,94 @@ internal fun BarValueChip(
 		}
 		FloatingMenu(open, { open = false; commit() }, width = 200.dp, alignment = if (rise) Alignment.BottomStart else Alignment.TopStart, rise = rise) {
 			FloatingMenuSlider(label, value, onValueChange, valueRange, display, logarithmic, enabled)
+		}
+	}
+}
+
+/**
+ * A choice of a few, side by side, in the mode menu's motion: the choice in force sits on an accent pill that glides
+ * to a new pick, and a second, fainter pill glides after the pointer from segment to segment. A segment shows its
+ * [icon], or its [label] when it has none; [tooltip] names it.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+internal fun <T> GlidingSegments(
+	choices: List<T>,
+	selected: T,
+	onSelect: (T) -> Unit,
+	label: (T) -> String?,
+	modifier: Modifier = Modifier,
+	tooltip: (T) -> String? = { null },
+	iconOf: (@Composable (T, Color) -> Unit)? = null,
+	enabled: Boolean = true,
+) {
+	val colors = LocalToolColors.current
+	val density = LocalDensity.current
+	val bounds = remember { androidx.compose.runtime.mutableStateMapOf<Int, Pair<Float, Float>>() }
+	var hovered by remember { mutableStateOf<Int?>(null) }
+	val selectedIndex = choices.indexOf(selected)
+
+	@Composable
+	fun pill(index: Int?, fill: Color, edge: Color) {
+		val target = index?.let { bounds[it] }
+		val x = remember { androidx.compose.animation.core.Animatable(0f) }
+		val w = remember { androidx.compose.animation.core.Animatable(0f) }
+		val shown by animateFloatAsState(if (target != null) 1f else 0f, tween(100, easing = FastOutSlowInEasing))
+		LaunchedEffect(target) {
+			val (left, width) = target ?: return@LaunchedEffect
+			// Appearing, it starts on its segment; moving, it glides there.
+			if (shown < 0.05f) { x.snapTo(left); w.snapTo(width) }
+			else kotlinx.coroutines.coroutineScope {
+				launch { x.animateTo(left, tween(110, easing = FastOutSlowInEasing)) }
+				launch { w.animateTo(width, tween(110, easing = FastOutSlowInEasing)) }
+			}
+		}
+		Box(
+			Modifier
+				.offset { IntOffset(x.value.roundToInt(), 0) }
+				.width(with(density) { w.value.toDp() })
+				.height(22.dp)
+				.alpha(shown)
+				.clip(RoundedCornerShape(4.dp))
+				.background(fill)
+				.border(0.5.dp, edge, RoundedCornerShape(4.dp)),
+		)
+	}
+
+	Box(modifier.onPointerEvent(PointerEventType.Exit) { hovered = null }, contentAlignment = Alignment.CenterStart) {
+		pill(hovered?.takeIf { it != selectedIndex && enabled }, colors.controlHover.copy(alpha = 0.75f), Color.Transparent)
+		pill(selectedIndex.takeIf { it >= 0 }, colors.accent.copy(alpha = 0.22f), colors.accent.copy(alpha = 0.5f))
+		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+			choices.forEachIndexed { i, choice ->
+				val isSelected = i == selectedIndex
+				val isHovered = hovered == i
+				val tint by animateColorAsState(when {
+					!enabled -> colors.textMuted.copy(alpha = 0.5f)
+					isSelected -> colors.accent
+					isHovered -> colors.textPrimary
+					else -> colors.textMuted
+				}, tween(80))
+				BarTooltip(tooltip(choice)) {
+					Row(
+						Modifier
+							.height(22.dp)
+							.defaultMinSize(minWidth = 24.dp)
+							.onGloballyPositioned { bounds[i] = it.positionInParent().x to it.size.width.toFloat() }
+							.onPointerEvent(PointerEventType.Enter) { hovered = i }
+							.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, enabled = enabled) { onSelect(choice) }
+							.semantics { contentDescription = label(choice) ?: tooltip(choice) ?: "" }
+							.padding(horizontal = if (iconOf != null && label(choice) == null) 5.dp else 7.dp),
+						verticalAlignment = Alignment.CenterVertically,
+						horizontalArrangement = Arrangement.Center,
+					) {
+						if (iconOf != null) iconOf(choice, tint)
+						val text = label(choice)
+						if (iconOf != null && text != null) Spacer(Modifier.width(5.dp))
+						if (text != null) Text(text, color = tint, fontSize = 11.sp, maxLines = 1,
+							fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium)
+					}
+				}
+			}
 		}
 	}
 }

@@ -57,36 +57,31 @@ internal fun BoxScope.CanvasPreviewToolbar(
 	modifier: Modifier = Modifier,
 ) {
 	var fpsMenu by remember { mutableStateOf(false) }
-	var runtimeMenu by remember { mutableStateOf(false) }
-	// An open menu keeps the toolbar open under it.
+	// An open rate menu keeps the toolbar open under it.
 	CanvasOptionsRail(
 		modifier = modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 44.dp),
 		leading = true,
 		expandedWidth = 156.dp,
-		pinned = fpsMenu || runtimeMenu,
+		pinned = fpsMenu,
 	) {
+		// The three runtimes as rows of their own, the one drawing the preview lit: a choice of three is seen at a
+		// glance rather than behind a menu. Without the PSD2Live runtime library only Cubism can be picked.
 		val p2lrtShown = runtime == PreviewBackend.P2LRT
-		Box {
+		for ((backend, mode) in listOf(PreviewBackend.CUBISM to false, PreviewBackend.P2LRT to false, PreviewBackend.P2LRT to true)) {
+			val p2lrt = backend == PreviewBackend.P2LRT
 			RailItem(
-				label = runtimeLabel(runtime, advanced),
-				selected = false,
-				enabled = enabled,
-				onClick = { runtimeMenu = true },
+				label = runtimeLabel(backend, mode),
+				selected = if (p2lrt) p2lrtShown && advanced == mode else !p2lrtShown,
+				enabled = enabled && (!p2lrt || p2lrtAvailable),
+				onClick = { onSelectRuntime(backend, if (p2lrt) mode else advanced) },
 				icon = { tint ->
 					// C for Cubism, P for p2lrt, P+ in its advanced mode.
-					Text(if (!p2lrtShown) "C" else if (advanced) "P+" else "P", color = tint,
-						fontSize = if (p2lrtShown && advanced) 9.5.sp else 10.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+					Text(if (!p2lrt) "C" else if (mode) "P+" else "P", color = tint,
+						fontSize = if (p2lrt && mode) 9.5.sp else 10.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
 				},
 			)
-			FloatingMenu(expanded = runtimeMenu, onDismiss = { runtimeMenu = false }, width = 180.dp) {
-				FloatingMenuRadio(tr("preview.runtime.cubism"), selected = !p2lrtShown,
-					onSelect = { runtimeMenu = false; onSelectRuntime(PreviewBackend.CUBISM, advanced) })
-				FloatingMenuRadio(tr("preview.runtime.p2lrtStandard"), selected = p2lrtShown && !advanced, enabled = p2lrtAvailable,
-					onSelect = { runtimeMenu = false; onSelectRuntime(PreviewBackend.P2LRT, false) })
-				FloatingMenuRadio(tr("preview.runtime.p2lrtAdvanced"), selected = p2lrtShown && advanced, enabled = p2lrtAvailable,
-					onSelect = { runtimeMenu = false; onSelectRuntime(PreviewBackend.P2LRT, true) })
-			}
 		}
+		RailDivider()
 		RailItem(
 			label = tr(if (animationEnabled) "preview.idle.on" else "preview.idle.off"),
 			selected = animationEnabled,
