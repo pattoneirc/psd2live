@@ -91,7 +91,6 @@ dependencies {
 	implementation("org.jetbrains.compose.ui:ui:1.11.1")
 	implementation("org.jetbrains.compose.material:material:1.11.1")
 	testImplementation(kotlin("test"))
-	testImplementation(testFixtures(project(":targets:spine")))
 }
 
 // JNA bundles native libraries for every platform. Resolve them with only the build

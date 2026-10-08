@@ -4,10 +4,13 @@ import io.github.psd2live.application.*
 import io.github.psd2live.project.*
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.*
 
 class WorkspaceLifecyclePortTest {
+    @TempDir lateinit var temp: Path
+
     @Test fun guiLifecycleUsesTheApplicationPortAndTrustedUserExpectation() = runBlocking {
         val calls = mutableListOf<Triple<Path?, Boolean?, WorkspaceExecution>>()
         val workspace = object : WorkspaceBackendStub() {
@@ -28,7 +31,7 @@ class WorkspaceLifecyclePortTest {
         }
         PSD2LiveViewModel().use { vm ->
             vm.attachWorkspace(workspace)
-            val path = Path.of("build/lifecycle-port.psd2live")
+            val path = temp.resolve("lifecycle-port.psd2live")
             assertEquals("head", vm.saveProjectNow(path))
             assertEquals("load:2:0", vm.openProjectNow(path).state)
             assertEquals(listOf(path.toAbsolutePath().normalize(), path.toAbsolutePath().normalize()), calls.map { it.first })

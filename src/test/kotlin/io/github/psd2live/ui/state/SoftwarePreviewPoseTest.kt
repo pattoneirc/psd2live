@@ -47,9 +47,13 @@ class SoftwarePreviewPoseTest {
             val key = vm.canvasRenderKey(vm.state.value.activeCanvas.id)
             vm.beginParameterScrub()
             try {
-                repeat(12) { index ->
-                    vm.setParameterValue(head, 10f + index)
-                    Thread.sleep(17)
+                // Paused physics steps by the time between frames, so the frames go on until the swing shows.
+                val deadline = System.nanoTime() + 5_000_000_000L
+                var index = 0
+                while (index < 12 || kotlin.math.abs(vm.state.value.previewParameterValues[hair] ?: 0f) <= 1e-3f) {
+                    check(System.nanoTime() < deadline) { "the head never swung the hair: ${vm.state.value.previewParameterValues[hair]}" }
+                    val angle = 10f + index % 20
+                    vm.setParameterValue(head, angle)
                     val poses = mutableListOf<Map<org.umamo.runtime.model.ParameterId, Float>>()
                     val observer = launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
                         vm.state.collect { poses += it.previewParameterValues }
@@ -58,9 +62,9 @@ class SoftwarePreviewPoseTest {
                     vm.requestSdkFrame(8, 8, 1f, 0f, 0f, viewId = key)
                     observer.cancelAndJoin()
                     assertEquals(1, poses.size, "frame $index publishes $poses")
-                    assertEquals(10f + index, poses.single()[head])
+                    assertEquals(angle, poses.single()[head])
+                    index++
                 }
-                assertTrue(kotlin.math.abs(vm.state.value.previewParameterValues[hair] ?: 0f) > 1e-3f)
             } finally {
                 vm.cancelParameterScrub()
             }

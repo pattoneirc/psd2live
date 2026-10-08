@@ -24,8 +24,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import org.junit.jupiter.api.io.TempDir
 import java.awt.image.BufferedImage
-import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -39,11 +40,12 @@ import kotlin.test.assertTrue
  * landing as the session showed it.
  */
 class AtlasRealtimeEditTest {
+	@TempDir lateinit var temp: Path
+
 	@OptIn(ExperimentalComposeUiApi::class)
 	@Test fun gesturesShowLiveAndApplyAsOneStep() = kotlinx.coroutines.runBlocking<Unit> {
 		val saved = AppSettings.softwareCanvas
 		AppSettings.softwareCanvas = true
-		val temp = Files.createTempDirectory("atlas-realtime")
 		fun png(name: String, argb: Int) = temp.resolve("$name.png").also { path ->
 			val image = BufferedImage(24, 24, BufferedImage.TYPE_INT_ARGB)
 			for (y in 0 until 24) for (x in 0 until 24) image.setRGB(x, y, argb)
@@ -75,28 +77,55 @@ class AtlasRealtimeEditTest {
 						}
 					}
 					var clock = 0L
-					fun render(): BufferedImage {
+					fun render() { clock += 16_000_000L; scene.render(clock).close() }
+					/** A frame, of which [probe] reads pixels. */
+					fun <T> frame(probe: (org.jetbrains.skia.Bitmap) -> T): T {
 						clock += 16_000_000L
-						val image = scene.render(clock)
-						return org.jetbrains.skia.Bitmap.makeFromImage(image).let { bitmap ->
-							val out = BufferedImage(bitmap.width, bitmap.height, BufferedImage.TYPE_INT_ARGB)
-							for (y in 0 until bitmap.height) for (x in 0 until bitmap.width) out.setRGB(x, y, bitmap.getColor(x, y))
-							bitmap.close(); image.close(); out
-						}
+						val bitmap = scene.render(clock).use { org.jetbrains.skia.Bitmap.makeFromImage(it) }
+						try { return probe(bitmap) } finally { bitmap.close() }
 					}
-					fun settle() { repeat(20) { render(); Thread.sleep(20) } }
-					fun view(x: Float, y: Float): Offset { val c = AtlasPageProbe.camera; return Offset(c[0] + x * c[2], c[1] + y * c[2]) }
-					fun isRed(image: BufferedImage, at: Offset): Boolean {
-						val c = image.getRGB(at.x.toInt(), at.y.toInt())
+					// Skia reads a pixel outside the bitmap from wherever that address points: such a point is neither red nor clear.
+					fun org.jetbrains.skia.Bitmap.shows(at: Offset) = at.x.toInt() in 0 until width && at.y.toInt() in 0 until height
+					fun org.jetbrains.skia.Bitmap.red(at: Offset): Boolean {
+						val c = getColor(at.x.toInt(), at.y.toInt())
 						return (c ushr 16 and 0xff) > 200 && (c ushr 8 and 0xff) < 60 && (c and 0xff) < 60
 					}
-					settle()
+					fun org.jetbrains.skia.Bitmap.redAt(at: Offset) = shows(at) && red(at)
+					fun org.jetbrains.skia.Bitmap.clearAt(at: Offset) = shows(at) && !red(at)
+					fun isRed(at: Offset) = frame { check(it.shows(at)) { "$at is outside the view" }; it.red(at) }
+					fun view(x: Float, y: Float): Offset { val c = AtlasPageProbe.camera; return Offset(c[0] + x * c[2], c[1] + y * c[2]) }
+					/** Whether red shows anywhere in the page rectangle: wires and cells may cover a small tile's middle. */
+					fun org.jetbrains.skia.Bitmap.redIn(x: Int, y: Int, width: Int, height: Int): Boolean {
+						val from = view(x.toFloat(), y.toFloat()); val to = view((x + width).toFloat(), (y + height).toFloat())
+						for (py in from.y.toInt().coerceAtLeast(0)..to.y.toInt().coerceAtMost(this.height - 1))
+							for (px in from.x.toInt().coerceAtLeast(0)..to.x.toInt().coerceAtMost(this.width - 1))
+								if (redAt(Offset(px.toFloat(), py.toFloat()))) return true
+						return false
+					}
+					/**
+					 * Renders until two frames in a row show what [expected] asks: tile images are made off the UI thread, and a
+					 * new version may take frames to lay out. The view's camera is read after each frame, which sets it.
+					 */
+					fun settle(what: String, expected: (org.jetbrains.skia.Bitmap) -> Boolean) {
+						val deadline = System.nanoTime() + 10_000_000_000L
+						var shown = 0
+						while (shown < 2) {
+							check(System.nanoTime() < deadline) { "the page never showed $what" }
+							shown = if (frame(expected)) shown + 1 else 0
+							if (shown == 0) Thread.sleep(2)
+						}
+					}
+					settle("the red tile") { it.redAt(view(red.x + red.width / 2f, red.y + red.height / 2f)) }
 
 					// A first applied session, so the gestures below run on a later version than the view was first composed with.
 					vm.setTextureDensity(first, listOf(red.layerId), 0.5f)
 					vm.applyTextureSession()
 					vm.awaitTextureEdits()
-					settle()
+					val halved = requireNotNull(vm.textureSnapshot()).tilesByLayer.getValue(red.layerId)
+					// Red within its new cells, none left where only the full size reached.
+					settle("the halved tile") {
+						it.redIn(halved.x, halved.y, halved.width, halved.height) && it.clearAt(view(red.x + red.width * 0.8f, red.y + red.height * 0.8f))
+					}
 					// The two squares were packed side by side, a padding apart: giving them their meshes' cells to keep must
 					// not make them meet by the cells' rounding and push one away.
 					assertNull(vm.state.value.textureWorkspace.error)
@@ -111,13 +140,13 @@ class AtlasRealtimeEditTest {
 					scene.sendPointerEvent(PointerEventType.Move, from)
 					scene.sendPointerEvent(PointerEventType.Press, from, buttons = primary, button = PointerButton.Primary)
 					for (i in 1..10) { scene.sendPointerEvent(PointerEventType.Move, from + (to - from) * (i / 10f), buttons = primary); render() }
-					assertTrue(isRed(render(), to), "the dragged tile shows under the pointer while it moves")
-					assertTrue(!isRed(render(), from), "and no longer where it was")
+					assertTrue(isRed(to), "the dragged tile shows under the pointer while it moves")
+					assertTrue(!isRed(from), "and no longer where it was")
 
 					scene.sendPointerEvent(PointerEventType.Release, to, button = PointerButton.Primary)
 					// Released into the session: shown where it was dropped, nothing committed.
 					assertTrue(vm.state.value.textureWorkspace.session.containsKey(red.layerId), "the move is in the session")
-					assertTrue(isRed(render(), to), "the dropped tile shows at once")
+					assertTrue(isRed(to), "the dropped tile shows at once")
 					assertFalse(vm.state.value.textureWorkspace.busy, "nothing commits while the session is open")
 					assertEquals(nodes, vm.state.value.historySnapshot?.nodes?.size)
 					// Back to full size where it was dropped, in free space, still in the session; a step back and forth.
@@ -130,7 +159,8 @@ class AtlasRealtimeEditTest {
 
 					// A corner drag on the session's tile: it shrinks under the pointer from its opposite corner.
 					val shown = requireNotNull(vm.textureSnapshot()).let { s -> s.shownTiles(tile.page, vm.state.value.textureWorkspace.shown).single { it.layerId == red.layerId } }
-					settle()
+					// Where only the full size reaches.
+					settle("the tile back at full size") { it.redAt(view(shown.x + shown.width * 0.8f, shown.y + shown.height * 0.8f)) }
 					val grip = view((shown.x + shown.width).toFloat(), (shown.y + shown.height).toFloat())
 					val anchor = view(shown.x.toFloat(), shown.y.toFloat())
 					val outward = anchor + (grip - anchor) * 0.6f
@@ -140,13 +170,15 @@ class AtlasRealtimeEditTest {
 					for (i in 1..10) { scene.sendPointerEvent(PointerEventType.Move, grip + (outward - grip) * (i / 10f), buttons = primary); render() }
 					assertTrue(AtlasPageProbe.liftedDraws.get() > 0, "the corner drag draws its tiles at their new size")
 					val leftBehind = anchor + (grip - anchor) * 0.8f
-					assertTrue(!isRed(render(), leftBehind), "the shrinking tile shows at its new size while the corner moves")
-					assertTrue(isRed(render(), anchor + (grip - anchor) * 0.3f))
+					assertTrue(!isRed(leftBehind), "the shrinking tile shows at its new size while the corner moves")
+					assertTrue(isRed(anchor + (grip - anchor) * 0.3f))
 					scene.sendPointerEvent(PointerEventType.Release, outward, button = PointerButton.Primary)
 
 					// Just outside a corner the pointer turns the tile, about its anchor - its centre, while the anchor is not moved.
 					val small = requireNotNull(vm.textureSnapshot()).let { s -> s.shownTiles(tile.page, vm.state.value.textureWorkspace.shown).single { it.layerId == red.layerId } }
-					settle()
+					settle("the shrunk tile") {
+						it.redIn(small.x, small.y, small.width, small.height) && it.clearAt(view(small.x + small.width * 1.15f, small.y + small.height * 1.15f))
+					}
 					val middle = view(small.x + small.width / 2f, small.y + small.height / 2f)
 					val bottomRight = view((small.x + small.width).toFloat(), (small.y + small.height).toFloat())
 					val outside = bottomRight + Offset(8f, 8f)
@@ -162,26 +194,26 @@ class AtlasRealtimeEditTest {
 
 					// Half a quarter turn: the turned square leaves its upright corners empty.
 					assertTrue(vm.rotateTextureTile(requireNotNull(vm.textureSnapshot()), red.layerId, 45f))
-					settle()
 					val turned = requireNotNull(vm.textureSnapshot()).let { s -> s.shownTiles(tile.page, vm.state.value.textureWorkspace.shown).single { it.layerId == red.layerId } }
 					val centre = Offset(turned.x + turned.width / 2f, turned.y + turned.height / 2f)
-					val corner = view(centre.x - turned.width * 0.42f, centre.y + turned.height * 0.42f)
-					assertTrue(isRed(render(), view(centre.x, centre.y)), "the turned tile shows")
-					assertFalse(isRed(render(), corner), "turned: its upright bottom left corner is empty")
+					fun corner() = view(centre.x - turned.width * 0.42f, centre.y + turned.height * 0.42f)
+					settle("the turned tile") { it.redAt(view(centre.x, centre.y)) && it.clearAt(corner()) }
+					assertTrue(isRed(view(centre.x, centre.y)), "the turned tile shows")
+					assertFalse(isRed(corner()), "turned: its upright bottom left corner is empty")
 
 					// Applied: one step, everything as the session showed it.
 					vm.applyTextureSession()
 					assertTrue(vm.state.value.textureWorkspace.session.isEmpty())
 					assertTrue(vm.state.value.textureWorkspace.pending.containsKey(red.layerId), "shown as applied until its version lands")
 					vm.awaitTextureEdits()
-					settle()
 					assertNull(vm.state.value.textureWorkspace.error)
 					assertEquals(nodes?.plus(1), vm.state.value.historySnapshot?.nodes?.size, "one history node for the whole session")
 					val landed = requireNotNull(vm.textureSnapshot()).tilesByLayer.getValue(red.layerId)
 					assertEquals(Triple(turned.x, turned.y, 45f), Triple(landed.x, landed.y, landed.rotation), "landed as the session showed it")
 					assertEquals(turned.width, landed.width)
 					assertTrue(vm.state.value.textureWorkspace.pending.isEmpty())
-					assertFalse(isRed(render(), corner), "and the committed page shows it turned")
+					settle("the committed page") { it.redIn(landed.x, landed.y, landed.width, landed.height) && it.clearAt(corner()) }
+					assertFalse(isRed(corner()), "and the committed page shows it turned")
 					scene.close()
 				}
 			}
@@ -195,7 +227,6 @@ class AtlasRealtimeEditTest {
 	 * upright again; and the page saves byte for byte as the export writes it.
 	 */
 	@Test fun menuTurnsTheSelectionAsOneStepAndSavesThePage() = kotlinx.coroutines.runBlocking<Unit> {
-		val temp = Files.createTempDirectory("atlas-menu")
 		fun png(name: String, argb: Int) = temp.resolve("$name.png").also { path ->
 			val image = BufferedImage(24, 24, BufferedImage.TYPE_INT_ARGB)
 			for (y in 0 until 24) for (x in 0 until 24) image.setRGB(x, y, argb)
@@ -251,7 +282,6 @@ class AtlasRealtimeEditTest {
 	 * a page with no room for it refuses and moves nothing.
 	 */
 	@Test fun menuMovesTilesToAnotherPage() = kotlinx.coroutines.runBlocking<Unit> {
-		val temp = Files.createTempDirectory("atlas-pages")
 		fun png(name: String, argb: Int) = temp.resolve("$name.png").also { path ->
 			val image = BufferedImage(200, 200, BufferedImage.TYPE_INT_ARGB)
 			for (y in 0 until 200) for (x in 0 until 200) image.setRGB(x, y, argb)
@@ -308,7 +338,6 @@ class AtlasRealtimeEditTest {
 	@Test fun tilesCollideByTheirMeshesAndScaleWithoutSteps() = kotlinx.coroutines.runBlocking<Unit> {
 		val saved = AppSettings.softwareCanvas
 		AppSettings.softwareCanvas = true
-		val temp = Files.createTempDirectory("atlas-mesh")
 		fun triangle(name: String, lower: Boolean) = temp.resolve("$name.png").also { path ->
 			val image = BufferedImage(96, 96, BufferedImage.TYPE_INT_ARGB)
 			// A wide diagonal band between the two halves stays empty.
@@ -367,7 +396,7 @@ class AtlasRealtimeEditTest {
 					vm.applyTextureSession()
 					vm.awaitTextureEdits()
 					vm.selectLayer(shown.layerId)
-					repeat(10) { render(); Thread.sleep(20) }
+					repeat(3) { render() }
 					fun view(x: Float, y: Float): Offset { val c = AtlasPageProbe.camera; return Offset(c[0] + x * c[2], c[1] + y * c[2]) }
 					val grip = view(shown.x.toFloat(), shown.y.toFloat())
 					val anchor = view((shown.x + shown.width).toFloat(), (shown.y + shown.height).toFloat())

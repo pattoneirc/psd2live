@@ -7,6 +7,7 @@ import io.github.psd2live.project.WorkspaceStore
 import io.github.psd2live.core.RigAuthoringJournal
 import io.github.psd2live.core.VertexGroupJournal
 import kotlinx.serialization.json.*
+import org.junit.jupiter.api.io.TempDir
 import org.umamo.edit.MeshRefinementOps
 import org.umamo.edit.withMeshTopologyEdit
 import org.umamo.runtime.model.*
@@ -415,23 +416,18 @@ class SimulationTest {
         assertTrue(SimAuthoring.remove(overlay, "skirt").simEdits.isEmpty())
     }
 
-    @Test fun simulationsAndVertexGroupsSurviveAProjectReopen() {
-        val temp = kotlin.io.path.createTempDirectory("sim-store")
-        try {
-            val put = VertexGroupJournal.encode(VertexGroup("pin", DrawableId("skirt"), VertexGroupKind.PIN, floatArrayOf(1f, 0.25f, 0f)))
-            val edits = io.github.psd2live.core.RigEditOverlay(
-                authoringJournal = listOf(put),
-                simEdits = listOf(RigSimEdit("skirt", "Skirt", SimKind.CLOTH, listOf("skirt"), glueRoles = mapOf("band|skirt" to GlueRole.PIN))),
-            )
-            val document = io.github.psd2live.project.WorkspaceDocument(
-                io.github.psd2live.project.WorkspaceSourceArt(30, 20, emptyList(), emptyList()), emptyMap(), emptySet(), emptyMap(), emptyMap(), edits)
-            val store = io.github.psd2live.project.WorkspaceStore(temp)
-            store.persistHistory("sim", io.github.psd2live.history.WorkspaceHistoryTree(document, "revision", "snapshot").state())
-            val restored = assertNotNull(store.loadHistory("sim")).head().snapshot.rigEdits
-            assertEquals(edits.simEdits, restored.simEdits)
-            assertEquals(listOf(put), restored.authoringJournal)
-        } finally {
-            temp.toFile().deleteRecursively()
-        }
+    @Test fun simulationsAndVertexGroupsSurviveAProjectReopen(@TempDir temp: java.nio.file.Path) {
+        val put = VertexGroupJournal.encode(VertexGroup("pin", DrawableId("skirt"), VertexGroupKind.PIN, floatArrayOf(1f, 0.25f, 0f)))
+        val edits = io.github.psd2live.core.RigEditOverlay(
+            authoringJournal = listOf(put),
+            simEdits = listOf(RigSimEdit("skirt", "Skirt", SimKind.CLOTH, listOf("skirt"), glueRoles = mapOf("band|skirt" to GlueRole.PIN))),
+        )
+        val document = io.github.psd2live.project.WorkspaceDocument(
+            io.github.psd2live.project.WorkspaceSourceArt(30, 20, emptyList(), emptyList()), emptyMap(), emptySet(), emptyMap(), emptyMap(), edits)
+        val store = io.github.psd2live.project.WorkspaceStore(temp)
+        store.persistHistory("sim", io.github.psd2live.history.WorkspaceHistoryTree(document, "revision", "snapshot").state())
+        val restored = assertNotNull(store.loadHistory("sim")).head().snapshot.rigEdits
+        assertEquals(edits.simEdits, restored.simEdits)
+        assertEquals(listOf(put), restored.authoringJournal)
     }
 }

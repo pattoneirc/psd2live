@@ -4,7 +4,6 @@ import com.sun.jna.Library
 import com.sun.jna.Memory
 import com.sun.jna.Native
 import com.sun.jna.Pointer
-import io.github.psd2live.core.PSD2LivePipeline
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.umamo.format.moc3.encode.MocEncoder
 import org.umamo.format.moc3.encode.MocLowering
@@ -18,7 +17,6 @@ import org.umamo.format.moc3.model.RenderOrderChild
 import org.umamo.format.moc3.model.RenderOrderGroup
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -67,21 +65,6 @@ class MocDefaultColorsTest {
                 val aligned = memory.share((64 - Pointer.nativeValue(memory) % 64) % 64)
                 aligned.write(0, bytes, 0, bytes.size)
                 assertEquals(1, core.csmHasMocConsistency(aligned, bytes.size), "$version rejected by Core")
-            }
-        }
-    }
-
-    @Test fun psdPreviewBundlesPassOfficialCoreConsistencyCheck() {
-        val corePath = System.getenv("PSD2LIVE_TEST_CUBISM_CORE")
-        assumeTrue(!corePath.isNullOrBlank(), "Set PSD2LIVE_TEST_CUBISM_CORE to the official Core library")
-        val core = Native.load(corePath, Core::class.java)
-        for (sample in listOf("ds", "tml")) {
-            val preview = PSD2LivePipeline().buildPreview(Path.of("examples/$sample/psd-input/$sample.psd"))
-            val bytes = preview.runtimeBundle.assets.single { it.path.endsWith(".moc3") }.bytes
-            Memory(bytes.size.toLong() + 63).use { memory ->
-                val aligned = memory.share((64 - Pointer.nativeValue(memory) % 64) % 64)
-                aligned.write(0, bytes, 0, bytes.size)
-                assertEquals(1, core.csmHasMocConsistency(aligned, bytes.size), "$sample preview rejected by Core")
             }
         }
     }

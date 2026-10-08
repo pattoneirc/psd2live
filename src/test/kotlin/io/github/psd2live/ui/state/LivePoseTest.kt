@@ -9,7 +9,9 @@ import io.github.psd2live.core.RigEditOverlay
 import io.github.psd2live.core.RigPhysicsEdit
 import io.github.psd2live.core.StandardParameters
 import org.umamo.runtime.model.ParameterId
+import org.junit.jupiter.api.io.TempDir
 import java.awt.image.BufferedImage
+import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -18,6 +20,8 @@ import kotlin.test.assertTrue
 
 /** The one frame rate and the pose every panel reads from the preview. */
 class LivePoseTest {
+	@TempDir lateinit var temp: Path
+
 	@Test
 	fun everyPreviewFramePublishesThePoseAndAPausedOneOnlyThePointersLook() {
 		PSD2LiveViewModel().use { vm ->
@@ -75,7 +79,6 @@ class LivePoseTest {
 
 	@Test
 	fun aStoppedSoftwareAnimationReturnsTheSlidersToTheAuthoredPose() = kotlinx.coroutines.runBlocking {
-		val temp = java.nio.file.Files.createTempDirectory("stopped-animation")
 		val png = temp.resolve("art.png")
 		val image = BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB)
 		for (y in 2..13) for (x in 2..13) image.setRGB(x, y, 0xff3366ff.toInt())
@@ -97,15 +100,21 @@ class LivePoseTest {
 				vm.setCanvasMode(id, CanvasMode.PREVIEW)
 				vm.setStateForTest(vm.state.value.copy(sdkStatus = "unavailable"))
 				val key = vm.canvasRenderKey(id)
-				fun frames(n: Int) = repeat(n) { vm.requestSdkFrame(8, 8, 1f, 0f, 0f, viewId = key); Thread.sleep(8) }
+				// The preview's frames drive the clock; the playback session starts off the caller's thread, so the
+				// frames go on until the pose shows what is asked of it.
+				fun framesUntil(what: () -> String, done: () -> Boolean) {
+					val deadline = System.nanoTime() + 3_000_000_000L
+					do {
+						check(System.nanoTime() < deadline, what)
+						vm.requestSdkFrame(8, 8, 1f, 0f, 0f, viewId = key)
+						Thread.sleep(1)
+					} while (!done())
+				}
 				vm.setAnimationEnabled(true)
-				val deadline = System.nanoTime() + 3_000_000_000L
-				while (vm.livePose.value.isEmpty() && System.nanoTime() < deadline) frames(1)
-				assertTrue(vm.livePose.value.isNotEmpty(), "the software preview publishes its animated pose")
+				framesUntil({ "the software preview publishes its animated pose" }) { vm.livePose.value.isNotEmpty() }
 				vm.setAnimationEnabled(false)
 				vm.setMouseTrackingEnabled(false)
-				frames(3)
-				assertTrue(vm.livePose.value.isEmpty(), "a stopped preview leaves no stale frame on the sliders: ${vm.livePose.value}")
+				framesUntil({ "a stopped preview leaves no stale frame on the sliders: ${vm.livePose.value}" }) { vm.livePose.value.isEmpty() }
 			}
 		}
 	}
