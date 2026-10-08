@@ -60,7 +60,7 @@ macOS 打包暂缓，本工作流不构建。
 - Linux 预览需要 X11/GLX（含 XWayland / `xvfb-run`）。纯 Wayland、aarch64、musl/Alpine 不支持。详见 [CUBISM_SDK_SETUP](CUBISM_SDK_SETUP.md)。
 - v1 不做脆弱的 GUI 冒烟；Linux 侧以 `.deb` 存在且非空为准。
 - Windows 包打两遍：第二遍加 `-Ppsd2live.ffmpegDir=<目录>`，把固定版本的 Gyan.dev ffmpeg essentials 构建（GPLv3，下载后校验 SHA-256，并检查视频与动图导出用到的编码器）连同其 `LICENSE.txt`、`README.txt` 放进应用的 `resources/ffmpeg/`。升级 ffmpeg 时同时修改工作流中的 `FFMPEG_URL` 与 `FFMPEG_SHA256`。Linux 包不内置 ffmpeg。
-- Windows 安装包由 `packageExe` / `packageMsi` 从应用镜像构建，使用 `packaging/windows/main.wxs`（JDK 21 jpackage 模板加 PSD2Live 改动）：已安装时默认装回原目录并跳过"目录非空"提示，同版本的包（重新构建或带/不带 ffmpeg）也会替换已安装的版本。换用其他大版本的 JDK 打包时需按其模板同步该文件。
+- Windows 安装包由 `packageExe` / `packageMsi` 从应用镜像构建，使用 `packaging/windows/main.wxs`（JDK 21 jpackage 模板加 PSD2Live 改动）：已安装时默认装回原目录并跳过"目录非空"提示，同版本的包（重新构建或带/不带 ffmpeg）也会替换已安装的版本；卸载与升级只移除安装的文件，不再像 jpackage 默认那样清空整个安装目录（3.0.0 及更早版本的安装会在新版装好后才移除，并先清掉它们记录的待清空目录）。打包时会核对 jpackage 生成的 WiX 源文件仍含该文件引用的属性与组件 GUID，否则构建失败。换用其他大版本的 JDK 打包时需按其模板同步该文件。
 - 含 Cubism 的包仅供许可允许范围内的用途；**不要**把专有二进制再分发到公开渠道。
 
 ## 许可提醒

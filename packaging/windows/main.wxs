@@ -127,16 +127,31 @@
     </Property>
     <SetProperty Action="PSD2LiveLegacyDir" Id="PSD2LIVE_PREVIOUS_DIR" Value="[PSD2LIVE_LAUNCHER_DIR]" After="AppSearch"
       Sequence="both">NOT PSD2LIVE_PREVIOUS_DIR AND PSD2LIVE_LAUNCHER_DIR</SetProperty>
-    <!-- In the UI sequence when there is one, so the folder chosen in the dialog stands. -->
-    <SetDirectory Id="INSTALLDIR" Value="[PSD2LIVE_PREVIOUS_DIR]" Sequence="first">PSD2LIVE_PREVIOUS_DIR AND NOT Installed</SetDirectory>
+    <!-- In the UI sequence when there is one, so the folder chosen in the dialog stands. Also when installed:
+         a per-user install's components have registry key paths, so its uninstall cannot find the folder
+         otherwise and would remove files from the default one. -->
+    <SetDirectory Id="INSTALLDIR" Value="[PSD2LIVE_PREVIOUS_DIR]" Sequence="first">PSD2LIVE_PREVIOUS_DIR</SetDirectory>
     <SetProperty Action="PSD2LivePreviousInstallDir" Id="PSD2LIVE_PREVIOUS_INSTALLDIR" Value="[INSTALLDIR]" After="CostFinalize"
       Sequence="ui">PSD2LIVE_PREVIOUS_DIR AND NOT Installed</SetProperty>
     <DirectoryRef Id="INSTALLDIR">
       <Component Id="PSD2LiveInstallDir" Guid="{442B6066-FA33-4114-B35A-6D2D89F00154}" Win64="yes">
+        <!-- PSD2Live: clears what earlier versions recorded under the app's key (rewritten below), above all the
+             folder their uninstall empties; see PSD2LiveKeepFolder. -->
+        <RemoveRegistryKey Root="HKMU" Key="Software\$(var.JpAppVendor)\$(var.JpAppName)" Action="removeOnInstall"/>
         <RegistryValue Root="HKMU" Key="Software\$(var.JpAppVendor)\$(var.JpAppName)" Name="InstallDir" Type="string"
           Value="[INSTALLDIR]" KeyPath="yes"/>
       </Component>
     </DirectoryRef>
+
+    <!-- PSD2Live: jpackage records the install folder under the version's key (RM_RF..., the property
+         build.gradle.kts checks the generated sources for) and its RemoveFolderEx deletes that folder with
+         everything in it on uninstall, files the user put there included. Without the property it removes
+         only what it installed. Earlier versions do this too and their uninstall runs from their own package,
+         so it runs after this package is in place (RemoveExistingProducts below), once the registry key above
+         has lost what they recorded; every file is written so that order leaves no file of theirs behind. -->
+    <SetProperty Action="PSD2LiveKeepFolder" Id="RM_RF48431AECBD69377EA800D62616352F20" Value="[PSD2LIVE_NO_VALUE]" After="AppSearch"
+      Sequence="both"/>
+    <Property Id="REINSTALLMODE" Value="amus"/>
     <UI>
       <!-- The installed version's folder is not empty, but replacing it is what an upgrade does: skip the
            "folder is not empty" question there (JpCheckInstallDir runs at 3, the next dialog opens at 5). -->
@@ -164,7 +179,7 @@
       <?ifndef JpAllowDowngrades ?>
       <Custom Action="JpDisallowDowngrade" After="JpFindRelatedProducts">JP_DOWNGRADABLE_FOUND</Custom>
       <?endif?>
-      <RemoveExistingProducts Before="CostInitialize"/>
+      <RemoveExistingProducts After="InstallExecute"/><!-- PSD2Live: Before="CostInitialize" in jpackage -->
       <Custom Action="JpFindRelatedProducts" After="FindRelatedProducts"/>
     </InstallExecuteSequence>
 

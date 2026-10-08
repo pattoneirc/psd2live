@@ -253,9 +253,4 @@ internal object ProjectArchive {
         require(path.parent == Path.of(System.getProperty("java.io.tmpdir")).toAbsolutePath().normalize() && path.fileName.toString().startsWith("psd2live-project-"))
         Files.walk(path).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
     }
-    fun installationProjectsDirectory(): Path {
-        System.getProperty("compose.application.resources.dir")?.let { return Path.of(it).toAbsolutePath().parent.resolve("projects") }
-        val location = Path.of(ProjectArchive::class.java.protectionDomain.codeSource.location.toURI())
-        return if (Files.isRegularFile(location)) location.parent.parent.resolve("projects") else Path.of(System.getProperty("user.dir"), "projects").toAbsolutePath()
-    }
 }

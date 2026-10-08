@@ -272,17 +272,29 @@ if (hostOs == "windows") afterEvaluate {
 			val appImage = createDistributable.get().destinationDir.dir(distributions.packageName!!)
 			val resources = file("packaging/windows")
 			val dest = layout.buildDirectory.dir("compose/binaries/main/$type")
+			val temp = layout.buildDirectory.dir("tmp/jpackage-$type").get().asFile
 			inputs.dir(appImage); inputs.dir(resources)
 			outputs.dir(dest)
 			executable = File(createDistributable.get().javaHome.get(), "bin/jpackage.exe").path
-			args("--type", type, "--app-image", appImage.get().asFile, "--resource-dir", resources, "--dest", dest.get().asFile,
+			args("--type", type, "--app-image", appImage.get().asFile, "--resource-dir", resources, "--dest", dest.get().asFile, "--temp", temp,
 				"--name", distributions.packageName!!, "--app-version", distributions.packageVersion!!,
 				"--vendor", distributions.vendor!!, "--description", distributions.description!!, "--copyright", distributions.copyright!!,
 				"--win-dir-chooser", "--win-menu", "--win-menu-group", distributions.windows.menuGroup!!,
 				"--win-upgrade-uuid", distributions.windows.upgradeUuid!!)
 			doFirst {
 				dest.get().asFile.deleteRecursively()
+				temp.deleteRecursively()
 				environment("PATH", unzipWix.get().destinationDir.path + File.pathSeparator + System.getenv("PATH"))
+			}
+			// main.wxs names a property and a component GUID that jpackage generates; a JDK that names them
+			// otherwise must fail the build rather than leave the installer emptying the install folder again.
+			doLast {
+				val main = resources.resolve("main.wxs").readText()
+				val bundle = temp.resolve("config/bundle.wxf").readText()
+				val expected = Regex("""Id="(RM_RF\w+)"""").findAll(main).map { "Property Id=\"${it.groupValues[1]}\"" } +
+					Regex("""<ComponentSearch[^>]*Guid="(\{[^}]+\})"""").findAll(main).map { "Guid=\"${it.groupValues[1]}\"" }
+				val missing = expected.filterNot(bundle::contains).toList()
+				check(missing.isEmpty()) { "jpackage's generated WiX sources lack ${missing.joinToString()}; update packaging/windows/main.wxs" }
 			}
 		}
 	}

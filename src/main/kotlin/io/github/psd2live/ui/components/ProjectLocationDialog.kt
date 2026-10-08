@@ -16,7 +16,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.i18n.tr
-import io.github.psd2live.project.ProjectArchive
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.theme.LocalToolColors
@@ -43,6 +42,16 @@ internal fun distinctProjectName(directory: Path?, stem: String, current: Path?)
     return generateSequence(2) { it + 1 }.map { "$base-$it" }.first { !taken(it) }
 }
 
+/**
+ * The projects folder the dialog offers: PSD2Live in the user's documents folder (where Windows has moved it,
+ * too). Never the installation directory, which an installer replaces and the system may not let the user write.
+ */
+internal fun userProjectsDirectory(): Path {
+    val documents = runCatching { javax.swing.filechooser.FileSystemView.getFileSystemView().defaultDirectory.toPath() }.getOrNull()
+        ?.takeIf { Files.isDirectory(it) } ?: Path.of(System.getProperty("user.home"), "Documents")
+    return documents.resolve("PSD2Live").toAbsolutePath().normalize()
+}
+
 @Composable
 fun ProjectLocationDialog(state: PSD2LiveState, viewModel: PSD2LiveViewModel, window: Window? = null) {
     if (!state.showProjectLocationDialog) return
@@ -63,7 +72,7 @@ fun ProjectLocationDialog(state: PSD2LiveState, viewModel: PSD2LiveViewModel, wi
     // A target that exists waits for this in-window confirmation; it never saves over a file unasked.
     var confirm by remember { mutableStateOf<Path?>(null) }
     val directory = when (location) {
-        2 -> ProjectArchive.installationProjectsDirectory()
+        2 -> userProjectsDirectory()
         else -> source.parent
     }
     val target = runCatching {
@@ -125,7 +134,7 @@ fun ProjectLocationDialog(state: PSD2LiveState, viewModel: PSD2LiveViewModel, wi
                 selected = location == 2,
                 onClick = { location = 2 },
                 enabled = !state.projectSaving,
-                label = tr("project.installation"),
+                label = tr("project.documents"),
             )
             CompactRadioButton(
                 selected = location == 3,
