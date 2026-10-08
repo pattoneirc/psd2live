@@ -299,8 +299,8 @@ internal val VERTEX_TOOLS = setOf(
 /**
  * Every tool the left (edit) toolbar can show, in the order it shows them.
  *
- * Creation tools are started from the hierarchy tree context menu or shortcuts, not this palette.
- * The per-mode palettes below are subsets of this list.
+ * The per-mode palettes below are subsets of this list. The creation tools follow them in a group of their own,
+ * [CREATE_GROUP_TOOLS].
  */
 internal val TOOLBAR_TOOL_ORDER = listOf(
     CanvasTool.SELECT, CanvasTool.TRANSFORM, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT,
@@ -317,8 +317,8 @@ internal val TOOLBAR_TOOL_ORDER = listOf(
 internal val TOOLBAR_DIVIDERS = listOf(CanvasTool.BRUSH_SELECT, CanvasTool.SKELETON_EDIT)
 
 /**
- * The left toolbar's palette for [mode]. Creation tools are not listed here — use the tree
- * context menu or shortcuts (C / R / P).
+ * The left toolbar's palette for [mode]. The creation tools are not part of it: they arm a placement rather than
+ * a mode's tool, and sit in their own group below it ([createGroupOffered]).
  *
  * Object mode is the one without the vertex tools. Deform mode edits points without changing topology.
  * Edit mode handles mesh topology (subdivide / knife). Simulate paints the simulation's vertex groups,
@@ -349,6 +349,13 @@ internal fun toolbarGroups(mode: EditHierarchyMode): List<List<CanvasTool>> = wh
         listOf(CanvasTool.PAINT_SHAPE),
     )
 }
+
+/** The toolbar's Create group: each arms place-then-confirm on the part in hand, as the tree's Add menu does. */
+internal val CREATE_GROUP_TOOLS = listOf(CanvasTool.CREATE_WARP, CanvasTool.CREATE_ROTATION, CanvasTool.CREATE_DEFORM_PATH)
+
+/** The modes whose toolbar offers the Create group: the ones that work on meshes and deformers. */
+internal fun createGroupOffered(mode: EditHierarchyMode): Boolean =
+    mode == EditHierarchyMode.SELECT || mode == EditHierarchyMode.DEFORM || mode == EditHierarchyMode.EDIT
 
 /** The simulation weight tools: both write the mesh's vertex group of the kind picked in the toolbar. */
 internal val WEIGHT_TOOLS = setOf(CanvasTool.WEIGHT_PAINT, CanvasTool.WEIGHT_GRADIENT)
@@ -1091,6 +1098,8 @@ internal class CanvasEditor(
     var paintBrushSize by mutableStateOf(16f)
     var paintPencilSize by mutableStateOf(4f)
     var paintEraserSize by mutableStateOf(24f)
+    /** The line width of the shape tool; its own, so drawing a thin outline leaves the brush tip as it was. */
+    var paintShapeSize by mutableStateOf(16f)
 
     /** The open document's longest side in pixels; 0 with nothing open. */
     val documentLongSide: Int
@@ -1126,6 +1135,7 @@ internal class CanvasEditor(
         paintBrushSize = (paintBrushSize * k).coerceIn(1f, limit)
         paintPencilSize = (paintPencilSize * k).coerceIn(1f, limit)
         paintEraserSize = (paintEraserSize * k).coerceIn(1f, limit)
+        paintShapeSize = (paintShapeSize * k).coerceIn(1f, limit)
         radius = (radius * k).coerceIn(1f, limit)
         skeletonWeightRadius = (skeletonWeightRadius * k).coerceIn(1f, limit)
         brushScaleApplied = scale
@@ -1139,12 +1149,14 @@ internal class CanvasEditor(
         get() = when (tool) {
             CanvasTool.PAINT_PENCIL -> paintPencilSize
             CanvasTool.PAINT_ERASER -> paintEraserSize
+            CanvasTool.PAINT_SHAPE -> paintShapeSize
             else -> paintBrushSize
         }
         set(value) {
             when (tool) {
                 CanvasTool.PAINT_PENCIL -> paintPencilSize = value
                 CanvasTool.PAINT_ERASER -> paintEraserSize = value
+                CanvasTool.PAINT_SHAPE -> paintShapeSize = value
                 else -> paintBrushSize = value
             }
         }
@@ -3046,7 +3058,7 @@ internal class CanvasEditor(
      * The mode a tool belongs to when the current palette does not offer it.
      * Creation tools are handled separately and never force Edit.
      */
-    private fun modeForTool(tool: CanvasTool): EditHierarchyMode = when {
+    internal fun modeForTool(tool: CanvasTool): EditHierarchyMode = when {
         tool == CanvasTool.TRANSFORM -> EditHierarchyMode.SELECT
         tool in SKELETON_TOOLS -> EditHierarchyMode.SKELETON
         tool in PAINT_TOOLS -> EditHierarchyMode.PAINT

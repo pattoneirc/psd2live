@@ -118,6 +118,8 @@ import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.state.ShortcutAction
 import io.github.psd2live.ui.state.ShortcutScope
+import io.github.psd2live.ui.tooloptions.OptionRole
+import io.github.psd2live.ui.tooloptions.stepOption
 import io.github.psd2live.ui.state.MouseInput
 import io.github.psd2live.ui.state.buttonBindingOf
 import io.github.psd2live.ui.state.wheelBindingOf
@@ -738,43 +740,14 @@ fun CanvasViewportComposable(
 				if (editor.hierarchyMode != EditHierarchyMode.PAINT) editor.setHierarchyMode(EditHierarchyMode.PAINT)
 				editor.cyclePaintShape(); true
 			}
-			// The brush keys drive whichever brush is in hand: the paint tip in paint mode,
-			// the deform brush's radius/hardness everywhere else.
-			ShortcutAction.BRUSH_RADIUS_DOWN -> {
-				if (editor.paintSizeActive) editor.paintSize = (editor.paintSize / 1.2f).coerceAtLeast(1f)
-				else editor.radius = (editor.radius / 1.2f).coerceAtLeast(4f)
-				true
-			}
-			ShortcutAction.BRUSH_RADIUS_UP -> {
-				if (editor.paintSizeActive) editor.paintSize = (editor.paintSize * 1.2f).coerceAtMost(editor.brushSizeLimit)
-				else editor.radius = (editor.radius * 1.2f).coerceAtMost(editor.brushSizeLimit)
-				true
-			}
-			// Never let the deform brush's hardness reach 1.0: brushWeight divides by (1 - hardness).
-			ShortcutAction.BRUSH_HARDNESS_DOWN -> {
-				if (editor.paintBrushActive) editor.paintHardness = (editor.paintHardness - 0.05f).coerceIn(0f, 1f)
-				else editor.hardness = (editor.hardness - 0.05f).coerceIn(0f, 0.95f)
-				true
-			}
-			ShortcutAction.BRUSH_HARDNESS_UP -> {
-				if (editor.paintBrushActive) editor.paintHardness = (editor.paintHardness + 0.05f).coerceIn(0f, 1f)
-				else editor.hardness = (editor.hardness + 0.05f).coerceIn(0f, 0.95f)
-				true
-			}
-			ShortcutAction.PAINT_OPACITY_DOWN -> {
-				if (!editor.paintBrushActive) false
-				else {
-					editor.paintOpacity = (editor.paintOpacity - 0.05f).coerceIn(0.01f, 1f)
-					true
-				}
-			}
-			ShortcutAction.PAINT_OPACITY_UP -> {
-				if (!editor.paintBrushActive) false
-				else {
-					editor.paintOpacity = (editor.paintOpacity + 0.05f).coerceIn(0.01f, 1f)
-					true
-				}
-			}
+			// The brush keys drive whichever brush is in hand - the deform, weight or skeleton weight brush, the paint
+			// tip or the shape's line - through its options, so they keep to the ranges the options bar shows.
+			ShortcutAction.BRUSH_RADIUS_DOWN -> editor.stepOption(OptionRole.SIZE, up = false)
+			ShortcutAction.BRUSH_RADIUS_UP -> editor.stepOption(OptionRole.SIZE, up = true)
+			ShortcutAction.BRUSH_HARDNESS_DOWN -> editor.stepOption(OptionRole.HARDNESS, up = false)
+			ShortcutAction.BRUSH_HARDNESS_UP -> editor.stepOption(OptionRole.HARDNESS, up = true)
+			ShortcutAction.PAINT_OPACITY_DOWN -> editor.stepOption(OptionRole.OPACITY, up = false)
+			ShortcutAction.PAINT_OPACITY_UP -> editor.stepOption(OptionRole.OPACITY, up = true)
 			// A wheel notch only turns a deform brush's tip; with any other tool the wheel keeps zooming.
 			ShortcutAction.BRUSH_ROTATE_LEFT -> if (wheel && editor.tool !in ANGLED_BRUSH_TOOLS) false else {
 				val step = if (shift) 45f else 15f

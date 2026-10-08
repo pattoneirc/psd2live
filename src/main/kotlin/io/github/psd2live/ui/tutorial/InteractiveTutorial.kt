@@ -478,9 +478,10 @@ private fun buildTutorialCatalog(): Map<TutorialId, TutorialDefinition> = mapOf(
 	TutorialId.TOOL_DETAILS to TutorialDefinition(
 		TutorialId.TOOL_DETAILS,
 		listOf(
-			step("open", TutorialTargetId.TOOLS_DOCK, selectDock = "tools", ensureEditTab = true, showAction = true),
-			step("brushes", TutorialTargetId.TOOLS_DOCK, selectDock = "tools", ensureEditTab = true, setHierarchyMode = EditHierarchyMode.DEFORM),
+			step("open", TutorialTargetId.TOOL_OPTIONS_BAR, ensureEditTab = true, setHierarchyMode = EditHierarchyMode.DEFORM, requireSelection = true, showAction = true),
+			step("brushes", TutorialTargetId.TOOL_OPTIONS_BAR, ensureEditTab = true, setHierarchyMode = EditHierarchyMode.DEFORM, requireSelection = true),
 			step("split", TutorialTargetId.CANVAS_TOOLBAR, ensureEditTab = true),
+			step("advanced", TutorialTargetId.TOOLS_DOCK, selectDock = "tools", ensureEditTab = true),
 			step("shortcuts", TutorialTargetId.TOOLS_DOCK, selectDock = "tools"),
 			step("done", isDone = true, preferSideBubble = false),
 		),

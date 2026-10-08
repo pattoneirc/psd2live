@@ -95,6 +95,7 @@ import io.github.psd2live.ui.views.texture.AccentButton
 import io.github.psd2live.ui.views.texture.BarChip
 import io.github.psd2live.ui.views.texture.BarDivider
 import io.github.psd2live.ui.views.texture.FloatingBar
+import io.github.psd2live.ui.views.tooloptions.ToolOptionsBar
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -1543,8 +1544,23 @@ internal fun BoxScope.CanvasEditorOverlay(
         SkeletonPoseLayer(editor, viewport, passive = true)
     }
 
+    // The session is opened here rather than in composition: the bars only ever read it, and one opened while
+    // they draw would be a state write during composition.
+    LaunchedEffect(editor.state.selectedLayerId, editor.hierarchyMode) {
+        if (editor.hierarchyMode == EditHierarchyMode.PAINT) editor.ensurePaintSession()
+    }
+
+    // The tool in hand's settings and actions, under the mode bar; the palette makes room under it.
+    var optionsBarHeight by remember { mutableStateOf(0) }
+    ToolOptionsBar(editor, focus, onHeight = { optionsBarHeight = it })
+    val density = LocalDensity.current
+    val paletteTop by animateDpAsState(
+        targetValue = if (optionsBarHeight > 0) 42.dp + with(density) { optionsBarHeight.toDp() } + 4.dp else 44.dp,
+        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+    )
+
     // Left Animated Hover Toolbar (edit / deform / paint tools)
-    CanvasToolBar(editor = editor, keymap = keymap, focus = focus)
+    CanvasToolBar(editor = editor, keymap = keymap, focus = focus, top = paletteTop)
 
     // Top Left Hierarchy / Layer Mode Toolbar
     var modeBarWidth by remember { mutableStateOf(0) }
@@ -2177,11 +2193,12 @@ private fun BoxScope.CanvasToolBar(
     editor: CanvasEditor,
     keymap: Keymap,
     focus: () -> Unit,
+    top: Dp,
 ) {
     CanvasOptionsRail(
         modifier = Modifier
             .align(Alignment.TopStart)
-            .padding(start = 8.dp, top = 44.dp)
+            .padding(start = 8.dp, top = top)
             .tutorialTarget(TutorialTargetId.CANVAS_TOOLBAR),
         leading = true,
         expandedWidth = 156.dp,
@@ -2192,10 +2209,9 @@ private fun BoxScope.CanvasToolBar(
         // composition has nothing left to animate out of — so the rows that a mode change adds or
         // removes would pop while the rest slid. Composing them all and hiding the ones the mode has no
         // use for makes the arriving and departing rows slide with everything else.
-        // Glue joins exactly two meshes, so it is offered only while two are selected.
-        val glueOffered = editor.glueMeshCount() == 2
+        // Glue joins exactly two meshes: with any other count it stays in place, disabled, and says why.
+        val glueReady = editor.glueMeshCount() == 2
         val availableTools = editor.palette().toSet()
-            .let { if (glueOffered) it else it - CanvasTool.GLUE }
         val lastVisibleIndex = TOOLBAR_TOOL_ORDER.indexOfLast { it in availableTools }
 
         TOOLBAR_TOOL_ORDER.forEachIndexed { index, tool ->
@@ -2206,10 +2222,12 @@ private fun BoxScope.CanvasToolBar(
                 RailRows(splitsGroups) { RailDivider() }
             }
             RailRows(tool in availableTools) {
+                val glueWaiting = tool == CanvasTool.GLUE && !glueReady && editor.tool != CanvasTool.GLUE
                 RailItem(
                     label = tr("editor.tool.${tool.name.lowercase()}"),
                     selected = editor.tool == tool,
-                    enabled = !editor.busy,
+                    enabled = !editor.busy && !glueWaiting,
+                    tooltip = if (glueWaiting) tr("editor.glueNeedTwo", editor.glueMeshCount()) else null,
                     // The shape group answers to its shapes' chords, so its row shows the one that is in
                     // hand: pressing it is how the row is reached.
                     keyLabel = keymap.labelFor(
@@ -2233,9 +2251,51 @@ private fun BoxScope.CanvasToolBar(
             }
         }
 
+        // Create: one row that unfolds into the three place-then-confirm creates, like a brush into its tips. It
+        // opens on a click and stays open while one of them is placing.
+        val createOffered = createGroupOffered(editor.hierarchyMode)
+        val placingKind = editor.placement?.kind?.takeIf { it != CreatePlacementKind.LAYER }
+        val creating = placingKind != null || editor.tool in CREATE_GROUP_TOOLS
+        var createOpen by remember { mutableStateOf(false) }
+        RailRows(createOffered) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                RailDivider()
+                RailItem(
+                    label = tr("editor.toolbar.create"),
+                    selected = creating && !createOpen,
+                    enabled = !editor.busy,
+                    icon = { color -> CreateGroupIcon(color) },
+                    onClick = { createOpen = !createOpen },
+                )
+            }
+        }
+        RailRows(createOffered && (createOpen || creating)) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                RailDivider(strong = true)
+                CREATE_GROUP_TOOLS.forEach { tool ->
+                    val kind = when (tool) {
+                        CanvasTool.CREATE_WARP -> CreatePlacementKind.WARP
+                        CanvasTool.CREATE_ROTATION -> CreatePlacementKind.ROTATION
+                        else -> CreatePlacementKind.PATH
+                    }
+                    RailItem(
+                        label = tr("editor.tool.${tool.name.lowercase()}"),
+                        selected = editor.tool == tool || placingKind == kind,
+                        enabled = editor.editable,
+                        keyLabel = keymap.labelFor(tool.action).orEmpty(),
+                        icon = { color -> ToolIcon(tool = tool, color = color) },
+                        onClick = {
+                            editor.activateTool(tool)
+                            focus()
+                        },
+                    )
+                }
+            }
+        }
+
         // A tool's variants unfold under it only while it is in hand: Glue's sub-tools, the skeleton tools'
         // sub-tools, the deform brush's tips, the paint shape's faces and the vertex groups the weight tools write.
-        RailRows(CanvasTool.GLUE in availableTools && editor.tool == CanvasTool.GLUE) {
+        RailRows(editor.tool == CanvasTool.GLUE) {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 RailDivider(strong = true)
                 GLUE_SUB_TOOL_LABELS.forEach { (sub, key) ->
@@ -2451,74 +2511,11 @@ private fun BoxScope.HierarchyModeBar(
                 val warpRows = target?.geometry?.rows ?: 4
                 val warpCols = target?.geometry?.columns ?: 4
                 Text(
-                    text = "Grid: ${warpRows}×${warpCols}",
+                    text = tr("editor.warpGrid", warpRows, warpCols),
                     fontSize = 11.sp,
                     color = colors.textMuted,
                     modifier = Modifier.padding(horizontal = 4.dp)
                 )
-            }
-        }
-
-        // Paint mode quick controls
-        AnimatedVisibility(
-            visible = editor.hierarchyMode == EditHierarchyMode.PAINT,
-            enter = expandHorizontally(
-                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                expandFrom = Alignment.Start,
-            ) + fadeIn(animationSpec = tween(160)),
-            exit = shrinkHorizontally(
-                animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
-                shrinkTowards = Alignment.Start,
-            ) + fadeOut(animationSpec = tween(120)),
-        ) {
-            // The session is opened here rather than in composition: the controls below only ever read
-            // it, and one opened while the toolbar draws would be a state write during composition.
-            LaunchedEffect(editor.state.selectedLayerId) {
-                if (editor.hierarchyMode == EditHierarchyMode.PAINT) editor.ensurePaintSession()
-            }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                BarDivider()
-                // Photoshop-style FG/BG swatch: overlapping squares with a tiny swap in the corner.
-                // The canvas chord for the same swap is X.
-                PaintFgBgSwatch(
-                    foreground = editor.paintColor,
-                    background = editor.paintSecondaryColor,
-                    onForegroundChanged = { editor.paintColor = it },
-                    onBackgroundChanged = { editor.paintSecondaryColor = it },
-                    onSwap = { editor.swapPaintColors(); focus() },
-                    squareSize = 15.dp,
-                )
-                Text(
-                    text = editor.paintColor.toHex(),
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = colors.textMuted,
-                    modifier = Modifier.padding(start = 2.dp),
-                )
-                BarDivider()
-                Text(
-                    text = "${editor.paintSize.toInt()}px",
-                    fontSize = 10.5.sp,
-                    color = colors.textMuted,
-                    modifier = Modifier.padding(horizontal = 2.dp),
-                )
-                // Applying and discarding the strokes live in the session bar at the top of the canvas.
-                if (editor.paintSession == null && editor.hierarchyMode == EditHierarchyMode.PAINT) {
-                    // The prompt asks for the one thing paint mode cannot start without, so it may only
-                    // be said while paint mode is the mode in hand. Leaving it drops the session on the
-                    // spot, and this row outlives that by the length of its exit animation - tested on
-                    // the mode alone, the row would otherwise flash "pick a layer" at the very moment
-                    // the user stops painting, when there is nothing left to pick a layer for.
-                    Text(
-                        text = tr("editor.paintSelectLayerHint"),
-                        fontSize = 10.sp,
-                        color = colors.textMuted,
-                        modifier = Modifier.padding(horizontal = 4.dp),
-                    )
-                }
             }
         }
 
@@ -3118,3 +3115,11 @@ private val uniqueEdgeCache = java.util.WeakHashMap<IntArray, List<org.umamo.edi
 
 private fun cachedUniqueEdges(indices: IntArray): List<org.umamo.edit.MeshElement.Edge> =
     uniqueEdgeCache.getOrPut(indices) { MeshTopology.uniqueEdges(indices) }
+
+/** The toolbar's Create group: a plus over a lattice corner. */
+@Composable
+private fun CreateGroupIcon(color: Color) = GridIcon(Modifier.size(15.dp), color) {
+    box(2.4f, 5.6f, 10f, 10f, 1.6f, ICON_FINE, dash = floatArrayOf(1.6f, 2.2f))
+    line(13f, 1.8f, 13f, 8.6f)
+    line(9.6f, 5.2f, 16.4f, 5.2f)
+}

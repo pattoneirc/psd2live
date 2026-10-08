@@ -134,165 +134,17 @@ internal fun ToolDetailsView(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // The tool's everyday settings and actions are on the canvas, in the options bar and the context
+            // menu; this panel keeps what needs more room: numeric transforms, create defaults, the path list,
+            // the skeleton's binding and weights, and the paint palette.
+            Text(tr("toolDetails.inOptionsBar"), style = typography.caption.copy(fontSize = 10.5.sp), color = colors.textMuted)
             if (target?.kind == "rotation") {
                 Text(tr("editor.rotationGestureHint"), style = typography.caption, color = colors.textMuted)
                 PreciseTransformColumn(editor)
             }
-            if (editor.tool == CanvasTool.CREATE_WARP || editor.tool == CanvasTool.CREATE_ROTATION) {
-                CompactButton(
-                    text = tr("editor.createFromSelection"),
-                    onClick = { editor.createWarp(editor.tool == CanvasTool.CREATE_ROTATION) },
-                    enabled = editor.editable && (
-                        (editor.tool == CanvasTool.CREATE_WARP && editor.warpAddTo == WarpAddTo.CHILD_OF_SELECTED_DEFORMER &&
-                            state.selectedDeformerId != null) ||
-                            target?.kind == "mesh"
-                        ),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (editor.tool == CanvasTool.CREATE_ROTATION) {
-                    Text(tr("editor.rotationScopeHint"), style = typography.caption, color = colors.textMuted)
-                }
-            }
 
-            // 2. Selection Style (Box / Lasso)
-            if (editor.tool in listOf(CanvasTool.SELECT, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT)) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = tr("editor.selectionMode"),
-                        style = typography.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
-                        color = colors.textMuted,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        CompactToggleChip(
-                            text = tr("editor.mode.box"),
-                            selected = editor.selectionStyle == SelectionStyle.BOX,
-                            onToggle = { editor.selectionStyle = SelectionStyle.BOX },
-                            height = 24.dp,
-                        )
-                        CompactToggleChip(
-                            text = tr("editor.mode.lasso"),
-                            selected = editor.selectionStyle == SelectionStyle.LASSO,
-                            onToggle = { editor.selectionStyle = SelectionStyle.LASSO },
-                            height = 24.dp,
-                        )
-                    }
-                }
-            }
-
-            // Every geometry target can bind to the selected parameter while deforming.
-            if (target != null && editor.hierarchyMode == io.github.psd2live.ui.EditHierarchyMode.DEFORM) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = tr("editor.targetPose"),
-                        style = typography.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
-                        color = colors.textMuted,
-                    )
-                    var paramMenuOpen by remember { mutableStateOf(false) }
-                    Box {
-                        CompactButton(
-                            text = if (editor.parameter == null) if (target.geometry.axes.isEmpty()) tr("editor.base") else tr("editor.pose") else editor.parameter!!,
-                            onClick = { paramMenuOpen = true },
-                            modifier = Modifier.fillMaxWidth(),
-                            height = 25.dp,
-                        )
-                        DropdownMenu(
-                            expanded = paramMenuOpen,
-                            onDismissRequest = { paramMenuOpen = false },
-                        ) {
-                            DropdownMenuItem({ editor.parameter = null; paramMenuOpen = false }) {
-                                Text(if (target.geometry.axes.isEmpty()) tr("editor.base") else tr("editor.pose"))
-                            }
-                            editor.model.parameters.forEach { p ->
-                                DropdownMenuItem({ editor.parameter = p.id.raw; paramMenuOpen = false }) {
-                                    Text(p.name)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Divider(color = colors.divider, thickness = 0.8.dp)
-
-            // 4. Tool-Specific Parameters
             when (editor.tool) {
-                CanvasTool.SELECT, CanvasTool.TRANSFORM, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT -> {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (editor.hierarchyMode == io.github.psd2live.ui.EditHierarchyMode.EDIT && target?.kind == "mesh") {
-                            Text(
-                                text = tr("editor.elementMode"),
-                                style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
-                                color = colors.textPrimary,
-                            )
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                listOf("vertex", "edge", "face").forEachIndexed { i, key ->
-                                    CompactButton(
-                                        text = tr("editor.$key"),
-                                        onClick = { editor.elementMode = i },
-                                        isPrimary = editor.elementMode == i,
-                                        modifier = Modifier.weight(1f),
-                                        height = 24.dp,
-                                    )
-                                }
-                            }
-
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = tr("editor.topology"),
-                                style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
-                                color = colors.textPrimary,
-                            )
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                listOf("split", "subdivide", "connect", "merge", "delete", "duplicate").forEach { action ->
-                                    CompactButton(
-                                        text = tr("editor.$action"),
-                                        onClick = { editor.topology(action) },
-                                        enabled = editor.editable && editor.vertices.isNotEmpty(),
-                                        modifier = Modifier.weight(1f),
-                                        height = 24.dp,
-                                    )
-                                }
-                            }
-
-                            Divider(color = colors.divider, thickness = 0.8.dp)
-                        }
-
-                        if (target?.kind == "mesh") {
-                            Text(
-                                text = tr("editor.deformers"),
-                                style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
-                                color = colors.textPrimary,
-                            )
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                CompactButton(
-                                    text = tr("editor.createWarp"),
-                                    onClick = { editor.createWarp() },
-                                    enabled = editor.editable,
-                                    modifier = Modifier.weight(1f),
-                                    height = 25.dp,
-                                )
-                                CompactButton(
-                                    text = tr("editor.createRotation"),
-                                    onClick = { editor.createWarp(rotation = true) },
-                                    enabled = editor.editable,
-                                    modifier = Modifier.weight(1f),
-                                    height = 25.dp,
-                                )
-                            }
-                        } else {
-                            Text(
-                                text = tr("editor.select"),
-                                style = typography.caption.copy(fontSize = 10.5.sp),
-                                color = colors.textMuted,
-                            )
-                        }
-
-                        if (editor.tool == CanvasTool.TRANSFORM && editor.hasTransformSelection) {
-                            Divider(color = colors.divider, thickness = 0.8.dp)
-                            PreciseTransformColumn(editor)
-                        }
-                    }
-                }
+                CanvasTool.TRANSFORM -> if (editor.hasTransformSelection && target?.kind != "rotation") PreciseTransformColumn(editor)
 
                 CanvasTool.CREATE_WARP -> {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -504,42 +356,9 @@ internal fun ToolDetailsView(
 
                 CanvasTool.GLUE -> {
                     val pair = editor.glueMeshPair()
-                    val ready = pair != null && editor.editable
                     val pairs = if (pair != null) editor.gluePreviewPoints().size else 0
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            GLUE_SUB_TOOL_LABELS.forEach { (sub, key) ->
-                                CompactToggleChip(
-                                    text = tr(key),
-                                    selected = editor.glueSubTool == sub,
-                                    onToggle = { editor.glueSubTool = sub },
-                                    height = 24.dp,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                        }
-                        if (editor.glueSubTool == GlueSubTool.WEIGHT) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                GLUE_WEIGHT_MODE_LABELS.forEach { (mode, label) ->
-                                    CompactToggleChip(
-                                        text = label,
-                                        selected = editor.glueWeightMode == mode,
-                                        onToggle = { editor.glueWeightMode = mode },
-                                        height = 24.dp,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                }
-                            }
-                        }
-                        Text(tr("editor.glueDistance"), style = typography.caption, color = colors.textMuted)
-                        CompactNumberSpinner(value = editor.glueDistance.toDouble(), onValueChange = { editor.glueDistance = it.toFloat() }, min = 0.5, max = 40.0, unit = "px", height = 24.dp)
-                        if (pair == null) {
-                            Text(
-                                text = tr("editor.glueNeedTwo", editor.glueMeshCount()),
-                                style = typography.caption.copy(fontSize = 10.5.sp),
-                                color = colors.warning,
-                            )
-                        } else {
+                        if (pair != null) {
                             Text(
                                 text = tr("editor.glueMeshA") + "  " + editor.meshLabel(pair.first),
                                 style = typography.caption.copy(fontSize = 10.5.sp),
@@ -561,197 +380,6 @@ internal fun ToolDetailsView(
                             style = typography.caption.copy(fontSize = 10.5.sp),
                             color = colors.textMuted,
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            CompactButton(
-                                text = tr("editor.glueSwap"),
-                                onClick = { editor.swapGlueEnds() },
-                                enabled = ready,
-                            )
-                            CompactButton(
-                                text = tr(if (editor.glueAlreadyBound()) "editor.glueReplace" else "editor.glueCreate"),
-                                onClick = { editor.applyGlue() },
-                                enabled = ready && pairs > 0,
-                            )
-                        }
-                        CompactButton(
-                            text = tr("editor.glueRemergeAll"),
-                            onClick = { editor.remergeGlue() },
-                            enabled = ready,
-                        )
-                    }
-                }
-
-                CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE -> {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = tr("editor.brushSettings"),
-                            style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
-                            color = colors.textPrimary,
-                        )
-
-                        // Shape selector chips
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            listOf(
-                                BrushShape.CIRCLE to tr("editor.brushShape.circle"),
-                                BrushShape.LINE to tr("editor.brushShape.line"),
-                                BrushShape.RECTANGLE to tr("editor.brushShape.rectangle"),
-                            ).forEach { (shape, label) ->
-                                CompactToggleChip(
-                                    text = label,
-                                    selected = editor.brushShape == shape,
-                                    onToggle = { editor.brushShape = shape },
-                                    height = 24.dp,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                        }
-
-                        // Angle settings for Line / Rectangle
-                        AnimatedVisibility(
-                            visible = editor.brushShape != BrushShape.CIRCLE,
-                            enter = expandVertically() + fadeIn(),
-                            exit = shrinkVertically() + fadeOut(),
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(colors.panelElevated, RoundedCornerShape(4.dp))
-                                    .padding(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    Text(
-                                        text = tr("editor.angle"),
-                                        style = typography.caption.copy(fontSize = 11.sp),
-                                        color = colors.textMuted,
-                                        modifier = Modifier.width(42.dp),
-                                    )
-                                    CompactNumberSpinner(
-                                        value = editor.brushAngle.toDouble(),
-                                        onValueChange = { editor.brushAngle = it.toFloat().mod(360f) },
-                                        modifier = Modifier.weight(1f),
-                                        min = 0.0,
-                                        max = 360.0,
-                                        step = 15.0,
-                                        unit = "°",
-                                        height = 24.dp,
-                                    )
-                                }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                ) {
-                                    listOf(0f, 45f, 90f, 135f).forEach { ang ->
-                                        val isQuickActive = abs(editor.brushAngle - ang) < 1f
-                                        CompactToggleChip(
-                                            text = "${ang.toInt()}°",
-                                            selected = isQuickActive,
-                                            onToggle = { editor.brushAngle = ang },
-                                            showCheckWhenSelected = false,
-                                            height = 22.dp,
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        // Radius row
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text(
-                                text = tr("editor.radius"),
-                                style = typography.caption.copy(fontSize = 11.sp),
-                                color = colors.textMuted,
-                                modifier = Modifier.width(42.dp),
-                            )
-                            CompactNumberSpinner(
-                                value = editor.radius.toDouble(),
-                                onValueChange = { editor.radius = it.toFloat() },
-                                modifier = Modifier.weight(1f),
-                                min = 4.0,
-                                max = editor.brushSizeLimit.toDouble(),
-                                unit = "px",
-                                height = 24.dp,
-                            )
-                        }
-
-                        // Strength row
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text(
-                                text = tr("editor.strength"),
-                                style = typography.caption.copy(fontSize = 11.sp),
-                                color = colors.textMuted,
-                                modifier = Modifier.width(42.dp),
-                            )
-                            CompactNumberSpinner(
-                                value = (editor.strength * 100).toDouble(),
-                                onValueChange = { editor.strength = it.toFloat() / 100f },
-                                modifier = Modifier.weight(1f),
-                                min = 1.0,
-                                max = 100.0,
-                                unit = "%",
-                                height = 24.dp,
-                            )
-                        }
-
-                        // Hardness row
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text(
-                                text = tr("editor.hardness"),
-                                style = typography.caption.copy(fontSize = 11.sp),
-                                color = colors.textMuted,
-                                modifier = Modifier.width(42.dp),
-                            )
-                            CompactNumberSpinner(
-                                value = (editor.hardness * 100).toDouble(),
-                                onValueChange = { editor.hardness = it.toFloat() / 100f },
-                                modifier = Modifier.weight(1f),
-                                min = 0.0,
-                                max = 95.0,
-                                unit = "%",
-                                height = 24.dp,
-                            )
-                        }
-
-                        // Inflate Direction
-                        if (editor.tool == CanvasTool.INFLATE) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                CompactToggleChip(
-                                    text = tr("editor.mode.inflate"),
-                                    selected = !editor.inflateInvert,
-                                    onToggle = { editor.inflateInvert = false },
-                                    enabled = editor.editable,
-                                    height = 24.dp,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                CompactToggleChip(
-                                    text = tr("editor.mode.shrink"),
-                                    selected = editor.inflateInvert,
-                                    onToggle = { editor.inflateInvert = true },
-                                    enabled = editor.editable,
-                                    height = 24.dp,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                        }
                     }
                 }
 
@@ -888,117 +516,28 @@ internal fun ToolDetailsView(
                             }
                         }
 
-                        CompactButton(
-                            text = "Level ${editor.pathLevel}",
-                            onClick = { editor.pathLevel = if (editor.pathLevel == 2) 3 else 2; editor.activePath = null },
-                            height = 24.dp,
-                        )
                     }
                 }
                 CanvasTool.WEIGHT_PAINT, CanvasTool.WEIGHT_GRADIENT -> {
                     val brush = editor.tool == CanvasTool.WEIGHT_PAINT
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(tr("editor.weightKind"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-                            // Wind moves nothing the editor bakes or previews, so it is not offered.
-                            CompactDropdown(io.github.psd2live.ui.PAINTED_GROUP_KINDS.let { if (editor.weightGroupKind in it) it else it + editor.weightGroupKind },
-                                editor.weightGroupKind, { editor.weightGroupKind = it },
-                                Modifier.weight(1f), itemLabel = { tr("sim.group.${it.jsonName}") }, height = 24.dp)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            io.github.psd2live.ui.WeightPaintMode.entries.forEach { mode ->
-                                CompactButton(
-                                    text = tr(mode.labelKey),
-                                    onClick = { editor.weightPaintMode = mode },
-                                    isPrimary = editor.weightPaintMode == mode,
-                                    modifier = Modifier.weight(1f),
-                                    height = 24.dp,
-                                )
-                            }
-                        }
-                        if (brush) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(tr("editor.radius"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-                                CompactNumberSpinner(value = editor.radius.toDouble(), onValueChange = { editor.radius = it.toFloat() }, min = 1.0, max = editor.brushSizeLimit.toDouble(), unit = "px", height = 24.dp)
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(tr("editor.hardness"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-                                CompactNumberSpinner(value = (editor.hardness * 100).toDouble(), onValueChange = { editor.hardness = (it.toFloat() / 100f).coerceIn(0f, 0.95f) }, min = 0.0, max = 95.0, unit = "%", height = 24.dp)
-                            }
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(tr("editor.strength"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-                            CompactNumberSpinner(value = (editor.strength * 100).toDouble(), onValueChange = { editor.strength = it.toFloat() / 100f }, min = 1.0, max = 100.0, unit = "%", height = 24.dp)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            CompactButton(text = tr("editor.weightFill"), onClick = { editor.fillVertexGroup(1f) }, enabled = editor.editable, height = 24.dp)
-                            CompactButton(text = tr("editor.weightClear"), onClick = { editor.fillVertexGroup(0f) }, enabled = editor.editable, height = 24.dp)
-                            CompactButton(text = tr("editor.weightInvert"), onClick = { editor.invertVertexGroup() }, enabled = editor.editable, height = 24.dp)
-                            CompactButton(text = tr("editor.weightDelete"), onClick = { editor.deleteVertexGroup() }, enabled = editor.editable, danger = true, height = 24.dp)
-                        }
-                        Text(tr(if (brush) "editor.weightHint" else "editor.weightGradientHint"), style = typography.caption.copy(fontSize = 10.5.sp), color = colors.textMuted)
-                    }
+                    Text(tr(if (brush) "editor.weightHint" else "editor.weightGradientHint"), style = typography.caption.copy(fontSize = 10.5.sp), color = colors.textMuted)
                 }
                 CanvasTool.SUBDIVIDE -> {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CompactNumberSpinner(value = editor.radius.toDouble(), onValueChange = { editor.radius = it.toFloat() }, min = 1.0, max = editor.brushSizeLimit.toDouble(), unit = "px", height = 24.dp)
-                        Text(
-                            text = tr("editor.subdivideHint"),
-                            style = typography.caption.copy(fontSize = 10.5.sp),
-                            color = colors.textMuted,
-                        )
-                        CompactButton(
-                            text = tr("editor.subdivide"),
-                            onClick = { editor.topology("subdivide") },
-                            enabled = editor.editable && editor.vertices.isNotEmpty(),
-                            modifier = Modifier.fillMaxWidth(),
-                            height = 24.dp,
-                        )
-                    }
+                    Text(
+                        text = tr("editor.subdivideHint"),
+                        style = typography.caption.copy(fontSize = 10.5.sp),
+                        color = colors.textMuted,
+                    )
                 }
                 CanvasTool.KNIFE -> {
                     Text(expandShortcutMarkup(tr("editor.knifeGestureHint"), editor.state.keymap), style = typography.caption, color = colors.textMuted)
-                    // No snap toggle: snapping is always on and the radius is the only thing to tune. Inside it a
-                    // click takes the vertex or edge; outside it the click drops a new point.
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(tr("editor.knifeSnapRadius"), color = colors.textMuted, fontSize = 11.sp)
-                        CompactNumberSpinner(value = editor.knifeSnapRadius.toDouble(),
-                            onValueChange = { editor.knifeSnapRadius = it.toFloat() }, min = 3.0, max = 30.0, unit = "px", height = 24.dp)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        CompactButton(text = tr("editor.finishCut"), onClick = { editor.finishKnife() }, enabled = editor.editable && editor.knifeDraft.size >= 2)
-                        CompactButton(text = tr("editor.undoPoint"), onClick = { editor.undoDraftPoint() }, enabled = !editor.busy && editor.knifeDraft.isNotEmpty())
-                        CompactButton(text = tr("action.cancel"), onClick = { editor.cancel() }, enabled = !editor.busy && editor.knifeDraft.isNotEmpty())
-                    }
                 }
                 CanvasTool.SKELETON_POSE -> {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            SkeletonPoseSubTool.entries.forEach { sub ->
-                                CompactToggleChip(tr(sub.labelKey), selected = editor.skeletonPoseSubTool == sub,
-                                    onToggle = { editor.skeletonPoseSubTool = sub }, modifier = Modifier.weight(1f))
-                            }
-                        }
-                        Text(
-                            text = tr("editor.tool.skeleton_pose"),
-                            style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
-                            color = colors.textPrimary,
-                        )
                         Text(
                             text = if (editor.bakedSkeleton != null) tr("skeleton.pose.hint") else tr("skeleton.pose.none"),
                             style = typography.caption.copy(fontSize = 10.5.sp),
                             color = colors.textMuted,
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            CompactCheckbox(checked = editor.showSkeletonWeights, onCheckedChange = { editor.showSkeletonWeights = it })
-                            Text(tr("skeleton.pose.weights"), color = colors.textPrimary, fontSize = 11.sp)
-                        }
-                        CompactButton(
-                            text = tr("animation.resetPose"),
-                            onClick = { editor.resetSkeletonPose() },
-                            enabled = editor.bakedSkeleton != null,
-                            modifier = Modifier.fillMaxWidth(),
-                            height = 24.dp,
                         )
                         SkeletonSavedPoseControls(editor)
                         SkeletonIkControls(editor)
@@ -1007,27 +546,14 @@ internal fun ToolDetailsView(
                 CanvasTool.SKELETON_EDIT -> {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            text = tr("editor.tool.skeleton_edit"),
+                            text = tr(editor.skeletonEditSubTool.labelKey),
                             style = typography.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
                             color = colors.textPrimary,
-                        )
-                        CompactDropdown(SkeletonEditSubTool.entries, editor.skeletonEditSubTool, { editor.skeletonEditSubTool = it },
-                            itemLabel = { tr(it.labelKey) }, modifier = Modifier.fillMaxWidth())
-                        Text(
-                            text = tr(editor.skeletonEditSubTool.hintKey),
-                            style = typography.caption.copy(fontSize = 10.5.sp),
-                            color = colors.textMuted,
                         )
                         if (editor.skeletonEditSubTool == SkeletonEditSubTool.BIND) SkeletonBindingControls(editor)
                         else if (editor.skeletonEditSubTool == SkeletonEditSubTool.WEIGHTS) SkeletonWeightControls(editor)
                         else SkeletonTransformControls(editor)
                         SkeletonIkControls(editor)
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            CompactButton(text = tr("skeleton.panel.cancel"), onClick = { editor.cancelSkeletonEdit() },
-                                enabled = editor.skeletonDraft != null, modifier = Modifier.weight(1f), height = 24.dp)
-                            CompactButton(text = tr("skeleton.panel.done"), onClick = { editor.finishSkeletonEdit() },
-                                enabled = editor.skeletonDraft != null, isPrimary = true, modifier = Modifier.weight(1f), height = 24.dp)
-                        }
                     }
                 }
                 CanvasTool.PAINT_BRUSH, CanvasTool.PAINT_PENCIL, CanvasTool.PAINT_ERASER,
@@ -1035,6 +561,7 @@ internal fun ToolDetailsView(
                 CanvasTool.PAINT_SHAPE -> {
                     PaintToolDetailsColumn(editor, target)
                 }
+                else -> Unit
             }
 
             Spacer(Modifier.weight(1f))
@@ -1153,23 +680,6 @@ private fun PreciseTransformColumn(editor: CanvasEditor) {
     }
 }
 
-/**
- * The opacity the tip lands at, on every tool that stamps one: the same number whichever of the three
- * is in hand, and shown for each of them rather than only for the brush it is usually set on.
- */
-@Composable
-private fun PaintOpacityRow(editor: CanvasEditor, colors: ToolColors) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(tr("editor.opacity"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-        CompactNumberSpinner(
-            value = (editor.paintOpacity * 100).toDouble(),
-            onValueChange = { editor.paintOpacity = (it.toFloat() / 100f).coerceIn(0.01f, 1f) },
-            modifier = Modifier.weight(1f),
-            min = 1.0, max = 100.0, step = 5.0, unit = "%", height = 24.dp
-        )
-    }
-}
-
 @Composable
 private fun PaintToolDetailsColumn(editor: CanvasEditor, target: CanvasTarget?) {
     val colors = LocalToolColors.current
@@ -1272,127 +782,6 @@ private fun PaintToolDetailsColumn(editor: CanvasEditor, target: CanvasTarget?) 
 
         Divider(color = colors.divider, thickness = 0.5.dp)
 
-        // Tool-specific parameter rows
-        when (editor.tool) {
-            CanvasTool.PAINT_BRUSH -> {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(tr("editor.radius"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-                    CompactNumberSpinner(
-                        value = editor.paintBrushSize.toDouble(),
-                        onValueChange = { editor.paintBrushSize = it.toFloat().coerceIn(1f, editor.brushSizeLimit) },
-                        modifier = Modifier.weight(1f),
-                        min = 1.0, max = 256.0, step = 1.0, unit = "px", height = 24.dp
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(tr("editor.hardness"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-                    CompactNumberSpinner(
-                        value = (editor.paintHardness * 100).toDouble(),
-                        onValueChange = { editor.paintHardness = (it.toFloat() / 100f).coerceIn(0f, 1f) },
-                        modifier = Modifier.weight(1f),
-                        min = 0.0, max = 100.0, step = 5.0, unit = "%", height = 24.dp
-                    )
-                }
-                PaintOpacityRow(editor, colors)
-            }
-            CanvasTool.PAINT_PENCIL -> {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(tr("editor.radius"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-                    CompactNumberSpinner(
-                        value = editor.paintPencilSize.toDouble(),
-                        onValueChange = { editor.paintPencilSize = it.toFloat().coerceIn(1f, editor.brushSizeLimit) },
-                        modifier = Modifier.weight(1f),
-                        min = 1.0, max = 64.0, step = 1.0, unit = "px", height = 24.dp
-                    )
-                }
-                PaintOpacityRow(editor, colors)
-            }
-            CanvasTool.PAINT_ERASER -> {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(tr("editor.radius"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-                    CompactNumberSpinner(
-                        value = editor.paintEraserSize.toDouble(),
-                        onValueChange = { editor.paintEraserSize = it.toFloat().coerceIn(1f, editor.brushSizeLimit) },
-                        modifier = Modifier.weight(1f),
-                        min = 1.0, max = 256.0, step = 2.0, unit = "px", height = 24.dp
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(tr("editor.hardness"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-                    CompactNumberSpinner(
-                        value = (editor.paintHardness * 100).toDouble(),
-                        onValueChange = { editor.paintHardness = (it.toFloat() / 100f).coerceIn(0f, 1f) },
-                        modifier = Modifier.weight(1f),
-                        min = 0.0, max = 100.0, step = 5.0, unit = "%", height = 24.dp
-                    )
-                }
-                PaintOpacityRow(editor, colors)
-            }
-            CanvasTool.PAINT_BUCKET -> {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(tr("editor.tolerance"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-                    CompactNumberSpinner(
-                        value = editor.paintTolerance.toDouble(),
-                        onValueChange = { editor.paintTolerance = it.toInt().coerceIn(0, 255) },
-                        modifier = Modifier.weight(1f),
-                        min = 0.0, max = 255.0, step = 4.0, height = 24.dp
-                    )
-                }
-            }
-            CanvasTool.PAINT_SHAPE -> {
-                // The three faces, the same way the deform brush offers its own.
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    PaintShape.entries.forEach { shape ->
-                        CompactToggleChip(
-                            text = tr(shape.labelKey),
-                            selected = editor.paintShape == shape,
-                            onToggle = { editor.selectPaintShape(shape) },
-                            height = 24.dp,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(tr("editor.width"), color = colors.textMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
-                    CompactNumberSpinner(
-                        value = editor.paintBrushSize.toDouble(),
-                        onValueChange = { editor.paintBrushSize = it.toFloat().coerceIn(1f, editor.brushSizeLimit) },
-                        modifier = Modifier.weight(1f),
-                        min = 1.0, max = 128.0, step = 1.0, unit = "px", height = 24.dp
-                    )
-                }
-                // A line has no inside, so the fill choice belongs to the box shapes only.
-                AnimatedVisibility(
-                    visible = editor.paintShape.canFill,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut(),
-                ) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        CompactToggleChip(
-                            text = tr("editor.outline"),
-                            selected = !editor.paintShapeFilled,
-                            onToggle = { editor.paintShapeFilled = false },
-                            height = 24.dp,
-                            modifier = Modifier.weight(1f),
-                        )
-                        CompactToggleChip(
-                            text = tr("editor.filled"),
-                            selected = editor.paintShapeFilled,
-                            onToggle = { editor.paintShapeFilled = true },
-                            height = 24.dp,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-            }
-            else -> {}
-        }
-
-        Divider(color = colors.divider, thickness = 0.5.dp)
-
         // Actions
         val hasSession = editor.paintSession != null
         val uncommittedCount = editor.paintSession?.strokeCount ?: 0
@@ -1400,34 +789,6 @@ private fun PaintToolDetailsColumn(editor: CanvasEditor, target: CanvasTarget?) 
             Text(tr("editor.depthSplit.paintHint"), style = typography.caption, color = colors.textMuted)
         }
         if (paintT != null && layerId != null) {
-            val canUndo = editor.canUndoPaint()
-            val canRedo = editor.canRedoPaint()
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                CompactButton(
-                    text = tr("editor.undo"),
-                    onClick = { editor.undoPaint() },
-                    enabled = canUndo,
-                    leadingIcon = { IconSessionUndo(if (canUndo) colors.textPrimary else colors.textDisabled) },
-                    modifier = Modifier.weight(1f),
-                    height = 24.dp,
-                )
-                CompactButton(
-                    text = tr("editor.redo"),
-                    onClick = { editor.redoPaint() },
-                    enabled = canRedo,
-                    leadingIcon = { IconSessionRedo(if (canRedo) colors.textPrimary else colors.textDisabled) },
-                    modifier = Modifier.weight(1f),
-                    height = 24.dp,
-                )
-            }
-            CompactButton(
-                text = tr("editor.paintClear"),
-                onClick = { editor.clearCurrentLayerPaint() },
-                danger = true,
-                modifier = Modifier.fillMaxWidth(),
-                height = 24.dp,
-            )
-
             Spacer(Modifier.height(4.dp))
 
             // Discard and apply side by side, as the session bar at the top of the canvas has them.

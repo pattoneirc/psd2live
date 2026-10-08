@@ -50,12 +50,12 @@ The catalog has 19 topics. The beginner path contains the 18 lessons below; the 
 | 4 | Layer types and variants | Presets apply part algorithms; toggle variants show/hide; exclusive variants share a parameter with different association IDs. |
 | 5 | Parameters and keyforms | Drag sliders or XY controls; right-click a key mark to snap. Move to the target key before editing its keyform. |
 | 6 | Select mode | Select objects with the canvas tools or hierarchy; selection alone changes no geometry. |
-| 7 | Create deformers | Select a target, use the tree context menu, adjust the placement preview and confirm. |
+| 7 | Create deformers | Select a target, use the toolbar's Create group or the tree context menu, adjust the placement preview and confirm. |
 | 8 | Deform mode | Edit points or use brushes at the current parameter pose; check the L1 / L2 editing level. |
 | 9 | Edit mode | Subdivide, connect, cut or remove mesh elements; inspect existing poses afterward. |
 | 10 | Paint mode | Select a layer, paint pixels and use session-local undo. Apply or discard the session. |
 | 11 | Inspector | Edit properties for the selected object: name, ownership, masks, drawing order, opacity and colors. |
-| 12 | Tool details | Configure the current tool; canvas context menus also change with mode and tool. |
+| 12 | Tool options | The options bar under the mode bar sets the current tool's radius, hardness, strength and so on; the context menu shows the same values plus the tool's actions; the Tools dock keeps advanced settings. |
 | 13 | Skeleton rigging and editing | Create, extrude, duplicate and mirror bones in Skeleton mode, batch-bind ArtMeshes, pose with FK/IK, paint and clean skin weights and save poses; configure parameter sampling limits in the panel. Export bakes this into Cubism parameters, deformers and keyforms. |
 | 14 | Animation editor | Tune generated motions with each preset's knobs; edit parameter tracks and keyframes on the timeline with auto-keying, default Bezier easing, track key marks, and shared poses across canvases. |
 | 15 | Physics canvas | Configure inputs, pendulums and outputs, then calibrate output scale against the observed range. |
