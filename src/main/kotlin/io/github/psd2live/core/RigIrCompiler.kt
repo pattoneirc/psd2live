@@ -1,5 +1,6 @@
 package io.github.psd2live.core
 
+import io.github.psd2live.format.model.AdvancedIR
 import io.github.psd2live.format.model.Bytes
 import io.github.psd2live.format.model.Clip
 import io.github.psd2live.format.model.ParameterRole
@@ -45,7 +46,17 @@ internal object RigIrCompiler {
 			}),
 			// The open mouth keeps its texture coordinates over the whole artwork in a canvas-space base mesh.
 			restPose = if (config.rigEdits.importedCmo3 != null) emptyMap() else mapOf(StandardParameters.MOUTH_OPEN.raw to 1f),
+			advanced = advanced(rig, config),
 		)
+	}
+
+	/** What the runtime's advanced mode plays live that the rig bakes: the skeleton's folded bones. */
+	private fun advanced(rig: BuiltRig, config: PipelineConfig): AdvancedIR {
+		val spec = config.rigEdits.skeleton ?: return AdvancedIR()
+		val model = rig.puppet
+		val frame = Bounds(0f, 0f, model.canvasWidth.coerceAtLeast(1f), model.canvasHeight.coerceAtLeast(1f))
+		val bones = runCatching { SkeletonRig.virtualBones(model, spec, frame) }.getOrElse { emptyList() }
+		return AdvancedIR(virtualBones = bones.map { PuppetIr.deformerToIr(it) as io.github.psd2live.format.model.Deformer.Rotation })
 	}
 
 	/**

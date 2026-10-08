@@ -50,7 +50,7 @@ fn rig(parameters: Vec<Parameter>, deformers: Vec<Deformer>, meshes: Vec<Mesh>) 
         canvas: Canvas { width: 512.0, height: 512.0, origin_x: 0.0, origin_y: 0.0, pixels_per_unit: None },
         parameters, deformers, parts: vec![], meshes, glues: vec![],
         render: RenderGroup { part: None, draw_order: 500, channels: vec![], composite: None, children: vec![] },
-        textures: vec![], physics_fps: 0.0, physics: vec![], clips: vec![], roles: vec![], gui: None, meta: vec![],
+        textures: vec![], physics_fps: 0.0, physics: vec![], clips: vec![], roles: vec![], gui: None, meta: vec![], extensions: Extensions::default(),
     }
 }
 

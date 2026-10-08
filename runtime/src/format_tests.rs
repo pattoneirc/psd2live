@@ -186,8 +186,8 @@ fn unknown_chunks_are_skipped_unless_required() {
     chunks.push(C { tag: "XTRA", version: 1, flags: 0, data: vec![1, 2, 3] });
     chunks.push(C { tag: "lab0", version: 7, flags: HAS_CRC, data: vec![] });
     assert_eq!(read(&chunks).unwrap(), read(&core()).unwrap());
-    chunks.push(C { tag: "SKIN", version: 1, flags: REQUIRED, data: vec![] });
-    assert!(error(&chunks).contains("requires feature SKIN"));
+    chunks.push(C { tag: "XREQ", version: 1, flags: REQUIRED, data: vec![] });
+    assert!(error(&chunks).contains("requires feature XREQ"));
     // A newer version of a known chunk is as unknown as a new tag.
     let newer = with(core(), "CANV", |c| c.version = 2);
     assert!(error(&newer).contains("requires feature CANV version 2"));

@@ -53,9 +53,10 @@ fn compare_variants(dir: &Path) -> Result<(), String> {
         }
         let mut other = read(name)?;
         other.meta.clear();
-        // Version 1 has no parameter panel.
+        // Version 1 has no parameter panel and no advanced data.
         if name == "rig.v1.p2lrt" {
             other.gui = main.gui.clone();
+            other.extensions = main.extensions.clone();
         }
         if other != main {
             return Err(format!("{} reads differently from rig.p2lrt", name));
@@ -143,8 +144,178 @@ fn compare(dir: &Path) -> Result<Report, String> {
     Ok(report)
 }
 
+/// Advanced mode on a case: every feature its file offers on, over the case's poses and at the skins' keys.
+/// Off-key it may differ from the bake by the bake's own chord error; at a key, where the bake is exact, it
+/// must not. Returns (features, largest difference anywhere, largest at keys).
+fn advanced(dir: &Path) -> Result<(u32, f32, f32), String> {
+    use p2l_runtime::advanced::Advanced;
+    let rig = Rig::read(&fs::read(dir.join("rig.p2lrt")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let mut adv = Advanced::new();
+    let features = adv.set(&rig, u32::MAX);
+    let poses = fs::read(dir.join("poses.bin")).map_err(|e| e.to_string())?;
+    let params = u32::from_le_bytes(poses[4..8].try_into().unwrap()) as usize;
+    let values: Vec<f32> = f32s(&poses[8..]).collect();
+    let (mut core, mut live) = (Evaluator::new(), Evaluator::new());
+    let mut compare = |pose: &[f32]| -> Result<f32, String> {
+        let a = core.evaluate(&rig, pose).vertices.clone();
+        let b = &live.evaluate_ext(&rig, pose, Some(&mut adv)).vertices;
+        let mut worst = 0f32;
+        for (x, y) in a.iter().flatten().zip(b.iter().flatten()) {
+            if !y.is_finite() {
+                return Err("advanced mode produced a non-finite vertex".into());
+            }
+            worst = worst.max((x - y).abs());
+        }
+        Ok(worst)
+    };
+    let mut anywhere = 0f32;
+    for pose in values.chunks(params.max(1)) {
+        anywhere = anywhere.max(compare(pose)?);
+    }
+    // Each skin's axes all at keys - every combination up to 256, else each axis in turn with the others at
+    // their first keys - and the other parameters at their defaults.
+    let mut at_keys = 0f32;
+    for skin in &rig.extensions.skins {
+        let combinations: usize = skin.axes.iter().map(|(_, k)| k.len()).product();
+        let poses: Vec<Vec<usize>> = if combinations <= 256 {
+            (0..combinations).map(|mut i| skin.axes.iter().map(|(_, k)| { let c = i % k.len(); i /= k.len(); c }).collect()).collect()
+        } else {
+            skin.axes.iter().enumerate().flat_map(|(a, (_, k))| (0..k.len()).map(move |c| (0..skin.axes.len()).map(|b| if b == a { c } else { 0 }).collect::<Vec<_>>()).collect::<Vec<_>>()).collect()
+        };
+        for choice in poses {
+            let mut pose = rig.defaults();
+            for ((parameter, keys), c) in skin.axes.iter().zip(&choice) {
+                pose[*parameter] = keys[*c];
+            }
+            at_keys = at_keys.max(compare(&pose)?);
+        }
+    }
+    Ok((features, anywhere, at_keys))
+}
+
+/// Against the same rig baked finely (rig.fine.p2lrt), over the case's poses: the worst vertex error of the
+/// default bake and of advanced mode on it, per mesh both versions skin alike.
+fn against_fine(dir: &Path) -> Result<Option<(f32, f32)>, String> {
+    use p2l_runtime::advanced::Advanced;
+    let Ok(fine) = fs::read(dir.join("rig.fine.p2lrt")) else { return Ok(None) };
+    let fine = Rig::read(&fine).map_err(|e| e.to_string())?;
+    let rig = Rig::read(&fs::read(dir.join("rig.p2lrt")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let mut adv = Advanced::new();
+    adv.set(&rig, u32::MAX);
+    // Each skin axis alone halfway between its keys, where a chord strays furthest from its arc; the rest at defaults.
+    let mut sweeps: Vec<Vec<f32>> = Vec::new();
+    for skin in &rig.extensions.skins {
+        for (parameter, keys) in &skin.axes {
+            for pair in keys.windows(2) {
+                let mut pose = rig.defaults();
+                pose[*parameter] = (pair[0] + pair[1]) / 2.0;
+                sweeps.push(pose);
+            }
+        }
+    }
+    let (mut reference, mut core, mut live) = (Evaluator::new(), Evaluator::new(), Evaluator::new());
+    let (mut baked, mut advanced) = (0f32, 0f32);
+    if env::var("P2L_SKINS").is_ok() {
+        for skin in &rig.extensions.skins {
+            let mut worst = (0f32, String::new());
+            for (parameter, keys) in &skin.axes {
+                for pair in keys.windows(2) {
+                    let mut pose = rig.defaults();
+                    pose[*parameter] = (pair[0] + pair[1]) / 2.0;
+                    let a = core.evaluate(&rig, &pose).vertices[skin.mesh].clone();
+                    let b = live.evaluate_ext(&rig, &pose, Some(&mut adv)).vertices[skin.mesh].clone();
+                    let e = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);
+                    if e > worst.0 {
+                        worst = (e, format!("{} at {} (keys {} {})", rig.parameters[*parameter].id, pose[*parameter], pair[0], pair[1]));
+                    }
+                }
+            }
+            let bones: Vec<String> = skin.bones.iter().map(|b| rig.deformer_or_bone(*b).id.clone()).collect();
+            eprintln!("skin {} bones {:?} worst {:.3} {}", rig.meshes[skin.mesh].id, bones, worst.0, worst.1);
+            // Against the fine bake at the same midpoints.
+            let Some(f) = fine.mesh(&rig.meshes[skin.mesh].id) else { continue };
+            let fine_axes = fine.meshes[f].offsets.as_ref().map(|g| g.axes.iter().map(|a| (fine.parameters[a.parameter].id.clone(), a.keys.len())).collect::<Vec<_>>());
+            let (mut eb, mut ea) = (0f32, 0f32);
+            for (parameter, keys) in &skin.axes {
+                for pair in keys.windows(2) {
+                    let mut pose = rig.defaults();
+                    pose[*parameter] = (pair[0] + pair[1]) / 2.0;
+                    let by_id: Vec<f32> = fine.parameters.iter().map(|q| rig.parameter(&q.id).map_or(q.default, |i| pose[i])).collect();
+                    let want = reference.evaluate(&fine, &by_id).vertices[f].clone();
+                    let a = core.evaluate(&rig, &pose).vertices[skin.mesh].clone();
+                    let b = live.evaluate_ext(&rig, &pose, Some(&mut adv)).vertices[skin.mesh].clone();
+                    eb = eb.max(want.iter().zip(&a).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max));
+                    ea = ea.max(want.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max));
+                }
+            }
+            eprintln!("     vs fine (axes {:?}): baked {:.3} advanced {:.3}", fine_axes, eb, ea);
+        }
+    }
+    if env::var("P2L_DEBUG").is_ok() {
+        let rest = rig.defaults();
+        let by_id: Vec<f32> = fine.parameters.iter().map(|q| rig.parameter(&q.id).map_or(q.default, |i| rest[i])).collect();
+        let want = reference.evaluate(&fine, &by_id).vertices.clone();
+        let got = core.evaluate(&rig, &rest).vertices.clone();
+        for (m, mesh) in rig.meshes.iter().enumerate() {
+            if let Some(f) = fine.mesh(&mesh.id) {
+                let e = want[f].iter().zip(&got[m]).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+                eprintln!("rest {} vertices {} vs {} error {}", mesh.id, got[m].len() / 2, want[f].len() / 2, e);
+            }
+        }
+    }
+    for pose in &sweeps {
+        let by_id = |r: &Rig, p: &[f32]| -> Vec<f32> { fine.parameters.iter().map(|q| r.parameter(&q.id).map_or(q.default, |i| p[i])).collect() };
+        let want = reference.evaluate(&fine, &by_id(&rig, pose)).vertices.clone();
+        let a = core.evaluate(&rig, pose).vertices.clone();
+        let b = live.evaluate_ext(&rig, pose, Some(&mut adv)).vertices.clone();
+        for (m, mesh) in rig.meshes.iter().enumerate() {
+            if rig.extensions.skins.iter().all(|s| s.mesh != m) {
+                continue;
+            }
+            let Some(f) = fine.mesh(&mesh.id) else { continue };
+            if want[f].len() != a[m].len() {
+                continue;
+            }
+            for ((w, x), y) in want[f].iter().zip(&a[m]).zip(&b[m]) {
+                baked = baked.max((w - x).abs());
+                advanced = advanced.max((w - y).abs());
+            }
+        }
+    }
+    Ok(Some((baked, advanced)))
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--advanced") {
+        let root = Path::new(args.get(2).map(String::as_str).unwrap_or("../build/tools/runtime-conformance"));
+        let mut dirs: Vec<_> = fs::read_dir(root).expect("reference directory").filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join("poses.bin").exists()).collect();
+        dirs.sort();
+        let mut failed = 0;
+        for dir in dirs {
+            let name = dir.file_name().unwrap().to_string_lossy().to_string();
+            match advanced(&dir) {
+                Ok((0, ..)) => {}
+                Ok((features, anywhere, at_keys)) => {
+                    // At the keys the bake is exact and so must advanced mode be. Between them it may differ by the
+                    // chord's departure from the arc; how far a skeleton sample's finer bake lies from both is
+                    // reported (with P2L_SKINS, per skin) but not judged: the bake's own solve shifts with its keys.
+                    let fine = against_fine(&dir);
+                    let ok = at_keys < 0.01;
+                    if !ok { failed += 1; }
+                    let reference = match fine {
+                        Ok(Some((baked, advanced))) => format!("  vs fine bake: baked {:.4} advanced {:.4}", baked, advanced),
+                        Ok(None) => String::new(),
+                        Err(e) => format!("  fine bake: {}", e),
+                    };
+                    println!("{} {:<22} features {:>2} difference {:>9.4} at keys {:>9.5}{}", if ok { "ok  " } else { "FAIL" }, name, features, anywhere, at_keys, reference);
+                }
+                Err(e) => { failed += 1; println!("ERR  {:<22} {}", name, e); }
+            }
+        }
+        println!("{} failing", failed);
+        std::process::exit(if failed == 0 { 0 } else { 1 });
+    }
     let root = Path::new(args.get(1).map(String::as_str).unwrap_or("../build/tools/runtime-conformance"));
     let filter = args.get(2).cloned().unwrap_or_default();
     let mut dirs: Vec<_> = fs::read_dir(root).expect("reference directory").filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_dir()).collect();

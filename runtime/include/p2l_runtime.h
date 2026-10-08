@@ -84,6 +84,21 @@ float p2l_mesh_draw_order(const P2lRig *rig, uint32_t index);
 void p2l_mesh_colors(const P2lRig *rig, uint32_t index, float *multiply, float *screen);
 uint32_t p2l_render_order(const P2lRig *rig, uint32_t *out, uint32_t capacity);
 
+/* Advanced mode: what the file's extension chunks add over the Cubism-equivalent evaluation, all off by default.
+ * P2L_SKIN skins meshes along true arcs between their baked keys; P2L_EXACT_LINKS moves pivots keyed along a
+ * circle on it. p2l_set_advanced returns the features now on (0 is the Cubism-equivalent evaluation). */
+#define P2L_SKIN 1u
+#define P2L_EXACT_LINKS 2u
+#define P2L_SIM 4u
+#define P2L_COLLISION 8u
+uint32_t p2l_advanced_available(const P2lRig *rig);
+uint32_t p2l_set_advanced(P2lRig *rig, uint32_t features);
+/* Bones a host can attach things to, and each one's canvas frame at the last evaluation as an affine map
+ * [a, b, c, d, tx, ty]: x' = a x + b y + tx, y' = c x + d y + ty. */
+uint32_t p2l_bone_count(const P2lRig *rig);
+const char *p2l_bone_id(const P2lRig *rig, uint32_t index);
+bool p2l_bone_transform(P2lRig *rig, uint32_t index, float *out);
+
 /* Memory for passing a rig in from a WebAssembly host. */
 uint8_t *p2l_alloc(size_t len);
 void p2l_dealloc(uint8_t *pointer, size_t len);

@@ -8,9 +8,10 @@ use std::fmt;
 /// The newest major version this reader understands; version 1 is read too.
 pub const VERSION: u32 = 2;
 /// The chunks this reader understands, with the newest version of each.
-pub const CHUNKS: [(&str, u16); 14] = [
+pub const CHUNKS: [(&str, u16); 16] = [
     ("STRS", 1), ("CANV", 1), ("PARM", 1), ("DEFM", 1), ("PART", 1), ("MESH", 1), ("GLUE", 1),
     ("DRAW", 1), ("TEXR", 1), ("PHYS", 1), ("CLIP", 1), ("ROLE", 1), ("PGUI", 1), ("META", 1),
+    ("BONE", 1), ("SKIN", 1),
 ];
 
 #[derive(Debug)]
@@ -334,6 +335,69 @@ pub struct Texture {
     pub uri: String,
 }
 
+/// What an extension chunk overrides in the core evaluation, readable without understanding the rest of it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ExtensionHeader {
+    /// The `p2l_set_advanced` bit that turns the extension on.
+    pub feature: u16,
+    /// The evaluation hooks it uses: H1 = 1, H2 = 2, H3 = 4, H4 = 8, H6 = 32.
+    pub hooks: u16,
+    /// H1: parameters evaluated at their defaults for the geometry while the extension is on.
+    pub parameters: Vec<usize>,
+    /// H1: physics groups skipped while the extension is on.
+    pub physics_groups: Vec<usize>,
+    /// H2: deformers whose frames the extension replaces.
+    pub deformers: Vec<usize>,
+    /// H4: per mesh, the keyform axes evaluated at their defaults and the blend shapes left out.
+    pub meshes: Vec<MeshOverride>,
+    /// Tags of the extension chunks this one needs.
+    pub depends_on: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct MeshOverride {
+    pub mesh: usize,
+    pub axes: Vec<usize>,
+    pub bindings: Vec<usize>,
+}
+
+/// A mesh the runtime skins: it follows [bones] (rotation deformers, its parent among them) with two-bone
+/// weights, which the file gives or the runtime fits to the baked keyforms over [axes].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Skin {
+    pub mesh: usize,
+    /// The parameters whose keys the baked skin was sampled at, each with those keys.
+    pub axes: Vec<(usize, Vec<f32>)>,
+    pub bones: Vec<usize>,
+    /// Per vertex: the bone it follows, the bone it blends toward and how far; empty to fit at load.
+    pub from: Vec<u32>,
+    pub to: Vec<u32>,
+    pub weight: Vec<f32>,
+}
+
+/// A rotation deformer whose keyed pivot positions along [parameter] lie on a circle about [center] (in its
+/// parent's space): with exact links on they are interpolated along that circle rather than its chords.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Arc {
+    pub deformer: usize,
+    pub parameter: usize,
+    pub center: [f32; 2],
+}
+
+/// The runtime's advanced data: skeleton bones, exact links and skins.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Extensions {
+    pub bone_header: Option<ExtensionHeader>,
+    /// Bones the rig folded into keyforms, as rotations only skinning evaluates. Deformer index `n + i` (n the
+    /// rig's deformer count) is virtual bone `i`; a parent is a rig deformer or an earlier virtual bone.
+    pub virtual_bones: Vec<Deformer>,
+    /// Deformers a host can attach things to, with their bone ids.
+    pub bones: Vec<(usize, String)>,
+    pub arcs: Vec<Arc>,
+    pub skin_header: Option<ExtensionHeader>,
+    pub skins: Vec<Skin>,
+}
+
 /// How a parameter panel groups and shows the parameters; it does not affect evaluation.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Gui {
@@ -481,9 +545,21 @@ pub struct Rig {
     pub gui: Option<Gui>,
     /// Generator and other information as key-value pairs.
     pub meta: Vec<(String, String)>,
+    /// Advanced data, off until a host enables it.
+    pub extensions: Extensions,
 }
 
 impl Rig {
+    /// Deformer [i] counting the virtual bones after the rig's own.
+    pub fn deformer_or_bone(&self, i: usize) -> &Deformer {
+        self.deformers.get(i).unwrap_or_else(|| &self.extensions.virtual_bones[i - self.deformers.len()])
+    }
+
+    /// The rig's deformers and the virtual bones after them.
+    pub fn deformer_count_with_bones(&self) -> usize {
+        self.deformers.len() + self.extensions.virtual_bones.len()
+    }
+
     pub fn read(bytes: &[u8]) -> Result<Rig> {
         Rig::read_with(bytes, false)
     }
@@ -503,6 +579,27 @@ impl Rig {
         };
         rig.validate()?;
         Ok(rig)
+    }
+
+    /// Extensions refer to rotation deformers and to meshes whose vertices they weigh.
+    fn validate_extensions(&self) -> Result<()> {
+        let rotation = |d: usize| matches!(self.deformer_or_bone(d).kind, DeformerKind::Rotation { .. });
+        for arc in &self.extensions.arcs {
+            if !matches!(&self.deformer_or_bone(arc.deformer).kind, DeformerKind::Rotation { pivot: Some(g), .. } if g.axes.len() == 1 && g.axes[0].parameter == arc.parameter) {
+                return err(format!("Arc on {} is not a rotation keyed on its parameter alone", self.deformer_or_bone(arc.deformer).id));
+            }
+        }
+        for skin in &self.extensions.skins {
+            let mesh = &self.meshes[skin.mesh];
+            let parent_is_bone = mesh.parent.is_some_and(|p| rotation(p) && skin.bones.contains(&p));
+            if !parent_is_bone || skin.bones.iter().any(|b| !rotation(*b)) {
+                return err(format!("Skin of {} must hang from one of its bones, all rotations", mesh.id));
+            }
+            if !skin.from.is_empty() && skin.from.len() != mesh.vertex_count() {
+                return err(format!("Skin weights of {} do not match its vertices", mesh.id));
+            }
+        }
+        Ok(())
     }
 
     /// Checks that hold across sections: glue pairs and keyform offsets against their meshes' vertices.
@@ -737,7 +834,7 @@ impl<'a> Reader<'a> {
         if self.at != self.bytes.len() {
             return err("Trailing bytes after the rig");
         }
-        Ok(Rig { canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui: None, meta: vec![] })
+        Ok(Rig { canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui: None, meta: vec![], extensions: Extensions::default() })
     }
 
     fn canvas(&mut self) -> Result<Canvas> {
@@ -875,6 +972,84 @@ impl<'a> Reader<'a> {
             at = subtree(&nodes, at, 0)?;
         }
         Ok(Gui { snaps, joysticks, nodes })
+    }
+
+    fn extension_header(&mut self) -> Result<ExtensionHeader> {
+        let (feature, hooks) = (self.u16()?, self.u16()?);
+        let n = self.count(4)?;
+        let parameters = (0..n).map(|_| self.parameter()).collect::<Result<Vec<_>>>()?;
+        let n = self.count(4)?;
+        let physics_groups = (0..n).map(|_| self.u32().map(|v| v as usize)).collect::<Result<Vec<_>>>()?;
+        let n = self.count(4)?;
+        let deformers = (0..n).map(|_| self.index(self.deformers, "deformer")).collect::<Result<Vec<_>>>()?;
+        let n = self.count(12)?;
+        let mut meshes = Vec::with_capacity(n);
+        for _ in 0..n {
+            let mesh = self.index(self.meshes, "mesh")?;
+            let count = self.count(4)?;
+            let axes = (0..count).map(|_| self.parameter()).collect::<Result<Vec<_>>>()?;
+            let count = self.count(4)?;
+            let bindings = (0..count).map(|_| self.u32().map(|v| v as usize)).collect::<Result<Vec<_>>>()?;
+            meshes.push(MeshOverride { mesh, axes, bindings });
+        }
+        let n = self.count(4)?;
+        let depends_on = (0..n).map(|_| Ok(String::from_utf8_lossy(self.take(4)?).into_owned())).collect::<Result<Vec<_>>>()?;
+        Ok(ExtensionHeader { feature, hooks, parameters, physics_groups, deformers, meshes, depends_on })
+    }
+
+    /// BONE: the header, the virtual bones, the attachable bones, then the arcs.
+    fn bones(&mut self, ext: &mut Extensions) -> Result<()> {
+        ext.bone_header = Some(self.extension_header()?);
+        let rig_deformers = self.deformers;
+        let n = self.count(1)?;
+        for i in 0..n {
+            // A virtual bone's parent may be any rig deformer or an earlier virtual bone.
+            self.deformers = rig_deformers + i;
+            let bone = self.deformer()?;
+            if !matches!(bone.kind, DeformerKind::Rotation { .. }) {
+                return err("A virtual bone must be a rotation");
+            }
+            ext.virtual_bones.push(bone);
+        }
+        self.deformers = rig_deformers + n;
+        let n = self.count(8)?;
+        for _ in 0..n {
+            let d = self.index(self.deformers, "deformer")?;
+            ext.bones.push((d, self.str()?));
+        }
+        let n = self.count(16)?;
+        for _ in 0..n {
+            let (deformer, parameter) = (self.index(self.deformers, "deformer")?, self.parameter()?);
+            ext.arcs.push(Arc { deformer, parameter, center: [self.f32()?, self.f32()?] });
+        }
+        Ok(())
+    }
+
+    /// SKIN: the header, then per mesh its axes, bones and optional weights.
+    fn skins(&mut self, ext: &mut Extensions) -> Result<()> {
+        ext.skin_header = Some(self.extension_header()?);
+        let n = self.count(16)?;
+        for _ in 0..n {
+            let mesh = self.index(self.meshes, "mesh")?;
+            let count = self.count(8)?;
+            let mut axes = Vec::with_capacity(count);
+            for _ in 0..count {
+                let parameter = self.parameter()?;
+                let keys = self.floats()?;
+                if keys.is_empty() || keys.windows(2).any(|w| w[1] < w[0]) {
+                    return err("Skin axis keys must ascend");
+                }
+                axes.push((parameter, keys));
+            }
+            let count = self.count(4)?;
+            let bones = (0..count).map(|_| self.index(self.deformers, "deformer")).collect::<Result<Vec<_>>>()?;
+            let (from, to, weight) = (self.indices()?, self.indices()?, self.floats()?);
+            if from.len() != to.len() || from.len() != weight.len() || from.iter().chain(&to).any(|b| *b as usize >= bones.len()) {
+                return err("Invalid skin weights");
+            }
+            ext.skins.push(Skin { mesh, axes, bones, from, to, weight });
+        }
+        Ok(())
     }
 
     fn meta(&mut self) -> Result<Vec<(String, String)>> {
@@ -1276,7 +1451,21 @@ fn read_chunks(bytes: &[u8], verify_crc: bool) -> Result<Rig> {
     let mut r = reader(chunk("META").unwrap_or(empty));
     let meta = if r.bytes.is_empty() { vec![] } else { r.meta()? };
     r.end("META")?;
-    Ok(Rig { canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui, meta })
+    let mut extensions = Extensions::default();
+    if let Some(data) = chunk("BONE") {
+        let mut r = reader(data);
+        r.bones(&mut extensions)?;
+        r.end("BONE")?;
+    }
+    if let Some(data) = chunk("SKIN") {
+        let mut r = reader(data);
+        r.deformers += extensions.virtual_bones.len();
+        r.skins(&mut extensions)?;
+        r.end("SKIN")?;
+    }
+    let rig = Rig { canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui, meta, extensions };
+    rig.validate_extensions()?;
+    Ok(rig)
 }
 
 /// The string table: a count, `count + 1` ascending offsets into the UTF-8 that follows, then that UTF-8.

@@ -41,7 +41,12 @@ class LegacySplitReplayTest {
         return ProjectRepository().open(target)
     }
 
-    private fun hash(model: RigPreviewModel) = ContentHash.of(PuppetIr.toIr(model.rig.puppet)).toString()
+    // The IR's advanced block came after these hashes were taken; it is empty for a puppet and left out of the hash.
+    private fun hash(model: RigPreviewModel): String {
+        val ir = PuppetIr.toIr(model.rig.puppet)
+        check(ir.advanced.isEmpty)
+        return ContentHash.of(ir.toString().removeSuffix(", advanced=${ir.advanced})") + ")")
+    }
 
     @Test fun legacySplitsReplayUnchangedAndAreNotUpgradedOnRead() = runBlocking<Unit> {
         open().use { opened ->

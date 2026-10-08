@@ -40,6 +40,15 @@ class RuntimeConformanceTool {
 			cases["project"] = RigIrCompiler.compile(kotlinx.coroutines.runBlocking { ExportService.load(it.toPath()) })
 		}
 		for ((name, ir) in cases) write(File(root, name).apply { mkdirs() }, ir, Random(name.hashCode()))
+		// The skeleton samples baked as finely as sampling allows: a reference for how close advanced mode's arcs
+		// come to the continuous skin between the default bake's keys (p2lrt-conformance --advanced).
+		for (sample in listOf("tml", "ds")) {
+			val plain = PSD2LivePipeline().buildPreview(File("examples/$sample/psd-input/$sample.psd").toPath())
+			val spec = SkeletonAutoBuilder.build(plain.analysis, plain.rig)
+			val fine = spec.copy(sampling = io.github.psd2live.core.SkeletonSampling(tolerancePx = 0.25f, minimumStepDegrees = 2.5f, maxMeshKeyforms = 1200))
+			val skeletal = PSD2LivePipeline().buildPreview(plain.analysis, plain.config.copy(rigEdits = plain.config.rigEdits.copy(skeleton = fine)))
+			File(root, "$sample-skeleton/rig.fine.p2lrt").writeBytes(P2lrt.write(RigIrCompiler.compile(skeletal)))
+		}
 		println("Wrote ${cases.size} cases to $root")
 	}
 

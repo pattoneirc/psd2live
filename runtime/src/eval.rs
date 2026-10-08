@@ -1,21 +1,22 @@
 //! Evaluates a rig at parameter values: keyform grids, blend shapes, the deformer chain and glue,
 //! producing every mesh's vertices in canvas pixels (y down) with its opacity, colors and draw order.
 
+use crate::advanced::Advanced;
 use crate::rig::*;
 use crate::warp::Lattice;
 
 /// One axis' bracketing keys and the weight of the upper one.
 #[derive(Clone, Copy)]
-struct Span {
-    lo: usize,
-    hi: usize,
-    t: f32,
+pub(crate) struct Span {
+    pub(crate) lo: usize,
+    pub(crate) hi: usize,
+    pub(crate) t: f32,
 }
 
 /// Keyform grids take a key exactly when the value is this close to it; blend shapes do not snap.
 const KEY_SNAP: f32 = 0.001;
 
-fn span(keys: &[f32], value: f32) -> Span {
+pub(crate) fn span(keys: &[f32], value: f32) -> Span {
     match keys.iter().find(|k| (value - **k).abs() < KEY_SNAP) {
         Some(k) => span_exact(keys, *k),
         None => span_exact(keys, value),
@@ -92,7 +93,7 @@ fn floor_cell<F>(grid: &Grid<F>, values: &[f32]) -> Option<usize> {
 
 /// Channel values of one object at a pose, starting from its static values.
 #[derive(Clone, Copy)]
-struct ChannelState {
+pub(crate) struct ChannelState {
     draw_order: f32,
     opacity: f32,
     multiply: Rgb,
@@ -287,71 +288,28 @@ impl Evaluator {
     /// Blend shapes add their difference from the object's form at the default pose, weighted by the
     /// blend parameter and its limits; mesh shapes hold target offsets.
     pub fn evaluate(&mut self, rig: &Rig, parameters: &[f32]) -> &Pose {
+        self.evaluate_ext(rig, parameters, None)
+    }
+
+    /// [evaluate] with the advanced features [advanced] has on; `None`, or none on, is exactly [evaluate].
+    pub fn evaluate_ext(&mut self, rig: &Rig, parameters: &[f32], mut advanced: Option<&mut Advanced>) -> &Pose {
         self.values.clear();
         self.defaults.clear();
         for (i, p) in rig.parameters.iter().enumerate() {
             self.values.push(p.normalize(parameters.get(i).copied().unwrap_or(p.default)));
             self.defaults.push(p.normalize(p.default));
         }
+        if let Some(a) = advanced.as_deref_mut() {
+            a.override_parameters(rig, &mut self.values, &self.defaults);
+        }
         let (values, defaults, cells) = (&self.values, &self.defaults, &mut self.cells);
         let pose = &mut self.pose;
         pose.deformers.clear();
         pose.deformer_opacity.clear();
-        let mut shapes_lattice: Vec<(&LatticeShape, f32)> = Vec::new();
-        let mut shapes_pivot: Vec<(&PivotShape, f32)> = Vec::new();
-        let mut shapes_mesh: Vec<(&MeshShape, f32)> = Vec::new();
-        for d in &rig.deformers {
-            let mut state = deformer_state(d, values, cells);
+        for (i, d) in rig.deformers.iter().enumerate() {
             let parent = d.parent.map(|p| &pose.deformers[p]);
-            let transform = match &d.kind {
-                DeformerKind::Warp { columns, rows, bilinear, lattice, shapes } => {
-                    let len = (columns + 1) * (rows + 1) * 2;
-                    let mut points = lattice_points(lattice.as_ref(), len, values, cells);
-                    if !shapes.is_empty() {
-                        let base = deformer_state(d, defaults, cells);
-                        let base_points = lattice_points(lattice.as_ref(), len, defaults, cells);
-                        for binding in shapes {
-                            blend(binding, values, &mut shapes_lattice);
-                            for (s, w) in shapes_lattice.drain(..) {
-                                for ((o, v), b) in points.iter_mut().zip(&s.points).zip(&base_points) {
-                                    *o += (v - b) * w;
-                                }
-                                toward(&mut state, &base, s.opacity, None, s.multiply, s.screen, w);
-                            }
-                        }
-                    }
-                    if let Some(parent) = parent {
-                        for p in points.chunks_exact_mut(2) {
-                            let q = parent.apply(p[0], p[1]);
-                            p[0] = q[0];
-                            p[1] = q[1];
-                        }
-                    }
-                    let scale = match parent {
-                        Some(Transform::Warp { scale, .. }) | Some(Transform::Rotation { scale, .. }) => *scale,
-                        None => 1.0,
-                    };
-                    Transform::Warp { points, columns: *columns, rows: *rows, bilinear: *bilinear, scale }
-                }
-                DeformerKind::Rotation { base_angle, pivot, shapes, .. } => {
-                    let mut p = pivot_at(pivot.as_ref(), values, cells);
-                    if !shapes.is_empty() {
-                        let base = deformer_state(d, defaults, cells);
-                        let b = pivot_at(pivot.as_ref(), defaults, cells);
-                        for binding in shapes {
-                            blend(binding, values, &mut shapes_pivot);
-                            for (s, w) in shapes_pivot.drain(..) {
-                                p.x += (s.pivot.x - b.x) * w;
-                                p.y += (s.pivot.y - b.y) * w;
-                                p.angle += (s.pivot.angle - b.angle) * w;
-                                p.scale += (s.pivot.scale - b.scale) * w;
-                                toward(&mut state, &base, s.opacity, None, s.multiply, s.screen, w);
-                            }
-                        }
-                    }
-                    rotation_frame(parent, p, *base_angle, state.flip_x, state.flip_y)
-                }
-            };
+            let arc = advanced.as_deref().and_then(|a| a.arc(rig, i));
+            let (transform, state) = deformer_frame(d, parent, values, defaults, cells, arc);
             let inherited = d.parent.map_or(1.0, |p| pose.deformer_opacity[p]);
             // Each stage clamps, so blend shapes cannot carry an object below transparent.
             pose.deformer_opacity.push(state.opacity.clamp(0.0, 1.0) * inherited);
@@ -364,41 +322,10 @@ impl Evaluator {
         pose.multiply.clear();
         pose.screen.clear();
         for (m, mesh) in rig.meshes.iter().enumerate() {
-            let mut state = mesh_state(mesh, values, cells);
             let out = &mut pose.vertices[m];
-            out.clear();
-            if let Some(geometry) = &mesh.geometry {
-                out.extend_from_slice(&geometry.positions);
-                if let Some(grid) = &mesh.offsets {
-                    weights(grid, values, cells);
-                    for &(cell, w) in cells.iter() {
-                        for (o, d) in out.iter_mut().zip(&grid.cells[cell].1) {
-                            *o += d * w;
-                        }
-                    }
-                }
-            }
-            if !mesh.shapes.is_empty() {
-                let base = mesh_state(mesh, defaults, cells);
-                // Shape deltas are target offsets: they replace the offsets the default pose has.
-                let mut base_offsets = vec![0.0f32; out.len()];
-                if let Some(grid) = &mesh.offsets {
-                    weights(grid, defaults, cells);
-                    for &(cell, w) in cells.iter() {
-                        for (o, d) in base_offsets.iter_mut().zip(&grid.cells[cell].1) {
-                            *o += d * w;
-                        }
-                    }
-                }
-                for binding in &mesh.shapes {
-                    blend(binding, values, &mut shapes_mesh);
-                    for (s, w) in shapes_mesh.drain(..) {
-                        for ((o, d), b) in out.iter_mut().zip(&s.deltas).zip(&base_offsets) {
-                            *o += (d - b) * w;
-                        }
-                        toward(&mut state, &base, s.opacity, Some(s.draw_order), s.multiply, s.screen, w);
-                    }
-                }
+            let state = mesh_local(mesh, values, defaults, cells, out);
+            if let Some(a) = advanced.as_deref_mut() {
+                a.correct_mesh(rig, m, values, defaults, out);
             }
             if let Some(parent) = mesh.parent {
                 let transform = &pose.deformers[parent];
@@ -457,6 +384,135 @@ impl Evaluator {
         }
         pose
     }
+}
+
+/// A deformer's frame and channel state at [values], under its parent's frame. With an [arc], its keyed pivot
+/// positions are interpolated along that circle.
+pub(crate) fn deformer_frame(
+    d: &Deformer, parent: Option<&Transform>, values: &[f32], defaults: &[f32], cells: &mut Vec<(usize, f32)>, arc: Option<&Arc>,
+) -> (Transform, ChannelState) {
+    let mut state = deformer_state(d, values, cells);
+    let transform = match &d.kind {
+        DeformerKind::Warp { columns, rows, bilinear, lattice, shapes } => {
+            let len = (columns + 1) * (rows + 1) * 2;
+            let mut points = lattice_points(lattice.as_ref(), len, values, cells);
+            if !shapes.is_empty() {
+                let base = deformer_state(d, defaults, cells);
+                let base_points = lattice_points(lattice.as_ref(), len, defaults, cells);
+                let mut blended: Vec<(&LatticeShape, f32)> = Vec::new();
+                for binding in shapes {
+                    blend(binding, values, &mut blended);
+                    for (s, w) in blended.drain(..) {
+                        for ((o, v), b) in points.iter_mut().zip(&s.points).zip(&base_points) {
+                            *o += (v - b) * w;
+                        }
+                        toward(&mut state, &base, s.opacity, None, s.multiply, s.screen, w);
+                    }
+                }
+            }
+            if let Some(parent) = parent {
+                for p in points.chunks_exact_mut(2) {
+                    let q = parent.apply(p[0], p[1]);
+                    p[0] = q[0];
+                    p[1] = q[1];
+                }
+            }
+            let scale = match parent {
+                Some(Transform::Warp { scale, .. }) | Some(Transform::Rotation { scale, .. }) => *scale,
+                None => 1.0,
+            };
+            Transform::Warp { points, columns: *columns, rows: *rows, bilinear: *bilinear, scale }
+        }
+        DeformerKind::Rotation { base_angle, pivot, shapes, .. } => {
+            let mut p = pivot_at(pivot.as_ref(), values, cells);
+            if !shapes.is_empty() {
+                let base = deformer_state(d, defaults, cells);
+                let b = pivot_at(pivot.as_ref(), defaults, cells);
+                let mut blended: Vec<(&PivotShape, f32)> = Vec::new();
+                for binding in shapes {
+                    blend(binding, values, &mut blended);
+                    for (s, w) in blended.drain(..) {
+                        p.x += (s.pivot.x - b.x) * w;
+                        p.y += (s.pivot.y - b.y) * w;
+                        p.angle += (s.pivot.angle - b.angle) * w;
+                        p.scale += (s.pivot.scale - b.scale) * w;
+                        toward(&mut state, &base, s.opacity, None, s.multiply, s.screen, w);
+                    }
+                }
+            }
+            if let (Some(arc), Some(grid)) = (arc, pivot) {
+                along_arc(grid, arc, values, &mut p);
+            }
+            rotation_frame(parent, p, *base_angle, state.flip_x, state.flip_y)
+        }
+    };
+    (transform, state)
+}
+
+/// Moves a pivot from the chord between its two bracketing keys onto the circle about [arc]'s center,
+/// turning and scaling the radius in step with the key weight.
+fn along_arc(grid: &Grid<Pivot>, arc: &Arc, values: &[f32], p: &mut Pivot) {
+    let s = span(&grid.axes[0].keys, values[arc.parameter]);
+    let (lo, hi) = (grid.dense[s.lo], grid.dense[s.hi]);
+    if s.lo == s.hi || lo == u32::MAX || hi == u32::MAX {
+        return;
+    }
+    let (a, b) = (grid.cells[lo as usize].1, grid.cells[hi as usize].1);
+    let [cx, cy] = arc.center;
+    let (ra, rb) = ((a.x - cx).hypot(a.y - cy), (b.x - cx).hypot(b.y - cy));
+    let start = (a.y - cy).atan2(a.x - cx);
+    let mut turn = (b.y - cy).atan2(b.x - cx) - start;
+    if turn > std::f32::consts::PI {
+        turn -= std::f32::consts::TAU;
+    } else if turn < -std::f32::consts::PI {
+        turn += std::f32::consts::TAU;
+    }
+    let (angle, radius) = (start + turn * s.t, ra + (rb - ra) * s.t);
+    let chord = (a.x + (b.x - a.x) * s.t, a.y + (b.y - a.y) * s.t);
+    p.x += cx + radius * angle.cos() - chord.0;
+    p.y += cy + radius * angle.sin() - chord.1;
+}
+
+/// A mesh's vertices in its parent's space at [values] - rest positions, keyform offsets and blend shapes - and
+/// its channel state.
+pub(crate) fn mesh_local(mesh: &Mesh, values: &[f32], defaults: &[f32], cells: &mut Vec<(usize, f32)>, out: &mut Vec<f32>) -> ChannelState {
+    let mut state = mesh_state(mesh, values, cells);
+    out.clear();
+    if let Some(geometry) = &mesh.geometry {
+        out.extend_from_slice(&geometry.positions);
+        if let Some(grid) = &mesh.offsets {
+            weights(grid, values, cells);
+            for &(cell, w) in cells.iter() {
+                for (o, d) in out.iter_mut().zip(&grid.cells[cell].1) {
+                    *o += d * w;
+                }
+            }
+        }
+    }
+    if !mesh.shapes.is_empty() {
+        let base = mesh_state(mesh, defaults, cells);
+        // Shape deltas are target offsets: they replace the offsets the default pose has.
+        let mut base_offsets = vec![0.0f32; out.len()];
+        if let Some(grid) = &mesh.offsets {
+            weights(grid, defaults, cells);
+            for &(cell, w) in cells.iter() {
+                for (o, d) in base_offsets.iter_mut().zip(&grid.cells[cell].1) {
+                    *o += d * w;
+                }
+            }
+        }
+        let mut blended: Vec<(&MeshShape, f32)> = Vec::new();
+        for binding in &mesh.shapes {
+            blend(binding, values, &mut blended);
+            for (s, w) in blended.drain(..) {
+                for ((o, d), b) in out.iter_mut().zip(&s.deltas).zip(&base_offsets) {
+                    *o += (d - b) * w;
+                }
+                toward(&mut state, &base, s.opacity, Some(s.draw_order), s.multiply, s.screen, w);
+            }
+        }
+    }
+    state
 }
 
 fn deformer_state(d: &Deformer, values: &[f32], cells: &mut Vec<(usize, f32)>) -> ChannelState {

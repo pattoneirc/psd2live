@@ -2,6 +2,7 @@
 //! Strings and arrays returned stay valid until the handle is freed or, for pose data, until the
 //! next evaluation. Every function tolerates a null handle. See `include/p2l_runtime.h`.
 
+use crate::advanced::{Advanced, Affine};
 use crate::behavior::Behaviors;
 use crate::clip::Player;
 use crate::eval::Evaluator;
@@ -21,6 +22,8 @@ pub struct Handle {
     mesh_ids: Vec<CString>,
     clip_ids: Vec<CString>,
     texture_uris: Vec<CString>,
+    bone_ids: Vec<CString>,
+    advanced: Advanced,
     render_order: Vec<u32>,
 }
 
@@ -66,6 +69,8 @@ pub unsafe extern "C" fn p2l_rig_load_ex(bytes: *const u8, len: usize, flags: u3
                 mesh_ids: c_strings(rig.meshes.iter().map(|m| &m.id)),
                 clip_ids: c_strings(rig.clips.iter().map(|c| &c.id)),
                 texture_uris: c_strings(rig.textures.iter().map(|t| &t.uri)),
+                bone_ids: c_strings(rig.extensions.bones.iter().map(|(_, id)| id)),
+                advanced: Advanced::new(),
                 evaluator: Evaluator::new(),
                 player: Player::new(),
                 behaviors: Behaviors::default(),
@@ -97,7 +102,8 @@ pub unsafe extern "C" fn p2l_rig_free(handle: *mut Handle) {
 }
 
 fn evaluate(handle: &mut Handle) {
-    let pose = handle.evaluator.evaluate(&handle.rig, &handle.values);
+    let advanced = if handle.advanced.enabled() != 0 { Some(&mut handle.advanced) } else { None };
+    let pose = handle.evaluator.evaluate_ext(&handle.rig, &handle.values, advanced);
     handle.render_order = crate::eval::render_order(&handle.rig, pose);
 }
 
@@ -476,6 +482,59 @@ pub extern "C" fn p2l_format_support() -> *const c_char {
             CString::new(format!("1,{} {}", crate::rig::VERSION, chunks.join(" "))).unwrap()
         })
         .as_ptr()
+}
+
+// --- advanced mode ---
+
+/// The advanced features this rig's file carries: P2L_SKIN | P2L_EXACT_LINKS | ...
+#[no_mangle]
+pub unsafe extern "C" fn p2l_advanced_available(handle: *const Handle) -> u32 {
+    with!(handle, 0, |h| Advanced::available(&h.rig))
+}
+
+/// Turns on the advanced [features] the rig carries and the rest off (0 is the Cubism-equivalent evaluation);
+/// returns those now on and re-evaluates.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_set_advanced(handle: *mut Handle, features: u32) -> u32 {
+    with_mut!(handle, 0, |h| {
+        let on = h.advanced.set(&h.rig, features);
+        evaluate(h);
+        on
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn p2l_bone_count(handle: *const Handle) -> u32 {
+    with!(handle, 0, |h| h.rig.extensions.bones.len() as u32)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn p2l_bone_id(handle: *const Handle, index: u32) -> *const c_char {
+    with!(handle, ptr::null(), |h| h.bone_ids.get(index as usize).map_or(ptr::null(), |s| s.as_ptr()))
+}
+
+/// The bone's frame at the last evaluation as a canvas-space affine map `[a, b, c, d, tx, ty]`
+/// (x' = a x + b y + tx, y' = c x + d y + ty); false when there is no such bone.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_bone_transform(handle: *mut Handle, index: u32, out: *mut f32) -> bool {
+    with_mut!(handle, false, |h| {
+        let Some((d, _)) = h.rig.extensions.bones.get(index as usize) else { return false };
+        let m = match h.evaluator.pose.deformers.get(*d) {
+            Some(t) => Affine::of(t),
+            // A virtual bone: evaluated on request at the current values.
+            None => {
+                let values: Vec<f32> = h.rig.parameters.iter().zip(&h.values).map(|(p, v)| p.normalize(*v)).collect();
+                h.advanced.bone_frame(&h.rig, &values, *d)
+            }
+        };
+        let Some(m) = m else { return false };
+        if !out.is_null() {
+            for (i, v) in [m.a, m.b, m.c, m.d, m.tx, m.ty].into_iter().enumerate() {
+                *out.add(i) = v;
+            }
+        }
+        true
+    })
 }
 
 /// The runtime's version, `major.minor.patch`.

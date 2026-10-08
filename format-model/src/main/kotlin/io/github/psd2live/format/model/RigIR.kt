@@ -34,6 +34,8 @@ public data class RigIR(
 	 */
 	val restPose: Map<String, Float> = emptyMap(),
 	val authoring: Authoring = Authoring(),
+	/** What only the PSD2Live runtime's advanced mode reads. */
+	val advanced: AdvancedIR = AdvancedIR(),
 ) {
 	public companion object {
 		public const val DEFAULT_DRAW_ORDER: Int = 500

@@ -487,7 +487,7 @@ internal object SkeletonRig {
 		// from the legs warp.
 		val bends = LinkedHashMap<String, BodyBend>()
 		model = addBodyWarps(model, bones.filter { it.role.body }, frame, bends, spec.sampling)
-		model = addRotations(model, joints, parentOf, spec, frame, bends, plan.blend)
+		model = addRotations(model, joints, parentOf, spec, frame, bends.mapValues { it.value.id }, plan.blend)
 		model = addParameters(model, bones, plan.blend)
 
 		// 4. The preset poses, hips that move while the feet stay put among them.
@@ -530,6 +530,34 @@ internal object SkeletonRig {
 		model = RigBuildProfile.stage("skeleton: arm swing") { withArmSwing(model, joints, standing) }
 		model = withSkeletonGroup(model, bones, poses)
 		return model.withDerivedRenderRoot()
+	}
+
+	/**
+	 * The arm and head bones [model] has no rotation for any more - folded into the keyforms of the meshes they
+	 * bend, as [pruneEmptyBones] and [foldLinkBones] leave them - rebuilt as the rotations [apply] first gave
+	 * them, parents first. Never part of the rig: the runtime's advanced mode turns them to skin those meshes
+	 * along their arcs instead of the keyforms' chords. Legs bend in their stance warps and are left out.
+	 */
+	fun virtualBones(model: PuppetModel, spec: SkeletonSpec, frame: Bounds): List<Deformer.Rotation> {
+		if (!spec.enabled || model.deformers.none { it.id == bodyId || it.id == torsoWarpId }) return emptyList()
+		val bones = limbBones(spec)
+		val present = model.deformers.mapTo(HashSet()) { it.id }
+		val missing = bones.filter { !it.role.body && it.role !in legRoles && DeformerId(it.deformerId) !in present }
+		if (missing.isEmpty()) return emptyList()
+		val parentOf = jointParents(spec)
+		// Parents first, so each one's frame exists by the time its children's are measured.
+		val ordered = ArrayList<SkeletonBone>()
+		fun visit(bone: SkeletonBone) {
+			if (bone in ordered) return
+			parentOf[bone.id]?.takeIf { it in missing }?.let(::visit)
+			ordered += bone
+		}
+		missing.forEach(::visit)
+		val bends = if (torsoWarpId in present) bones.filter { it.role.body }.associate { it.id to torsoWarpId } else emptyMap()
+		val ids = ordered.mapTo(HashSet()) { DeformerId(it.deformerId) }
+		return addRotations(model, ordered, parentOf, spec, frame, bends, emptySet()).deformers
+			.filter { it.id in ids }.filterIsInstance<Deformer.Rotation>()
+			.sortedBy { d -> ordered.indexOfFirst { it.deformerId == d.id.raw } }
 	}
 
 	/**
@@ -849,13 +877,13 @@ internal object SkeletonRig {
 	 * warp, so it rides every bend of the body chain down to there. Without one, an upper limb takes the
 	 * breath warp and anything else the body warp.
 	 */
-	private fun attachDeformer(model: PuppetModel, spec: SkeletonSpec, bone: SkeletonBone, bends: Map<String, BodyBend>): DeformerId {
+	private fun attachDeformer(model: PuppetModel, spec: SkeletonSpec, bone: SkeletonBone, bends: Map<String, DeformerId>): DeformerId {
 		val lineage = generateSequence(bone) { it.parentId?.let(spec::bone) }
 		val present = model.deformers.mapTo(HashSet()) { it.id }
 		if (lineage.any { it.role == BoneRole.HEAD } && headRotationId in present) return headRotationId
 		if (lineage.any { it.role in legRoles } && BodyStance.legsWarpId in present) return BodyStance.legsWarpId
 		val body = lineage.firstOrNull { it.role.body }
-		body?.let { bends[it.id] }?.let { return it.id }
+		body?.let { bends[it.id] }?.let { return it }
 		return if (body?.role == BoneRole.UPPER_BODY && breathId in present) breathId else bodyId
 	}
 
@@ -865,7 +893,7 @@ internal object SkeletonRig {
 		parentOf: Map<String, SkeletonBone?>,
 		spec: SkeletonSpec,
 		frame: Bounds,
-		bends: Map<String, BodyBend>,
+		bends: Map<String, DeformerId>,
 		blend: Set<ParameterId>,
 	): PuppetModel {
 		val restWorlds = worlds(base, emptyMap())

@@ -41,9 +41,14 @@ public object P2lrt {
 
 	/**
 	 * How to write: [version] 1 or 2; in version 2, [compress] deflates the chunks that shrink (never the PNG
-	 * pages) and [stripNames] leaves every display name empty, keeping the ids.
+	 * pages), [stripNames] leaves every display name empty, keeping the ids, and [advanced] adds what the runtime's
+	 * advanced mode reads.
 	 */
-	public data class Options(val version: Int = VERSION, val compress: Boolean = false, val stripNames: Boolean = false) {
+	public data class Options(
+		val version: Int = VERSION, val compress: Boolean = false, val stripNames: Boolean = false,
+		/** Version 2 only: the chunks the runtime's advanced mode reads (bones, arcs, skins). */
+		val advanced: Boolean = true,
+	) {
 		init { require(version == 1 || version == 2) { "Unsupported .p2lrt version $version" } }
 	}
 
@@ -99,6 +104,12 @@ public object P2lrt {
 	private const val HAS_CRC = 2
 	private const val DEFLATE = 1 shl 2
 	private const val NAMES_STRIPPED = 1
+	// Advanced features and the evaluation hooks extension chunks declare.
+	private const val SKIN = 1
+	private const val EXACT_LINKS = 2
+	private const val H2 = 2
+	private const val H3 = 4
+	private const val H4 = 8
 
 	private class Chunk(val tag: String, val required: Boolean, val data: ByteArray, val compressible: Boolean = true)
 
@@ -167,6 +178,7 @@ public object P2lrt {
 			if (ir.physics.groups.isNotEmpty() || ir.physics.fps != null) chunks += chunk("PHYS") { physics() }
 			if (ir.clips.isNotEmpty()) chunks += chunk("CLIP") { out.u32(ir.clips.size); ir.clips.forEach(::clip) }
 			if (ir.parameterRoles.isNotEmpty()) chunks += chunk("ROLE") { roles() }
+			if (options.advanced) advanced().forEach { chunks += chunk(it.first, required = false) { it.second() } }
 			val gui = Gui(ir, parameterIndex)
 			if (!gui.isEmpty) chunks += chunk("PGUI", required = false) { gui.write() }
 			chunks += chunk("META", required = false) {
@@ -182,6 +194,49 @@ public object P2lrt {
 			utf8.forEach(out::raw)
 			chunks.add(0, Chunk("STRS", true, out.result()))
 			return container(chunks, options)
+		}
+
+		/** The advanced chunks the rig offers, each a tag and its body: BONE (bones and arcs), SKIN. */
+		private fun advanced(): List<Pair<String, () -> Unit>> {
+			val arcs = AdvancedData.arcs(ir)
+			val skins = AdvancedData.skins(ir)
+			val bones = (skins.flatMap { it.bones } + arcs.map { it.deformer }).distinct()
+			// The virtual bones the skins and arcs use, and the ones above them.
+			val byId = ir.advanced.virtualBones.associateBy { it.id }
+			val needed = HashSet<String>()
+			fun need(id: String?) { if (id != null && id in byId && needed.add(id)) need(byId.getValue(id).parent) }
+			bones.forEach(::need)
+			val virtual = ir.advanced.virtualBones.filter { it.id in needed }
+			val virtualIndex = virtual.withIndex().associate { it.value.id to deformers.size + it.index }
+			fun bone(id: String?): Int = id?.let { virtualIndex[it] } ?: deformer(id)
+			return buildList {
+				if (bones.isNotEmpty()) add("BONE" to {
+					extensionHeader(EXACT_LINKS, H2 or H3, arcs.map { bone(it.deformer) })
+					out.u32(virtual.size); virtual.forEach { deformer(it, bone(it.parent)) }
+					out.u32(bones.size); bones.forEach { out.u32(bone(it)); out.str(it) }
+					out.u32(arcs.size)
+					for (a in arcs) { out.u32(bone(a.deformer)); out.u32(parameter(a.parameter)); out.f32(a.centerX); out.f32(a.centerY) }
+				})
+				if (skins.isNotEmpty()) add("SKIN" to {
+					extensionHeader(SKIN, H4)
+					out.u32(skins.size)
+					for (s in skins) {
+						out.u32(mesh(s.mesh))
+						out.u32(s.axes.size); s.axes.forEach { (p, keys) -> out.u32(parameter(p)); out.floats(keys) }
+						out.u32(s.bones.size); s.bones.forEach { out.u32(bone(it)) }
+						// No weights: the runtime fits them to the keyforms.
+						out.indices(Ints.Empty); out.indices(Ints.Empty); out.floats(FloatArray(0))
+					}
+				})
+			}
+		}
+
+		/** An extension chunk's opening: its feature bit and hooks, then what it overrides (nothing here but frames). */
+		private fun extensionHeader(feature: Int, hooks: Int, deformers: List<Int> = emptyList()) {
+			out.u16(feature); out.u16(hooks)
+			out.u32(0); out.u32(0)
+			out.u32(deformers.size); deformers.forEach(out::u32)
+			out.u32(0); out.u32(0)
 		}
 
 		/** The parameter panel: snap values, two-dimensional pads and the group tree, for parameters the file has. */
@@ -308,8 +363,9 @@ public object P2lrt {
 			}
 		}
 
-		private fun deformer(d: Deformer) {
-			out.u8(if (d is Deformer.Warp) 0 else 1); out.str(d.id); out.i32(deformer(d.parent)); out.i32(part(d.part))
+		/** A deformer record; [parent] is its parent's index, given apart for a virtual bone. */
+		private fun deformer(d: Deformer, parent: Int = deformer(d.parent)) {
+			out.u8(if (d is Deformer.Warp) 0 else 1); out.str(d.id); out.i32(parent); out.i32(part(d.part))
 			val flags = (if (d.visible) 1 else 0) or (if (d.enabled) 2 else 0) or
 				(if (d is Deformer.Rotation && d.flipX) 4 else 0) or (if (d is Deformer.Rotation && d.flipY) 8 else 0) or
 				(if (d is Deformer.Warp && d.bilinear) 16 else 0)
@@ -436,15 +492,20 @@ public object P2lrtTarget : ExportTarget {
 		blendModes = ColorBlend.entries.toSet(), masks = MaskSupport.TEXTURE_ALPHA, keyedDrawOrder = true, glue = true,
 	)
 
-	/** `v1` writes version 1 for players that predate version 2; `compress` and `strip_names` apply to version 2. */
+	/**
+	 * `v1` writes version 1 for players that predate version 2; `compress`, `strip_names` and `advanced` (the data
+	 * the runtime's advanced mode reads) apply to version 2.
+	 */
 	override val settings: List<TargetSetting> = listOf(
 		TargetSetting.Flag("v1", false), TargetSetting.Flag("compress", false), TargetSetting.Flag("strip_names", false),
+		TargetSetting.Flag("advanced", true),
 	)
 
 	override fun plan(ir: RigIR, options: ExportOptions): LoweredExport {
 		val bytes = P2lrt.write(ir, P2lrt.Options(
 			version = if (options.flag("v1", false)) 1 else 2,
 			compress = options.flag("compress", false), stripNames = options.flag("strip_names", false),
+			advanced = options.flag("advanced", true),
 		))
 		return object : LoweredExport {
 			override val losses: List<LossEntry> = CapabilityScan.scan(ir, capabilities, options)

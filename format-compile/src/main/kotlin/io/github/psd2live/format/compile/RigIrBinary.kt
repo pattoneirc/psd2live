@@ -15,7 +15,7 @@ import java.io.IOException
  * A field added to the IR must be added here in the same change, with [VERSION] raised.
  */
 public object RigIrBinary {
-	public const val VERSION: Int = 1
+	public const val VERSION: Int = 2
 	private const val MAGIC = 0x50524952 // "PRIR"
 
 	public fun encode(ir: RigIR): ByteArray {
@@ -84,6 +84,31 @@ public object RigIrBinary {
 			list(ir.clips, ::clip)
 			list(ir.restPose.entries.toList()) { string(it.key); float(it.value) }
 			authoring(ir.authoring)
+			advanced(ir.advanced)
+		}
+
+		fun advanced(a: AdvancedIR) {
+			list(a.virtualBones, ::deformer)
+			list(a.simulations) { s ->
+				string(s.id); float(s.fps); int(s.substeps); float(s.gravityX); float(s.gravityY); float(s.windX); float(s.windY); float(s.pinCompliance)
+				list(s.targets) { string(it.mesh); int(it.vertexCount) }
+				s.particles.let { p ->
+					floats(p.invMass); floats(p.damping); floats(p.windFactor); floats(p.pinWeight); floats(p.goalCompliance)
+					floats(p.goalOffsetX); floats(p.goalOffsetY); list(p.anchorMesh, ::string); ints(p.anchorVertex)
+				}
+				s.stretch.let { ints(it.a); ints(it.b); floats(it.rest); floats(it.compliance); floats(it.compressionCompliance) }
+				s.triangles.let { ints(it.a); ints(it.b); ints(it.c); floats(it.areaCompliance) }
+				s.bends.let { ints(it.t1); ints(it.t2); floats(it.compliance) }
+				s.welds.let { ints(it.a); ints(it.b); floats(it.weightA); floats(it.weightB); floats(it.compliance) }
+				s.longRange.let { ints(it.particle); ints(it.root); floats(it.maxDistance) }
+				list(s.parameters, ::string); list(s.physicsGroups, ::string)
+				list(s.statics) { st -> string(st.parameter); floats(st.keys); list(st.offsets.entries.toList()) { string(it.key); list(it.value, ::floats) } }
+				list(s.colliders, ::string)
+			}
+			list(a.colliders) { c ->
+				string(c.id); bool(c.capsule); nullable(c.deformer, ::string); nullable(c.mesh, ::string); int(c.vertexA); int(c.vertexB)
+				float(c.ax); float(c.ay); float(c.bx); float(c.by); float(c.radiusA); float(c.radiusB); float(c.friction)
+			}
 		}
 
 		fun parameterNode(node: ParameterNode) {
@@ -284,8 +309,32 @@ public object RigIrBinary {
 			val clips = list(::clip)
 			val restPose = map(::float)
 			val authoring = authoring()
+			val advanced = advanced()
 			return RigIR(canvas, parameters, links, tree, roles, parts, rootChildren, rootPart, deformers, meshes, glues, renderRoot,
-				textures, physics, clips, restPose, authoring)
+				textures, physics, clips, restPose, authoring, advanced)
+		}
+
+		fun advanced(): AdvancedIR {
+			val bones = list { deformer() as? Deformer.Rotation ?: throw IOException("A virtual bone must be a rotation") }
+			val simulations = list {
+				val id = string(); val fps = float(); val substeps = int()
+				val gx = float(); val gy = float(); val wx = float(); val wy = float(); val pin = float()
+				val targets = list { SimTarget(string(), int()) }
+				val particles = SimParticles(floats(), floats(), floats(), floats(), floats(), floats(), floats(), list(::string), ints())
+				val stretch = SimStretch(ints(), ints(), floats(), floats(), floats())
+				val triangles = SimTriangles(ints(), ints(), ints(), floats())
+				val bends = SimBends(ints(), ints(), floats())
+				val welds = SimWelds(ints(), ints(), floats(), floats(), floats())
+				val longRange = SimLongRange(ints(), ints(), floats())
+				val parameters = list(::string); val groups = list(::string)
+				val statics = list { SimStatic(string(), floats(), map { list(::floats) }) }
+				SimulationIR(id, fps, substeps, gx, gy, wx, wy, pin, targets, particles, stretch, triangles, bends, welds, longRange,
+					parameters, groups, statics, list(::string))
+			}
+			val colliders = list {
+				ColliderIR(string(), bool(), nullable(::string), nullable(::string), int(), int(), float(), float(), float(), float(), float(), float(), float())
+			}
+			return AdvancedIR(bones, simulations, colliders)
 		}
 
 		fun parameterNode(): ParameterNode = when (tag(1)) {

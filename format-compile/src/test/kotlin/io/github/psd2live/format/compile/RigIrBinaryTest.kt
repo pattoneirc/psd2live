@@ -54,6 +54,19 @@ class RigIrBinaryTest {
 				listOf(SourceFile("src", "Source", null, "psd", listOf(SourceLayer("layer", "Layer", "a/b", 1, 2, 3, 4, true, hash = "h", replaced = true)), "hash", 123L)),
 				listOf(DeformPath("path", "mesh", listOf(PathPoint(0, 1, 2, 0.2f, 0.3f, 0.5f, true)), 4f, 0.5f, true, 2)),
 				listOf(VertexGroup("pin", "mesh", "pin", Floats.values(1f, 0f, 0.5f)))),
+			advanced = AdvancedIR(
+				virtualBones = listOf(Deformer.Rotation("bone", "Bone", "rot", null, 12f, KeyGrid.single(Pivot(1f, 2f, 3f, 1f)))),
+				simulations = listOf(SimulationIR("sim", 60f, 16, 0f, -980f, 1f, 0f, 1e-4f, listOf(SimTarget("mesh", 3)),
+					SimParticles(Floats.values(1f, 1f, 1f), Floats.values(0f, 0f, 0f), Floats.values(1f, 1f, 1f), Floats.values(1f, 0f, 0f),
+						Floats.values(Float.POSITIVE_INFINITY, 0.1f, 0.1f), Floats.values(0f, 1f, 0f), Floats.values(0f, 0f, 2f), listOf("", "other", ""), Ints.values(0, 4, 0)),
+					SimStretch(Ints.values(0), Ints.values(1), Floats.values(2f), Floats.values(1e-9f), Floats.values(1e-3f)),
+					SimTriangles(Ints.values(0), Ints.values(1), Ints.values(2), Floats.values(Float.POSITIVE_INFINITY)),
+					SimBends(Ints.Empty, Ints.Empty, Floats.Empty), SimWelds(Ints.Empty, Ints.Empty, Floats.Empty, Floats.Empty, Floats.Empty),
+					SimLongRange(Ints.values(1), Ints.values(0), Floats.values(3f)), listOf("ParamSim_1"), listOf("PhysicsSim"),
+					listOf(SimStatic("ParamA", Floats.values(0f, 1f), mapOf("mesh" to listOf(Floats.values(0f, 0f, 0f, 0f, 0f, 0f), Floats.values(1f, 0f, 0f, 0f, 0f, 0f))))),
+					listOf("head"))),
+				colliders = listOf(ColliderIR("head", true, deformer = "rot", ax = 1f, by = 2f, radiusA = 5f, radiusB = 3f, friction = 0.2f)),
+			),
 		)
 	}
 

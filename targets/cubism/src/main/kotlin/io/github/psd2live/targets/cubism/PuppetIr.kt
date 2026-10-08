@@ -184,6 +184,9 @@ public object PuppetIr {
 		binding.parameterId.raw, floats(binding.keys), binding.neutralIndex, binding.forms.map { it?.let(shape) },
 		binding.limits.map { limit -> BlendLimit(limit.parameterId.raw, limit.points.map { BlendLimitPoint(it.value, it.weight) }) })
 
+	/** One engine deformer as the IR holds it. */
+	public fun deformerToIr(deformer: Deformer): IrDeformer = deformer(deformer)
+
 	private fun deformer(deformer: Deformer): IrDeformer = when (deformer) {
 		is Deformer.Warp -> IrDeformer.Warp(deformer.id.raw, deformer.name, deformer.parent?.raw, deformer.partId?.raw,
 			deformer.rows, deformer.columns, deformer.isQuadTransform,
