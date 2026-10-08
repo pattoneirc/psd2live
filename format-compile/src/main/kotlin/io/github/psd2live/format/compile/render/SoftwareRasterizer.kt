@@ -1,6 +1,7 @@
 package io.github.psd2live.format.compile.render
 
 import io.github.psd2live.format.compile.FrameSpec
+import io.github.psd2live.format.compile.PlacedRaster
 import io.github.psd2live.format.compile.PoseGeometry
 import io.github.psd2live.format.compile.RasterImage
 import io.github.psd2live.format.model.*
@@ -20,22 +21,25 @@ import kotlin.math.min
  * meshes under hidden parts are skipped. Group composites (isolated parts) and alpha blend modes other
  * than over are not drawn and are reported by [unsupported].
  */
-public class SoftwareRasterizer(private val ir: RigIR) {
-	private class Texture(val width: Int, val height: Int, val premultiplied: FloatArray)
+public class SoftwareRasterizer(
+	private val ir: RigIR,
+	/**
+	 * The ARGB pixels (row by row, never modified here) a page's PNG decodes to, when the host already holds
+	 * them; null decodes the PNG.
+	 */
+	pixels: (ByteArray) -> IntArray? = { null },
+) {
+	/** A page as straight ARGB; texels are premultiplied as they are sampled. */
+	private class Texture(val width: Int, val height: Int, val argb: IntArray)
 
-	private val textures: List<Texture> = ir.textures.pages.mapIndexed { index, page ->
-		val image = requireNotNull(ImageIO.read(ByteArrayInputStream(page.png.shared()))) { "Texture page $index is not a PNG" }
-		val argb = image.getRGB(0, 0, image.width, image.height, null, 0, image.width)
-		val pixels = FloatArray(argb.size * 4)
-		for (i in argb.indices) {
-			val a = (argb[i] ushr 24) / 255f
-			pixels[i * 4] = ((argb[i] shr 16) and 0xff) / 255f * a
-			pixels[i * 4 + 1] = ((argb[i] shr 8) and 0xff) / 255f * a
-			pixels[i * 4 + 2] = (argb[i] and 0xff) / 255f * a
-			pixels[i * 4 + 3] = a
+	// Pages decode in parallel; their order is kept.
+	private val textures: List<Texture> = ir.textures.pages.withIndex().toList().parallelStream().map { (index, page) ->
+		val png = page.png.shared()
+		pixels(png)?.takeIf { it.size == page.width * page.height }?.let { Texture(page.width, page.height, it) } ?: run {
+			val image = requireNotNull(ImageIO.read(ByteArrayInputStream(png))) { "Texture page $index is not a PNG" }
+			Texture(image.width, image.height, image.getRGB(0, 0, image.width, image.height, null, 0, image.width))
 		}
-		Texture(image.width, image.height, pixels)
-	}
+	}.toList()
 
 	private val hidden: Set<String> = run {
 		val out = HashSet<String>()
@@ -61,16 +65,63 @@ public class SoftwareRasterizer(private val ir: RigIR) {
 	 * The rig at [pose] with [colors] into [frame]; [only] limits drawing to those meshes (their masks still
 	 * apply).
 	 */
-	public fun render(pose: PoseGeometry, colors: Map<String, IrColors.MeshColor>, frame: FrameSpec, only: Set<String>? = null): RasterImage {
+	public fun render(pose: PoseGeometry, colors: Map<String, IrColors.MeshColor>, frame: FrameSpec, only: Set<String>? = null): RasterImage =
+		render(pose, colors, frame, only, 0, 0, frame.outputWidth - 1, frame.outputHeight - 1)
+
+	/**
+	 * [mesh] alone at [pose] (its masks still apply), drawn only over the frame pixels its vertices can reach:
+	 * each pixel is exactly the one [render] draws there with `only = setOf(mesh)`, which is transparent
+	 * outside the returned rectangle. Null when the mesh reaches no pixel of [frame].
+	 */
+	public fun renderMesh(pose: PoseGeometry, colors: Map<String, IrColors.MeshColor>, frame: FrameSpec, mesh: String): PlacedRaster? =
+		region(pose, frame, mesh)?.let { (x0, y0, x1, y1) -> PlacedRaster(x0, y0, render(pose, colors, frame, setOf(mesh), x0, y0, x1, y1)) }
+
+	/**
+	 * [meshes] each by [renderMesh], trimmed to their drawn pixels ([PlacedRaster.trimmed]), drawn in parallel
+	 * as far as memory allows.
+	 */
+	public fun renderMeshes(pose: PoseGeometry, colors: Map<String, IrColors.MeshColor>, frame: FrameSpec, meshes: List<String>): List<PlacedRaster?> {
+		val regions = meshes.map { region(pose, frame, it) }
+		return bounded(meshes.size, { i -> regions[i]?.let { (x0, y0, x1, y1) -> (x1 - x0 + 1).toLong() * (y1 - y0 + 1) * BYTES_PER_PIXEL } ?: 0L }) { i ->
+			regions[i]?.let { (x0, y0, x1, y1) -> PlacedRaster(x0, y0, render(pose, colors, frame, setOf(meshes[i]), x0, y0, x1, y1)).trimmed() }
+		}
+	}
+
+	/** Whole frames at each pose with its colors, as [render] draws them, drawn in parallel as far as memory allows. */
+	public fun renderFrames(poses: List<Pair<PoseGeometry, Map<String, IrColors.MeshColor>>>, frame: FrameSpec): List<RasterImage> =
+		bounded(poses.size, { frame.outputWidth.toLong() * frame.outputHeight * BYTES_PER_PIXEL }) { i -> render(poses[i].first, poses[i].second, frame) }
+
+	/** The frame pixels (x0, y0, x1, y1, inclusive) [triangles] can scan for [mesh], or null when there are none. */
+	private fun region(pose: PoseGeometry, frame: FrameSpec, mesh: String): IntArray? {
 		val w = frame.outputWidth; val h = frame.outputHeight
+		val p = pose.positions[mesh] ?: return null
+		val scale = min(w / frame.width, h / frame.height)
+		var minX = Float.POSITIVE_INFINITY; var minY = Float.POSITIVE_INFINITY
+		var maxX = Float.NEGATIVE_INFINITY; var maxY = Float.NEGATIVE_INFINITY
+		for (i in 0 until p.size / 2) {
+			val x = (p[i * 2] - frame.left) * scale; val y = (p[i * 2 + 1] - frame.top) * scale
+			// A vertex off the number line: let the triangles decide, over the whole frame.
+			if (!x.isFinite() || !y.isFinite()) return intArrayOf(0, 0, w - 1, h - 1)
+			minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+		}
+		// The union of the per-triangle ranges [triangles] computes, from the same coordinates.
+		val x0 = max(0, floor(minX - 0.5f).toInt()); val x1 = min(w - 1, ceil(maxX - 0.5f).toInt())
+		val y0 = max(0, floor(minY - 0.5f).toInt()); val y1 = min(h - 1, ceil(maxY - 0.5f).toInt())
+		return if (x0 > x1 || y0 > y1) null else intArrayOf(x0, y0, x1, y1)
+	}
+
+	/** The pixels [x0]..[x1] by [y0]..[y1] (inclusive) of the full render of [frame]. */
+	private fun render(pose: PoseGeometry, colors: Map<String, IrColors.MeshColor>, frame: FrameSpec, only: Set<String>?,
+	                   x0: Int, y0: Int, x1: Int, y1: Int): RasterImage {
+		val w = x1 - x0 + 1; val h = y1 - y0 + 1
 		val out = FloatArray(w * h * 4)
 		if (frame.background != 0) {
 			val a = (frame.background ushr 24) / 255f
 			val r = ((frame.background shr 16) and 0xff) / 255f * a; val g = ((frame.background shr 8) and 0xff) / 255f * a; val b = (frame.background and 0xff) / 255f * a
 			for (i in 0 until w * h) { out[i * 4] = r; out[i * 4 + 1] = g; out[i * 4 + 2] = b; out[i * 4 + 3] = a }
 		}
-		val scale = min(w / frame.width, h / frame.height)
-		val view = View(scale, frame.left, frame.top, w, h)
+		val scale = min(frame.outputWidth / frame.width, frame.outputHeight / frame.height)
+		val view = View(scale, frame.left, frame.top, x0, y0, x1, y1)
 		val drawn = ir.meshes.filter { it.id !in hidden && (only == null || it.id in only) && pose.positions.containsKey(it.id) }
 			.sortedWith(compareBy({ pose.drawOrder[it.id] ?: it.drawOrder }, { order.getValue(it.id) }))
 		val masks = HashMap<List<String>, FloatArray>()
@@ -91,7 +142,14 @@ public class SoftwareRasterizer(private val ir: RigIR) {
 		return RasterImage(w, h, argb)
 	}
 
-	private class View(val scale: Float, val left: Float, val top: Float, val width: Int, val height: Int) {
+	/**
+	 * Frame coordinates by [scale] from ([left], [top]); only the pixels [x0]..[x1] by [y0]..[y1] are drawn,
+	 * into buffers of that rectangle. Coordinates stay those of the whole frame, so every pixel computes
+	 * exactly as in a full render.
+	 */
+	private class View(val scale: Float, val left: Float, val top: Float, val x0: Int, val y0: Int, val x1: Int, val y1: Int) {
+		val width: Int = x1 - x0 + 1
+		val height: Int = y1 - y0 + 1
 		fun x(v: Float) = (v - left) * scale
 		fun y(v: Float) = (v - top) * scale
 	}
@@ -147,8 +205,8 @@ public class SoftwareRasterizer(private val ir: RigIR) {
 			val cx = view.x(p[ic * 2]); val cy = view.y(p[ic * 2 + 1])
 			val area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
 			if (abs(area) < 1e-12f) continue
-			val x0 = max(0, floor(min(ax, min(bx, cx)) - 0.5f).toInt()); val x1 = min(view.width - 1, ceil(max(ax, max(bx, cx)) - 0.5f).toInt())
-			val y0 = max(0, floor(min(ay, min(by, cy)) - 0.5f).toInt()); val y1 = min(view.height - 1, ceil(max(ay, max(by, cy)) - 0.5f).toInt())
+			val x0 = max(view.x0, floor(min(ax, min(bx, cx)) - 0.5f).toInt()); val x1 = min(view.x1, ceil(max(ax, max(bx, cx)) - 0.5f).toInt())
+			val y0 = max(view.y0, floor(min(ay, min(by, cy)) - 0.5f).toInt()); val y1 = min(view.y1, ceil(max(ay, max(by, cy)) - 0.5f).toInt())
 			if (x0 > x1 || y0 > y1) continue
 			val inv = 1f / area
 			for (y in y0..y1) {
@@ -162,7 +220,7 @@ public class SoftwareRasterizer(private val ir: RigIR) {
 					if (!inside(w0, by - cy, cx - bx) || !inside(w1, cy - ay, ax - cx) || !inside(w2, ay - by, bx - ax)) continue
 					val u = w0 * uv[ia * 2] + w1 * uv[ib * 2] + w2 * uv[ic * 2]
 					val v = w0 * uv[ia * 2 + 1] + w1 * uv[ib * 2 + 1] + w2 * uv[ic * 2 + 1]
-					fragment(y * view.width + x, u, v)
+					fragment((y - view.y0) * view.width + x - view.x0, u, v)
 				}
 			}
 		}
@@ -177,12 +235,21 @@ public class SoftwareRasterizer(private val ir: RigIR) {
 		val x0 = fx.toInt(); val y0 = fy.toInt()
 		val x1 = min(x0 + 1, t.width - 1); val y1 = min(y0 + 1, t.height - 1)
 		val tx = fx - x0; val ty = fy - y0
-		val p = t.premultiplied
+		val p = t.argb
+		val pa = p[y0 * t.width + x0]; val pb = p[y0 * t.width + x1]
+		val pd = p[y1 * t.width + x0]; val pe = p[y1 * t.width + x1]
 		for (c in 0 until 4) {
-			val a = p[(y0 * t.width + x0) * 4 + c]; val b = p[(y0 * t.width + x1) * 4 + c]
-			val d = p[(y1 * t.width + x0) * 4 + c]; val e = p[(y1 * t.width + x1) * 4 + c]
+			val shift = CHANNEL_SHIFT[c]
+			val a = premultiplied(pa, shift); val b = premultiplied(pb, shift)
+			val d = premultiplied(pd, shift); val e = premultiplied(pe, shift)
 			out[c] = (a + (b - a) * tx) * (1f - ty) + (d + (e - d) * tx) * ty
 		}
+	}
+
+	/** The channel at [shift] of [argb] premultiplied by its alpha, 0..1; the alpha itself at shift 24. */
+	private fun premultiplied(argb: Int, shift: Int): Float {
+		val a = UNIT[argb ushr 24]
+		return if (shift == 24) a else UNIT[(argb shr shift) and 0xff] * a
 	}
 
 	private fun blend(mode: ColorBlend, out: FloatArray, at: Int, sr: Float, sg: Float, sb: Float, sa: Float) {
@@ -258,5 +325,36 @@ public class SoftwareRasterizer(private val ir: RigIR) {
 		if (c[hi] > c[lo]) { out[mid] = (c[mid] - c[lo]) * s / (c[hi] - c[lo]); out[hi] = s } else { out[mid] = 0f; out[hi] = 0f }
 		out[lo] = 0f
 		return out
+	}
+
+	private companion object {
+		/** Working memory of one drawn pixel: the float color, a mask's coverage and the packed result. */
+		const val BYTES_PER_PIXEL = 24L
+
+		/** Each 8-bit value over 255, as dividing gives it. */
+		val UNIT = FloatArray(256) { it / 255f }
+
+		/** Red, green, blue and alpha's bit offsets in ARGB. */
+		val CHANNEL_SHIFT = intArrayOf(16, 8, 0, 24)
+
+		/**
+		 * [task] over 0 until [count] in parallel, results in order, holding at most about a third of the heap in
+		 * the [bytes] the tasks say they use at once.
+		 */
+		fun <R> bounded(count: Int, bytes: (Int) -> Long, task: (Int) -> R): List<R> {
+			val results = arrayOfNulls<Any?>(count)
+			if (count <= 1) { for (i in 0 until count) results[i] = task(i) } else {
+				val unit = 1L shl 16
+				val permits = (Runtime.getRuntime().maxMemory() / 3 / unit).coerceIn(1024L, Int.MAX_VALUE.toLong()).toInt()
+				val budget = java.util.concurrent.Semaphore(permits)
+				java.util.stream.IntStream.range(0, count).parallel().forEach { i ->
+					val need = ((bytes(i) + unit - 1) / unit).coerceIn(1L, permits.toLong()).toInt()
+					budget.acquireUninterruptibly(need)
+					try { results[i] = task(i) } finally { budget.release(need) }
+				}
+			}
+			@Suppress("UNCHECKED_CAST")
+			return results.asList() as List<R>
+		}
 	}
 }

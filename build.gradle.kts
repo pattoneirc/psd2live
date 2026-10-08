@@ -150,13 +150,14 @@ tasks.named("compileTestKotlin").configure {
 }
 
 // Test classes run in parallel JVMs. Each fork already uses every core for coroutine work, so a quarter of
-// the cores (at most 8 forks of 2 GiB) is enough; -Ppsd2live.testForks=N overrides it.
+// the cores (at most 8 forks of 2 GiB) is enough; -Ppsd2live.testForks=N overrides it, and -Ppsd2live.testHeap
+// the heap (for tools on large inputs).
 val testForks = providers.gradleProperty("psd2live.testForks").map(String::toInt)
 	.orElse(providers.provider { (Runtime.getRuntime().availableProcessors() / 4).coerceIn(1, 8) })
 
 tasks.withType<Test>().configureEach {
 	useJUnitPlatform()
-	maxHeapSize = "2g"
+	maxHeapSize = providers.gradleProperty("psd2live.testHeap").getOrElse("2g")
 	// `--tests` names one class from either module; the other module simply has nothing to run.
 	filter.isFailOnNoMatchingTests = false
 	maxParallelForks = testForks.get()

@@ -106,6 +106,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `SwingCostTool` | tml での 2 つのスイングの生成時間、その入力の単純なハッシュ時間、編集全体の再生時間。生成器に生成キャッシュを付ける価値があるかの判断に使う | `swing-cost/report.txt` |
 | `GeneratorCostTool` | 各生成器（スケルトンの有無による Rig 生成、スケルトンのベイクのキャッシュ前後、物理グループ一覧、生成モーションのキャッシュ前後、Rig IR のコンパイル、シミュレーションのベイクと書き戻し）の時間と、その入力のコンテンツハッシュ時間。`PSD2LIVE_SAMPLE` でサンプルを指定 | `generator-cost/report.txt` |
 | `ExportGoldenTool` | `tml` と `ds` の、スケルトンなし・自動スケルトン・作成したモーションの 3 種での全書き出しファイルのダイジェスト（cmo3 は読み戻して moc3 に下げたもの）。リファクタリング前後の書き出しをバイト単位で比較する。`PSD2LIVE_GOLDEN_LABEL` で出力名を指定 | `export-golden/<名前>.txt` |
+| `ExportPerfTool` | サンプル PSD（`PSD2LIVE_SAMPLE`）を整数倍に最近傍拡大し（`PSD2LIVE_EXPORT_SCALES`、既定 `1,2`）、書き出し先ごと（`PSD2LIVE_EXPORT_TARGETS`、既定は動画以外すべて）に時間を計り、書き出した全ファイルのダイジェスト（cmo3 は画像エントリと、読み戻して moc3 に下げたもの）を記録する。書き出し高速化の前後で時間とバイトを比較する。ラスター書き出しは拡大 1 段につき 1024 px、5 fps。`PSD2LIVE_GOLDEN_LABEL` で出力名を指定し、大きな倍率では `-Ppsd2live.testHeap=8g` などでテストのヒープを増やす | `export-perf/<名前>.txt`、`<名前>.digest.txt` |
 | `SafetyGoldenTool` | 自動スケルトン Rig 上の、シード付きランダムなジオメトリ編集 24 件の完全なジオメトリ安全性レポート（`coverage` を除く）。検査器の変更前後で分類をバイト単位で比較する。`PSD2LIVE_GOLDEN_LABEL` で出力名を指定 | `safety-golden/<名前>.txt` |
 | `BundleProfileTool` | moc3 プレビューバンドルの段階別時間（IR コンパイル、IR からの復元、静止メッシュのキャンバス空間への変換、physics3/motion3、moc の変換と書き出し、cdi3）とジオメトリ安全性検査の時間。`PSD2LIVE_SAMPLER=1` でスタックサンプラーのホットスポットも出力 | 標準出力のみ |
 | `TextureWorkspaceTool` | `tml` にいくつかの密度、ロック、固定を設定し、アトラスのページとテクスチャパネル（中国語と英語、単一・複数・未選択、ヒートマップのオン／オフ、密度スライダーのプレビュー）、および編集キャンバスのアトラスと元画像のピクセルの比較を描画 | `texture-workspace/*.png` |

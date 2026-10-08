@@ -193,7 +193,7 @@ internal object Cmo3AtlasUndedup {
 			packed.skipped
 				.filter { skip -> skip.reason == AtlasPackSkipReason.LargerThanPage }
 				.flatMap { skip -> jobByKey.getValue(skip.key).drawableIds }
-		val builtPages = pages + packed.pages.map { page -> Cmo3Conversion.AtlasPage(PngCodec.write(page), page.width, page.height) }
+		val builtPages = pages + packed.pages.parallelStream().map { page -> Cmo3Conversion.AtlasPage(PngCodec.write(page), page.width, page.height) }.toList()
 
 		val remappedDrawables =
 			puppet.drawables.map { drawable ->

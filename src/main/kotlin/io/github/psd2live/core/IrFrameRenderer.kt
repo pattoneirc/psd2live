@@ -3,6 +3,7 @@ package io.github.psd2live.core
 import io.github.psd2live.format.compile.FrameRenderer
 import io.github.psd2live.format.compile.FrameSession
 import io.github.psd2live.format.compile.FrameSpec
+import io.github.psd2live.format.compile.PlacedRaster
 import io.github.psd2live.format.compile.RasterImage
 import io.github.psd2live.format.model.PhysicsSource
 import io.github.psd2live.format.model.RigIR
@@ -16,7 +17,7 @@ import io.github.psd2live.format.compile.render.SoftwareRasterizer
  */
 internal object IrFrameRenderer : FrameRenderer {
 	override fun open(ir: RigIR, physics: Boolean): FrameSession {
-		val rasterizer = SoftwareRasterizer(ir)
+		val rasterizer = SoftwareRasterizer(ir, AtlasPagePng::pixelsOf)
 		val colors = IrColors(ir)
 		val geometry = IrGeometryEvaluator.open(ir)
 		val engine = if (!physics || ir.physics.groups.isEmpty()) null else PhysicsEngine(
@@ -32,6 +33,21 @@ internal object IrFrameRenderer : FrameRenderer {
 			override fun render(parameters: Map<String, Float>, deltaSeconds: Float, frame: FrameSpec, meshes: Set<String>?): RasterImage {
 				val values = parameters + engine?.step(parameters, deltaSeconds).orEmpty()
 				return rasterizer.render(geometry.evaluate(values), colors.at(values), frame, meshes)
+			}
+
+			// The pose is evaluated once; each mesh is drawn over its own reach, in parallel.
+			override fun renderEach(parameters: Map<String, Float>, frame: FrameSpec, meshes: List<String>): List<PlacedRaster?> {
+				val values = parameters + engine?.step(parameters, 0f).orEmpty()
+				return rasterizer.renderMeshes(geometry.evaluate(values), colors.at(values), frame, meshes)
+			}
+
+			// Physics and geometry step in frame order; the frames are then drawn in parallel.
+			override fun renderSequence(frames: List<Pair<Map<String, Float>, Float>>, frame: FrameSpec): List<RasterImage> {
+				val poses = frames.map { (parameters, delta) ->
+					val values = parameters + engine?.step(parameters, delta).orEmpty()
+					geometry.evaluate(values) to colors.at(values)
+				}
+				return rasterizer.renderFrames(poses, frame)
 			}
 
 			override fun close() = geometry.close()

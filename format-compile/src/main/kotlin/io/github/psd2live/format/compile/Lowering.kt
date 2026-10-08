@@ -117,6 +117,29 @@ public class RasterImage(public val width: Int, public val height: Int, public v
 	init { require(width > 0 && height > 0 && argb.size == width * height) { "Raster size mismatch" } }
 }
 
+/** [image] with its top-left pixel at ([left], [top]) of a larger frame. */
+public class PlacedRaster(public val left: Int, public val top: Int, public val image: RasterImage) {
+	/** This raster cut to the bounding box of its pixels with any alpha, or null when every pixel is transparent. */
+	public fun trimmed(): PlacedRaster? {
+		val width = image.width; val argb = image.argb
+		var left = width; var top = image.height; var right = -1; var bottom = -1
+		for (y in 0 until image.height) {
+			val row = y * width
+			var first = -1; var last = -1
+			for (x in 0 until width) if (argb[row + x] ushr 24 != 0) { if (first < 0) first = x; last = x }
+			if (first < 0) continue
+			if (first < left) left = first; if (last > right) right = last
+			if (y < top) top = y; bottom = y
+		}
+		if (right < 0) return null
+		if (left == 0 && top == 0 && right == width - 1 && bottom == image.height - 1) return this
+		val w = right - left + 1; val h = bottom - top + 1
+		val out = IntArray(w * h)
+		for (y in 0 until h) System.arraycopy(argb, (top + y) * width + left, out, y * w, w)
+		return PlacedRaster(this.left + left, this.top + top, RasterImage(w, h, out))
+	}
+}
+
 /** The canvas rectangle to render and the output size in pixels. [background] is ARGB; 0 is transparent. */
 public data class FrameSpec(
 	val left: Float, val top: Float, val width: Float, val height: Float,
@@ -150,6 +173,21 @@ public interface FrameSession : AutoCloseable {
 	 * [meshes] limits drawing to those mesh ids (masks still apply); null draws every visible mesh.
 	 */
 	public fun render(parameters: Map<String, Float>, deltaSeconds: Float, frame: FrameSpec, meshes: Set<String>? = null): RasterImage
+
+	/**
+	 * Each of [meshes] drawn alone at [parameters] (its masks still apply), pixel for pixel as [render] with
+	 * only that mesh and no time step draws it, trimmed to its drawn pixels ([PlacedRaster.trimmed]); null
+	 * where nothing is drawn. A host may render the meshes in parallel and only over the pixels each reaches.
+	 */
+	public fun renderEach(parameters: Map<String, Float>, frame: FrameSpec, meshes: List<String>): List<PlacedRaster?> =
+		meshes.map { PlacedRaster(0, 0, render(parameters, 0f, frame, setOf(it))).trimmed() }
+
+	/**
+	 * Consecutive frames, each at its parameters and the seconds since the previous one, as one [render] call
+	 * after another draws them. A host may draw them in parallel once physics has been stepped in order.
+	 */
+	public fun renderSequence(frames: List<Pair<Map<String, Float>, Float>>, frame: FrameSpec): List<RasterImage> =
+		frames.map { (parameters, delta) -> render(parameters, delta, frame) }
 }
 
 /** Evaluated geometry of a rig at one pose: mesh vertices in canvas pixels (y down), opacity and draw order. */

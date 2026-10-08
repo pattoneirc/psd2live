@@ -108,6 +108,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `SwingCostTool` | tml 上两个摆动的生成耗时、朴素哈希其输入的耗时与全部编辑重放耗时，用于判断生成器是否值得接入生成缓存 | `swing-cost/report.txt` |
 | `GeneratorCostTool` | 各生成器（Rig 生成有无骨架、骨架烘焙缓存前后、物理组目录、生成动作缓存前后、Rig IR 编译、模拟烘焙与写回）的耗时，及对其输入做内容哈希的耗时；`PSD2LIVE_SAMPLE` 指定样例 | `generator-cost/report.txt` |
 | `ExportGoldenTool` | `tml`、`ds` 的无骨架、自动骨架和自定义动作三种变体的全部导出文件摘要（cmo3 取读回后降级为 moc3 的摘要），用于逐字节对比重构前后的导出；`PSD2LIVE_GOLDEN_LABEL` 指定输出名 | `export-golden/<名称>.txt` |
+| `ExportPerfTool` | 把示例 PSD（`PSD2LIVE_SAMPLE`）按整数倍最近邻放大（`PSD2LIVE_EXPORT_SCALES`，默认 `1,2`）后，逐个导出目标（`PSD2LIVE_EXPORT_TARGETS`，默认除视频外全部）计时，并记录每个导出文件的摘要（cmo3 取其中图像条目与读回后降级为 moc3 的摘要），用于对比导出提速前后的耗时与字节；栅格目标每档放大输出 1024 像素、5 fps；`PSD2LIVE_GOLDEN_LABEL` 指定输出名，大倍数需 `-Ppsd2live.testHeap=8g` 等加大测试堆 | `export-perf/<名称>.txt`、`<名称>.digest.txt` |
 | `ArtPrimitiveV2VisualTool` | 在 `tml` 上把腿按侧连通块拆分、左眼睫多边形拆分、嘴部多边形拆分分别写成版本 1 与版本 2 记录，渲染未拆分、v1、v2 与 v1/v2 差异（×4）在睁眼/半闭/闭眼、闭嘴/张嘴/张嘴笑等姿态下的对照，检查接缝、错位与缺失像素 | `art-primitive-v2/{legs,eye,mouth}.png` |
 | `SafetyGoldenTool` | 自动骨架 Rig 上 24 组带种子的随机几何编辑的完整几何安全报告（不含 `coverage`），用于逐字节对比检查器改动前后的分类；`PSD2LIVE_GOLDEN_LABEL` 指定输出名 | `safety-golden/<名称>.txt` |
 | `BundleProfileTool` | moc3 预览包的分项耗时（IR 编译、IR 转回、静止网格换到画布空间、physics3/motion3、moc 降级与写出、cdi3）及几何安全检查耗时；`PSD2LIVE_SAMPLER=1` 另打印栈采样的热点 | 仅标准输出 |

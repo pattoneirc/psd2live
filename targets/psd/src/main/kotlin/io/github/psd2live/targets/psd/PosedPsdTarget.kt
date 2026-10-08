@@ -41,9 +41,8 @@ public class PosedPsdTarget(private val renderer: FrameRenderer) : ExportTarget 
 		val frame = FrameSpec(0f, 0f, ir.canvas.width, ir.canvas.height, width, height)
 		val meshes = ir.meshes.filter { it.visible && it.geometry != null }.sortedBy { it.drawOrder }
 		val layers = renderer.open(ir, physics = false).use { session ->
-			meshes.mapIndexedNotNull { index, mesh ->
-				val image = session.render(pose, 0f, frame, setOf(mesh.id))
-				crop(image)?.let { (bounds, raster) -> PosedLayer(mesh.id, mesh.name, meshes.size - index, bounds, raster) }
+			session.renderEach(pose, frame, meshes.map { it.id }).mapIndexedNotNull { index, placed ->
+				placed?.let { PosedLayer(meshes[index].id, meshes[index].name, meshes.size - index, LayerBounds(it.left, it.top, it.image.width, it.image.height), rgba(it.image)) }
 			}
 		}
 		val losses = buildList {
@@ -76,20 +75,13 @@ public class PosedPsdTarget(private val renderer: FrameRenderer) : ExportTarget 
 		key.trim() to (value.trim().toFloatOrNull()?.takeIf(Float::isFinite) ?: throw IllegalArgumentException("Pose value is not a number: $pair"))
 	}.orEmpty()
 
-	/** The opaque bounding box of [image] and its pixels as straight RGBA, or null when nothing is drawn. */
-	private fun crop(image: RasterImage): Pair<LayerBounds, LayerRaster>? {
-		var left = image.width; var top = image.height; var right = -1; var bottom = -1
-		for (y in 0 until image.height) for (x in 0 until image.width) if (image.argb[y * image.width + x] ushr 24 != 0) {
-			if (x < left) left = x; if (x > right) right = x; if (y < top) top = y; if (y > bottom) bottom = y
+	/** [image]'s pixels as straight RGBA. */
+	private fun rgba(image: RasterImage): LayerRaster {
+		val rgba = ByteArray(image.argb.size * 4)
+		for (i in image.argb.indices) {
+			val argb = image.argb[i]
+			rgba[i * 4] = (argb shr 16).toByte(); rgba[i * 4 + 1] = (argb shr 8).toByte(); rgba[i * 4 + 2] = argb.toByte(); rgba[i * 4 + 3] = (argb ushr 24).toByte()
 		}
-		if (right < 0) return null
-		val w = right - left + 1; val h = bottom - top + 1
-		val rgba = ByteArray(w * h * 4)
-		for (y in 0 until h) for (x in 0 until w) {
-			val argb = image.argb[(top + y) * image.width + left + x]
-			val i = (y * w + x) * 4
-			rgba[i] = (argb shr 16).toByte(); rgba[i + 1] = (argb shr 8).toByte(); rgba[i + 2] = argb.toByte(); rgba[i + 3] = (argb ushr 24).toByte()
-		}
-		return LayerBounds(left, top, w, h) to LayerRaster(w, h, rgba)
+		return LayerRaster(image.width, image.height, rgba)
 	}
 }

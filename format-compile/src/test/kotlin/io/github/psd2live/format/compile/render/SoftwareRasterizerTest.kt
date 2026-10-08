@@ -1,6 +1,7 @@
 package io.github.psd2live.format.compile.render
 
 import io.github.psd2live.format.compile.FrameSpec
+import io.github.psd2live.format.compile.PlacedRaster
 import io.github.psd2live.format.compile.PoseGeometry
 import io.github.psd2live.format.model.*
 import java.awt.image.BufferedImage
@@ -82,6 +83,46 @@ class SoftwareRasterizerTest {
 		near(0xff804040.toInt(), render(listOf(mesh), pages, values = mapOf("A" to 0.5f), parameters = parameters)[55])
 		// The shape screens blue at full weight: 0x80 + 0xff - 0x80 x 0xff / 0xff.
 		near(0xff8080ff.toInt(), render(listOf(mesh), pages, values = mapOf("S" to 1f), parameters = parameters)[55])
+	}
+
+	@Test fun eachMeshDrawsOverItsOwnReachAsTheFullFrameDoes() {
+		// A 4 x 4 page of varied texels, so bilinear sampling differs from pixel to pixel.
+		val image = BufferedImage(4, 4, BufferedImage.TYPE_INT_ARGB)
+		for (y in 0 until 4) for (x in 0 until 4) image.setRGB(x, y, ((40 + 50 * x) shl 24) or ((x * 60) shl 16) or ((y * 70) shl 8) or (x * y * 15))
+		val pages = listOf(TexturePage(4, 4, Bytes.of(ByteArrayOutputStream().also { ImageIO.write(image, "png", it) }.toByteArray())))
+		fun mesh(id: String, x0: Float, y0: Float, x1: Float, y1: Float, maskedBy: List<String> = emptyList(), invert: Boolean = false) =
+			Mesh(id, id, null, page = 0, maskedBy = maskedBy, invertMask = invert, offsets = null, geometry = MeshGeometry(
+				Floats.values(x0, y0, x1, y0, x0, y1, x1, y1), Floats.values(0.1f, 0.05f, 0.9f, 0.2f, 0f, 1f, 0.95f, 0.85f), Ints.values(0, 1, 2, 1, 3, 2)))
+		val meshes = listOf(
+			mesh("mask", 3.3f, 2.7f, 17.2f, 12.9f).copy(visible = false),
+			mesh("a", 1.37f, 2.11f, 9.73f, 14.6f, maskedBy = listOf("mask")),
+			mesh("b", 6.2f, -4f, 23.5f, 8.8f, maskedBy = listOf("mask"), invert = true),
+			mesh("c", 30f, 30f, 40f, 40f),
+		)
+		val ir = RigIR(Canvas(20f, 16f), emptyList(), meshes = meshes, textures = Textures(pages = pages))
+		val pose = PoseGeometry(meshes.associate { it.id to it.geometry!!.positions.toArray() }, meshes.associate { it.id to 1f }, meshes.associate { it.id to it.drawOrder })
+		val colors = IrColors(ir).at(emptyMap())
+		val frame = FrameSpec(0.5f, 0.25f, 19f, 15f, 37, 29)
+		val rasterizer = SoftwareRasterizer(ir)
+		val ids = meshes.map { it.id }
+		val each = rasterizer.renderMeshes(pose, colors, frame, ids)
+		for ((index, id) in ids.withIndex()) {
+			val full = PlacedRaster(0, 0, rasterizer.render(pose, colors, frame, setOf(id))).trimmed()
+			val placed = each[index]
+			assertEquals(full == null, placed == null, id)
+			if (full == null || placed == null) continue
+			assertEquals(listOf(full.left, full.top, full.image.width, full.image.height), listOf(placed.left, placed.top, placed.image.width, placed.image.height), id)
+			assertContentEquals(full.image.argb, placed.image.argb, id)
+		}
+		assertNotNull(each[1]); assertNotNull(each[2]); assertNull(each[3])
+		// Whole frames drawn together match frames drawn one by one.
+		val moved = PoseGeometry(pose.positions.mapValues { (_, p) -> FloatArray(p.size) { p[it] + 1.5f } }, pose.opacity, pose.drawOrder)
+		val frames = rasterizer.renderFrames(listOf(pose to colors, moved to colors), frame)
+		assertContentEquals(rasterizer.render(pose, colors, frame).argb, frames[0].argb)
+		assertContentEquals(rasterizer.render(moved, colors, frame).argb, frames[1].argb)
+		// Pixels the host already holds stand in for decoding the page.
+		val held = SoftwareRasterizer(ir) { image.getRGB(0, 0, 4, 4, null, 0, 4) }
+		assertContentEquals(rasterizer.render(pose, colors, frame).argb, held.render(pose, colors, frame).argb)
 	}
 
 	@Test fun hiddenPartsAndMeshesAreNotDrawn() {

@@ -1,5 +1,6 @@
 package org.umamo.interop.cmo3
 
+import org.umamo.format.art.LayerBounds
 import org.umamo.format.art.analyzeAlpha
 import org.umamo.format.cmo3.model.custom.CImageResource
 import org.umamo.format.cmo3.model.custom.CLayer
@@ -1215,6 +1216,7 @@ internal object Cmo3ImageChainBuilder {
 	 * @param Cmo3FreshChainNames names     The document's shared filter definitions and naming counters.
 	 * @param MutableList      pngEntries   The PNG entry collector, for the icon.
 	 * @param Long             nowMillis    The timestamp the env values record.
+	 * @param ByteArray?       icon16Png    The icon's PNG when already encoded from [raster], else encoded here.
 	 * @return CModelImage The model image.
 	 */
 	internal fun modelImageOver(
@@ -1228,6 +1230,7 @@ internal object Cmo3ImageChainBuilder {
 		names: Cmo3FreshChainNames,
 		pngEntries: MutableList<Cmo3FreshFile.PngEntry>,
 		nowMillis: Long,
+		icon16Png: ByteArray? = null,
 	): CModelImage =
 		CModelImage().apply {
 			guid = Cmo3SkeletonBuilder.freshGuid("CModelImageGuid")
@@ -1276,7 +1279,9 @@ internal object Cmo3ImageChainBuilder {
 			_filteredImage = resource
 			// CMO3: CModelImage fields icon16 / cachedImageManager - present on every corpus model
 			// image; the icon is the filtered image fitted into its square.
-			icon16 = Cmo3Icons.iconOf(raster, 16, names.nextIconPath(), pngEntries)
+			icon16 = names.nextIconPath().let { path ->
+				if (icon16Png != null) Cmo3Icons.iconOf(icon16Png, 16, path, pngEntries) else Cmo3Icons.iconOf(raster, 16, path, pngEntries)
+			}
 			// CMO3: CModelImage field _materialLocalToCanvasTransform - the layer's canvas placement
 			// (official layers carry their canvas origin here), the same numbers the layer's
 			// boundsOnImageDoc origin carries.
@@ -1379,6 +1384,26 @@ internal object Cmo3ImageChainBuilder {
 			pngEntries.add(Cmo3FreshFile.PngEntry(path, png))
 			return Cmo3Icons.iconReferencing(size, path)
 		}
+		// The pixel work of every distinct patch (mask, trim to the opaque bounds, encode) runs in parallel up
+		// front, keyed like the webs; the loop below mints the graph in region order, so every name, guid and
+		// entry comes out in the order it always did.
+		val patchJobs = LinkedHashMap<PatchWebKey, () -> PatchPixels>()
+		for (region in regions) {
+			val patch = patchRectOf(region.uvs, page.width, page.height) ?: continue
+			patchJobs.getOrPut(PatchWebKey(patch, region.uvs, region.indices)) {
+				{
+					val cropWidth = patch[2] - patch[0]
+					val cropHeight = patch[3] - patch[1]
+					val coverage = coverageMaskOf(region.uvs, region.indices, page.width, page.height, patch[0], patch[1], cropWidth, cropHeight)
+					val maskedCrop = maskedCropOf(decodedPage, patch[0], patch[1], cropWidth, cropHeight, coverage)
+					val opaqueBounds = opaqueBoundsOf(maskedCrop)
+					val trimmedCrop = if (opaqueBounds == null) maskedCrop else maskedCrop.cropped(opaqueBounds)
+					PatchPixels(trimmedCrop, opaqueBounds, PngCodec.write(trimmedCrop), Cmo3Icons.iconPngOf(trimmedCrop, 16),
+						Cmo3Icons.iconPngOf(trimmedCrop, 32), Cmo3Icons.iconPngOf(trimmedCrop, 64))
+				}
+			}
+		}
+		val patchPixels = patchJobs.entries.toList().parallelStream().map { (key, job) -> key to job() }.toList().toMap()
 		for (region in regions) {
 			val pageFit = fitAtlasPageToCanvasTransform(region.uvs, region.positions, page.width, page.height)
 			val patch = patchRectOf(region.uvs, page.width, page.height)
@@ -1394,17 +1419,14 @@ internal object Cmo3ImageChainBuilder {
 			val webKey = PatchWebKey(patch, region.uvs, region.indices)
 			val patchWeb =
 				patchWebByKey.getOrPut(webKey) {
-					val coverage =
-						coverageMaskOf(region.uvs, region.indices, page.width, page.height, patchX0, patchY0, cropWidth, cropHeight)
-					val maskedCrop = maskedCropOf(decodedPage, patchX0, patchY0, cropWidth, cropHeight, coverage)
+					val pixels = patchPixels.getValue(webKey)
 					// Trim the masked crop to its opaque pixel bounds: an official layer rect
 					// records the ART's own bounds, not the mesh's reach (the auto-mesh margin
 					// the uv bbox includes), and trimming lands within ~1px median of the
 					// editor's own rects on the EricaTamamo differential.  A fully transparent
 					// crop (a mesh over empty page pixels) keeps the untrimmed rect.
-					val opaqueBounds =
-						analyzeAlpha(cropWidth, cropHeight, maskedCrop.rgba, contourEpsilon = 0f)?.opaqueBounds
-					val trimmedCrop = if (opaqueBounds == null) maskedCrop else maskedCrop.cropped(opaqueBounds)
+					val opaqueBounds = pixels.opaqueBounds
+					val trimmedCrop = pixels.trimmedCrop
 					val trimmedX0 = patchX0 + (opaqueBounds?.left ?: 0)
 					val trimmedY0 = patchY0 + (opaqueBounds?.top ?: 0)
 					// Anchor the web on an INTEGER canvas placement, official-style: every
@@ -1420,7 +1442,7 @@ internal object Cmo3ImageChainBuilder {
 					patchPlacement.m02 = kotlin.math.round(patchPlacement.m02)
 					patchPlacement.m12 = kotlin.math.round(patchPlacement.m12)
 					val packingOrigin = solvePageFitFor(pageFit, patchPlacement.m02, patchPlacement.m12)
-					val cropBytes = PngCodec.write(trimmedCrop)
+					val cropBytes = pixels.png
 					val cropPath = names.nextImageFileBufPath()
 					pngEntries.add(Cmo3FreshFile.PngEntry(cropPath, cropBytes))
 					val cropResource =
@@ -1465,15 +1487,15 @@ internal object Cmo3ImageChainBuilder {
 								}
 							// CMO3: CLayer fields icon16 / icon64 - thumbnails on every corpus layer,
 							// the crop fitted into each square.
-							icon16 = Cmo3Icons.iconOf(trimmedCrop, 16, names.nextIconPath(), pngEntries)
-							icon64 = Cmo3Icons.iconOf(trimmedCrop, 64, names.nextIconPath(), pngEntries)
+							icon16 = Cmo3Icons.iconOf(pixels.icon16, 16, names.nextIconPath(), pngEntries)
+							icon64 = Cmo3Icons.iconOf(pixels.icon64, 64, names.nextIconPath(), pngEntries)
 							layerInfo = LinkedHashMap<String, Any?>()
 							this.group = rootLayerGroup
 						}
 					patchLayers.add(patchLayer)
 					layerEntryList.add(patchLayer)
 					val patchImage =
-						modelImageOver(region.drawableIdStr, layeredImage, patchLayer, cropResource, trimmedCrop, patchPlacement.copyAffine(), group.group, names, pngEntries, nowMillis)
+						modelImageOver(region.drawableIdStr, layeredImage, patchLayer, cropResource, trimmedCrop, patchPlacement.copyAffine(), group.group, names, pngEntries, nowMillis, pixels.icon16)
 					group.modelImages.add(patchImage)
 					atlasEntries.add(
 						// The declared packing origin is the fit-inverse of the snapped placement
@@ -1497,7 +1519,7 @@ internal object Cmo3ImageChainBuilder {
 					)
 					// The drawable icons show the crop, which IS the mesh's uv box; twins share the
 					// bytes and each takes an entry of its own, like the editor's one icon per drawable.
-					PatchWeb(patchImage.guid as Guid, Cmo3Icons.iconPngOf(trimmedCrop, 32), Cmo3Icons.iconPngOf(trimmedCrop, 16))
+					PatchWeb(patchImage.guid as Guid, pixels.icon32, pixels.icon16)
 				}
 			bindingByDrawableId[region.drawableIdStr] =
 				Cmo3DrawableTextureBinding(
@@ -1521,4 +1543,48 @@ internal object Cmo3ImageChainBuilder {
 	 * @property ByteArray icon16Png The 16px drawable icon's bytes.
 	 */
 	private class PatchWeb(val imageGuid: Guid, val icon32Png: ByteArray, val icon16Png: ByteArray)
+
+	/**
+	 * The pixels of one patch, made before the graph is minted: the masked crop trimmed to [opaqueBounds]
+	 * (null when nothing in it is opaque, which keeps the whole crop), its PNG and its icons' PNGs.
+	 */
+	private class PatchPixels(
+		val trimmedCrop: RasterImage,
+		val opaqueBounds: LayerBounds?,
+		val png: ByteArray,
+		val icon16: ByteArray,
+		val icon32: ByteArray,
+		val icon64: ByteArray,
+	)
+
+	/**
+	 * The bounds of [raster]'s pixels with any alpha, or null when it has none: the opaque bounds [analyzeAlpha]
+	 * reports at the default threshold, without tracing contours.
+	 */
+	private fun opaqueBoundsOf(raster: RasterImage): LayerBounds? {
+		val width = raster.width
+		val rgba = raster.rgba
+		var left = width
+		var right = -1
+		var top = -1
+		var bottom = -1
+		for (row in 0 until raster.height) {
+			var first = -1
+			var last = -1
+			var offset = row * width * 4 + 3
+			for (column in 0 until width) {
+				if (rgba[offset].toInt() != 0) {
+					if (first < 0) first = column
+					last = column
+				}
+				offset += 4
+			}
+			if (first < 0) continue
+			if (top < 0) top = row
+			bottom = row
+			if (first < left) left = first
+			if (last > right) right = last
+		}
+		return if (right < 0) null else LayerBounds(left, top, right - left + 1, bottom - top + 1)
+	}
 }

@@ -91,7 +91,11 @@ public class RasterTargets(private val renderer: FrameRenderer) {
 	/** Numbered PNG frames. */
 	public val sequence: ExportTarget = target("png-sequence", "PNG image sequence") { frames, options, clip, fps ->
 		{ sink: OutputSink ->
-			frames.forEachIndexed { index, image -> sink.write("${options.baseName}_${index.toString().padStart(4, '0')}.png", png(image)) }
+			// Encoded in parallel a batch at a time, written in order.
+			for (batch in frames.indices.chunked(maxOf(1, Runtime.getRuntime().availableProcessors() * 2))) {
+				val encoded = batch.parallelStream().map { png(frames[it]) }.toList()
+				batch.forEachIndexed { i, index -> sink.write("${options.baseName}_${index.toString().padStart(4, '0')}.png", encoded[i]) }
+			}
 		}
 	}
 
@@ -104,9 +108,11 @@ public class RasterTargets(private val renderer: FrameRenderer) {
 		require(columns.toLong() * width <= MAX_SHEET && rows.toLong() * height <= MAX_SHEET) {
 			"Sprite sheet ${columns * width}x${rows * height} exceeds $MAX_SHEET px; lower the size or the frame rate"
 		}
-		val image = BufferedImage(columns * width, rows * height, BufferedImage.TYPE_INT_ARGB)
+		val sheetWidth = columns * width; val sheetHeight = rows * height
+		val pixels = IntArray(sheetWidth * sheetHeight)
 		frames.forEachIndexed { index, frame ->
-			image.setRGB(index % columns * width, index / columns * height, width, height, frame.argb, 0, width)
+			val left = index % columns * width; val top = index / columns * height
+			for (y in 0 until height) System.arraycopy(frame.argb, y * width, pixels, (top + y) * sheetWidth + left, width)
 		}
 		val sheetName = "${options.baseName}.png"
 		val json = buildString {
@@ -120,10 +126,13 @@ public class RasterTargets(private val renderer: FrameRenderer) {
 				append("\"sourceSize\": {\"w\": $width, \"h\": $height}, \"duration\": ${(1000f / fps).toInt()}}")
 			}
 			append("\n  },\n  \"meta\": {\"app\": \"psd2live\", \"version\": \"${Compiler.version}\", \"image\": \"$sheetName\", ")
-			append("\"format\": \"RGBA8888\", \"size\": {\"w\": ${image.width}, \"h\": ${image.height}}, \"scale\": \"1\", ")
+			append("\"format\": \"RGBA8888\", \"size\": {\"w\": $sheetWidth, \"h\": $sheetHeight}, \"scale\": \"1\", ")
 			append("\"frameRate\": $fps, \"loop\": ${clip?.loop ?: false}}\n}\n")
 		}
-		val write: (OutputSink) -> Unit = { sink -> sink.write(sheetName, png(image)); sink.write("${options.baseName}.json", json.encodeToByteArray()) }
+		// One large image, encoded in parallel bands.
+		val write: (OutputSink) -> Unit = { sink ->
+			sink.write(sheetName, PngEncoder.encode(sheetWidth, sheetHeight, pixels)); sink.write("${options.baseName}.json", json.encodeToByteArray())
+		}
 		write
 	}
 
@@ -163,10 +172,9 @@ public class RasterTargets(private val renderer: FrameRenderer) {
 			var simulated = false
 			val frames = renderer.open(ir, physics).use { session ->
 				var previous = 0f
-				times.map { time ->
-					val values = clip?.let { ClipSampler.valuesAt(it, time) } ?: emptyMap()
-					session.render(values, (time - previous).also { previous = time }, spec)
-				}.also { simulated = session.simulatesPhysics }
+				session.renderSequence(times.map { time ->
+					(clip?.let { ClipSampler.valuesAt(it, time) } ?: emptyMap()) to (time - previous).also { previous = time }
+				}, spec).also { simulated = session.simulatesPhysics }
 			}
 			val losses = CapabilityScan.scan(ir, capabilities, options).filter { it.feature != Feature.PHYSICS || !simulated } + listOfNotNull(extraLoss)
 			val write = writer(frames, options, clip, fps)
@@ -181,9 +189,7 @@ public class RasterTargets(private val renderer: FrameRenderer) {
 		it.setRGB(0, 0, frame.width, frame.height, frame.argb, 0, frame.width)
 	}
 
-	private fun png(frame: RasterImage) = png(image(frame))
-
-	private fun png(image: BufferedImage): ByteArray = ByteArrayOutputStream().also { check(ImageIO.write(image, "png", it)) }.toByteArray()
+	private fun png(frame: RasterImage): ByteArray = ByteArrayOutputStream().also { check(ImageIO.write(image(frame), "png", it)) }.toByteArray()
 
 	private fun gif(frames: List<RasterImage>, fps: Float, loop: Boolean): ByteArray {
 		val writer = ImageIO.getImageWritersByFormatName("gif").next()
@@ -192,8 +198,8 @@ public class RasterTargets(private val renderer: FrameRenderer) {
 			writer.output = stream
 			writer.prepareWriteSequence(null)
 			val delay = (100f / fps).toInt().coerceAtLeast(1)
-			frames.forEachIndexed { index, frame ->
-				val indexed = indexed(frame)
+			val palettized = frames.parallelStream().map(::indexed).toList()
+			palettized.forEachIndexed { index, indexed ->
 				val metadata = writer.getDefaultImageMetadata(ImageTypeSpecifier.createFromRenderedImage(indexed), null)
 				val format = metadata.nativeMetadataFormatName
 				val root = metadata.getAsTree(format) as IIOMetadataNode
@@ -247,16 +253,17 @@ public class RasterTargets(private val renderer: FrameRenderer) {
 		val model = java.awt.image.IndexColorModel(8, 256, reds.map(Int::toByte).toByteArray(), greens.map(Int::toByte).toByteArray(),
 			blues.map(Int::toByte).toByteArray(), 0)
 		val image = BufferedImage(frame.width, frame.height, BufferedImage.TYPE_BYTE_INDEXED, model)
-		val raster = image.raster
-		for (y in 0 until frame.height) for (x in 0 until frame.width) {
-			val argb = frame.argb[y * frame.width + x]
+		// An 8-bit indexed image keeps one byte per pixel, row by row.
+		val samples = (image.raster.dataBuffer as java.awt.image.DataBufferByte).data
+		for (i in frame.argb.indices) {
+			val argb = frame.argb[i]
 			val index = if ((argb ushr 24) < 128) 0 else {
 				val r = (((argb shr 16) and 255) * 5 + 127) / 255
 				val g = (((argb shr 8) and 255) * 6 + 127) / 255
 				val b = ((argb and 255) * 5 + 127) / 255
 				1 + (r * 7 + g) * 6 + b
 			}
-			raster.setSample(x, y, 0, index)
+			samples[i] = index.toByte()
 		}
 		return image
 	}

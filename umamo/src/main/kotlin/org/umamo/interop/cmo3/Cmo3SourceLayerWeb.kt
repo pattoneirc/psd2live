@@ -212,9 +212,23 @@ internal object Cmo3SourceLayerWeb {
 			return folder
 		}
 		val bindings = HashMap<String, Cmo3DrawableTextureBinding>()
-		for (layerInput in image.layers) {
+		// Every layer's pixel work (its PNG, its icons, its drawables' patch icons) runs in parallel up front;
+		// the graph is minted below in layer order, so names and entries come out in the order they always did.
+		val encoded = image.layers.parallelStream().map { layerInput ->
 			val raster = layerInput.raster
-			val pngBytes = PngCodec.write(raster)
+			val placed = layerInput.placement?.let { atlases.getOrNull(it.pageIndex) } != null
+			LayerPixels(
+				PngCodec.write(raster), Cmo3Icons.iconPngOf(raster, 16), Cmo3Icons.iconPngOf(raster, 64),
+				if (!placed) emptyMap() else layerInput.drawableIds.associateWith { drawableId ->
+					val patch = Cmo3Icons.patchOf(raster, layerInput.artUvsByDrawableId[drawableId])
+					Cmo3Icons.iconPngOf(patch, 32) to Cmo3Icons.iconPngOf(patch, 16)
+				},
+			)
+		}.toList()
+		for ((layerIndex, layerInput) in image.layers.withIndex()) {
+			val raster = layerInput.raster
+			val pixels = encoded[layerIndex]
+			val pngBytes = pixels.png
 			val path = names.nextImageFileBufPath()
 			pngEntries.add(Cmo3FreshFile.PngEntry(path, pngBytes))
 			val resource = layerResource(path, raster, pngBytes.size)
@@ -232,10 +246,11 @@ internal object Cmo3SourceLayerWeb {
 					folder = folder,
 					names = names,
 					pngEntries = pngEntries,
+					icons = pixels.icon16 to pixels.icon64,
 				)
 			childrenByPath.getValue(layerInput.groupPath).add(layer)
 			layerEntryList.add(layer)
-			val modelImage = Cmo3ImageChainBuilder.modelImageOver(layerInput.name, layeredImage, layer, resource, raster, layerPlacement(layerInput.canvasLeft, layerInput.canvasTop), group, names, pngEntries, nowMillis)
+			val modelImage = Cmo3ImageChainBuilder.modelImageOver(layerInput.name, layeredImage, layer, resource, raster, layerPlacement(layerInput.canvasLeft, layerInput.canvasTop), group, names, pngEntries, nowMillis, pixels.icon16)
 			groupModelImages.add(modelImage)
 			val tilePlacement = layerInput.placement ?: continue
 			val atlas = atlases.getOrNull(tilePlacement.pageIndex) ?: continue
@@ -258,20 +273,26 @@ internal object Cmo3SourceLayerWeb {
 			for (drawableId in layerInput.drawableIds) {
 				// The drawable's icons show the patch its mesh covers on the layer, one icon per
 				// drawable like the editor's files.
-				val patch = Cmo3Icons.patchOf(raster, layerInput.artUvsByDrawableId[drawableId])
+				val (patch32, patch16) = pixels.patchIcons.getValue(drawableId)
 				bindings[drawableId] =
 					Cmo3DrawableTextureBinding(
 						texture,
 						atlas.guid as Guid,
 						modelImage.guid as Guid,
 						affineOf(entryHalf),
-						icon32 = Cmo3Icons.iconOf(patch, 32, names.nextIconPath(), pngEntries),
-						icon16 = Cmo3Icons.iconOf(patch, 16, names.nextIconPath(), pngEntries),
+						icon32 = Cmo3Icons.iconOf(patch32, 32, names.nextIconPath(), pngEntries),
+						icon16 = Cmo3Icons.iconOf(patch16, 16, names.nextIconPath(), pngEntries),
 					)
 			}
 		}
 		return Written(minted.wrapper, group, bindings)
 	}
+
+	/**
+	 * One layer's encoded pixels: its PNG, its 16 and 64 px icons, and the 32 and 16 px patch icons of each
+	 * drawable over it (only for a placed tile, the only one whose drawables are bound).
+	 */
+	private class LayerPixels(val png: ByteArray, val icon16: ByteArray, val icon64: ByteArray, val patchIcons: Map<String, Pair<ByteArray, ByteArray>>)
 
 	/**
 	 * A freshly minted layered image with the lists a layer is added through.
@@ -398,6 +419,7 @@ internal object Cmo3SourceLayerWeb {
 	 * @param CLayerGroup         folder       The folder the layer sits in.
 	 * @param Cmo3FreshChainNames names        The document's shared blend, options, and icon paths.
 	 * @param MutableList         pngEntries   The PNG entry collector, for the icons.
+	 * @param Pair?               icons        The 16 and 64 px icon PNGs when already encoded from [raster], else encoded here.
 	 * @return CLayer The layer, not yet added to any list.
 	 */
 	internal fun layerOver(
@@ -412,6 +434,7 @@ internal object Cmo3SourceLayerWeb {
 		folder: CLayerGroup,
 		names: Cmo3ImageChainBuilder.Cmo3FreshChainNames,
 		pngEntries: MutableList<Cmo3FreshFile.PngEntry>,
+		icons: Pair<ByteArray, ByteArray>? = null,
 	): CLayer =
 		CLayer().apply {
 			// CMO3: CLayer - the tile's layer on the file's document.
@@ -431,8 +454,8 @@ internal object Cmo3SourceLayerWeb {
 			layerIdentifier = identifierOf(name, layerKey)
 			// CMO3: CLayer fields icon16 / icon64 - thumbnails on every corpus layer, the whole
 			// layer fitted into each square.
-			icon16 = Cmo3Icons.iconOf(raster, 16, names.nextIconPath(), pngEntries)
-			icon64 = Cmo3Icons.iconOf(raster, 64, names.nextIconPath(), pngEntries)
+			icon16 = Cmo3Icons.iconOf(icons?.first ?: Cmo3Icons.iconPngOf(raster, 16), 16, names.nextIconPath(), pngEntries)
+			icon64 = Cmo3Icons.iconOf(icons?.second ?: Cmo3Icons.iconPngOf(raster, 64), 64, names.nextIconPath(), pngEntries)
 			layerInfo = LinkedHashMap<String, Any?>()
 			this.group = folder
 		}

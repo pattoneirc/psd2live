@@ -35,8 +35,22 @@ internal object AtlasPagePng {
 	fun canonical(image: BufferedImage): ByteArray {
 		val output = ByteArrayOutputStream()
 		check(ImageIO.write(image, "png", output)) { tr("error.pngEncoder") }
-		return output.toByteArray()
+		return output.toByteArray().also { png -> synchronized(imagesByPng) { imagesByPng[png] = java.lang.ref.WeakReference(image) } }
 	}
+
+	/**
+	 * The image each canonical encoding was made from, by the encoding's identity (a ByteArray hashes by
+	 * identity) and only while the encoding lives, so an export renderer handed the PNG can read the pixels
+	 * instead of decoding it. Neither is kept alive by the entry: it serves only while the page holds both.
+	 */
+	private val imagesByPng = java.util.WeakHashMap<ByteArray, java.lang.ref.WeakReference<BufferedImage>>()
+
+	/**
+	 * The ARGB pixels (row by row, not to be modified) [png] decodes to, when it is a live canonical encoding of
+	 * a straight-alpha image (whose pixels the PNG holds exactly).
+	 */
+	fun pixelsOf(png: ByteArray): IntArray? =
+		synchronized(imagesByPng) { imagesByPng[png]?.get() }?.takeIf { it.type == BufferedImage.TYPE_INT_ARGB }?.let(::argb)
 
 	/** Strips of [image]; those of [reuse] (a page of the same size) are kept wherever no row in [dirtyRows] falls. */
 	fun strips(image: BufferedImage, reuse: Strips?, dirtyRows: BitSet?): Strips {

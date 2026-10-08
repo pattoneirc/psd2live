@@ -287,7 +287,10 @@ public object PngCodec : RasterCodec {
 			unfilterScanline(filterType, current, previous, bytesPerPixel)
 
 			val imageY = startRow + rowIndex * rowStep
-			for (columnIndex in 0 until passWidth) {
+			if (columnStep == 1 && header.bitDepth == 8 && header.colorType == COLOR_RGBA) {
+				// 8-bit RGBA rows are already the output's layout (the common case, and every atlas page).
+				current.copyInto(rgba, (imageY * header.width + startColumn) * 4, 0, passWidth * 4)
+			} else for (columnIndex in 0 until passWidth) {
 				val imageX = startColumn + columnIndex * columnStep
 				val destination = (imageY * header.width + imageX) * 4
 				writePixel(current, columnIndex, header, channels, palette, transparency, rgba, destination)

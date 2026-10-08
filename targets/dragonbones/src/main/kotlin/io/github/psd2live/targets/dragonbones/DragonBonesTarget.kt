@@ -128,7 +128,8 @@ public class DragonBonesTarget(private val evaluator: GeometryEvaluator) : Expor
 			}
 			// The runtime addresses an animation's deform floats (every frame holds all its mesh's vertices) with
 			// 16-bit offsets: past the budget, keys are dropped at doubling tolerances until the animation fits.
-			fun reduce(t: Float) = moving.map { (_, offsets) -> KeyReduction.reduce(times, offsets, t) }
+			// Each mesh's track reduces on its own, in parallel; the results keep the meshes' order.
+			fun reduce(t: Float): List<List<Int>> = moving.parallelStream().map { (_, offsets) -> KeyReduction.reduce(times, offsets, t) }.toList()
 			fun floats(keys: List<List<Int>>) = moving.indices.sumOf { keys[it].size * moving[it].second[0].size }
 			var used = tolerance
 			var kept = reduce(used)

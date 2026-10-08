@@ -37,7 +37,8 @@ internal object RigIrCompiler {
 		)
 		return base.copy(
 			textures = base.textures.copy(
-				pages = atlas.pages.map { TexturePage(it.image.width, it.image.height, Bytes.wrap(it.png)) },
+				// Pages not encoded yet encode in parallel.
+				pages = atlas.pages.parallelStream().map { TexturePage(it.image.width, it.image.height, Bytes.wrap(it.png)) }.toList(),
 				bindings = rig.pageByDrawableId,
 				tileArt = if (!tileArt) emptyList() else PuppetSourceAtlas.rastersByTile(analysis).map { (tile, raster) ->
 				TileArt(tile.raw, raster.width, raster.height, Bytes.wrap(raster.rgba))

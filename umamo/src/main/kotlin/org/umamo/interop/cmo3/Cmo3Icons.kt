@@ -50,8 +50,20 @@ internal object Cmo3Icons {
 	 * @param MutableList entries The PNG entry collector.
 	 * @return CImageIcon The icon.
 	 */
-	fun iconOf(raster: RasterImage, size: Int, path: String, entries: MutableList<Cmo3FreshFile.PngEntry>): CImageIcon {
-		entries.add(Cmo3FreshFile.PngEntry(path, iconPngOf(raster, size)))
+	fun iconOf(raster: RasterImage, size: Int, path: String, entries: MutableList<Cmo3FreshFile.PngEntry>): CImageIcon =
+		iconOf(iconPngOf(raster, size), size, path, entries)
+
+	/**
+	 * An icon of [size] over [png] (made by [iconPngOf]), collected for the assembler under [path].
+	 *
+	 * @param ByteArray   png     The encoded icon.
+	 * @param Int         size    The square's edge.
+	 * @param String      path    The unique archive path for the PNG entry.
+	 * @param MutableList entries The PNG entry collector.
+	 * @return CImageIcon The icon.
+	 */
+	fun iconOf(png: ByteArray, size: Int, path: String, entries: MutableList<Cmo3FreshFile.PngEntry>): CImageIcon {
+		entries.add(Cmo3FreshFile.PngEntry(path, png))
 		return iconReferencing(size, path)
 	}
 
