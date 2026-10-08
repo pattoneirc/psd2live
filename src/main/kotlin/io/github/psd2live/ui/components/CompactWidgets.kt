@@ -434,6 +434,38 @@ fun IconSearch(
 	}
 }
 
+/**
+ * Globe marking the language choice. It carries no text, so someone who switched to a language they
+ * cannot read still finds the way back.
+ */
+@Composable
+fun IconLanguage(
+	modifier: Modifier = Modifier.size(14.dp),
+	tint: Color = LocalToolColors.current.textPrimary,
+) {
+	Canvas(modifier = modifier) {
+		val w = size.width
+		val h = size.height
+		val stroke = Stroke(width = 1.2f)
+		val radius = minOf(w, h) * 0.42f
+		val center = Offset(w / 2f, h / 2f)
+		drawCircle(color = tint, radius = radius, center = center, style = stroke)
+		// Meridian: an ellipse half as wide as the globe.
+		drawOval(
+			color = tint,
+			topLeft = Offset(center.x - radius * 0.45f, center.y - radius),
+			size = androidx.compose.ui.geometry.Size(radius * 0.9f, radius * 2f),
+			style = stroke,
+		)
+		drawLine(tint, Offset(center.x, center.y - radius), Offset(center.x, center.y + radius), strokeWidth = stroke.width)
+		drawLine(tint, Offset(center.x - radius, center.y), Offset(center.x + radius, center.y), strokeWidth = stroke.width)
+		val parallel = radius * 0.5f
+		val half = radius * 0.866f
+		drawLine(tint, Offset(center.x - half, center.y - parallel), Offset(center.x + half, center.y - parallel), strokeWidth = stroke.width)
+		drawLine(tint, Offset(center.x - half, center.y + parallel), Offset(center.x + half, center.y + parallel), strokeWidth = stroke.width)
+	}
+}
+
 /** Parameter chain with rounded links and clear negative space at small sizes. */
 @Composable
 fun IconParameterLink(

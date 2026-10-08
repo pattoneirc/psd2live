@@ -28,6 +28,7 @@ import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -90,6 +91,9 @@ private enum class SettingsSection(val labelKey: String) {
 	ENVIRONMENT("dialog.settings.category.environment"),
 }
 
+/** The section shown when the preferences window is next composed. */
+private var lastSettingsSection = SettingsSection.SCALE
+
 /**
  * Preferences window: a category sidebar on the left, the selected category's content on the right.
  *
@@ -144,7 +148,10 @@ fun SettingsDialog(
 	// environment readout describe the same snapshot.
 	val displayMetrics = remember { AppSettings.detectDisplayMetrics() }
 
-	var selectedSection by remember { mutableStateOf(SettingsSection.SCALE) }
+	// Kept past this composition: a language switch rebuilds the window and this dialog with it,
+	// which should land back on the Language section rather than the first one.
+	var selectedSection by remember { mutableStateOf(lastSettingsSection) }
+	SideEffect { lastSettingsSection = selectedSection }
 	val contentScroll = rememberScrollState()
 	// The scroll state is shared by every section, so without this a switch made while scrolled down
 	// would land the new section mid-scroll.
@@ -276,6 +283,7 @@ private fun SettingsSidebar(
 		for (section in SettingsSection.entries) {
 			SettingsSidebarRow(
 				label = tr(section.labelKey),
+				showLanguageIcon = section == SettingsSection.LANGUAGE,
 				isSelected = section == selected,
 				onClick = { onSelect(section) },
 			)
@@ -288,6 +296,7 @@ private fun SettingsSidebarRow(
 	label: String,
 	isSelected: Boolean,
 	onClick: () -> Unit,
+	showLanguageIcon: Boolean = false,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
@@ -320,20 +329,28 @@ private fun SettingsSidebarRow(
 			.padding(start = 12.dp, end = 8.dp),
 		contentAlignment = Alignment.CenterStart,
 	) {
-		Text(
-			text = label,
-			style = typography.body.copy(
-				fontSize = 11.5.sp,
-				fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-			),
-			color = when {
-				isSelected -> colors.selectionText
-				isHovered -> colors.textPrimary
-				else -> colors.textMuted
-			},
-			maxLines = 1,
-			overflow = TextOverflow.Ellipsis,
-		)
+		val foreground = when {
+			isSelected -> colors.selectionText
+			isHovered -> colors.textPrimary
+			else -> colors.textMuted
+		}
+		Row(verticalAlignment = Alignment.CenterVertically) {
+			Text(
+				text = label,
+				style = typography.body.copy(
+					fontSize = 11.5.sp,
+					fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+				),
+				color = foreground,
+				maxLines = 1,
+				overflow = TextOverflow.Ellipsis,
+				modifier = Modifier.weight(1f, fill = false),
+			)
+			if (showLanguageIcon) {
+				Spacer(Modifier.width(6.dp))
+				IconLanguage(Modifier.size(12.dp), foreground)
+			}
+		}
 	}
 }
 
@@ -496,7 +513,7 @@ private fun SettingsScaleSection(
 }
 
 /**
- * Language selection. Rendered as radios rather than a dropdown because there are only three
+ * Language selection. Rendered as radios rather than a dropdown because there are only a few
  * options and all of them should be visible at once. Each label names its own language
  * (`language.chinese` → "简体中文"), so every option stays readable in any locale.
  */

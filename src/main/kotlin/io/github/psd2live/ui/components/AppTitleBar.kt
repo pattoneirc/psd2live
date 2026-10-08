@@ -654,6 +654,7 @@ fun AppTitleBar(
 			// 3. Language Menu
 			TitleBarMenuItem(
 				title = tr("menu.language"),
+				leadingIcon = { tint -> IconLanguage(Modifier.size(13.dp), tint) },
 				isOpen = activeMenu == "language",
 				onToggle = {
 					activeSubmenu = null
@@ -980,11 +981,13 @@ private fun TitleBarMenuItem(
 	onToggle: () -> Unit,
 	onHoverWhenActive: () -> Unit,
 	modifier: Modifier = Modifier,
+	leadingIcon: (@Composable (tint: Color) -> Unit)? = null,
 	content: @Composable () -> Unit,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	var isHovered by remember { mutableStateOf(false) }
+	val foreground = if (isOpen) colors.selectionText else colors.textPrimary
 
 	Box(
 		modifier = modifier
@@ -1009,11 +1012,17 @@ private fun TitleBarMenuItem(
 			.padding(horizontal = 10.dp),
 		contentAlignment = Alignment.Center,
 	) {
-		Text(
-			text = title,
-			style = typography.body.copy(fontSize = 11.5.sp),
-			color = if (isOpen) colors.selectionText else colors.textPrimary,
-		)
+		Row(verticalAlignment = Alignment.CenterVertically) {
+			if (leadingIcon != null) {
+				leadingIcon(foreground)
+				Spacer(Modifier.width(5.dp))
+			}
+			Text(
+				text = title,
+				style = typography.body.copy(fontSize = 11.5.sp),
+				color = foreground,
+			)
+		}
 		content()
 	}
 }

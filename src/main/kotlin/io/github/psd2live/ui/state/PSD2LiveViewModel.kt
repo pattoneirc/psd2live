@@ -4094,8 +4094,10 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	fun setLanguage(language: AppLanguage) {
+		val ready = tr("status.ready")
 		I18n.setLanguage(language)
-		updateState { it.copy(currentLanguage = language) }
+		// The window is rebuilt for the new language (see main); the idle status line is state, so it is re-read here.
+		updateState { it.copy(currentLanguage = language, statusText = if (it.statusText == ready) tr("status.ready") else it.statusText) }
 		schedulePreviewRebuild()
 	}
 

@@ -132,9 +132,14 @@ private fun runGui() {
 			val transparent by remember {
 				derivedStateOf { viewModel.uiState.value.canvasBackground.windowTransparent }
 			}
+			val language by remember {
+				derivedStateOf { viewModel.uiState.value.currentLanguage }
+			}
 			// A window's transparency cannot change once it is shown, so switching the canvas
 			// background to or from transparent replaces the window; windowState keeps its bounds.
-			key(transparent) {
+			// A language switch replaces it too: text is read through tr() wherever it is composed,
+			// remembered, or handed to Swing, so only a fresh composition shows none of the old language.
+			key(transparent, language) {
 				Window(
 					onCloseRequest = closeApp,
 					title = tr("app.title"),
