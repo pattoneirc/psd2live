@@ -496,6 +496,13 @@ data class RigPreviewModel(
 	/** The authored state of [config]'s edits ([AuthoredRig]): stored, or replayed from [baseRig]. */
 	internal val authored: AuthoredRig get() = sources.authored(config.rigEdits)
 
+	/**
+	 * The split parts [baseRig] holds for the journal's `art_primitive` records ([BuiltRig.primitiveSkins]); none, without
+	 * generating the base, when the journal has no such record.
+	 */
+	internal val primitiveSkins: PrimitiveSkins
+		get() = if (config.rigEdits.authoringJournal.none(ArtPrimitiveJournal::isRecord)) PrimitiveSkins.None else baseRig.primitiveSkins
+
 	/** True only when this exact preview bundle contains an active Cubism physics sidecar. */
 	val hasRuntimePhysics: Boolean
 		get() = runtimeBundle.assets.any { it.path.endsWith(".physics3.json", ignoreCase = true) }
@@ -543,7 +550,7 @@ class PreviewRigSources private constructor(
 		fun of(base: BuiltRig, bindingKey: String? = null) = PreviewRigSources(lazyOf(base), null, null, bindingKey)
 
 		/** [authored] is [overlay]'s authored state; [base] generates the rig it came from when asked. */
-		internal fun materialized(overlay: RigEditOverlay, authored: AuthoredRig, bindingKey: String, base: () -> BuiltRig) =
+		internal fun materialized(overlay: RigEditOverlay, authored: AuthoredRig, bindingKey: String?, base: () -> BuiltRig) =
 			PreviewRigSources(lazy(base), overlay, authored, bindingKey)
 	}
 }

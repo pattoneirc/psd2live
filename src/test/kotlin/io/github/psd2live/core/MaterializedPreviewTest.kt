@@ -76,6 +76,26 @@ class MaterializedPreviewTest {
 		assertEquals(ContentHash.of(PuppetIr.toIr(full.baseRig.puppet)), ContentHash.of(PuppetIr.toIr(materialized.baseRig.puppet)))
 	}
 
+	@Test fun entriesAddedToTheJournalActOnTheAuthoredRigWithoutTheBase() {
+		val pipeline = PSD2LivePipeline()
+		val edited = edited(pipeline)
+		val full = pipeline.buildPreview(source, edited)
+		val materialized = assertNotNull(PSD2LivePipeline().materializedPreview(source, edited, full.authored, assertNotNull(full.sources.bindingKey)))
+		val body = full.rig.layerIdByDrawableId.entries.single { it.value == "body" }.key
+		val mesh = full.rig.puppet.drawables.single { it.id.raw == body }.mesh!!
+		val added = edited.copy(rigEdits = edited.rigEdits.copy(authoringJournal = edited.rigEdits.authoringJournal + listOf(
+			VertexGroupJournal.encode(VertexGroup("mass", DrawableId(body), VertexGroupKind.MASS, FloatArray(mesh.vertexCount) { 0.25f })),
+			buildJsonObject { put("op", "structure"); putJsonArray("edits") {
+				add(buildJsonObject { put("action", "rename"); put("kind", "warp"); put("id", "WarpUser"); put("name", "Renamed") })
+			} },
+		)))
+		assertTrue(pipeline.canFastUpdateRig(materialized, source, added))
+		val updated = pipeline.updateRigEdits(materialized, added)
+		assertFalse(updated.sources.baseKnown, "the added entries need no base")
+		assertEquals(hash(PSD2LivePipeline().buildPreview(source, added)), hash(updated))
+		assertEquals("Renamed", updated.rig.puppet.deformers.single { it.id.raw == "WarpUser" }.name)
+	}
+
 	@Test fun anotherAtlasRefusesTheStoredRig() {
 		val pipeline = PSD2LivePipeline()
 		val full = pipeline.buildPreview(source, config)

@@ -486,8 +486,16 @@ class PSD2LivePipeline {
 		// A deferred deletion model keeps the complete generated base and atlas; only its replayed rig and
 		// analysis are filtered. Replay onto that base and filter the same way instead of regenerating it.
 		if (RigLayerDeletion.deferred(config) != RigLayerDeletion.deferred(current.config)) return buildPreview(current.analysis.source, config)
-		val replayed = RigLayerDeletion.rig(current.baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides),
-			current.analysis, config)
+		// Entries added to the journal act on the current authored rig: no base, no replay of the entries before them.
+		val appended = if (config.rigEdits == RigEditOverlay.Empty) null
+			else config.rigEdits.appendedTo(current.config.rigEdits, current.authored)
+		val sources = appended?.let { authored ->
+			val previous = current.sources
+			PreviewRigSources.materialized(config.rigEdits, authored, previous.bindingKey) { previous.base }
+		} ?: current.sources
+		val finished = appended?.finished(config.rigEdits, config.layerVisibility, config.drawOrderOverrides)
+			?: current.baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides)
+		val replayed = RigLayerDeletion.rig(finished, current.analysis, config)
 		val rig = current.generationAtlas?.let { full ->
 			RigLayerDeletion.rebind(replayed, current.analysis, full, current.analysis, current.atlas) ?: return buildPreview(current.analysis.source, config)
 		} ?: replayed
@@ -496,6 +504,7 @@ class PSD2LivePipeline {
 			rig = rig,
 			config = config,
 			runtimeBundle = runtimeBundle,
+			sources = sources,
 		)
 	}
 

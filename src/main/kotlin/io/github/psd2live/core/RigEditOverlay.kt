@@ -347,6 +347,41 @@ data class RigEditOverlay(
 	}
 
 	/**
+	 * Whether this overlay's authored state is [previous]'s with entries added to the journal ([appendedTo]): the
+	 * journal starts with [previous]'s, everything else the authored stage reads is equal, and no added entry is an
+	 * `art_primitive` record.
+	 */
+	internal fun extends(previous: RigEditOverlay): Boolean {
+		if (previous === this) return true
+		val journal = authoringJournal
+		val before = previous.authoringJournal
+		if (journal.size < before.size || (0 until before.size).any { journal[it] !== before[it] && journal[it] != before[it] }) return false
+		if (deletedParameterIds != previous.deletedParameterIds || parameterEdits != previous.parameterEdits || warpEdits != previous.warpEdits ||
+			structureEdits != previous.structureEdits || keyformSetEdits != previous.keyformSetEdits || keyformCopyEdits != previous.keyformCopyEdits ||
+			keyformDeleteEdits != previous.keyformDeleteEdits || generatedIds != previous.generatedIds) return false
+		return (before.size until journal.size).none { journal[it]["op"]?.jsonPrimitive?.contentOrNull == ArtPrimitiveJournal.OP }
+	}
+
+	/**
+	 * [authored] - [previous]'s authored state - with the journal entries this overlay has past [previous]'s: the
+	 * authored state of this overlay, as [replayAuthored] would give it from the base, without the base. Null when
+	 * this overlay differs from [previous] in anything else the authored stage reads, or an added entry needs the base
+	 * (an `art_primitive` record places parts the skeleton skinned with it).
+	 */
+	internal fun appendedTo(previous: RigEditOverlay, authored: AuthoredRig): AuthoredRig? {
+		if (previous === this) return authored
+		if (!extends(previous)) return null
+		val added = authoringJournal.subList(previous.authoringJournal.size, authoringJournal.size)
+		var model = authored.rig.puppet
+		for (command in added) model = when (command["op"]?.jsonPrimitive?.contentOrNull) {
+			"structure" -> RigStructureEdits.replay(model, command.getValue("edits").jsonArray.map { it.jsonObject }.filterNot(::generatedPanelEdit))
+			GeneratedOverrides.OP -> model
+			else -> RigAuthoringJournal.replay(model, command)
+		}
+		return AuthoredRig(authored.rig.copy(puppet = model), authored.visibilityTargets).withJournalMeshes(added)
+	}
+
+	/**
 	 * [authored] - this overlay's [replayAuthored] output - completed: swings and simulations write their keyforms, edits
 	 * of generated keyforms merge, and panel edits of generated parameters apply. [notes] pass through to the outcome.
 	 */

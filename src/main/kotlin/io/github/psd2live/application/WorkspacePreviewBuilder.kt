@@ -89,13 +89,17 @@ internal class WorkspacePreviewBuilder {
                 else decoded.copy(drawOrderOverrides = legacyDrawOrders)
             val materializable = pipeline.materializable(config)
             val revision = if (materializable) WorkspaceRevisions.of(document) else null
-            // A revision built before - in this process or by whoever saved the archive - builds from its authored rig.
-            if (revision != null && current == null) MaterializedRigStore.lookup(revision)?.let { stored ->
-                pipeline.materializedPreview(document.source, config, stored.authored, stored.bindingKey, progress)
-                    ?.let { return@runInterruptible it }
+            val fast = current != null && pipeline.canFastUpdateRig(current, document.source, config)
+            // A revision built before - in this process or by whoever saved the archive - builds from its authored rig,
+            // unless the current model updates more cheaply: entries added to its journal act on its authored rig, and
+            // with its base at hand any other edit of the overlay replays from the replay checkpoints.
+            val cheaper = fast && (current.sources.baseKnown || config.rigEdits.extends(current.config.rigEdits))
+            if (revision != null && !cheaper) MaterializedRigStore.lookup(revision)?.let { stored ->
+                pipeline.materializedPreview(document.source, config, stored.authored, stored.bindingKey, progress, current?.atlas)
+                    ?.let { model -> return@runInterruptible model }
             }
             val model = when {
-                current != null && pipeline.canFastUpdateRig(current, document.source, config) -> pipeline.updateRigEdits(current, config)
+                fast -> pipeline.updateRigEdits(current, config)
                 current != null && (current.analysis.source === document.source || current.analysis.source == document.source) &&
                     current.config.copy(parentOverrides = config.parentOverrides, rigEdits = config.rigEdits,
                         drawOrderOverrides = config.drawOrderOverrides, hairSimulationFront = config.hairSimulationFront,

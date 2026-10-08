@@ -2,7 +2,7 @@
 
 [文档目录](../../README.md) · [文档层](DOCUMENT_LAYER.md) · [工程格式](PROJECT_FORMAT.md)
 
-> 状态：**部分实现**。阶段 0 与阶段 1–2 的核心已实现（见[实现进度](#10-实现进度)），其余为设计。本页给出目标模型、存储、操作分类、再生成合并规则与分阶段计划；实现后各部分的事实写回 [文档层](DOCUMENT_LAYER.md) 与 [工程格式](PROJECT_FORMAT.md)。
+> 状态：**部分实现**。阶段 0、阶段 1–2 的核心与阶段 3 的追加编辑已实现（见[实现进度](#10-实现进度)），其余为设计。本页给出目标模型、存储、操作分类、再生成合并规则与分阶段计划；实现后各部分的事实写回 [文档层](DOCUMENT_LAYER.md) 与 [工程格式](PROJECT_FORMAT.md)。
 
 ## 1. 背景
 
@@ -199,14 +199,22 @@
 - 重放拆成两段（`RigEditOverlay.replayAuthored` / `finish`）：`BuiltRig.authoredRig` 给出作者态 Rig（`AuthoredRig`：作者态 puppet、日志创建网格的映射、需应用图层显隐的网格），`AuthoredRig.finished` 运行修改器、覆盖合并、延后面板编辑、显隐与绘制顺序。`withRigEdits` 即两段相接，导出与此前逐字节一致（`ExportGoldenTool`）。
 - `RigPreviewModel` 的基础 Rig 与作者态 Rig 由 `PreviewRigSources` 提供：生成构建已知基础 Rig，作者态在首次使用时由重放检查点给出；由作者态构建的模型只在有人读取 `baseRig` 时才生成基础 Rig。
 - `PSD2LivePipeline.materializedPreview`：由作者态 Rig 构建预览，只做源图分析与纹理集打包，不运行 `RigBuilder`、骨架烘焙与日志重放；纹理集绑定键不同时返回空，由调用方照常构建。延迟删除（软删除图层）的文档同样支持；导入 CMO3 的模型不支持。
-- 按修订的存储（`project/MaterializedRigStore`）：本进程构建过的修订（软引用）与打开归档读到的修订。`WorkspacePreviewBuilder.build` 在没有当前模型（打开、切换历史、批量候选）时先查存储；保存把可得的修订写入归档 `rig/`（格式见[工程格式 · 作者态 Rig](PROJECT_FORMAT.md#作者态-rig)）。
+- 按修订的存储（`project/MaterializedRigStore`）：本进程构建过的修订（软引用）与打开归档读到的修订。`WorkspacePreviewBuilder.build` 先查存储（打开、切换历史、撤销），除非当前模型能更便宜地更新（见阶段 3，或基础 Rig 已在手、只是编辑覆盖层）；保存把可得的修订写入归档 `rig/`（格式见[工程格式 · 作者态 Rig](PROJECT_FORMAT.md#作者态-rig)）。
 - 持久编码：`RigIrObjects`（MIT）把中立 IR 拆为框架、变形器与网格对象，按版本可读；`MaterializedRigCodec` 写头部。
+
+**阶段 3（追加编辑已实现）**
+
+- 新文档的作者态阶段输入与当前模型相同、只在日志末尾追加了条目（`RigEditOverlay.extends`，追加的不是 `art_primitive` 记录）时，`PSD2LivePipeline.updateRigEdits` 把追加的条目按重放语义作用于当前作者态 Rig（`appendedTo`），再运行收尾阶段；不读取基础 Rig，也不重放此前的条目。结果的基础 Rig 沿用当前模型的（仍按需生成）。
+- 提交路径上不再无谓地生成基础 Rig：生成结果覆盖的捕获只在日志有 `art_primitive` 记录时才读取基础 Rig 的拆分部件（`RigPreviewModel.primitiveSkins`）。
+- 由作者态 Rig 打开的工程，画布与 MCP 的几何、关键形、结构、顶点组、路径等编辑因此不触发生成；改变生成输入、改写较早条目、拆分与模拟烘焙仍经基础 Rig（按需生成后重放）。
 
 **与设计的差异**
 
 - 作者态 Rig 放在独立的 `rig/` 目录，没有写进修订索引、也没有提升修订 schema：旧的 v2 程序仍能打开新归档（丢弃该目录）。条目缺失或无法使用时退回生成与重放，因此它目前是“有则优先”的数据，而非唯一权威。
 - 生成快照 G 尚未保存（阶段 4 使用）。
 
-**未实现**：阶段 3（直接编辑作用于作者态 Rig，有当前模型的提交仍经基础 Rig 重放）、阶段 4（再生成合并）、阶段 5（清理）。
+**未实现**：阶段 3 的其余部分（改写较早条目的编辑、模拟烘焙与拆分捕获改用作者态 Rig）、阶段 4（再生成合并）、阶段 5（清理）。
 
-**测试**：`MaterializedPreviewTest`（作者态 Rig 构建与完整构建的 IR 哈希一致、不生成基础 Rig、纹理集不同则拒绝）、`MaterializedRigProjectTest`（保存后冷打开各修订均由作者态 Rig 构建且一致；日志已无法重放的修订仍可由作者态 Rig 打开）、`RigIrBinaryTest`（对象拆分、拼回、共享与拒绝）、`SkeletonCanvasSkinTest`、`HairSimulationSplitTest`。
+**实测**（含 6 个修订的一个用户工程，无骨架）：头部修订由生成与重放构建约 2.2 s，由保存的作者态 Rig 冷打开并构建约 0.4 s，IR 哈希一致；归档增加约 0.3 MB。
+
+**测试**：`MaterializedPreviewTest`（作者态 Rig 构建与完整构建的 IR 哈希一致、不生成基础 Rig、纹理集不同则拒绝、追加条目不需要基础 Rig）、`MaterializedRigProjectTest`（保存后冷打开各修订均由作者态 Rig 构建且一致；日志已无法重放的修订仍可由作者态 Rig 打开）、`RigIrBinaryTest`（对象拆分、拼回、共享与拒绝）、`SkeletonCanvasSkinTest`、`HairSimulationSplitTest`。
