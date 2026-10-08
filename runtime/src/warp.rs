@@ -7,16 +7,16 @@
 
 /// The mean affine frame of a lattice: its corners' centre and the averaged edge vectors.
 struct Frame {
-    c: [f32; 2],
-    ex: [f32; 2],
-    ey: [f32; 2],
+    c: [f64; 2],
+    ex: [f64; 2],
+    ey: [f64; 2],
 }
 
 impl Frame {
     fn new(points: &[f32], columns: usize, rows: usize) -> Frame {
         let p = |c: usize, r: usize| {
             let i = (r * (columns + 1) + c) * 2;
-            [points[i], points[i + 1]]
+            [points[i] as f64, points[i + 1] as f64]
         };
         let (c00, c10, c01, c11) = (p(0, 0), p(columns, 0), p(0, rows), p(columns, rows));
         let mut frame = Frame { c: [0.0; 2], ex: [0.0; 2], ey: [0.0; 2] };
@@ -28,7 +28,7 @@ impl Frame {
         frame
     }
 
-    fn at(&self, u: f32, v: f32) -> [f32; 2] {
+    fn at(&self, u: f64, v: f64) -> [f64; 2] {
         [
             self.c[0] + (u - 0.5) * self.ex[0] + (v - 0.5) * self.ey[0],
             self.c[1] + (u - 0.5) * self.ex[1] + (v - 0.5) * self.ey[1],
@@ -36,7 +36,7 @@ impl Frame {
     }
 }
 
-fn triangle(q00: [f32; 2], q10: [f32; 2], q01: [f32; 2], q11: [f32; 2], s: f32, t: f32) -> [f32; 2] {
+fn triangle(q00: [f64; 2], q10: [f64; 2], q01: [f64; 2], q11: [f64; 2], s: f64, t: f64) -> [f64; 2] {
     if s + t <= 1.0 {
         [q00[0] + s * (q10[0] - q00[0]) + t * (q01[0] - q00[0]), q00[1] + s * (q10[1] - q00[1]) + t * (q01[1] - q00[1])]
     } else {
@@ -47,7 +47,7 @@ fn triangle(q00: [f32; 2], q10: [f32; 2], q01: [f32; 2], q11: [f32; 2], s: f32, 
     }
 }
 
-fn bilinear(q00: [f32; 2], q10: [f32; 2], q01: [f32; 2], q11: [f32; 2], s: f32, t: f32) -> [f32; 2] {
+fn bilinear(q00: [f64; 2], q10: [f64; 2], q01: [f64; 2], q11: [f64; 2], s: f64, t: f64) -> [f64; 2] {
     let mut out = [0.0; 2];
     for k in 0..2 {
         out[k] = (1.0 - s) * (1.0 - t) * q00[k] + s * (1.0 - t) * q10[k] + (1.0 - s) * t * q01[k] + s * t * q11[k];
@@ -64,19 +64,25 @@ pub struct Lattice<'a> {
 }
 
 impl Lattice<'_> {
-    fn point(&self, c: usize, r: usize) -> [f32; 2] {
+    fn point(&self, c: usize, r: usize) -> [f64; 2] {
         let i = (r * (self.columns + 1) + c) * 2;
-        [self.points[i], self.points[i + 1]]
+        [self.points[i] as f64, self.points[i + 1] as f64]
     }
 
     pub fn map(&self, u: f32, v: f32) -> [f32; 2] {
+        let p = self.map64(u as f64, v as f64);
+        [p[0] as f32, p[1] as f32]
+    }
+
+    /// [map] without narrowing the result, for measurements between nearby points.
+    pub fn map64(&self, u: f64, v: f64) -> [f64; 2] {
         let (columns, rows) = (self.columns, self.rows);
         if (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v) {
-            let fx = u * columns as f32;
-            let fy = v * rows as f32;
+            let fx = u * columns as f64;
+            let fy = v * rows as f64;
             let i = (fx as usize).min(columns - 1);
             let j = (fy as usize).min(rows - 1);
-            let (s, t) = (fx - i as f32, fy - j as f32);
+            let (s, t) = (fx - i as f64, fy - j as f64);
             let q = (self.point(i, j), self.point(i + 1, j), self.point(i, j + 1), self.point(i + 1, j + 1));
             return if self.bilinear { bilinear(q.0, q.1, q.2, q.3, s, t) } else { triangle(q.0, q.1, q.2, q.3, s, t) };
         }
@@ -85,16 +91,16 @@ impl Lattice<'_> {
             return frame.at(u, v);
         }
         // Virtual grid lines: -2, the lattice's own lines, then 3.
-        let line = |i: usize, n: usize| -> f32 {
+        let line = |i: usize, n: usize| -> f64 {
             if i == 0 {
                 -2.0
             } else if i == n + 2 {
                 3.0
             } else {
-                (i - 1) as f32 / n as f32
+                (i - 1) as f64 / n as f64
             }
         };
-        let cell = |x: f32, n: usize| -> usize {
+        let cell = |x: f64, n: usize| -> usize {
             if x >= 3.0 {
                 return n + 1;
             }
@@ -105,7 +111,7 @@ impl Lattice<'_> {
             i
         };
         let (ci, ri) = (cell(u, columns), cell(v, rows));
-        let virtual_point = |c: usize, r: usize| -> [f32; 2] {
+        let virtual_point = |c: usize, r: usize| -> [f64; 2] {
             if (1..=columns + 1).contains(&c) && (1..=rows + 1).contains(&r) {
                 self.point(c - 1, r - 1)
             } else {

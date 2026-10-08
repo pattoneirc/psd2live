@@ -195,6 +195,31 @@ fn a_simulated_mesh_hangs_and_keeps_out_of_its_collider() {
 }
 
 #[test]
+fn behaviors_and_expressions_do_not_pile_up_over_updates() {
+    use crate::expression::{Blend, Expression};
+    use crate::ffi::*;
+    // A head turn with the roles breathing and gaze drive, and an expression that adds to it.
+    let (mut rig, _) = arm();
+    rig.parameters[0].id = "ParamAngleX".into();
+    rig.roles = vec![Role { role: "AngleX".into(), parameters: vec![0] }];
+    rig.expressions = vec![Expression { id: "add".into(), name: "add".into(), fade_in: 0.1, fade_out: 0.1, parameters: vec![(0, Blend::Add, 5.0)] }];
+    let handle = Box::into_raw(Box::new(Handle::new(rig)));
+    unsafe {
+        p2l_behaviors(handle, 2 | 4);
+        p2l_look_at(handle, 1.0, 0.0);
+        p2l_expression(handle, 0);
+        for _ in 0..3000 {
+            p2l_update(handle, 1.0 / 60.0);
+        }
+        // The host's pose is untouched; what was evaluated is that pose with one frame's layers on it.
+        assert_eq!(*p2l_parameter_values(handle), 0.0);
+        let current = *p2l_parameter_current(handle);
+        assert!(current > 5.0 && current <= 90.0 + 5.0 + 1.0, "{}", current);
+        p2l_rig_free(handle);
+    }
+}
+
+#[test]
 fn given_weights_are_used_as_they_are() {
     let (mut rig, forearm) = arm();
     // The fit would find these: the upper arm's two vertices on bone 0, the forearm's on bone 1.

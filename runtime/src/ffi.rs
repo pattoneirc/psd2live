@@ -19,7 +19,10 @@ pub struct Handle {
     player: Player,
     behaviors: Behaviors,
     physics: Physics,
+    /// The pose the host sets, under clips, expressions, behaviors and physics.
     values: Vec<f32>,
+    /// The values the last evaluation used: [values] with every layer applied, rebuilt from it each time.
+    current: Vec<f32>,
     parameter_ids: Vec<CString>,
     mesh_ids: Vec<CString>,
     clip_ids: Vec<CString>,
@@ -56,6 +59,43 @@ pub unsafe extern "C" fn p2l_rig_load(bytes: *const u8, len: usize, error: *mut 
     p2l_rig_load_ex(bytes, len, 0, error, error_capacity)
 }
 
+impl Handle {
+    /// A handle on [rig] at its defaults, evaluated once.
+    pub fn new(rig: Rig) -> Handle {
+        let values = rig.defaults();
+        let physics = Physics::new(&rig);
+        let mut handle = Handle {
+            parameter_ids: c_strings(rig.parameters.iter().map(|p| &p.id)),
+            mesh_ids: c_strings(rig.meshes.iter().map(|m| &m.id)),
+            clip_ids: c_strings(rig.clips.iter().map(|c| &c.id)),
+            texture_uris: c_strings(rig.textures.iter().map(|t| &t.uri)),
+            bone_ids: c_strings(rig.extensions.bones.iter().map(|(_, id)| id)),
+            expression_ids: c_strings(rig.expressions.iter().map(|e| &e.id)),
+            hit_area_ids: c_strings(rig.hit_areas.iter().map(|h| &h.0)),
+            user_data: {
+                let mut texts = vec![String::new(); rig.meshes.len()];
+                for (m, text) in &rig.user_data {
+                    texts[*m] = text.clone();
+                }
+                c_strings(texts.iter())
+            },
+            expressions: ExpressionPlayer::new(),
+            poses: PosePlayer::new(&rig),
+            advanced: Advanced::new(),
+            evaluator: Evaluator::new(),
+            player: Player::new(),
+            behaviors: Behaviors::default(),
+            physics,
+            current: values.clone(),
+            values,
+            render_order: Vec::new(),
+            rig,
+        };
+        evaluate(&mut handle);
+        handle
+    }
+}
+
 /// Load flag: check the CRC of every chunk that carries one.
 pub const LOAD_VERIFY_CRC: u32 = 1;
 
@@ -69,37 +109,7 @@ pub unsafe extern "C" fn p2l_rig_load_ex(bytes: *const u8, len: usize, flags: u3
     let data = std::slice::from_raw_parts(bytes, len);
     match std::panic::catch_unwind(|| Rig::read_with(data, flags & LOAD_VERIFY_CRC != 0)) {
         Ok(Ok(rig)) => {
-            let values = rig.defaults();
-            let physics = Physics::new(&rig);
-            let handle = Handle {
-                parameter_ids: c_strings(rig.parameters.iter().map(|p| &p.id)),
-                mesh_ids: c_strings(rig.meshes.iter().map(|m| &m.id)),
-                clip_ids: c_strings(rig.clips.iter().map(|c| &c.id)),
-                texture_uris: c_strings(rig.textures.iter().map(|t| &t.uri)),
-                bone_ids: c_strings(rig.extensions.bones.iter().map(|(_, id)| id)),
-                expression_ids: c_strings(rig.expressions.iter().map(|e| &e.id)),
-                hit_area_ids: c_strings(rig.hit_areas.iter().map(|h| &h.0)),
-                user_data: {
-                    let mut texts = vec![String::new(); rig.meshes.len()];
-                    for (m, text) in &rig.user_data {
-                        texts[*m] = text.clone();
-                    }
-                    c_strings(texts.iter())
-                },
-                expressions: ExpressionPlayer::new(),
-                poses: PosePlayer::new(&rig),
-                advanced: Advanced::new(),
-                evaluator: Evaluator::new(),
-                player: Player::new(),
-                behaviors: Behaviors::default(),
-                physics,
-                values,
-                render_order: Vec::new(),
-                rig,
-            };
-            let mut handle = Box::new(handle);
-            evaluate(&mut handle);
-            Box::into_raw(handle)
+            Box::into_raw(Box::new(Handle::new(rig)))
         }
         Ok(Err(e)) => {
             write_error(&e.0, error, error_capacity);
@@ -121,7 +131,7 @@ pub unsafe extern "C" fn p2l_rig_free(handle: *mut Handle) {
 
 fn evaluate(handle: &mut Handle) {
     let advanced = if handle.advanced.enabled() != 0 { Some(&mut handle.advanced) } else { None };
-    let pose = handle.evaluator.evaluate_ext(&handle.rig, &handle.values, advanced);
+    let pose = handle.evaluator.evaluate_ext(&handle.rig, &handle.current, advanced);
     handle.render_order = crate::eval::render_order(&handle.rig, pose);
     handle.poses.apply(&handle.rig, &mut handle.evaluator.pose);
 }
@@ -193,10 +203,17 @@ pub unsafe extern "C" fn p2l_parameter_range(handle: *const Handle, index: u32, 
     })
 }
 
-/// The current parameter values, one per parameter, that the next evaluation uses.
+/// The pose the host sets, one value per parameter: what every update and evaluation starts from. Clips,
+/// expressions, behaviors and physics apply over a copy of it, so additive layers never accumulate here.
 #[no_mangle]
 pub unsafe extern "C" fn p2l_parameter_values(handle: *mut Handle) -> *mut f32 {
     with_mut!(handle, ptr::null_mut(), |h| h.values.as_mut_ptr())
+}
+
+/// The values the last evaluation used, after clips, expressions, behaviors and physics; read-only.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_parameter_current(handle: *const Handle) -> *const f32 {
+    with!(handle, ptr::null(), |h| h.current.as_ptr())
 }
 
 #[no_mangle]
@@ -226,28 +243,31 @@ pub unsafe extern "C" fn p2l_role_parameters(handle: *const Handle, role: *const
 
 // --- evaluation ---
 
-/// Deforms the rig at the current parameter values.
+/// Deforms the rig at the host's pose as it is, without clips, behaviors or physics.
 #[no_mangle]
 pub unsafe extern "C" fn p2l_evaluate(handle: *mut Handle) {
     with_mut!(handle, (), |h| {
+        h.current.clone_from(&h.values);
         evaluate(h);
         h.advanced.show_simulations(&h.rig, &mut h.evaluator.pose);
     })
 }
 
-/// Advances clips, behaviors and physics by [dt] seconds over the current values, then evaluates.
+/// Advances clips, expressions, behaviors and physics by [dt] seconds over the host's pose, then evaluates.
 #[no_mangle]
 pub unsafe extern "C" fn p2l_update(handle: *mut Handle, dt: f32) {
     with_mut!(handle, (), |h| {
-        h.player.update(&h.rig, dt, &mut h.values);
-        h.expressions.update(&h.rig, dt, &mut h.values);
-        h.behaviors.update(&h.rig, dt, &mut h.values);
+        // Every layer starts from the host's pose afresh, so blinks, sways and added expressions never pile up.
+        h.current.clone_from(&h.values);
+        h.player.update(&h.rig, dt, &mut h.current);
+        h.expressions.update(&h.rig, dt, &mut h.current);
+        h.behaviors.update(&h.rig, dt, &mut h.current);
         h.poses.update(&h.rig, dt);
         let skip = h.advanced.skipped_physics(&h.rig);
-        h.physics.step_skipping(&h.rig, dt, &mut h.values, &skip);
+        h.physics.step_skipping(&h.rig, dt, &mut h.current, &skip);
         evaluate(h);
         if h.advanced.enabled() & crate::advanced::SIM != 0 {
-            let values: Vec<f32> = h.rig.parameters.iter().zip(&h.values).map(|(p, v)| p.normalize(*v)).collect();
+            let values: Vec<f32> = h.rig.parameters.iter().zip(&h.current).map(|(p, v)| p.normalize(*v)).collect();
             h.advanced.step_simulations(&h.rig, &values, dt, &mut h.evaluator.pose);
         }
     })
@@ -660,7 +680,7 @@ pub unsafe extern "C" fn p2l_bone_transform(handle: *mut Handle, index: u32, out
             Some(t) => Affine::of(t),
             // A virtual bone: evaluated on request at the current values.
             None => {
-                let values: Vec<f32> = h.rig.parameters.iter().zip(&h.values).map(|(p, v)| p.normalize(*v)).collect();
+                let values: Vec<f32> = h.rig.parameters.iter().zip(&h.current).map(|(p, v)| p.normalize(*v)).collect();
                 h.advanced.bone_frame(&h.rig, &values, *d)
             }
         };

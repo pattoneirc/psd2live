@@ -46,7 +46,7 @@
 - **精确链接（`P2L_EXACT_LINKS`）**：键控在同一圆上的枢轴沿圆弧插值。
 - **实时模拟（`P2L_SIM`）与碰撞（`P2L_COLLISION`）**：已烘焙的布料与头发以编辑器的 XPBD 求解器实时运行，替换烘焙的模式参数与摆锤；碰撞体是沿网格顶点的圆或胶囊。
 
-验证：`advanced_tests`（已知解析解的手臂、链接、虚拟骨骼和悬挂网格）；`p2lrt-conformance --advanced` 要求每个样例在蒙皮的键上与烘焙一致（全部为 0）；`--sim` 用 `RuntimeConformanceTool.simulation` 的随机布料轨迹比较求解器，与编辑器逐位一致（含碰撞）；`--sim-rig` 用 tml 后发的烘焙模拟端到端比较，前半秒误差 0.21 像素，全程平均 0.23 像素。差异来自两边求值目标时约 1e-4 像素的浮点差，布料会把它放大。
+验证：`advanced_tests`（已知解析解的手臂、链接、虚拟骨骼和悬挂网格）；`p2lrt-conformance --advanced` 要求每个样例在蒙皮的键上与烘焙一致（全部为 0）；`--sim` 用 `RuntimeConformanceTool.simulation` 的随机布料轨迹比较求解器，与编辑器逐位一致（含碰撞）；`--sim-rig` 用 tml 后发的烘焙模拟端到端比较，前半秒误差 0.21 像素，全程平均 0.22 像素。差异来自两边求值目标时约 1e-4 像素的浮点差，布料会把它放大。
 
 ## 物理
 
@@ -62,12 +62,12 @@
 
 ## C ABI
 
-一个句柄对应一个已加载模型，持有参数、动作播放器和物理状态。典型流程：`p2l_rig_load` → 设置参数（`p2l_parameter_values` / `p2l_set_parameter`）→ `p2l_update(dt)`（动作、物理、变形）或 `p2l_evaluate` → 读取 `p2l_mesh_vertices`、`p2l_mesh_opacity`、`p2l_mesh_colors`，按 `p2l_render_order` 由后往前绘制，贴图由 `p2l_texture_png` 提供（`p2l_texture_info` 给出贴图页类型：内嵌 PNG、KTX2 或模型旁的文件）。`p2l_rig_load_ex` 可要求校验块的 CRC，`p2l_format_support` 列出支持的版本与块。表情（`p2l_expression`）在动作片段之后、程序化行为之前叠加；`p2l_hit_test` 返回画布点下的点击区域；`p2l_mesh_user_data` 读取网格的用户数据；`p2l_pose_show` 切换部件互斥组（导出设置 `pose_groups`），被替换的部件随 `p2l_update` 淡出。所有函数接受空句柄；返回的指针在句柄释放（姿势数据在下次求值）前有效。
+一个句柄对应一个已加载模型，持有参数、动作播放器和物理状态。典型流程：`p2l_rig_load` → 设置参数（`p2l_parameter_values` / `p2l_set_parameter`）→ `p2l_update(dt)`（动作、物理、变形）或 `p2l_evaluate` → 读取 `p2l_mesh_vertices`、`p2l_mesh_opacity`、`p2l_mesh_colors`，按 `p2l_render_order` 由后往前绘制，贴图由 `p2l_texture_png` 提供（`p2l_texture_info` 给出贴图页类型：内嵌 PNG、KTX2 或模型旁的文件）。`p2l_rig_load_ex` 可要求校验块的 CRC，`p2l_format_support` 列出支持的版本与块。表情（`p2l_expression`）在动作片段之后、程序化行为之前叠加；`p2l_hit_test` 返回画布点下的点击区域；`p2l_mesh_user_data` 读取网格的用户数据；`p2l_pose_show` 切换部件互斥组（导出设置 `pose_groups`），被替换的部件随 `p2l_update` 淡出。`p2l_parameter_values` 是宿主设置的姿势，每次 `p2l_update` 都从它重新开始叠加动作、表情、行为和物理，叠加结果不写回，所以眨眼、呼吸和加法表情不会逐帧累积；本帧实际使用的值由 `p2l_parameter_current` 读取。所有函数接受空句柄；返回的指针在句柄释放（姿势数据在下次求值）前有效。
 
 ## 验证
 
 - `cargo test`：每条求值规则一个小模型单元测试（数值来自探测结果），以及 Warp、动作片段测试；`format_tests` 逐块拼出版本 2 文件，覆盖压缩、CRC、块目录与各种拒绝情形、全部数组编码、贴图页类型和参数面板。
-- `RuntimeConformanceTool`（`PSD2LIVE_TOOLS=1`）：生成 80 个随机模型（Warp、旋转、嵌套、稀疏网格、混合形、Glue、通道、部件、混合）、样例和本地工程的参考姿势，以及物理轨迹；`cargo run --release --bin p2lrt-conformance -- ../build/tools/runtime-conformance`（物理为 `runtime-physics`）逐例比较。每例同时写出版本 2、版本 1，以及 deflate 和 zstd 压缩的版本 2，四者必须读成相同的 `Rig`，并逐位得到相同姿势。当前除两个在放大极端的镜像格子中出现 0.02–0.1 像素单精度误差的随机模型外全部一致。
+- `RuntimeConformanceTool`（`PSD2LIVE_TOOLS=1`）：生成 80 个随机模型（Warp、旋转、嵌套、稀疏网格、混合形、Glue、通道、部件、混合）、样例和本地工程的参考姿势，以及物理轨迹；`cargo run --release --bin p2lrt-conformance -- ../build/tools/runtime-conformance`（物理为 `runtime-physics`）逐例比较。每例同时写出版本 2、版本 1，以及 deflate 和 zstd 压缩的版本 2，四者必须读成相同的 `Rig`，并逐位得到相同姿势。顶点误差上限为 0.02 像素；超出的姿势按自身条件数评判：把任一参数移动其范围的百万分之一时顶点移动最多的距离（灵敏度），误差不得超过它的两倍。网格内部插值用双精度。当前全部一致，唯一超出 0.02 的是 blend-6 的一个姿势（0.10 像素，灵敏度同为 0.10，该网格此时不透明度 3e-5）。
 
 ## 尚未完成
 

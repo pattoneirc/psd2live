@@ -36,8 +36,11 @@ uint32_t p2l_parameter_count(const P2lRig *rig);
 const char *p2l_parameter_id(const P2lRig *rig, uint32_t index);
 int32_t p2l_parameter_index(const P2lRig *rig, const char *id);
 bool p2l_parameter_range(const P2lRig *rig, uint32_t index, float *min, float *max, float *default_value);
-/* The values the next update reads and writes, one per parameter. */
+/* The pose the host sets, one value per parameter: what every update and evaluation starts from. Clips,
+ * expressions, behaviors and physics apply over a copy of it, so additive layers never accumulate here. */
 float *p2l_parameter_values(P2lRig *rig);
+/* The values the last evaluation used, after every layer; read-only. */
+const float *p2l_parameter_current(const P2lRig *rig);
 void p2l_set_parameter(P2lRig *rig, uint32_t index, float value);
 /* Parameters with a role such as "EyeBlink" or "LipSync"; returns how many there are. */
 uint32_t p2l_role_parameters(const P2lRig *rig, const char *role, uint32_t *out, uint32_t capacity);

@@ -137,9 +137,9 @@ export class P2LPlayer {
     return ranges;
   }
 
-  /** The current value of every parameter, after the last update. */
+  /** The value every parameter had in the last evaluation, after clips, expressions, behaviors and physics. */
   parameterValues() {
-    return Array.from(new Float32Array(this.rt.memory.buffer, this.rt.p2l_parameter_values(this.rig), this.parameters.length));
+    return Array.from(new Float32Array(this.rt.memory.buffer, this.rt.p2l_parameter_current(this.rig), this.parameters.length));
   }
 
   /** Mesh [m]'s vertices in canvas pixels at the last evaluation. */
