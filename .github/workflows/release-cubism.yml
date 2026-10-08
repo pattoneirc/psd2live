@@ -478,6 +478,56 @@ jobs:
             - **Windows MSI** `PSD2Live-${{ env.VERSION }}.msi` / `PSD2Live-${{ env.VERSION }}-ffmpeg.msi`：Windows Installer 安装包，升级行为同 EXE。
             - **Linux amd64 Deb（含 Cubism Native 预览）** `PSD2Live-${{ env.VERSION }}-linux-amd64.deb`：需 X11/GLX；内含官方运行时预览桥接，请遵守 Live2D SDK 许可，勿再二次公开分发专有组件。
 
+            <details>
+            <summary>English</summary>
+
+            Fixes Windows uninstall/upgrade wiping the installation folder, adds a Korean interface, lets meshes follow the texture, and makes skeleton editing, saving and opening noticeably faster.
+
+            ## ⚠️ Upgrade notes
+
+            - **Before upgrading from 3.0.0, move any projects out of the installation folder.** 3.0.0 and earlier delete the whole installation folder on uninstall or upgrade. This release fixes that, but the old version's uninstall is run by the old installer, so upgrading still cleans out the old folder.
+            - The Windows installers with and without `-ffmpeg` replace each other; they are never installed side by side.
+
+            ## Highlights
+
+            ### New
+
+            - **Korean interface**: selectable in Settings; on the command line use `--lang ko`.
+            - **Language switching**: the Language menu is now a globe icon at the right of the title bar, next to the theme toggle; switching redraws the whole window in the new language immediately.
+            - **Meshes follow the texture**: new projects default to "Trace outlines from texture pixels", so strokes finer than a canvas pixel still stay inside the mesh. Existing projects keep their previous method and meshes.
+            - **Mesh wrap**: a new mesh setting, "Wrap" (global or per-layer override; `--mesh-wrap` on the command line), wraps fine protrusions such as lashes, strand tips and fingers into a single outline, with far fewer vertices. Off by default.
+            - **Delete user data on uninstall**: after choosing Remove in Windows "Uninstall or change a program", you can tick "Also delete my PSD2Live data" (unticked by default).
+
+            ### Improvements
+
+            - **Unified icons**: every icon is redrawn on one shared grid, so lines no longer thin out on high-DPI screens.
+            - **Faster skeleton editing**: only the affected limb is rebaked, in parallel; moving an arm joint on a large project drops from about 2–3 seconds to under 1 second.
+            - **Faster saving and opening**: saving no longer re-encodes images or unpacks the whole archive to verify it; opening a large project decodes images in parallel.
+            - **Smoother large projects**: texture atlas packing, classification and compositing, as well as posed PSD export, are noticeably faster.
+            - **Installing and upgrading**: upgrades and reinstalls go back to the original folder by default; a rebuilt installer of the same version replaces the installed one instead of installing alongside it.
+
+            ### Fixes
+
+            - Uninstalling or upgrading on Windows wiped the installation folder. Now only the installed files are removed, and the default location for new projects is "Documents\PSD2Live".
+            - "Save as" no longer defaults to the current file, the overwrite confirmation appears inside the window, a queued "Save as" is no longer turned into a plain save by Ctrl+S, and the file chooser no longer ends up behind the main window.
+            - Switching between edit and preview mode keeps the view and canvas size.
+            - With the skeleton enabled, replaying a part split under an arm hanging deformer failed.
+            - A mesh bound to a bone and then manually placed under another deformer ended up in the wrong place after baking.
+            - After changing the topology of a bound mesh, the skeleton result on reopening the project differed from the one while editing.
+            - Layers added after generation had their meshes silently regenerated after a repaint, and later rebuilds failed.
+            - The Cubism preview occasionally lost the pose.
+
+            ## Downloads
+
+            Every Windows package comes in two versions: files with `-ffmpeg` in the name bundle ffmpeg and can export MP4, WebM, ProRes 4444, APNG and animated WebP directly; the ones without are smaller and need ffmpeg installed separately to export video and animations.
+
+            - **Portable ZIP** `PSD2Live-${{ env.VERSION }}-windows-x86_64-portable.zip` / `PSD2Live-${{ env.VERSION }}-windows-x86_64-portable-ffmpeg.zip`: unzip and run, no installation needed.
+            - **Windows EXE** `PSD2Live-${{ env.VERSION }}.exe` / `PSD2Live-${{ env.VERSION }}-ffmpeg.exe`: installer. If already installed, it installs into the existing folder and replaces the old version without asking for a path.
+            - **Windows MSI** `PSD2Live-${{ env.VERSION }}.msi` / `PSD2Live-${{ env.VERSION }}-ffmpeg.msi`: Windows Installer package; upgrades behave like the EXE.
+            - **Linux amd64 Deb (with Cubism Native preview)** `PSD2Live-${{ env.VERSION }}-linux-amd64.deb`: requires X11/GLX; includes the official runtime preview bridge. Please comply with the Live2D SDK license and do not redistribute the proprietary components publicly.
+
+            </details>
+
           files: |
             release-assets/PSD2Live-${{ env.VERSION }}-windows-x86_64-portable.zip
             release-assets/PSD2Live-${{ env.VERSION }}.exe
