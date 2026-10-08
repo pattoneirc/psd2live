@@ -1,5 +1,6 @@
 package io.github.psd2live.application
 
+import io.github.psd2live.core.StableIds
 import io.github.psd2live.project.WorkspaceAddLayerRequest
 import io.github.psd2live.project.WorkspaceCanvasPlacement
 import io.github.psd2live.project.WorkspaceImportedPngAsset
@@ -32,7 +33,6 @@ import org.umamo.format.art.SourceLayerKind
 import java.awt.image.BufferedImage
 import java.security.MessageDigest
 import java.util.Base64
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import javax.imageio.ImageIO
 
@@ -122,7 +122,10 @@ internal fun WorkspaceDocument.addLayer(
 	request: WorkspaceAddLayerRequest,
     checkCancelled: () -> Unit = {},
 ): Pair<WorkspaceDocument, String> {
-	val rawId = request.layerId?.trim().orEmpty().ifEmpty { "agent:${UUID.randomUUID()}" }
+	// An unnamed layer is named from what it is made of, so the same request adds the same layer ID.
+	val rawId = request.layerId?.trim().orEmpty().ifEmpty {
+		StableIds.fresh(StableIds.stem("agent:", request.copy(layerId = null, expectedState = "", taskId = null))) { id -> source.layers.any { it.id.raw == id } }
+	}
 	require(rawId.none(Char::isISOControl)) { "Layer ID contains control characters" }
 	require(source.layers.none { it.id.raw == rawId }) { "Layer ID already exists: $rawId" }
 	val name = request.name.trim()

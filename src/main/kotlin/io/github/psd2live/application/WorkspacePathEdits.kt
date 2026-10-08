@@ -1,5 +1,6 @@
 package io.github.psd2live.application
 
+import io.github.psd2live.core.StableIds
 import io.github.psd2live.core.DeformPathTools
 import io.github.psd2live.core.RigGeometryTools
 import kotlinx.serialization.json.*
@@ -8,7 +9,6 @@ import java.awt.*
 import java.awt.geom.Path2D
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
-import java.util.UUID
 import javax.imageio.ImageIO
 import kotlin.math.hypot
 import kotlin.math.max
@@ -474,7 +474,7 @@ internal object WorkspacePathEdits {
         val mesh = requireNotNull(drawable.mesh) { "Drawable has no mesh" }
 
         val id = (arguments["id"] ?: arguments["path_id"])?.jsonPrimitive?.contentOrNull
-            ?: "path_${UUID.randomUUID().toString().take(8)}"
+            ?: StableIds.of("path_", arguments) { id -> model.deformPaths.any { it.id == id } }
         val rawPoints = arguments.getValue("points").jsonArray
         val boundPoints = parsePoints(rawPoints, mesh.positions, mesh.indices)
 

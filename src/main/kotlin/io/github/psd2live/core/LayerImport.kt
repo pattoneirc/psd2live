@@ -13,7 +13,6 @@ import org.umamo.format.art.SourceLayerKind
 import org.umamo.format.raster.RasterCodec
 import org.umamo.format.raster.RasterImage
 import java.io.File
-import java.util.UUID
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.umamo.format.tiff.parseFirstDirectory
@@ -104,7 +103,7 @@ internal object LayerImport {
 		canvasWidth: Int,
 		canvasHeight: Int,
 		name: String,
-		layerId: String = "import:${UUID.randomUUID()}",
+		layerId: String = StableIds.stem("import:", name, image.width, image.height),
 		order: Int = 0,
 		checkCancelled: () -> Unit = {},
 	): WorkspaceSourceLayer {

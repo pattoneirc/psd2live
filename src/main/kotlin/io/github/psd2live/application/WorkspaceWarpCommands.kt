@@ -5,7 +5,6 @@ import io.github.psd2live.project.*
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.*
-import java.util.UUID
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 
@@ -24,7 +23,8 @@ internal object WorkspaceWarpEdits {
             requireNotNull(model.rig.puppet.drawables.singleOrNull { it.id.raw == id }) { "Mesh not found: $id" }.parentDeformerId
         }.distinct()
         require(parents.size == 1 && parents.single() != null) { "Targets need a common Warp parent" }
-        val edit = RigWarpEdit(request["id"]?.jsonPrimitive?.content ?: "Warp_${UUID.randomUUID()}",
+        val edit = RigWarpEdit(request["id"]?.jsonPrimitive?.content
+                ?: StableIds.of("Warp_", request) { id -> model.rig.puppet.deformers.any { it.id.raw == id } },
             request.getValue("name").jsonPrimitive.content, parents.single()!!.raw, targets,
             request["rows"]?.jsonPrimitive?.int ?: 16, request["columns"]?.jsonPrimitive?.int ?: 16,
             request["fit_local"]?.jsonPrimitive?.boolean ?: true)

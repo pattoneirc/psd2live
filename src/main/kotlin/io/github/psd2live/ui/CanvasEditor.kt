@@ -24,7 +24,6 @@ import org.umamo.format.art.SourceLayer
 import org.umamo.render.eval.*
 import org.umamo.runtime.model.*
 import java.awt.image.BufferedImage
-import java.util.UUID
 import kotlin.math.*
 
 /** Canvas tools, each pointing at the shortcut action that activates it. */
@@ -2556,8 +2555,12 @@ internal class CanvasEditor(
         }
     }
 
+    /** A new deformer's ID made from what creates it (StableIds): the same gesture on the same rig names the same object. */
+    private fun newDeformerId(prefix: String, vararg inputs: Any?): String =
+        StableIds.fresh(StableIds.stem(prefix, *inputs)) { id -> model.deformers.any { it.id.raw == id } }
+
     private fun commitPlacedWarp(p: CreatePlacement) {
-        val id = "Warp_${UUID.randomUUID()}"
+        val id = newDeformerId("Warp_", p.copy(imagePlacement = null))
         val cmd = buildJsonObject {
             put("op", "canvas_create_warp")
             put("id", id)
@@ -2596,7 +2599,7 @@ internal class CanvasEditor(
     }
 
     private fun commitPlacedRotation(p: CreatePlacement) {
-        val id = "Rotation_${UUID.randomUUID()}"
+        val id = newDeformerId("Rotation_", p.copy(imagePlacement = null))
         val angleDeg = Math.toDegrees(
             atan2((p.tipY - p.originY).toDouble(), (p.tipX - p.originX).toDouble()),
         ).toFloat()
@@ -3876,7 +3879,7 @@ internal class CanvasEditor(
             val points = input.inputs.mapIndexed { i, p -> DeformPathTools.bind(frame.geometry.points, frame.indices, p.first, p.second, previous?.points?.getOrNull(i)?.corner ?: false) }
             val path = previous?.copy(points = points, closed = if (previous.closed) previous.closed else pathClosed)
                 ?: DeformPath(
-                    UUID.randomUUID().toString(),
+                    StableIds.fresh(StableIds.stem("path_", frame.id, input.inputs)) { id -> input.model.rig.puppet.deformPaths.any { it.id == id } },
                     DrawableId(frame.id),
                     points,
                     pathWidth,
@@ -4057,7 +4060,7 @@ internal class CanvasEditor(
             return
         }
         val name = defaultCreateName(targets.first().id, rotation = false)
-        val id = "Warp_${UUID.randomUUID()}"
+        val id = newDeformerId("Warp_", name, targets.map { it.id }, warpCreateGridRows, warpCreateGridCols, warpSizeStrategy)
         gestureState = null
         commitWarpCreation(buildJsonObject {
             put("op", "canvas_create_warp")
@@ -4073,7 +4076,7 @@ internal class CanvasEditor(
         val t = target() ?: return
         if (t.kind != "mesh" || !editable) return
         val name = defaultCreateName(t.id, rotation = true)
-        val id = "Rotation_${UUID.randomUUID()}"
+        val id = newDeformerId("Rotation_", name, t.id, objects.sorted())
         val targets = objects.mapNotNull { target(model, it, null) }.ifEmpty { listOf(t) }
             .filter { it.kind == "mesh" }
         if (targets.isEmpty()) return
@@ -4104,7 +4107,7 @@ internal class CanvasEditor(
         if (!editable) return
         val parent = model.deformers.firstOrNull { it.id.raw == parentId } ?: return
         val name = tr("editor.defaultWarpName", parent.name)
-        val id = "Warp_${UUID.randomUUID()}"
+        val id = newDeformerId("Warp_", name, parentId, warpCreateGridRows, warpCreateGridCols)
         gestureState = null
         commitWarpCreation(buildJsonObject {
             put("op", "canvas_create_warp")
@@ -4125,7 +4128,7 @@ internal class CanvasEditor(
 
         val targetMeshes = objects.mapNotNull { target(model, it, null)?.id }.ifEmpty { listOfNotNull(target()?.takeIf { it.kind == "mesh" }?.id) }
         if (targetMeshes.isEmpty()) return
-        val id = "Warp_${UUID.randomUUID()}"
+        val id = newDeformerId("Warp_", targetMeshes, wX, wY, wW, wH, warpCreateGridRows, warpCreateGridCols)
         val name = defaultCreateName(targetMeshes.first(), rotation = false)
         val cmd = buildJsonObject {
             put("op", "canvas_create_warp")
@@ -4155,7 +4158,7 @@ internal class CanvasEditor(
 
         val targetMeshes = objects.mapNotNull { target(model, it, null)?.id }.ifEmpty { listOf(meshTarget.id) }
         if (targetMeshes.isEmpty()) return
-        val id = "Rotation_${UUID.randomUUID()}"
+        val id = newDeformerId("Rotation_", targetMeshes, origin, tip)
         val name = defaultCreateName(targetMeshes.first(), rotation = true)
         val cmd = buildJsonObject {
             put("op", "canvas_create_rotation")
@@ -4590,7 +4593,8 @@ internal class CanvasEditor(
             GlueWeightMode.BALANCE -> "balance"
         }
         val cmd = buildJsonObject {
-            put("id", existingId ?: "Glue_${UUID.randomUUID()}")
+            // A new Glue is named by the edit from its mesh pair (WorkspaceCanvasWeightEdits).
+            existingId?.let { put("id", it) }
             put("action", action)
             put("mesh_a", a)
             put("mesh_b", b)

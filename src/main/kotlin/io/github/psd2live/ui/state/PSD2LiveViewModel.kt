@@ -1485,7 +1485,9 @@ class PSD2LiveViewModel : AutoCloseable {
             setErrorMessage(tr("editor.depthSplit.changed")); return
         }
         val port: io.github.psd2live.application.WorkspaceSourcePort = workspaceBackend ?: return
-        val frontLayerId = "depth:${java.util.UUID.randomUUID()}"
+        // Named from the split itself (StableIds), as the command would name it.
+        val frontLayerId = io.github.psd2live.core.StableIds.fresh(io.github.psd2live.core.StableIds.stem("depth:", offer.sourceId, middleIds)) { id ->
+            offer.preview.analysis.layers.any { it.source.id.raw == id } }
         val request = kotlinx.serialization.json.buildJsonObject {
             put("source_id", offer.sourceId)
             put("front_layer_id", frontLayerId)

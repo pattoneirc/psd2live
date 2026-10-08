@@ -1,8 +1,8 @@
 package io.github.psd2live.application
 
+import io.github.psd2live.core.StableIds
 import kotlinx.serialization.json.*
 import org.umamo.runtime.model.PuppetModel
-import java.util.UUID
 
 /** Materialize canvas requests against the model belonging to this candidate document. */
 internal object WorkspaceCanvasCommands {
@@ -15,7 +15,8 @@ internal object WorkspaceCanvasCommands {
             else -> throw IllegalArgumentException("Unknown canvas mode: $mode")
         }
         val id = request["id"]?.jsonPrimitive?.content
-            ?: "Agent${mode.replaceFirstChar(Char::uppercase)}_${UUID.randomUUID().toString().take(8)}"
+            ?: StableIds.of("Agent${mode.replaceFirstChar(Char::uppercase)}_", request) { id ->
+                model.deformers.any { it.id.raw == id } || model.glues.any { it.id == id } }
         return buildJsonObject {
             put("op", op); put("id", id)
             request.forEach { (key, value) -> if (key !in setOf("mode", "state", "project_id", "request_id", "id")) put(key, value) }

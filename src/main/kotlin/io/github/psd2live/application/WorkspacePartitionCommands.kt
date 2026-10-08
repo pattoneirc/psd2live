@@ -62,11 +62,12 @@ internal object WorkspacePartitionEdits {
         }
         val names = request.getValue("names").jsonArray.map { it.jsonPrimitive.content.trim() }
         require(names.size >= 2 && names.all { it.isNotBlank() } && names.distinct().size == names.size) { "Name each piece once" }
-        val pieceIds = request["piece_ids"]?.jsonArray?.map { it.jsonPrimitive.content }
-        if (pieceIds != null) {
-            val known = document.source.layers.map { it.id.raw } + model.analysis.layers.map { it.source.id.raw }
+        val known = (document.source.layers.map { it.id.raw } + model.analysis.layers.map { it.source.id.raw }).toHashSet()
+        val pieceIds = request["piece_ids"]?.jsonArray?.map { it.jsonPrimitive.content }?.also { pieceIds ->
             require(pieceIds.size == names.size && pieceIds.distinct().size == pieceIds.size &&
                 pieceIds.all { it.isNotBlank() && it !in known }) { "Piece IDs must be unique, new and match the names" }
+        } ?: names.indices.fold(emptyList<String>()) { chosen, index ->
+            chosen + StableIds.of("split:", request, "piece$index") { it in known || it in chosen }
         }
         val sides = request["sides"]?.jsonArray?.map { Side.valueOf(it.jsonPrimitive.content.uppercase()) }
             ?: List(names.size) { Side.NONE }
@@ -75,7 +76,7 @@ internal object WorkspacePartitionEdits {
             componentPlan(model, id, work::checkpoint) ?: throw IllegalArgumentException("Layer has no splittable mesh islands: $id") else null
         val pieces = if (operation.operation == "source_split_polygon") {
             require(names.size == 2) { "Polygon partition requires two names" }
-            partitionSourcePolygon(source, request, work)
+            partitionSourcePolygon(source, request, pieceIds, work)
         } else {
             val plan = requireNotNull(componentPlan)
             require(plan.components.size == names.size) { "Names must match the current mesh island count: ${plan.components.size}" }

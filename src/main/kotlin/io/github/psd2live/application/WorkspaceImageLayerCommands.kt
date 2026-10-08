@@ -25,6 +25,8 @@ internal class WorkspaceImageLayerCommands(private val runtime: WorkspaceRuntime
         require(parent == null || before.model.rig.puppet.deformers.any { it.id.raw == parent }) { "Parent deformer not found" }
         val layers = runInterruptible(Dispatchers.Default) {
             var pixels = 0L
+            // Each layer is named from its file and place in the batch, so the same import names the same layers.
+            val taken = before.document.source.layers.mapTo(HashSet()) { it.id.raw }
             paths.mapIndexed { index, path ->
                 context.ensureActive()
                 context[WorkspaceJobContext]?.progress(0.05f + 0.2f * index / paths.size, "Reading image ${index + 1}/${paths.size}")
@@ -32,8 +34,10 @@ internal class WorkspaceImageLayerCommands(private val runtime: WorkspaceRuntime
                 val image = LayerImport.decodeRasterFile(file, { context.ensureActive() })
                 pixels += image.width.toLong() * image.height
                 require(pixels <= 33_554_432L) { "Image batch exceeds 32 megapixels" }
+                val id = StableIds.fresh(StableIds.stem("import:", index, path.toString(), image.width, image.height)) { it in taken }
+                taken += id
                 LayerImport.placedLayer(image, before.document.source.widthPx, before.document.source.heightPx,
-                    LayerImport.displayNameOf(file), checkCancelled = { context.ensureActive() })
+                    LayerImport.displayNameOf(file), id, checkCancelled = { context.ensureActive() })
             }
         }
         context.ensureActive()

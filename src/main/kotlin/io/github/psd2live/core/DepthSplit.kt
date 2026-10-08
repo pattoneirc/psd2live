@@ -8,7 +8,6 @@ import org.umamo.format.art.LayerId
 import org.umamo.format.art.LayerRaster
 import org.umamo.format.art.SourceArt
 import org.umamo.runtime.model.*
-import java.util.UUID
 
 /** Two independently paintable slices of the same rig, welded vertex for vertex. */
 internal object DepthSplit {
@@ -169,10 +168,14 @@ internal object DepthSplit {
         return Result(pipeline.buildPreviewAfterLayerSplit(current, prepared.source, prepared.config), prepared.frontLayerId)
     }
 
-    /** Pure preparation; production commands rebuild and commit the returned durable candidate. */
+    /**
+     * Pure preparation; production commands rebuild and commit the returned durable candidate. Unnamed objects are
+     * named from the source and middle meshes (StableIds).
+     */
     fun prepare(current: RigPreviewModel, config: PipelineConfig, sourceId: String, middleIds: List<String>,
-                frontId: String = "depth:${UUID.randomUUID()}", frontDrawableId: String = "ArtMeshDepth_${UUID.randomUUID()}",
-                glueId: String = "GlueDepth_${UUID.randomUUID()}", names: List<String>? = null,
+                frontId: String = StableIds.stem("depth:", sourceId, middleIds),
+                frontDrawableId: String = StableIds.stem("ArtMeshDepth_", sourceId, middleIds),
+                glueId: String = StableIds.stem("GlueDepth_", sourceId, middleIds), names: List<String>? = null,
                 checkpoint: () -> Unit = {}): Preparation {
         checkpoint()
         require(middleIds.isNotEmpty() && sourceId !in middleIds)

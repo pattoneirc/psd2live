@@ -3,7 +3,6 @@ package io.github.psd2live.application
 import io.github.psd2live.core.*
 import io.github.psd2live.project.*
 import kotlinx.serialization.json.*
-import java.util.UUID
 
 /**
  * Depth slices. A generated model gets two new primitives, back and front, that replace the source mesh and its
@@ -16,19 +15,25 @@ internal object WorkspaceDepthSplitEdits {
               work: WorkspaceRasterWork): WorkspaceDocument {
         val request = operation.request
         work.progress(0.05f, "Preparing depth slices")
-        val frontId = request["front_layer_id"]?.jsonPrimitive?.content ?: "depth:${UUID.randomUUID()}"
+        // Unnamed slices are named from the request, so a retry or a dry run and its commit agree (StableIds).
+        val layers = document.source.layers.mapTo(HashSet()) { it.id.raw } + model.analysis.layers.map { it.source.id.raw }
+        val meshes = model.rig.puppet.drawables.mapTo(HashSet()) { it.id.raw } + document.rigEdits.splitDrawableIds.values
+        val generated = setOf("front_layer_id", "back_layer_id", "front_mesh_id", "back_mesh_id", "glue_id")
+        fun named(field: String, prefix: String, taken: Set<String>) = request[field]?.jsonPrimitive?.content
+            ?: StableIds.of(prefix, request, field, generated) { it in taken }
+        val frontId = named("front_layer_id", "depth:", layers)
         require(document.source.layers.none { it.id.raw == frontId }) { "Front layer ID already exists: $frontId" }
         val decoded = document.config()
         val config = if ("drawOrderOverrides" in document.settings) decoded else decoded.copy(drawOrderOverrides = model.config.drawOrderOverrides)
         val sourceId = request.getValue("source_id").jsonPrimitive.content
         val middleIds = request.getValue("middle_ids").jsonArray.map { it.jsonPrimitive.content }
-        val frontMeshId = request["front_mesh_id"]?.jsonPrimitive?.content ?: "ArtMeshDepth_${UUID.randomUUID()}"
-        val glueId = request["glue_id"]?.jsonPrimitive?.content ?: "GlueDepth_${UUID.randomUUID()}"
+        val frontMeshId = named("front_mesh_id", "ArtMeshDepth_", meshes)
+        val glueId = named("glue_id", "GlueDepth_", model.rig.puppet.glues.mapNotNullTo(HashSet()) { it.id })
         val names = request["names"]?.jsonArray?.map { it.jsonPrimitive.content }
         if (config.rigEdits.importedCmo3 == null) {
-            val backId = request["back_layer_id"]?.jsonPrimitive?.content ?: "depth-back:${UUID.randomUUID()}"
+            val backId = named("back_layer_id", "depth-back:", layers)
             require(document.source.layers.none { it.id.raw == backId }) { "Back layer ID already exists: $backId" }
-            val backMeshId = request["back_mesh_id"]?.jsonPrimitive?.content ?: "ArtMeshDepthBack_${UUID.randomUUID()}"
+            val backMeshId = named("back_mesh_id", "ArtMeshDepthBack_", meshes)
             val slices = DepthSplit.materialize(model, config, sourceId, middleIds, backId, backMeshId, frontId, frontMeshId, glueId,
                 names, work::checkpoint)
             work.progress(0.75f, "Preserving depth slice bindings")

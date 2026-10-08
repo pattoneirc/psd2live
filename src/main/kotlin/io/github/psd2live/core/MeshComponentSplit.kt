@@ -7,7 +7,6 @@ import org.umamo.format.art.LayerRaster
 import org.umamo.format.art.SourceLayer
 import org.umamo.runtime.model.DrawableMesh
 import java.awt.image.BufferedImage
-import java.util.UUID
 import kotlin.math.roundToInt
 
 /** Partitions source pixels by the connected triangle islands of the mesh currently on screen. */
@@ -102,7 +101,7 @@ internal object MeshComponentSplit {
                 }
                 val placed = PaintSpace.placedOn(space, left, top, width, height, LayerRaster(width, height, rgba))
                 base.copy(
-                    id = LayerId(ids?.get(index) ?: "split:${UUID.randomUUID()}"),
+                    id = LayerId(ids?.get(index) ?: StableIds.stem("split:", source.id.raw, index, names[index])),
                     name = names[index].trim(),
                     bounds = placed.bounds,
                     rect = placed.rect,

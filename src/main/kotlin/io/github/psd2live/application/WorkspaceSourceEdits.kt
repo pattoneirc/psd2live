@@ -9,7 +9,6 @@ import org.umamo.format.art.*
 import java.awt.geom.Path2D
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.UUID
 
 internal fun sourceArtwork(arguments: JsonObject): Pair<WorkspaceSourceArt, Map<String, LayerClassificationOverride>> {
     val width = arguments.getValue("width").jsonPrimitive.int; val height = arguments.getValue("height").jsonPrimitive.int
@@ -26,7 +25,8 @@ internal fun sourceArtwork(arguments: JsonObject): Pair<WorkspaceSourceArt, Map<
         pixels += image.width.toLong() * image.height
         require(pixels <= 33_554_432) { "Artwork exceeds total raster budget" }
         val rgba = image.rgba
-        val id = "artwork:${UUID.randomUUID()}"
+        // Made from the file entry and its place, so the same request names the same layers.
+        val id = StableIds.stem("artwork:", index, a)
         a["role"]?.jsonPrimitive?.content?.let { role -> overrides[id] = LayerClassificationOverride(type = LayerType.PRESET,
             tag = enumValueOf<SemanticTag>(role.uppercase()), side = enumValueOf<Side>((a["side"]?.jsonPrimitive?.content ?: "none").uppercase())) }
         WorkspaceSourceLayer(LayerId(id), a.text("name"), "", SourceLayerKind.Raster, true, files.lastIndex - index,
@@ -37,7 +37,7 @@ internal fun sourceArtwork(arguments: JsonObject): Pair<WorkspaceSourceArt, Map<
 }
 
 /** A binary source partition preserves original RGBA exactly; it does not invent hidden artwork. */
-internal fun partitionSourcePolygon(layer: SourceLayer, arguments: JsonObject, work: WorkspaceRasterWork): List<WorkspaceSourceLayer> {
+internal fun partitionSourcePolygon(layer: SourceLayer, arguments: JsonObject, pieceIds: List<String>, work: WorkspaceRasterWork): List<WorkspaceSourceLayer> {
     require(!layer.clipped && layer.blend == LayerBlend.Normal && layer.channelMask == ChannelMask.ALL) { "Split requires a normal, unmasked source layer" }
     val polygon = arguments.getValue("polygon").jsonArray.map { point -> point.jsonArray.map { it.jsonPrimitive.double } }
     require(polygon.size in 3..32 && polygon.all { it.size == 2 && it.all(Double::isFinite) })
@@ -59,10 +59,10 @@ internal fun partitionSourcePolygon(layer: SourceLayer, arguments: JsonObject, w
         }
     }
     require(selectedPixels > 0 && remainingPixels > 0) { "Polygon must separate two nonempty painted regions" }
-    val pieceIds = arguments["piece_ids"]?.jsonArray?.map { it.jsonPrimitive.content }
+    require(pieceIds.size == 2) { "Polygon partition requires two piece IDs" }
     val pieces = listOf(selected, remainder).mapIndexed { index, rgba ->
         (WorkspaceSourceLayer.copyOf(layer, layer.order) as WorkspaceSourceLayer).copy(
-            id = LayerId(pieceIds?.get(index) ?: "split:${UUID.randomUUID()}"), name = names[index].trim(),
+            id = LayerId(pieceIds[index]), name = names[index].trim(),
             raster = LayerRaster(sourceRaster.width, sourceRaster.height, rgba), sourceAssetId = null, sourceSpatialReferenceId = null, derived = true)
     }
     return pieces
