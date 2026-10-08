@@ -1677,13 +1677,8 @@ fun CanvasViewportComposable(
 					previewModel.hasRuntimePhysics -> "${fpsStr}${tr("canvas.preview.physicsOn", zoomPct)}"
 					else -> "${fpsStr}${tr("canvas.preview.physicsOff", zoomPct)}"
 				} + if (!referenceSimulation && canvasState.rigEdits.simEdits.any { it.enabled && it.bake == null }) tr("canvas.preview.simUnbaked") else ""
-				CanvasMode.EDIT -> if (showMesh) {
-					val vertexCount = previewModel.rig.puppet.drawables.sumOf { it.mesh?.vertexCount ?: 0 }
-					val triangleCount = previewModel.rig.puppet.drawables.sumOf { it.mesh?.triangleCount ?: 0 }
-					tr("canvas.mesh.stats", previewModel.rig.puppet.drawables.size, vertexCount, triangleCount, zoomPct)
-				} else {
-					"$zoomPct%"
-				}
+				// The edit canvas keeps its bottom left for the tool options bar.
+				CanvasMode.EDIT -> ""
 			}
 
 			// Bottom-left: zoom/FPS/physics stats pill.

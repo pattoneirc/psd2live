@@ -95,7 +95,9 @@ import io.github.psd2live.ui.views.texture.AccentButton
 import io.github.psd2live.ui.views.texture.BarChip
 import io.github.psd2live.ui.views.texture.BarDivider
 import io.github.psd2live.ui.views.texture.FloatingBar
+import io.github.psd2live.ui.views.tooloptions.ModeBarToolOptions
 import io.github.psd2live.ui.views.tooloptions.ToolOptionsBar
+import io.github.psd2live.ui.tooloptions.topOptions
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -1550,10 +1552,8 @@ internal fun BoxScope.CanvasEditorOverlay(
         if (editor.hierarchyMode == EditHierarchyMode.PAINT) editor.ensurePaintSession()
     }
 
-    // The tool in hand's settings and actions at the bottom left, over the stats pill while the canvas shows it.
-    val statsShown = editor.skeletonDraft == null && editor.placement == null && viewModel.swingSession == null
-    val optionsBottom by animateDpAsState(if (statsShown) 38.dp else 8.dp, tween(durationMillis = 200, easing = FastOutSlowInEasing))
-    ToolOptionsBar(editor, focus, bottom = optionsBottom)
+    // The values that tune the tool in hand, at the bottom left.
+    ToolOptionsBar(editor, focus)
 
     // Left Animated Hover Toolbar (edit / deform / paint tools)
     CanvasToolBar(editor = editor, keymap = keymap, focus = focus)
@@ -2498,6 +2498,21 @@ private fun BoxScope.HierarchyModeBar(
                     },
                 )
             }
+        }
+
+        // The tool's element mode and the confirm and cancel of a step in hand.
+        AnimatedVisibility(
+            visible = topOptions(editor).isNotEmpty(),
+            enter = expandHorizontally(
+                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                expandFrom = Alignment.Start,
+            ) + fadeIn(animationSpec = tween(150)),
+            exit = shrinkHorizontally(
+                animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
+                shrinkTowards = Alignment.Start,
+            ) + fadeOut(animationSpec = tween(100)),
+        ) {
+            ModeBarToolOptions(editor, focus)
         }
 
         // Current edit target badge — shown whenever a mesh/deformer is selected so the label

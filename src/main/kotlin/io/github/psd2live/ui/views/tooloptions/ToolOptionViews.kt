@@ -30,12 +30,25 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.RoundedCornerShape
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.delay
@@ -84,6 +97,7 @@ import io.github.psd2live.ui.tooloptions.SliderOption
 import io.github.psd2live.ui.tooloptions.ToggleOption
 import io.github.psd2live.ui.tooloptions.ToolOption
 import io.github.psd2live.ui.tooloptions.barOptions
+import io.github.psd2live.ui.tooloptions.topOptions
 import io.github.psd2live.ui.tooloptions.foldedGroups
 import io.github.psd2live.ui.tooloptions.menuOptions
 import io.github.psd2live.ui.tutorial.TutorialTargetId
@@ -106,6 +120,7 @@ import io.github.psd2live.ui.views.texture.FloatingMenuSection
 import io.github.psd2live.ui.views.texture.FloatingMenuSlider
 import io.github.psd2live.ui.views.texture.FloatingMenuSubmenuRow
 import io.github.psd2live.ui.views.texture.FloatingMenuSwitch
+import io.github.psd2live.ui.views.texture.LocalMenuGlide
 import io.github.psd2live.ui.views.vertexGroupKindColor
 import org.umamo.runtime.model.VertexGroupKind
 
@@ -114,12 +129,12 @@ internal fun toolOptionsBarShown(editor: CanvasEditor): Boolean =
     editor.hierarchyMode == EditHierarchyMode.PAINT || barOptions(editor).isNotEmpty()
 
 /**
- * The tool options bar: at the bottom left of the canvas, [bottom] above its edge, the settings and actions of the
- * tool in hand as [barOptions] lists them - Photoshop's options bar in the canvas's frosted style. Paint mode leads
- * with its colours. Its menus open upwards, away from the edge.
+ * The tool options bar: at the bottom left of the canvas, the values that tune the tool in hand as [barOptions] lists
+ * them - Photoshop's options bar in the canvas's frosted style; what decides how the canvas is worked sits in the
+ * mode bar at the top ([ModeBarToolOptions]). Paint mode leads with its colours. Its menus open upwards.
  */
 @Composable
-internal fun BoxScope.ToolOptionsBar(editor: CanvasEditor, focus: () -> Unit, bottom: androidx.compose.ui.unit.Dp = 8.dp) {
+internal fun BoxScope.ToolOptionsBar(editor: CanvasEditor, focus: () -> Unit) {
     val options = barOptions(editor)
     val painting = editor.hierarchyMode == EditHierarchyMode.PAINT
     if (!painting && options.isEmpty()) return
@@ -127,7 +142,7 @@ internal fun BoxScope.ToolOptionsBar(editor: CanvasEditor, focus: () -> Unit, bo
     FloatingBar(
         Modifier
             .align(Alignment.BottomStart)
-            .padding(start = 8.dp, bottom = bottom, end = 56.dp)
+            .padding(start = 8.dp, bottom = 8.dp, end = 56.dp)
             .tutorialTarget(TutorialTargetId.TOOL_OPTIONS_BAR),
     ) {
         Row(
@@ -229,6 +244,20 @@ private fun <T> BarChoice(editor: CanvasEditor, option: ChoiceOption<T>, focus: 
     }
 }
 
+/**
+ * The tool's options that belong at the top ([topOptions]): the element mode and the confirm and cancel of a step in
+ * hand, in the mode bar after a rule. Nothing shows while the tool has none.
+ */
+@Composable
+internal fun ModeBarToolOptions(editor: CanvasEditor, focus: () -> Unit) {
+    val options = topOptions(editor)
+    if (options.isEmpty()) return
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        BarDivider()
+        options.forEach { option -> BarOption(editor, option, focus) }
+    }
+}
+
 /** One entry of the context menu: an option on its own line, or a group folded into a second level. */
 private sealed interface MenuEntry {
     data class Single(val option: ToolOption) : MenuEntry
@@ -274,23 +303,22 @@ internal fun ToolOptionMenu(editor: CanvasEditor, onDismiss: () -> Unit, onActio
     var openId by remember { mutableStateOf<String?>(null) }
     val open = entries.filterIsInstance<MenuEntry.Level>().firstOrNull { it.id == openId }
     Row(verticalAlignment = Alignment.Top) {
-        Column(Modifier.width(236.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            entries.forEachIndexed { i, entry ->
-                Box(Modifier.arrival(i)) {
-                    when (entry) {
-                        // A plain row closes the second level the pointer has left, the way a cascading menu does.
-                        is MenuEntry.Single -> Box(Modifier.onPointerEvent(PointerEventType.Enter) { openId = null }) {
-                            MenuOption(editor, entry.option, onDismiss, onAction)
-                        }
-                        is MenuEntry.Level -> FloatingMenuSubmenuRow(
-                            label = entry.label,
-                            open = openId == entry.id,
-                            onOpen = { openId = entry.id },
-                            trailing = entry.trailing ?: entry.options.count { it is ActionOption }.takeIf { it > 0 }?.toString(),
-                            icon = entry.icon?.let { icon -> { tint -> OptionIconView(icon, tint) } },
-                        )
-                    }
-                }
+        GlidingColumn(
+            modifier = Modifier.width(236.dp),
+            count = entries.size,
+            highlights = { i -> (entries[i] as? MenuEntry.Single)?.option.let { it !is NoteOption && it !is SectionOption } },
+            // A plain row closes the second level the pointer has left, the way a cascading menu does.
+            onHover = { i -> if (entries[i] is MenuEntry.Single) openId = null },
+        ) { i ->
+            when (val entry = entries[i]) {
+                is MenuEntry.Single -> MenuOption(editor, entry.option, onDismiss, onAction)
+                is MenuEntry.Level -> FloatingMenuSubmenuRow(
+                    label = entry.label,
+                    open = openId == entry.id,
+                    onOpen = { openId = entry.id },
+                    trailing = entry.trailing ?: entry.options.count { it is ActionOption }.takeIf { it > 0 }?.toString(),
+                    icon = entry.icon?.let { icon -> { tint -> OptionIconView(icon, tint) } },
+                )
             }
         }
         // The second level appears at its full width, fading and sliding in from the menu's side: animating the
@@ -301,24 +329,82 @@ internal fun ToolOptionMenu(editor: CanvasEditor, onDismiss: () -> Unit, onActio
             exit = fadeOut(tween(80, easing = FastOutLinearInEasing)),
         ) {
             val rule = colors.border.copy(alpha = 0.5f)
-            Column(
-                Modifier
-                    .padding(start = 4.dp)
-                    .drawBehind { drawLine(rule, androidx.compose.ui.geometry.Offset(0f, 4f), androidx.compose.ui.geometry.Offset(0f, size.height - 4f), 1f) }
-                    .padding(start = 4.dp)
-                    .width(196.dp),
-                verticalArrangement = Arrangement.spacedBy(1.dp),
-            ) {
-                    val level = open ?: return@Column
-                    // Keyed by the group, so switching groups brings the new rows in one after another again.
-                    key(level.id) {
-                        FloatingMenuSection(level.label)
-                        val choice = level.choice
-                        if (choice != null) MenuChoiceRadios(editor, choice)
-                        else level.options.forEachIndexed { i, option ->
-                            Box(Modifier.arrival(i)) { MenuOption(editor, option, onDismiss, onAction) }
-                        }
+            val level = open ?: return@AnimatedVisibility
+            // Keyed by the group, so switching groups brings the new rows in one after another again.
+            key(level.id) {
+                val choice = level.choice
+                val rows = if (choice != null) choice.choices(editor).size else level.options.size
+                GlidingColumn(
+                    modifier = Modifier
+                        .padding(start = 4.dp)
+                        .drawBehind { drawLine(rule, androidx.compose.ui.geometry.Offset(0f, 4f), androidx.compose.ui.geometry.Offset(0f, size.height - 4f), 1f) }
+                        .padding(start = 4.dp)
+                        .width(196.dp),
+                    count = rows + 1,
+                    highlights = { i -> i > 0 && (choice != null || level.options[i - 1].let { it !is NoteOption && it !is SectionOption }) },
+                ) { i ->
+                    when {
+                        i == 0 -> FloatingMenuSection(level.label)
+                        choice != null -> MenuChoiceRadio(editor, choice, i - 1)
+                        else -> MenuOption(editor, level.options[i - 1], onDismiss, onAction)
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A column of menu rows with the mode menu's motion: the rows arrive one after another, and one highlight glides to
+ * the row under the pointer instead of each row lighting up on its own. [highlights] says which rows take it - not a
+ * caption or a note; [onHover] hears which row the pointer entered.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun GlidingColumn(
+    modifier: Modifier,
+    count: Int,
+    highlights: (Int) -> Boolean,
+    onHover: (Int) -> Unit = {},
+    row: @Composable (Int) -> Unit,
+) {
+    val colors = LocalToolColors.current
+    val density = LocalDensity.current
+    val bounds = remember { mutableStateMapOf<Int, Pair<Float, Float>>() }
+    var hovered by remember { mutableStateOf<Int?>(null) }
+    val target = hovered?.takeIf { highlights(it) }?.let { bounds[it] }
+    val glow by animateFloatAsState(if (target != null) 1f else 0f, tween(100, easing = FastOutSlowInEasing))
+    val top = remember { Animatable(0f) }
+    val height = remember { Animatable(0f) }
+    LaunchedEffect(target) {
+        val (y, h) = target ?: return@LaunchedEffect
+        // Appearing, it starts on its row; moving, it glides there.
+        if (glow < 0.05f) { top.snapTo(y); height.snapTo(h) }
+        else coroutineScope {
+            launch { top.animateTo(y, tween(80, easing = FastOutSlowInEasing)) }
+            launch { height.animateTo(h, tween(80, easing = FastOutSlowInEasing)) }
+        }
+    }
+    Box(modifier.onPointerEvent(PointerEventType.Exit) { hovered = null }) {
+        Box(
+            Modifier
+                .offset { IntOffset(0, top.value.roundToInt()) }
+                .fillMaxWidth()
+                .height(with(density) { height.value.toDp() })
+                .alpha(glow)
+                .clip(RoundedCornerShape(5.dp))
+                .background(colors.controlHover.copy(alpha = 0.75f)),
+        )
+        CompositionLocalProvider(LocalMenuGlide provides true) {
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                for (i in 0 until count) {
+                    Box(
+                        Modifier
+                            .arrival(i)
+                            .onGloballyPositioned { bounds[i] = it.positionInParent().y to it.size.height.toFloat() }
+                            .onPointerEvent(PointerEventType.Enter) { hovered = i; onHover(i) },
+                    ) { row(i) }
+                }
             }
         }
     }
@@ -399,6 +485,14 @@ private fun <T> MenuChoiceRow(editor: CanvasEditor, option: ChoiceOption<T>) {
             }
         }
     }
+}
+
+/** Choice [index] of [option] as one radio row. */
+@Composable
+private fun <T> MenuChoiceRadio(editor: CanvasEditor, option: ChoiceOption<T>, index: Int) {
+    val choice = option.choices(editor).getOrNull(index) ?: return
+    FloatingMenuRadio(option.label(editor, choice), selected = choice == option.get(editor), onSelect = { option.set(editor, choice) },
+        icon = if (choiceHasIcon(choice)) { tint -> ChoiceIcon(choice, tint) } else null)
 }
 
 @Composable

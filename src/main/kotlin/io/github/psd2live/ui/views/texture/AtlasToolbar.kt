@@ -372,6 +372,12 @@ internal fun FloatingMenu(
 	)
 }
 
+/**
+ * True inside a menu column whose one highlight glides to the hovered row, the way the mode menu's does: its rows
+ * then leave the hover fill to it.
+ */
+internal val LocalMenuGlide = androidx.compose.runtime.staticCompositionLocalOf { false }
+
 /** A caption over a group of [FloatingMenu] rows. */
 @Composable
 internal fun FloatingMenuSection(text: String) {
@@ -410,7 +416,8 @@ internal fun FloatingMenuRow(
 		hovered -> colors.textPrimary
 		else -> colors.textMuted
 	}, tween(80))
-	val background by animateColorAsState(if (hovered && enabled) colors.controlHover.copy(alpha = 0.75f) else Color.Transparent, tween(80))
+	val glide = LocalMenuGlide.current
+	val background by animateColorAsState(if (hovered && enabled && !glide) colors.controlHover.copy(alpha = 0.75f) else Color.Transparent, tween(80))
 	val edge by animateFloatAsState(if (selected && bar) 1f else 0f, tween(80, easing = FastOutSlowInEasing))
 	Row(
 		Modifier
@@ -505,7 +512,13 @@ internal fun FloatingMenuSubmenuRow(label: String, open: Boolean, onOpen: () -> 
 	val hovered by interactionSource.collectIsHoveredAsState()
 	LaunchedEffect(hovered) { if (hovered) onOpen() }
 	val tint = if (open || hovered) colors.textPrimary else colors.textMuted
-	val background by animateColorAsState(if (open || hovered) colors.controlHover.copy(alpha = 0.75f) else Color.Transparent, tween(80))
+	// Open, the row keeps its fill while the pointer works the second level; hovered, a gliding highlight may light it.
+	val glide = LocalMenuGlide.current
+	val background by animateColorAsState(when {
+		open -> colors.controlHover.copy(alpha = 0.75f)
+		hovered && !glide -> colors.controlHover.copy(alpha = 0.75f)
+		else -> Color.Transparent
+	}, tween(80))
 	Row(
 		Modifier
 			.fillMaxWidth()

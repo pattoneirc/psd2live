@@ -194,6 +194,21 @@ class ToolOptionCatalogTest {
         assertEquals(setOf(EditHierarchyMode.SELECT), EditHierarchyMode.entries.filter(::createGroupOffered).toSet())
     }
 
+    @Test fun elementModesAndConfirmationsSitAtTheTop() = editor { editor ->
+        for (mode in listOf(EditHierarchyMode.DEFORM, EditHierarchyMode.EDIT)) {
+            editor.hierarchyMode = mode
+            editor.tool = CanvasTool.SELECT
+            assertTrue(editor.pointElementModes())
+            assertTrue(topOptions(editor).any { it === ELEMENT_MODE }, "$mode picks by vertex, edge or face")
+            assertTrue(barOptions(editor).none { it === ELEMENT_MODE })
+        }
+        editor.hierarchyMode = EditHierarchyMode.EDIT
+        editor.tool = CanvasTool.KNIFE
+        val top = topOptions(editor).map { it.id }
+        assertEquals(listOf("knife.finish", "knife.undoPoint", "knife.cancel"), top)
+        assertTrue(barOptions(editor).none { it.id in top }, "the bottom bar keeps to the values")
+    }
+
     @Test fun theMenuFoldsGroupsOnlyWhenItRunsLong() = editor { editor ->
         // Deform's selection tools hold one short group: it stays open.
         editor.hierarchyMode = EditHierarchyMode.DEFORM

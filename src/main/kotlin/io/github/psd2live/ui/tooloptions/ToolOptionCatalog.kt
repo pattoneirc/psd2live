@@ -127,7 +127,7 @@ internal fun toolOptions(editor: CanvasEditor): List<ToolOption> = buildList {
             // Armed without a part to build on: the tool waits for the pick that starts its placement.
             add(NoteOption("create.wait", { tr("editor.creationSelectFirst") }, warning = { true }))
             if (editor.tool != CanvasTool.CREATE_DEFORM_PATH) add(SEQUENTIAL_CREATE)
-            add(ActionOption("create.cancel", "action.cancel", { !it.busy }, { it.cancel() }, OptionIcon.CANCEL))
+            add(ActionOption("create.cancel", "action.cancel", { !it.busy }, { it.cancel() }, OptionIcon.CANCEL, place = OptionPlace.TOP))
             return@buildList
         }
         CanvasTool.GLUE -> {
@@ -147,6 +147,9 @@ internal fun toolOptions(editor: CanvasEditor): List<ToolOption> = buildList {
 
 /** The options of [toolOptions] the context menu shows. */
 internal fun menuOptions(editor: CanvasEditor): List<ToolOption> = toolOptions(editor).filter { it.place.menu }.trimSections()
+
+/** The options of [toolOptions] the mode bar shows at the top. */
+internal fun topOptions(editor: CanvasEditor): List<ToolOption> = toolOptions(editor).filter { it.place.top }
 
 /** The options of [toolOptions] the options bar shows. */
 internal fun barOptions(editor: CanvasEditor): List<ToolOption> = toolOptions(editor).filter { it.place.bar }.trimSections()
@@ -219,8 +222,8 @@ internal fun CanvasEditor.pickVariant(n: Int): Boolean {
     return when {
         deformLevelsShown() -> pick(listOf(1, 2)) { setEditLevel(it) }
         hierarchyMode == EditHierarchyMode.SIMULATE -> pick(io.github.psd2live.ui.PAINTED_GROUP_KINDS) { weightGroupKind = it }
-        // Edit's point tools take Blender's 1 2 3: vertex, edge and face.
-        hierarchyMode == EditHierarchyMode.EDIT && (tool in SELECTION_TOOLS || tool == CanvasTool.TRANSFORM) -> pick(listOf(0, 1, 2)) { elementMode = it }
+        // The point tools take Blender's 1 2 3: vertex, edge and face.
+        pointElementModes() && target()?.kind == "mesh" && (tool in SELECTION_TOOLS || tool == CanvasTool.TRANSFORM) -> pick(listOf(0, 1, 2)) { elementMode = it }
         tool in DEFORM_BRUSH_TOOLS || tool == CanvasTool.WEIGHT_PAINT -> pick(BrushShape.entries) { brushShape = it }
         tool == CanvasTool.GLUE -> pick(GlueSubTool.entries) { glueSubTool = it }
         tool == CanvasTool.SKELETON_EDIT -> pick(SkeletonEditSubTool.entries) { skeletonEditSubTool = it }
@@ -235,14 +238,14 @@ private val SEQUENTIAL_CREATE = ToggleOption("create.sequential", "editor.sequen
 private fun MutableList<ToolOption>.addPlacement(editor: CanvasEditor, kind: CreatePlacementKind) {
     if (kind == CreatePlacementKind.PATH) {
         add(ActionOption("path.finish", "editor.finishPath", { it.editable && it.draft.size >= 2 }, { it.confirmPlacement() },
-            OptionIcon.CONFIRM, primary = true))
+            OptionIcon.CONFIRM, primary = true, place = OptionPlace.TOP))
         add(ActionOption("path.undoPoint", "editor.undoPoint", { !it.busy && it.draft.isNotEmpty() }, { it.undoDraftPoint() },
-            OptionIcon.UNDO, keepsMenu = true))
+            OptionIcon.UNDO, keepsMenu = true, place = OptionPlace.TOP))
     } else {
         add(ActionOption("placement.confirm", "editor.placementConfirm", { it.editable }, { it.confirmPlacement() },
-            OptionIcon.CONFIRM, primary = true))
+            OptionIcon.CONFIRM, primary = true, place = OptionPlace.TOP))
     }
-    add(ActionOption("placement.cancel", "editor.placementCancel", { true }, { it.cancelPlacement() }, OptionIcon.CANCEL))
+    add(ActionOption("placement.cancel", "editor.placementCancel", { true }, { it.cancelPlacement() }, OptionIcon.CANCEL, place = OptionPlace.TOP))
     if (kind == CreatePlacementKind.WARP || kind == CreatePlacementKind.ROTATION) add(SEQUENTIAL_CREATE)
 }
 
@@ -262,7 +265,8 @@ private fun MutableList<ToolOption>.addGlue(editor: CanvasEditor) {
     }, warning = { it.glueMeshPair() == null }))
     add(ActionOption("glue.swap", "editor.glueSwap", { it.glueMeshPair() != null && it.editable }, { it.swapGlueEnds() }, OptionIcon.SWAP, keepsMenu = true))
     add(ActionOption("glue.apply", if (pair != null && editor.glueAlreadyBound()) "editor.glueReplace" else "editor.glueCreate",
-        { it.glueMeshPair() != null && it.editable && it.gluePreviewPoints().isNotEmpty() }, { it.applyGlue() }, OptionIcon.CONFIRM, primary = true))
+        { it.glueMeshPair() != null && it.editable && it.gluePreviewPoints().isNotEmpty() }, { it.applyGlue() }, OptionIcon.CONFIRM, primary = true,
+        place = OptionPlace.TOP))
     add(ActionOption("glue.remergeAll", "editor.glueRemergeAll", { it.glueMeshPair() != null && it.editable }, { it.remergeGlue() },
         OptionIcon.REMERGE, place = OptionPlace.MENU))
 }
@@ -322,7 +326,7 @@ private fun MutableList<ToolOption>.addPointModes(editor: CanvasEditor) {
     val editing = editor.hierarchyMode == EditHierarchyMode.EDIT
     val target = editor.target()
     val mesh = target?.kind == "mesh"
-    if (editing && mesh && (editor.tool in SELECTION_TOOLS || editor.tool == CanvasTool.TRANSFORM)) add(ELEMENT_MODE)
+    if (mesh && (editor.tool in SELECTION_TOOLS || editor.tool == CanvasTool.TRANSFORM)) add(ELEMENT_MODE)
     when (editor.tool) {
         CanvasTool.BRUSH_SELECT -> add(BRUSH_RADIUS)
         CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE -> {
@@ -343,10 +347,10 @@ private fun MutableList<ToolOption>.addPointModes(editor: CanvasEditor) {
         CanvasTool.KNIFE -> {
             add(KNIFE_SNAP)
             add(ActionOption("knife.finish", "editor.finishCut", { it.editable && it.knifeDraft.size >= 2 }, { it.finishKnife() },
-                OptionIcon.CONFIRM, primary = true))
+                OptionIcon.CONFIRM, primary = true, place = OptionPlace.TOP))
             add(ActionOption("knife.undoPoint", "editor.undoPoint", { !it.busy && it.knifeDraft.isNotEmpty() }, { it.undoDraftPoint() },
-                OptionIcon.UNDO, keepsMenu = true))
-            add(ActionOption("knife.cancel", "action.cancel", { !it.busy && it.knifeDraft.isNotEmpty() }, { it.cancel() }, OptionIcon.CANCEL))
+                OptionIcon.UNDO, keepsMenu = true, place = OptionPlace.TOP))
+            add(ActionOption("knife.cancel", "action.cancel", { !it.busy && it.knifeDraft.isNotEmpty() }, { it.cancel() }, OptionIcon.CANCEL, place = OptionPlace.TOP))
         }
         else -> Unit
     }
@@ -367,7 +371,7 @@ private val TOPOLOGY_ACTIONS = listOf(
 )
 
 internal val ELEMENT_MODE = ChoiceOption("edit.element", "editor.elementMode", { listOf(0, 1, 2) },
-    { _, i -> tr("editor.${listOf("vertex", "edge", "face")[i]}") }, { it.elementMode }, { e, i -> e.elementMode = i })
+    { _, i -> tr("editor.${listOf("vertex", "edge", "face")[i]}") }, { it.elementMode }, { e, i -> e.elementMode = i }, place = OptionPlace.TOP)
 
 private fun MutableList<ToolOption>.addSimulate(editor: CanvasEditor) {
     add(WEIGHT_KIND)

@@ -1383,6 +1383,9 @@ internal class CanvasEditor(
             if (activeElementMode != value) { selectedEdges = emptySet(); selectedFaces = emptySet() }
             activeElementMode = value.coerceIn(0, 2)
         }
+    /** Whether the mode picks a mesh's points by vertex, edge or face ([elementMode]): Deform and Edit alike. */
+    fun pointElementModes(): Boolean = hierarchyMode == EditHierarchyMode.EDIT || hierarchyMode == EditHierarchyMode.DEFORM
+
     var selectedEdges by mutableStateOf<Set<MeshElement.Edge>>(emptySet())
     var selectedFaces by mutableStateOf<Set<Int>>(emptySet())
 
@@ -3955,10 +3958,10 @@ internal class CanvasEditor(
             }
             selection = weldGroups().expand(all).filterValues { it.isNotEmpty() }
         } else target()?.let { t ->
-            if (hierarchyMode == EditHierarchyMode.EDIT && t.kind == "mesh" && elementMode == 1) {
+            if (pointElementModes() && t.kind == "mesh" && elementMode == 1) {
                 selectedEdges = MeshTopology.uniqueEdges(t.indices).filterTo(LinkedHashSet()) { !invert || it !in selectedEdges }
                 vertices = selectedEdges.flatMapTo(LinkedHashSet()) { listOf(it.endpointLow, it.endpointHigh) }
-            } else if (hierarchyMode == EditHierarchyMode.EDIT && t.kind == "mesh" && elementMode == 2) {
+            } else if (pointElementModes() && t.kind == "mesh" && elementMode == 2) {
                 selectedFaces = (0 until t.indices.size / 3).filterTo(LinkedHashSet()) { !invert || it !in selectedFaces }
                 vertices = selectedFaces.flatMapTo(LinkedHashSet()) { MeshTopology.verticesOfTriangle(t.indices, it) }
             } else {
@@ -5366,7 +5369,7 @@ internal class CanvasEditor(
         var picked = points.indices.filter { (points[it] - pos).getDistance() < 10f }.minByOrNull { (points[it] - pos).getDistance() }?.let { setOf(it) }.orEmpty()
         var pickedEdge: MeshElement.Edge? = null
         var pickedFace: Int? = null
-        if (hierarchyMode == EditHierarchyMode.EDIT && editTarget.kind == "mesh") {
+        if (pointElementModes() && editTarget.kind == "mesh") {
             when (elementMode) {
                 1 -> {
                     pickedEdge = MeshTopology.uniqueEdges(editTarget.indices).minByOrNull { edge -> distanceToSegment(pos, points[edge.endpointLow], points[edge.endpointHigh]) }
