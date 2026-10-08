@@ -23,6 +23,13 @@ val includeCubism: Boolean =
 	(findProperty("psd2live.includeCubism")?.toString()?.equals("true", ignoreCase = true) == true) ||
 		(System.getenv("PSD2LIVE_INCLUDE_CUBISM")?.equals("true", ignoreCase = true) == true)
 
+// An ffmpeg shipped with the app for video and animated image export, opt-in like Cubism: the directory
+// (ffmpeg executable plus its license) is copied to the app's resources/ffmpeg/. Enable with:
+//   -Ppsd2live.ffmpegDir=<dir>
+// or env PSD2LIVE_FFMPEG_DIR=<dir>
+val bundledFfmpeg: File? =
+	(findProperty("psd2live.ffmpegDir")?.toString() ?: System.getenv("PSD2LIVE_FFMPEG_DIR"))?.takeIf { it.isNotBlank() }?.let(::file)
+
 val hostOs = System.getProperty("os.name").lowercase().let { os ->
 	when {
 		os.contains("mac") || os.contains("darwin") -> "macos"
@@ -215,6 +222,10 @@ tasks.withType<Sync>().matching { it.name == "prepareAppResources" }.configureEa
 	from("LICENSE", "THIRD_PARTY_NOTICES.md")
 	from("licenses") { into("licenses") }
 	from(runtimeLibrary.parentFile) { include(runtimeLibrary.name) }
+	bundledFfmpeg?.let { dir ->
+		doFirst { check(dir.isDirectory) { "psd2live.ffmpegDir is not a directory: $dir" } }
+		from(dir) { into("ffmpeg") }
+	}
 }
 
 compose.desktop {
@@ -227,12 +238,9 @@ compose.desktop {
 			// the optional texture-upscale workflow is opened.
 			// LWJGL (the canvas GPU renderer) reaches native memory through sun.misc.Unsafe.
 			modules("java.net.http", "jdk.unsupported")
-			// Compose only packages formats supported on the build host; Deb is for Linux.
-			targetFormats(
-				org.jetbrains.compose.desktop.application.dsl.TargetFormat.Exe,
-				org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi,
-				org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb,
-			)
+			// Compose only packages formats supported on the build host; Deb is for Linux. The Windows
+			// installers are built below from the app image instead, with our own WiX project.
+			targetFormats(org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb)
 			packageName = "PSD2Live"
 			packageVersion = "3.0.0"
 			description = "PSD2Live - Automated Live2D Rigging Pipeline"
@@ -246,6 +254,39 @@ compose.desktop {
 			}
 		}
 	}
+}
+
+// Windows installers (packageExe, packageMsi): jpackage packs the app image with the WiX project in
+// packaging/windows, whose main.wxs adds to the JDK's template that an install remembers its folder (an
+// upgrade or reinstall goes back there) and that a reinstall of the same version replaces it. Compose's own
+// Exe/Msi tasks always hand jpackage an emptied resource directory, so they cannot carry it.
+if (hostOs == "windows") afterEvaluate {
+	val distributions = compose.desktop.application.nativeDistributions
+	val createDistributable = tasks.named<org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask>("createDistributable")
+	val unzipWix = tasks.named<Copy>("unzipWix")
+	val installers = listOf("exe", "msi").map { type ->
+		tasks.register<Exec>("package${type.replaceFirstChar(Char::uppercase)}") {
+			group = "compose desktop"
+			description = "Builds the Windows .$type installer from the app image."
+			dependsOn(createDistributable, unzipWix)
+			val appImage = createDistributable.get().destinationDir.dir(distributions.packageName!!)
+			val resources = file("packaging/windows")
+			val dest = layout.buildDirectory.dir("compose/binaries/main/$type")
+			inputs.dir(appImage); inputs.dir(resources)
+			outputs.dir(dest)
+			executable = File(createDistributable.get().javaHome.get(), "bin/jpackage.exe").path
+			args("--type", type, "--app-image", appImage.get().asFile, "--resource-dir", resources, "--dest", dest.get().asFile,
+				"--name", distributions.packageName!!, "--app-version", distributions.packageVersion!!,
+				"--vendor", distributions.vendor!!, "--description", distributions.description!!, "--copyright", distributions.copyright!!,
+				"--win-dir-chooser", "--win-menu", "--win-menu-group", distributions.windows.menuGroup!!,
+				"--win-upgrade-uuid", distributions.windows.upgradeUuid!!)
+			doFirst {
+				dest.get().asFile.deleteRecursively()
+				environment("PATH", unzipWix.get().destinationDir.path + File.pathSeparator + System.getenv("PATH"))
+			}
+		}
+	}
+	tasks.named("packageDistributionForCurrentOS") { dependsOn(installers) }
 }
 
 afterEvaluate {

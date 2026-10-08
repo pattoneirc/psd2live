@@ -50,6 +50,7 @@ macOS 打包暂缓，本工作流不构建。
    - `PSD2Live-<version>-windows-x86_64-portable.zip`
    - `PSD2Live-<version>.exe`
    - `PSD2Live-<version>.msi`
+   - 以上三项另各有内置 ffmpeg 的版本：`PSD2Live-<version>-windows-x86_64-portable-ffmpeg.zip`、`PSD2Live-<version>-ffmpeg.exe`、`PSD2Live-<version>-ffmpeg.msi`
    - `PSD2Live-<version>-linux-amd64.deb`
 
 也可以直接推送标签 `v<version>` 触发同一工作流。两种入口选其一，避免重复运行完整的构建矩阵。
@@ -58,6 +59,8 @@ macOS 打包暂缓，本工作流不构建。
 
 - Linux 预览需要 X11/GLX（含 XWayland / `xvfb-run`）。纯 Wayland、aarch64、musl/Alpine 不支持。详见 [CUBISM_SDK_SETUP](CUBISM_SDK_SETUP.md)。
 - v1 不做脆弱的 GUI 冒烟；Linux 侧以 `.deb` 存在且非空为准。
+- Windows 包打两遍：第二遍加 `-Ppsd2live.ffmpegDir=<目录>`，把固定版本的 Gyan.dev ffmpeg essentials 构建（GPLv3，下载后校验 SHA-256，并检查视频与动图导出用到的编码器）连同其 `LICENSE.txt`、`README.txt` 放进应用的 `resources/ffmpeg/`。升级 ffmpeg 时同时修改工作流中的 `FFMPEG_URL` 与 `FFMPEG_SHA256`。Linux 包不内置 ffmpeg。
+- Windows 安装包由 `packageExe` / `packageMsi` 从应用镜像构建，使用 `packaging/windows/main.wxs`（JDK 21 jpackage 模板加 PSD2Live 改动）：已安装时默认装回原目录并跳过"目录非空"提示，同版本的包（重新构建或带/不带 ffmpeg）也会替换已安装的版本。换用其他大版本的 JDK 打包时需按其模板同步该文件。
 - 含 Cubism 的包仅供许可允许范围内的用途；**不要**把专有二进制再分发到公开渠道。
 
 ## 许可提醒

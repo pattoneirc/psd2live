@@ -47,7 +47,7 @@ Get the latest version from [Releases](https://github.com/tsunehimatoi/psd2live/
 
 | Platform | Package | Notes |
 | --- | --- | --- |
-| Windows 10 / 11 x64 | Portable ZIP, EXE, MSI | Bundles a Java runtime; extract or install and run |
+| Windows 10 / 11 x64 | Portable ZIP, EXE, MSI | Bundles a Java runtime; extract or install and run. Each also comes as a `-ffmpeg` build with ffmpeg included. An upgrade installs into the installed folder without asking again |
 | Linux x86_64 | Deb | Bundles the runtime and Cubism native preview; requires X11 / GLX (XWayland works) |
 | macOS and others | No package yet | Install JDK 21 and [run from source](#build-from-source) |
 
@@ -95,7 +95,7 @@ The target version ranges from Cubism 3.0 to 5.3 (default 5.0); features the tar
 | VTube Studio | The `.moc3` bundle plus `.vtube.json`, mapping face tracking onto the standard parameters, one hotkey per motion |
 | PSD2Live runtime rig / web player | A `.p2lrt` rig, or a WebGL player page that opens in a browser; see [runtime](../zh/spec/RUNTIME.md) (Chinese) |
 | PNG sequence, sprite sheet, GIF | Rendered from sampled motions |
-| APNG, animated WebP, MP4, WebM, ProRes 4444 | Encoded by ffmpeg, which you install yourself (set it in the settings or put it on `PATH`) |
+| APNG, animated WebP, MP4, WebM, ProRes 4444 | Encoded by ffmpeg: included in the Windows `-ffmpeg` packages, otherwise install it yourself (set it in the settings or put it on `PATH`) |
 | PSD at a pose, source PSD | A layered PSD of the current pose, or the source PSD including generated layers |
 
 Every export compiles through the same neutral rig IR and comes with a loss report listing what the target format cannot keep. Spine 4.2, DragonBones 5.5 and glTF 2.0 are experimental targets available only from the command line. See [export targets](../zh/spec/EXPORT_TARGETS.md) (Chinese).

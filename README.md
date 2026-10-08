@@ -45,7 +45,7 @@ PSD2Live 根据图层名称识别部件，自动生成网格、变形器层级�
 
 | 平台 | 安装包 | 说明 |
 | --- | --- | --- |
-| Windows 10 / 11 x64 | 便携版 ZIP、EXE、MSI | 自带 Java 运行时，解压或安装后直接运行 |
+| Windows 10 / 11 x64 | 便携版 ZIP、EXE、MSI | 自带 Java 运行时，解压或安装后直接运行；每种都另有内置 ffmpeg 的 `-ffmpeg` 版本。升级时安装到已安装的目录，无需再选路径 |
 | Linux x86_64 | Deb | 自带运行时与 Cubism 原生预览，需要 X11 / GLX（XWayland 可用） |
 | macOS 及其他 | 暂无安装包 | 安装 JDK 21 后[从源码运行](#从源码构建) |
 
@@ -93,7 +93,7 @@ Linux 原生预览不支持无 XWayland 的纯 Wayland、aarch64 和 musl（如 
 | VTube Studio | `.moc3` 文件族加 `.vtube.json`，面部跟踪映射到标准参数，每个动作一个热键 |
 | PSD2Live 运行时模型 / 网页播放器 | `.p2lrt` 模型，或可直接在浏览器打开的 WebGL 播放页面，见[运行时](docs/zh/spec/RUNTIME.md) |
 | PNG 序列帧、精灵表、GIF | 按动作采样渲染 |
-| APNG、WebP 动图、MP4、WebM、ProRes 4444 | 经 ffmpeg 编码，需自行安装 ffmpeg（设置中指定或放入 `PATH`） |
+| APNG、WebP 动图、MP4、WebM、ProRes 4444 | 经 ffmpeg 编码：Windows 的 `-ffmpeg` 包已内置，其他情况需自行安装（设置中指定或放入 `PATH`） |
 | 指定姿势的 PSD、源 PSD | 按当前姿势输出分层 PSD，或导出含生成图层的源 PSD |
 
 所有导出都经同一份中立绑定 IR 编译，并附带损失报告，列出目标格式无法保留的内容。Spine 4.2、DragonBones 5.5 与 glTF 2.0 为实验性目标，只能经命令行导出。详见[导出目标](docs/zh/spec/EXPORT_TARGETS.md)。

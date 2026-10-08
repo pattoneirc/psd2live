@@ -130,4 +130,20 @@ class RasterTargetsTest {
 			} finally { file.delete() }
 		}
 	}
+
+	@Test fun aPackagedAppEncodesWithTheFfmpegAmongItsResources() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(System.getenv("PSD2LIVE_FFMPEG").isNullOrBlank(), "PSD2LIVE_FFMPEG takes precedence")
+		val resources = kotlin.io.path.createTempDirectory("psd2live-raster-resources-").toFile()
+		val name = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) "ffmpeg.exe" else "ffmpeg"
+		// Not a program: starting it fails, and the failure names the file that was chosen.
+		val bundled = resources.resolve("ffmpeg/$name").apply { parentFile.mkdirs(); writeText("not ffmpeg") }
+		val previous = System.setProperty("compose.application.resources.dir", resources.path)
+		try {
+			val failure = assertFailsWith<IllegalStateException> { export(RasterTargets(FakeRenderer()).all.single { it.id == "mp4" }, "size" to "16", "physics" to "false") }
+			assertTrue(bundled.path in failure.message.orEmpty(), failure.message)
+		} finally {
+			if (previous == null) System.clearProperty("compose.application.resources.dir") else System.setProperty("compose.application.resources.dir", previous)
+			resources.deleteRecursively()
+		}
+	}
 }

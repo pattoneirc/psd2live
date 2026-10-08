@@ -19,6 +19,10 @@ PSD2Live independently implements concepts inspired by See-Through semantic orga
 
 The built-in local Agent bridge uses the official Model Context Protocol Kotlin SDK, maintained by the Model Context Protocol project in collaboration with JetBrains. New SDK contributions are licensed under Apache-2.0 and existing portions under MIT. The HTTP transport is provided by Ktor under the Apache-2.0 license.
 
+## FFmpeg
+
+The Windows packages whose names end in `-ffmpeg` include `ffmpeg.exe` from the [Gyan.dev](https://www.gyan.dev/ffmpeg/builds/) essentials build (via [GyanD/codexffmpeg](https://github.com/GyanD/codexffmpeg/releases)), licensed under GNU GPL version 3. It sits in the app's `resources/ffmpeg/` with that build's `LICENSE.txt` and `README.txt`, which names the FFmpeg source commit and the versions of the libraries built in. PSD2Live runs it as a separate program to encode video and animated images; the other packages do not include it.
+
 ## MHR joint reference cages
 
 `src/main/resources/skinning/mhr-joints.tsv` contains modified, sampled sagittal surface cages

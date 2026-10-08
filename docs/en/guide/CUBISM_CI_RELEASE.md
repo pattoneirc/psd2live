@@ -50,6 +50,7 @@ Prerequisites: the SDK zip is uploaded to the private repository, and the variab
    - `PSD2Live-<version>-windows-x86_64-portable.zip`
    - `PSD2Live-<version>.exe`
    - `PSD2Live-<version>.msi`
+   - each of the three above also with ffmpeg included: `PSD2Live-<version>-windows-x86_64-portable-ffmpeg.zip`, `PSD2Live-<version>-ffmpeg.exe`, `PSD2Live-<version>-ffmpeg.msi`
    - `PSD2Live-<version>-linux-amd64.deb`
 
 Pushing tag `v<version>` triggers the same workflow. Use one entry point to avoid running the full matrix twice.
@@ -58,6 +59,8 @@ Pushing tag `v<version>` triggers the same workflow. Use one entry point to avoi
 
 - Linux preview needs X11/GLX (including XWayland / `xvfb-run`). Pure Wayland, aarch64, and musl/Alpine are unsupported. See [CUBISM_SDK_SETUP](CUBISM_SDK_SETUP.md).
 - v1 skips fragile GUI smoke tests; Linux checks that the `.deb` exists and is non-empty.
+- Windows packages are built twice: the second pass adds `-Ppsd2live.ffmpegDir=<dir>`, putting a pinned Gyan.dev ffmpeg essentials build (GPLv3; its SHA-256 and the encoders the video and animated image exports use are checked) with its `LICENSE.txt` and `README.txt` into the app's `resources/ffmpeg/`. To update ffmpeg, change both `FFMPEG_URL` and `FFMPEG_SHA256` in the workflow. Linux packages do not include ffmpeg.
+- The Windows installers are built by `packageExe` / `packageMsi` from the app image with `packaging/windows/main.wxs` (the JDK 21 jpackage template plus PSD2Live changes): when the app is installed, the installer defaults to its folder and skips the "folder is not empty" question, and a package of the same version (a rebuild, or with/without ffmpeg) replaces the installed one too. Packaging with another major JDK means bringing that file in step with its template.
 - Cubism-inclusive packages are only for uses allowed by your license; **do not** redistribute proprietary binaries on public channels.
 
 ## License reminder

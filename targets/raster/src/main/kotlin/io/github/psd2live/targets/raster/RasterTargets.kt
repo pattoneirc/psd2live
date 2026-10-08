@@ -37,9 +37,18 @@ public class RasterTargets(private val renderer: FrameRenderer) {
 		WEBP("webp", "webp", true, "Animated WebP", listOf("-c:v", "libwebp_anim", "-lossless", "0", "-quality", "90", "-loop", "0")),
 	}
 
-	/** The ffmpeg to encode with: the `ffmpeg` setting, then PSD2LIVE_FFMPEG, then ffmpeg on the PATH. */
+	/**
+	 * The ffmpeg to encode with: the `ffmpeg` setting, then PSD2LIVE_FFMPEG, then the one a packaged app ships
+	 * among its resources (`ffmpeg/`), then ffmpeg on the PATH.
+	 */
 	private fun ffmpeg(options: ExportOptions): String =
-		options.setting("ffmpeg") ?: System.getenv("PSD2LIVE_FFMPEG")?.takeIf { it.isNotBlank() } ?: "ffmpeg"
+		options.setting("ffmpeg") ?: System.getenv("PSD2LIVE_FFMPEG")?.takeIf { it.isNotBlank() } ?: bundledFfmpeg()?.path ?: "ffmpeg"
+
+	private fun bundledFfmpeg(): java.io.File? {
+		val resources = System.getProperty("compose.application.resources.dir") ?: return null
+		val name = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) "ffmpeg.exe" else "ffmpeg"
+		return java.io.File(resources, "ffmpeg/$name").takeIf(java.io.File::isFile)
+	}
 
 	private fun video(format: Video): ExportTarget = target(format.id, format.label, extraLoss = if (format.alpha) null else
 		LossEntry("*", Feature.TEXTURE_SIZE, Handling.APPROXIMATED, note = "${format.id} has no alpha; frames are composited over the background"),

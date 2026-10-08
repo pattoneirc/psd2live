@@ -47,7 +47,7 @@ PSD2Live는 레이어 이름으로 파츠를 인식해 메시, 디포머 계층,
 
 | 플랫폼 | 설치 패키지 | 설명 |
 | --- | --- | --- |
-| Windows 10 / 11 x64 | 포터블 ZIP, EXE, MSI | Java 런타임이 포함되어 있어 압축을 풀거나 설치한 뒤 바로 실행 |
+| Windows 10 / 11 x64 | 포터블 ZIP, EXE, MSI | Java 런타임이 포함되어 있어 압축을 풀거나 설치한 뒤 바로 실행. 각각 ffmpeg가 포함된 `-ffmpeg` 버전도 있음. 업그레이드 시 설치된 폴더에 설치되어 경로를 다시 고를 필요 없음 |
 | Linux x86_64 | Deb | 런타임과 Cubism 네이티브 미리보기 포함, X11 / GLX 필요(XWayland 사용 가능) |
 | macOS 및 기타 | 설치 패키지 없음 | JDK 21을 설치한 뒤 [소스에서 실행](#소스에서-빌드) |
 
@@ -95,7 +95,7 @@ Linux 네이티브 미리보기는 XWayland 없는 순수 Wayland, aarch64, musl
 | VTube Studio | `.moc3` 파일 세트와 `.vtube.json`. 페이스 트래킹을 표준 파라미터에 매핑하고, 모션마다 핫키 하나를 할당 |
 | PSD2Live 런타임 모델 / 웹 플레이어 | `.p2lrt` 모델, 또는 브라우저에서 바로 여는 WebGL 플레이어 페이지. [런타임](../zh/spec/RUNTIME.md)(중국어) 참고 |
 | PNG 시퀀스, 스프라이트 시트, GIF | 모션을 샘플링해 렌더링 |
-| APNG, 애니메이션 WebP, MP4, WebM, ProRes 4444 | ffmpeg로 인코딩. ffmpeg는 직접 설치해야 합니다(설정에서 지정하거나 `PATH`에 추가) |
+| APNG, 애니메이션 WebP, MP4, WebM, ProRes 4444 | ffmpeg로 인코딩. Windows `-ffmpeg` 패키지에는 포함되어 있으며, 그 외에는 직접 설치해야 합니다(설정에서 지정하거나 `PATH`에 추가) |
 | 지정 포즈의 PSD, 원본 PSD | 현재 포즈를 레이어 PSD로 출력하거나, 생성된 레이어를 포함한 원본 PSD를 내보냄 |
 
 모든 내보내기는 같은 중립 리그 IR을 거쳐 컴파일되며, 대상 형식이 보존할 수 없는 내용을 나열한 손실 보고서가 함께 생성됩니다. Spine 4.2, DragonBones 5.5, glTF 2.0은 실험적 대상으로, 명령줄에서만 내보낼 수 있습니다. 자세한 내용은 [내보내기 대상](../zh/spec/EXPORT_TARGETS.md)(중국어)을 참고하세요.
