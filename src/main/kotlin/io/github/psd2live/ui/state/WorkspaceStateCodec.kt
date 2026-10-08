@@ -654,9 +654,11 @@ internal object WorkspaceStateCodec {
         parameterSnapshots = WorkspaceAuxiliaryCodec.decode(value, WorkspaceAuxiliaryData(base.parameterSnapshots, base.historyAnnotations)).parameterSnapshots,
         drawOrderOverrides = value["drawOrderOverrides"]?.jsonObject?.mapValues { it.value.jsonPrimitive.float.coerceIn(0f, 1000f) } ?: base.drawOrderOverrides,
         historyAnnotations = WorkspaceAuxiliaryCodec.decode(value, WorkspaceAuxiliaryData(base.parameterSnapshots, base.historyAnnotations)).historyAnnotations,
-        logEntries = value["logEntries"]?.jsonArray?.map { v -> val l = v.jsonObject
+        logEntries = value["logEntries"]?.jsonArray?.mapNotNull { v -> val l = v.jsonObject
+            val source = runCatching { LogSource.valueOf(l.getValue("source").jsonPrimitive.content) }.getOrNull() ?: return@mapNotNull null
+            val level = runCatching { LogLevel.valueOf(l.getValue("level").jsonPrimitive.content) }.getOrDefault(LogLevel.INFO)
             AppLogEntry(id = l.getValue("id").jsonPrimitive.content, timestamp = java.time.Instant.parse(l.getValue("timestamp").jsonPrimitive.content),
-                source = LogSource.valueOf(l.getValue("source").jsonPrimitive.content), level = LogLevel.valueOf(l.getValue("level").jsonPrimitive.content),
+                source = source, level = level,
                 tag = l.getValue("tag").jsonPrimitive.content, message = l.getValue("message").jsonPrimitive.content,
                 detail = l["detail"]?.jsonPrimitive?.contentOrNull, imageLabel = l["imageLabel"]?.jsonPrimitive?.contentOrNull,
                 imageBytes = l["image"]?.jsonPrimitive?.content?.let { java.util.Base64.getDecoder().decode(it) })

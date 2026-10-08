@@ -1295,8 +1295,6 @@ class DesktopWorkspace(
             val previous=document.rigEdits.keyformSetEdits.firstOrNull { it.target==edit.target && it.coordinate==pose }
             document.copy(rigEdits=document.rigEdits.setKeyform(edit.copy(channels=previous?.channels)))
         }
-        viewModel.addLog("Rig transform $id committed ${result.historyNodeId}",
-            source=io.github.psd2live.ui.state.LogSource.AGENT, tag="Geometry", detail=arguments.toString())
         return result
     }
 

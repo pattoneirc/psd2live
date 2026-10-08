@@ -50,6 +50,7 @@ internal class AgentToolCatalog(
     private val registry: WorkspaceOperationRegistry,
     private val workspace: WorkspaceStatePort,
     val profile: AgentToolProfile,
+    internal val observer: AgentCallObserver? = null,
 ) {
     val tools: Map<String, AgentTool> = buildMap {
         val definitions = registry.definitions()
@@ -60,6 +61,28 @@ internal class AgentToolCatalog(
             AGENT_TOOL_FAMILIES.forEach { family -> put(family.name, familyTool(family, family.members(definitions))) }
             put(CALL_TOOL, callTool())
         }
+    }.mapValues { (_, tool) -> if (observer == null) tool else observed(tool, observer) }
+
+    /** [tool] reporting each finished call to [observer]; a cancelled call is not reported. */
+    private fun observed(tool: AgentTool, observer: AgentCallObserver) = AgentTool(tool.name, tool.description, tool.inputSchema,
+        tool.outputSchema, tool.annotations) { arguments ->
+        val started = System.nanoTime()
+        val result = tool.handler(arguments)
+        val structured = result.structuredContent
+        val operation = (structured?.get("operation") as? JsonPrimitive)?.contentOrNull ?: tool.name
+        val record = AgentCallRecord(
+            tool = tool.name,
+            operation = operation,
+            readOnly = runCatching { registry.definition(operation).kind == WorkspaceOperationKind.QUERY }.getOrDefault(false),
+            ok = result.isError != true,
+            durationMs = (System.nanoTime() - started) / 1_000_000,
+            request = arguments?.let { (it["request"] as? JsonObject) ?: it },
+            data = structured?.get("data") as? JsonObject,
+            error = structured?.get("error") as? JsonObject,
+            images = result.content.filterIsInstance<ImageContent>().mapNotNull { runCatching { Base64.getDecoder().decode(it.data) }.getOrNull() },
+        )
+        runCatching { observer.onCall(record) }
+        result
     }
 
     private fun operationTool(operation: WorkspaceOperationDefinition) = AgentTool(

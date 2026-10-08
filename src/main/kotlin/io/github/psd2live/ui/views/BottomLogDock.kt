@@ -67,6 +67,33 @@ private enum class LogFilter {
 	IMAGES_ONLY,
 }
 
+/** The thresholds the level menu offers, lowest first; SUCCESS shows with INFO. */
+private val LEVEL_THRESHOLDS = listOf(LogLevel.DEBUG, LogLevel.INFO, LogLevel.WARNING, LogLevel.ERROR)
+
+@Composable
+private fun LogLevel.label(): String = when (this) {
+	LogLevel.DEBUG -> tr("log.dock.level.debug")
+	LogLevel.INFO, LogLevel.SUCCESS -> tr("log.dock.level.info")
+	LogLevel.WARNING -> tr("log.dock.level.warning")
+	LogLevel.ERROR -> tr("log.dock.level.error")
+}
+
+/** One shown line: consecutive identical lines without images fold into the first, counted. */
+private class LogRow(val first: AppLogEntry, val latest: AppLogEntry, val count: Int)
+
+private fun AppLogEntry.repeats(other: AppLogEntry) = imageBytes == null && other.imageBytes == null &&
+	source == other.source && level == other.level && tag == other.tag && message == other.message && detail == other.detail
+
+private fun foldRepeats(entries: List<AppLogEntry>): List<LogRow> {
+	val rows = ArrayList<LogRow>(entries.size)
+	for (entry in entries) {
+		val last = rows.lastOrNull()
+		if (last != null && last.latest.repeats(entry)) rows[rows.lastIndex] = LogRow(last.first, entry, last.count + 1)
+		else rows += LogRow(entry, entry, 1)
+	}
+	return rows
+}
+
 private data class FilterTabItem(
 	val filter: LogFilter,
 	val label: String,
@@ -85,13 +112,15 @@ fun BottomLogDock(
 	val density = LocalDensity.current
 
 	var currentFilter by remember { mutableStateOf(LogFilter.ALL) }
+	var minLevel by remember { mutableStateOf(LogLevel.INFO) }
 	var searchQuery by remember { mutableStateOf("") }
 	var autoScroll by remember { mutableStateOf(true) }
 
 	val listState = rememberLazyListState()
 
-	val filteredEntries = remember(state.logEntries, currentFilter, searchQuery) {
+	val filteredEntries = remember(state.logEntries, currentFilter, minLevel, searchQuery) {
 		state.logEntries.filter { entry ->
+			if (entry.level.severity < minLevel.severity) return@filter false
 			val matchesFilter = when (currentFilter) {
 				LogFilter.ALL -> true
 				LogFilter.SYSTEM -> entry.source == LogSource.SYSTEM
@@ -108,16 +137,19 @@ fun BottomLogDock(
 		}
 	}
 
-	LaunchedEffect(filteredEntries.size, autoScroll) {
-		if (autoScroll && filteredEntries.isNotEmpty()) {
-			listState.scrollToItem(filteredEntries.size - 1)
+	val rows = remember(filteredEntries) { foldRepeats(filteredEntries) }
+	val expandedIds = remember { mutableStateMapOf<String, Boolean>() }
+
+	LaunchedEffect(rows.size, rows.lastOrNull()?.count, autoScroll) {
+		if (autoScroll && rows.isNotEmpty()) {
+			listState.scrollToItem(rows.size - 1)
 		}
 	}
 
 	fun copyLogs() {
 		val text = filteredEntries.joinToString("\n") { entry ->
 			val time = TIME_FORMATTER.format(entry.timestamp)
-			"[$time] [${entry.source}] [${entry.tag}] ${entry.message}"
+			"[$time] [${entry.level}] [${entry.source}] [${entry.tag}] ${entry.message}"
 		}
 		val selection = StringSelection(text)
 		Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, selection)
@@ -197,6 +229,11 @@ fun BottomLogDock(
 					onSelect = { currentFilter = it },
 					modifier = Modifier.weight(1f).fillMaxHeight(),
 				)
+				LogLevelMenu(
+					entries = state.logEntries,
+					selected = minLevel,
+					onSelect = { minLevel = it },
+				)
 				PanelToolButton(
 					label = tr("log.dock.autoScroll"),
 					showLabel = false,
@@ -224,27 +261,29 @@ fun BottomLogDock(
 					.then(if (fillDock) Modifier.weight(1f) else Modifier.height(state.logPanelHeight.dp))
 					.background(colors.inputBackground),
 			) {
-				if (filteredEntries.isEmpty()) {
+				if (rows.isEmpty()) {
 					Box(
 						modifier = Modifier.fillMaxSize(),
 						contentAlignment = Alignment.Center,
 					) {
 						Text(
-							text = tr("log.dock.empty"),
+							text = tr(if (state.logEntries.isEmpty()) "log.dock.empty" else "log.dock.noMatch"),
 							style = typography.caption.copy(fontSize = 11.sp),
 							color = colors.textMuted,
 						)
 					}
 				} else {
-					SelectionContainer(modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 4.dp)) {
+					SelectionContainer(modifier = Modifier.fillMaxSize().padding(vertical = 2.dp)) {
 						LazyColumn(
 							state = listState,
 							modifier = Modifier.fillMaxSize(),
-							verticalArrangement = Arrangement.spacedBy(3.dp),
 						) {
-							items(filteredEntries, key = { it.id }) { entry ->
+							items(rows, key = { it.first.id }) { row ->
 								LogEntryRow(
-									entry = entry,
+									entry = row.latest,
+									count = row.count,
+									expanded = expandedIds[row.first.id] == true,
+									onToggle = { expandedIds[row.first.id] = expandedIds[row.first.id] != true },
 									onImageClick = { bytes, label ->
 										viewModel.openLightbox(bytes, label)
 									},
@@ -453,6 +492,56 @@ private fun OverflowEllipsis(
 	}
 }
 
+/** The lowest level the dock shows; each choice counts the lines it would show. */
+@Composable
+private fun LogLevelMenu(
+	entries: List<AppLogEntry>,
+	selected: LogLevel,
+	onSelect: (LogLevel) -> Unit,
+) {
+	val colors = LocalToolColors.current
+	var open by remember { mutableStateOf(false) }
+	val counts = remember(entries) {
+		LEVEL_THRESHOLDS.associateWith { threshold -> entries.count { it.level.severity >= threshold.severity } }
+	}
+	Box(modifier = Modifier.fillMaxHeight()) {
+		LogFilterTab(
+			text = "${tr("log.dock.level")}: ${selected.label()} ▾",
+			selected = open,
+			onClick = { open = !open },
+		)
+		if (open) {
+			Popup(
+				alignment = Alignment.BottomStart,
+				offset = IntOffset(0, 4),
+				onDismissRequest = { open = false },
+				properties = PopupProperties(focusable = true),
+			) {
+				Surface(
+					color = colors.panelElevated,
+					border = BorderStroke(1.dp, colors.border),
+					shape = RoundedCornerShape(3.dp),
+					elevation = 8.dp,
+				) {
+					Column(modifier = Modifier.widthIn(min = 140.dp, max = 220.dp)) {
+						for (level in LEVEL_THRESHOLDS) {
+							AppMenuItem(
+								text = level.label(),
+								shortcut = "${counts[level] ?: 0}",
+								isChecked = level == selected,
+								onClick = {
+									onSelect(level)
+									open = false
+								},
+							)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 /** Follow the newest line: an arrow down to the floor. */
 @Composable
 private fun IconLogAutoScroll(tint: Color) = GridIcon(Modifier.size(12.dp), tint) {
@@ -469,161 +558,244 @@ private fun IconLogClear(tint: Color) = GridIcon(Modifier.size(12.dp), tint) { t
 @Composable
 private fun IconLogCopy(tint: Color) = GridIcon(Modifier.size(12.dp), tint) { copySheets() }
 
-/** Source-chip colors for a log row, from the theme's tag tokens the history tree shares. */
+/** Source-chip colors and label for a log row, from the theme's tag tokens the history tree shares. */
+@Composable
 private fun logSourceBadge(source: LogSource, colors: ToolColors): Triple<Color, Color, String> = when (source) {
-	LogSource.SYSTEM -> Triple(colors.tagSystem, colors.tagSystemText, "SYSTEM")
-	LogSource.MCP_SERVER -> Triple(colors.tagMcp, colors.tagMcpText, "MCP")
-	LogSource.AGENT -> Triple(colors.tagAgent, colors.tagAgentText, "AGENT")
+	LogSource.SYSTEM -> Triple(colors.tagSystem, colors.tagSystemText, tr("log.dock.filter.system"))
+	// Writes and reads both read "AI"; the chip's colour still tells an edit from a look.
+	LogSource.AGENT -> Triple(colors.tagAgent, colors.tagAgentText, tr("log.dock.filter.agent"))
+	LogSource.MCP_SERVER -> Triple(colors.tagMcp, colors.tagMcpText, tr("log.dock.filter.agent"))
 	// Same blue family the history tree gives a "User" node.
-	LogSource.EDITOR -> Triple(colors.tagUser, colors.tagUserText, "EDITOR")
+	LogSource.EDITOR -> Triple(colors.tagUser, colors.tagUserText, tr("log.dock.filter.editor"))
 }
 
+/** The edge stripe that marks a line's level; INFO and DEBUG lines go without. */
+private fun levelStripe(level: LogLevel, colors: ToolColors): Color = when (level) {
+	LogLevel.ERROR -> colors.error
+	LogLevel.WARNING -> colors.warning
+	LogLevel.SUCCESS -> colors.success
+	LogLevel.INFO, LogLevel.DEBUG -> Color.Transparent
+}
+
+private val LOG_ROW_START = 3.dp
+private val LOG_TOGGLE_WIDTH = 18.dp
+private val LOG_TIME_WIDTH = 50.dp
+private val LOG_SOURCE_WIDTH = 40.dp
+private val LOG_TAG_WIDTH = 64.dp
+private val LOG_GAP = 6.dp
+/** Where the message column starts, for the detail and image under it. */
+private val LOG_MESSAGE_INSET = LOG_TOGGLE_WIDTH + LOG_TIME_WIDTH + LOG_SOURCE_WIDTH + LOG_TAG_WIDTH + LOG_GAP * 3
+
+/**
+ * One line: a level stripe at the edge, then a fixed column each for the detail toggle, time, source and tag, so
+ * messages line up; errors and warnings carry a faint wash of their colour. The detail opens under the message.
+ */
 @Composable
 private fun LogEntryRow(
 	entry: AppLogEntry,
+	count: Int,
+	expanded: Boolean,
+	onToggle: () -> Unit,
 	onImageClick: (ByteArray, String?) -> Unit,
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
 
-	val timeText = remember(entry.timestamp) {
-		TIME_FORMATTER.format(entry.timestamp)
-	}
-
+	val timeText = remember(entry.timestamp) { TIME_FORMATTER.format(entry.timestamp) }
 	val (sourceBg, sourceFg, sourceLabel) = logSourceBadge(entry.source, colors)
-
+	val stripe = levelStripe(entry.level, colors)
 	val textColor = when (entry.level) {
 		LogLevel.ERROR -> colors.error
 		LogLevel.WARNING -> colors.warning
-		LogLevel.SUCCESS -> colors.success
-		LogLevel.INFO -> colors.textPrimary
+		LogLevel.SUCCESS, LogLevel.INFO -> colors.textPrimary
+		LogLevel.DEBUG -> colors.textMuted
 	}
+	val wash = when (entry.level) {
+		LogLevel.ERROR -> colors.error.copy(alpha = 0.08f)
+		LogLevel.WARNING -> colors.warning.copy(alpha = 0.06f)
+		else -> Color.Transparent
+	}
+	val hasDetail = !entry.detail.isNullOrBlank()
 
 	Column(
 		modifier = Modifier
 			.fillMaxWidth()
-			.background(colors.panelBackground.copy(alpha = 0.4f), RoundedCornerShape(2.dp))
-			.padding(horizontal = 4.dp, vertical = 2.dp),
+			.hoverable(interaction)
+			.background(if (hovered) colors.controlBackground.copy(alpha = 0.5f) else wash)
+			.drawBehind {
+				if (stripe != Color.Transparent) drawRect(stripe, size = Size(2.dp.toPx(), size.height))
+				val hairline = 0.5.dp.toPx()
+				drawRect(colors.divider.copy(alpha = 0.35f), topLeft = Offset(0f, size.height - hairline), size = Size(size.width, hairline))
+			}
+			.padding(start = LOG_ROW_START, end = 6.dp, top = 2.dp, bottom = 2.dp),
 	) {
 		Row(
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(6.dp),
+			verticalAlignment = Alignment.Top,
+			horizontalArrangement = Arrangement.spacedBy(LOG_GAP),
 		) {
-			Text(
-				text = timeText,
-				style = typography.monoSmall.copy(fontSize = 10.sp),
-				color = colors.textMuted,
-			)
-
 			Box(
 				modifier = Modifier
-					.clip(RoundedCornerShape(2.dp))
-					.background(sourceBg)
-					.padding(horizontal = 4.dp, vertical = 1.dp),
+					.width(LOG_TOGGLE_WIDTH - LOG_GAP)
+					.height(16.dp)
+					.then(
+						if (hasDetail) Modifier
+							.clickable(onClick = onToggle)
+							.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
+						else Modifier,
+					),
+				contentAlignment = Alignment.Center,
 			) {
-				Text(
-					text = sourceLabel,
-					style = typography.monoSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
-					color = sourceFg,
-				)
-			}
-
-			if (entry.tag.isNotBlank()) {
-				Box(
-					modifier = Modifier
-						.clip(RoundedCornerShape(2.dp))
-						.background(colors.controlBackground)
-						.border(BorderStroke(0.5.dp, colors.border), RoundedCornerShape(2.dp))
-						.padding(horizontal = 4.dp, vertical = 1.dp),
-				) {
-					Text(
-						text = entry.tag,
-						style = typography.caption.copy(fontSize = 9.5.sp),
-						color = colors.textMuted,
+				if (hasDetail) {
+					IconChevron(
+						expanded = expanded,
+						modifier = Modifier.size(9.dp),
+						tint = if (hovered || expanded) colors.textPrimary else colors.textMuted,
 					)
 				}
 			}
-
+			Text(
+				text = timeText,
+				style = typography.monoSmall.copy(fontSize = 10.sp, lineHeight = 16.sp),
+				color = colors.textMuted,
+				modifier = Modifier.width(LOG_TIME_WIDTH),
+				maxLines = 1,
+			)
+			Box(
+				modifier = Modifier.width(LOG_SOURCE_WIDTH).height(16.dp),
+				contentAlignment = Alignment.CenterStart,
+			) {
+				Box(
+					modifier = Modifier
+						.clip(RoundedCornerShape(2.dp))
+						.background(sourceBg)
+						.padding(horizontal = 4.dp),
+				) {
+					Text(
+						text = sourceLabel,
+						style = typography.monoSmall.copy(fontSize = 9.sp, lineHeight = 13.sp, fontWeight = FontWeight.Bold),
+						color = sourceFg,
+						maxLines = 1,
+					)
+				}
+			}
+			Text(
+				text = entry.tag,
+				style = typography.caption.copy(fontSize = 10.sp, lineHeight = 16.sp),
+				color = colors.textMuted,
+				modifier = Modifier.width(LOG_TAG_WIDTH),
+				maxLines = 1,
+				overflow = TextOverflow.Ellipsis,
+			)
 			Text(
 				text = entry.message,
-				style = typography.mono.copy(fontSize = 11.sp, lineHeight = 15.sp),
+				style = typography.mono.copy(fontSize = 11.sp, lineHeight = 16.sp),
 				color = textColor,
 				modifier = Modifier.weight(1f),
 			)
+			if (count > 1) RepeatBadge(count)
 		}
 
-		if (!entry.detail.isNullOrBlank()) {
+		if (hasDetail && expanded) {
 			Text(
-				text = entry.detail,
-				style = typography.monoSmall.copy(fontSize = 10.sp),
+				text = entry.detail.orEmpty(),
+				style = typography.monoSmall.copy(fontSize = 10.sp, lineHeight = 14.sp),
 				color = colors.textMuted,
-				modifier = Modifier.padding(start = 54.dp, top = 2.dp),
+				modifier = Modifier
+					.padding(start = LOG_MESSAGE_INSET, top = 2.dp, bottom = 2.dp)
+					.clip(RoundedCornerShape(2.dp))
+					.background(colors.codeBackground.copy(alpha = 0.6f))
+					.padding(horizontal = 6.dp, vertical = 3.dp),
 			)
 		}
 
-		if (entry.imageBytes != null) {
-			val imgBytes = entry.imageBytes
-			val buffered = remember(imgBytes) {
-				runCatching { ImageIO.read(ByteArrayInputStream(imgBytes)) }.getOrNull()
-			}
-			val bitmap = remember(buffered) {
-				buffered?.toImageBitmapFast()
-			}
+		if (entry.imageBytes != null) LogImageCard(entry, onImageClick)
+	}
+}
 
-			if (bitmap != null) {
-				Spacer(Modifier.height(4.dp))
-				Row(
-					modifier = Modifier
-						.padding(start = 54.dp)
-						.clip(RoundedCornerShape(4.dp))
-						.background(colors.inputBackground)
-						.border(BorderStroke(1.dp, colors.accent.copy(alpha = 0.4f)), RoundedCornerShape(4.dp))
-						.clickable { onImageClick(imgBytes, entry.imageLabel ?: entry.message) }
-						.padding(4.dp),
-					verticalAlignment = Alignment.CenterVertically,
-					horizontalArrangement = Arrangement.spacedBy(8.dp),
-				) {
-					Box(
-						modifier = Modifier
-							.size(width = 90.dp, height = 64.dp)
-							.clip(RoundedCornerShape(3.dp))
-							.background(Color.Black),
-						contentAlignment = Alignment.Center,
-					) {
-						CheckerboardBackground(
-							modifier = Modifier.fillMaxSize(),
-							squareSizePx = 8f,
-						)
-						Image(
-							bitmap = bitmap,
-							contentDescription = entry.imageLabel ?: "Log Image",
-							modifier = Modifier.fillMaxSize().padding(2.dp),
-						)
-					}
+/** How many identical lines a folded row stands for. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun RepeatBadge(count: Int) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	TooltipArea(tooltip = { ParameterTooltip(tr("log.dock.repeated", count)) }, delayMillis = 400) {
+		Box(
+			modifier = Modifier
+				.height(16.dp)
+				.clip(RoundedCornerShape(8.dp))
+				.background(colors.controlBackground)
+				.padding(horizontal = 5.dp),
+			contentAlignment = Alignment.Center,
+		) {
+			Text(text = "×$count", style = typography.monoSmall.copy(fontSize = 9.sp), color = colors.textMuted)
+		}
+	}
+}
 
-					Column(modifier = Modifier.widthIn(max = 240.dp)) {
-						Text(
-							text = entry.imageLabel ?: "Image",
-							style = typography.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
-							color = colors.accent,
-							maxLines = 1,
-							overflow = TextOverflow.Ellipsis,
-						)
-						if (buffered != null) {
-							Text(
-								text = "${buffered.width} × ${buffered.height} px · ${(imgBytes.size / 1024).coerceAtLeast(1)} KB",
-								style = typography.caption.copy(fontSize = 9.5.sp),
-								color = colors.textMuted,
-							)
-						}
-						Text(
-							text = "🔍 Click to inspect",
-							style = typography.caption.copy(fontSize = 9.sp),
-							color = colors.textMuted,
-						)
-					}
-				}
-			}
+/** A returned render under its line: a thumbnail on the checkerboard, its size, and a click to open it large. */
+@Composable
+private fun LogImageCard(entry: AppLogEntry, onImageClick: (ByteArray, String?) -> Unit) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val imgBytes = entry.imageBytes ?: return
+	val buffered = remember(imgBytes) {
+		runCatching { ImageIO.read(ByteArrayInputStream(imgBytes)) }.getOrNull()
+	} ?: return
+	val bitmap = remember(buffered) { buffered.toImageBitmapFast() }
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
+	val label = entry.imageLabel ?: entry.message
+
+	Row(
+		modifier = Modifier
+			.padding(start = LOG_MESSAGE_INSET, top = 3.dp, bottom = 2.dp)
+			.clip(RoundedCornerShape(4.dp))
+			.background(colors.inputBackground)
+			.border(BorderStroke(1.dp, if (hovered) colors.accent else colors.border), RoundedCornerShape(4.dp))
+			.hoverable(interaction)
+			.clickable { onImageClick(imgBytes, label) }
+			.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)))
+			.padding(4.dp),
+		verticalAlignment = Alignment.CenterVertically,
+		horizontalArrangement = Arrangement.spacedBy(8.dp),
+	) {
+		Box(
+			modifier = Modifier
+				.size(width = 96.dp, height = 64.dp)
+				.clip(RoundedCornerShape(3.dp)),
+			contentAlignment = Alignment.Center,
+		) {
+			CheckerboardBackground(
+				modifier = Modifier.fillMaxSize(),
+				squareSizePx = 8f,
+			)
+			Image(
+				bitmap = bitmap,
+				contentDescription = label,
+				modifier = Modifier.fillMaxSize().padding(2.dp),
+			)
+		}
+
+		Column(modifier = Modifier.widthIn(max = 240.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+			Text(
+				text = label,
+				style = typography.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
+				color = colors.textPrimary,
+				maxLines = 1,
+				overflow = TextOverflow.Ellipsis,
+			)
+			Text(
+				text = "${buffered.width} × ${buffered.height} px · ${(imgBytes.size / 1024).coerceAtLeast(1)} KB",
+				style = typography.monoSmall.copy(fontSize = 9.5.sp),
+				color = colors.textMuted,
+			)
+			Text(
+				text = tr("log.dock.inspect"),
+				style = typography.caption.copy(fontSize = 9.sp),
+				color = if (hovered) colors.accent else colors.textMuted,
+			)
 		}
 	}
 }

@@ -76,6 +76,7 @@ class AgentMcpService internal constructor(
 	private val workspace: WorkspaceBackend,
 	private val config: AgentMcpConfig,
 	private val operations: WorkspaceOperations,
+	private val observer: AgentCallObserver? = null,
 ) : AutoCloseable {
 	private var engine: EmbeddedServer<*, *>? = null
 	private val isClosed = AtomicBoolean(false)
@@ -85,7 +86,7 @@ class AgentMcpService internal constructor(
 
 	fun start(): AgentMcpConnectionInfo {
 		check(engine == null) { "Agent MCP service is already running" }
-		val catalog = AgentToolCatalog(operations.registry, workspace, config.profile)
+		val catalog = AgentToolCatalog(operations.registry, workspace, config.profile, observer)
 		val started = embeddedServer(CIO, configure = {
 			connector {
 				host = config.host
@@ -209,7 +210,12 @@ private suspend fun createTransport(
 	transport.setOnSessionClosed { sessionId -> transports.remove(sessionId) }
 	val server = createAgentMcpServer(workspace, catalog)
 	server.onClose { transport.sessionId?.let(transports::remove) }
-	server.createSession(transport)
+	val session = server.createSession(transport)
+	catalog.observer?.let { observer ->
+		fun client() = session.clientVersion?.let { "${it.name} ${it.version}" } ?: "MCP client"
+		session.onInitialized { runCatching { observer.onClientConnected(client()) } }
+		session.onClose { runCatching { observer.onClientDisconnected(client()) } }
+	}
 	return transport
 }
 

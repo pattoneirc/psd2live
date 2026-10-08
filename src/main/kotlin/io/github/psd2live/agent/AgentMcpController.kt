@@ -74,6 +74,8 @@ class AgentMcpController(
     private val workspace: WorkspaceBackend,
     private val store: AgentMcpSettingsStore = PreferencesAgentMcpSettingsStore(),
     private val host: String = "127.0.0.1",
+    /** Told of every tool call any endpoint this controller starts serves. */
+    private val observer: AgentCallObserver? = null,
 ) : AutoCloseable {
     private val operations = WorkspaceOperations(workspace)
     private var service: AgentMcpService? = null
@@ -97,7 +99,7 @@ class AgentMcpController(
         service?.close()
         service = null
         val status = if (!settings.enabled) AgentMcpStatus.Stopped else {
-            val next = AgentMcpService(workspace, AgentMcpConfig(host, settings.port, settings.token, settings.profile), operations)
+            val next = AgentMcpService(workspace, AgentMcpConfig(host, settings.port, settings.token, settings.profile), operations, observer)
             try {
                 AgentMcpStatus.Running(next.start()).also { service = next }
             } catch (failure: Exception) {

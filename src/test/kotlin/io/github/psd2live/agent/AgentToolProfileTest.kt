@@ -127,6 +127,25 @@ class AgentToolProfileTest {
         }
     }
 
+    @Test fun theObserverHearsEveryCallWithItsOperationAndOutcome() = runBlocking {
+        val backend = ExportingBackend()
+        val records = mutableListOf<AgentCallRecord>()
+        WorkspaceOperations(backend).use { operations ->
+            val server = createAgentMcpServer(backend, AgentToolCatalog(operations.registry, backend, AgentToolProfile.CORE, records::add))
+            server.call("project", exportCall)
+            server.call("job", buildJsonObject { put(OP_FIELD, "list"); putJsonObject("request") {} })
+            server.call("job", buildJsonObject { put(OP_FIELD, "explode"); putJsonObject("request") {} })
+        }
+        val (export, listed, unknown) = records
+        assertEquals(listOf("project", "project_export_model", "false", "true"),
+            listOf(export.tool, export.operation, "${export.readOnly}", "${export.ok}"))
+        assertEquals("completed", export.data!!.getValue("status").jsonPrimitive.content)
+        assertEquals("/out", export.request!!.getValue("output_directory").jsonPrimitive.content)
+        assertTrue(listed.readOnly && listed.ok && listed.operation == "job_list")
+        assertEquals(listOf("job", "false"), listOf(unknown.operation, "${unknown.ok}"))
+        assertEquals("invalid_request", unknown.error!!.getValue("code").jsonPrimitive.content)
+    }
+
     @Test fun controllerRestartsTheEndpointWithSavedSettings() {
         val store = object : AgentMcpSettingsStore {
             var saved = AgentMcpSettings(port = freePort(), token = AgentMcpCredentials.generateToken())
