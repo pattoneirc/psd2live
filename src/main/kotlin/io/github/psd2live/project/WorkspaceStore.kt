@@ -136,17 +136,16 @@ internal class WorkspaceStore(
 				createdAt = Instant.parse(nodeJson.requiredString("createdAt")),
 			)
 		}.sortedWith(compareBy<WorkspaceHistoryNode> { it.createdAt }.thenBy { it.id })
-		val documents = mutableMapOf<String, WorkspaceDocument>()
-		val rasters = mutableMapOf<String, ByteArray>()
 		val shared = SharedContent()
-		val selections = nodes.map { node ->
+		val snapshots = LinkedHashMap<String, JsonObject>()
+		for (node in nodes) {
 			val snapshotFile = project.resolve("history/snapshots/${fileKey(node.snapshotHash)}.json")
 			require(Files.isRegularFile(snapshotFile)) { "History snapshot is missing for ${node.id}" }
-			val document = documents.getOrPut(node.snapshotHash) {
-				decodeDocument(expandSnapshot(project, readJson(snapshotFile), shared), project, rasters)
-			}
-			WorkspaceHistorySelection(node, document)
+			if (node.snapshotHash !in snapshots) snapshots[node.snapshotHash] = expandSnapshot(project, readJson(snapshotFile), shared)
 		}
+		val rasters = HashMap(loadRasters(project, snapshots.values))
+		val documents = snapshots.mapValues { (_, snapshot) -> decodeDocument(snapshot, project, rasters) }
+		val selections = nodes.map { node -> WorkspaceHistorySelection(node, documents.getValue(node.snapshotHash)) }
 		val order = headDocument["nodeOrder"]?.jsonArray?.map { it.jsonPrimitive.content }
         val ordered = if (order != null) {
             require(order.size == selections.size && order.toSet() == selections.map { it.node.id }.toSet()) { "Invalid history node order" }
@@ -167,10 +166,16 @@ internal class WorkspaceStore(
         return WorkspaceAssetCatalog(ids("assets"), ids("workflow"))
     }
 
+    /**
+     * Checks the catalog's references from the stored metadata. Rasters are not decoded here: the archive's
+     * manifest has checked every file of an opened project, and [loadAsset] checks the pixels against their digest.
+     */
+    @Synchronized
     fun validateAssetCatalog(projectId: String, catalog: WorkspaceAssetCatalog) {
+        val project = projectRoot(projectId)
         for (id in catalog.assets) {
-            val asset = requireNotNull(loadAsset(projectId, id)) { "Catalog asset is missing: $id" }
-            asset.public.details["reference_id"]?.jsonPrimitive?.content?.let { reference ->
+            val asset = requireNotNull(storedAsset(project, id)) { "Catalog asset is missing: $id" }
+            asset.details["reference_id"]?.jsonPrimitive?.content?.let { reference ->
                 require(reference in catalog.workflow) { "Asset reference is outside the catalog" }
                 require(loadWorkflow(projectId, reference).requiredString("kind") == "reference") { "Asset reference has an invalid kind" }
             }
@@ -325,6 +330,16 @@ internal class WorkspaceStore(
 	@Synchronized
 	override fun loadAsset(projectId: String, assetId: String): WorkspacePngAsset? {
 		val project = projectRoot(projectId)
+		val (objectValue, public) = assetMetadata(project, assetId) ?: return null
+		return WorkspacePngAsset(
+			public = public,
+			rgba = loadRaster(project, objectValue.requiredString("rgbaBlob"), public.pixelWidth, public.pixelHeight),
+            originalPng = objectValue.optionalString("originalPng")?.let { java.util.Base64.getDecoder().decode(it) },
+		)
+	}
+
+	/** [assetId]'s stored metadata and public description, without its raster; null when it is not stored. */
+	private fun assetMetadata(project: Path, assetId: String): Pair<JsonObject, WorkspaceImportedPngAsset>? {
 		val file = project.resolve("assets/${fileKey(assetId)}.json")
 		if (!Files.isRegularFile(file)) return null
 		val objectValue = readJson(file)
@@ -342,11 +357,8 @@ internal class WorkspaceStore(
 			canvasUnitsPerPixelY = bounds.height / height,
 			sourceViewId = objectValue.requiredString("sourceViewId"),
 		)
-		return WorkspacePngAsset(
-			public = WorkspaceImportedPngAsset(assetId, objectValue.requiredString("sha256"), width, height, placement, objectValue["details"] as? JsonObject ?: JsonObject(emptyMap())),
-			rgba = loadRaster(project, objectValue.requiredString("rgbaBlob"), width, height),
-            originalPng = objectValue.optionalString("originalPng")?.let { java.util.Base64.getDecoder().decode(it) },
-		)
+		return objectValue to WorkspaceImportedPngAsset(assetId, objectValue.requiredString("sha256"), width, height, placement,
+			objectValue["details"] as? JsonObject ?: JsonObject(emptyMap()))
 	}
 
 	@Synchronized
@@ -967,23 +979,83 @@ internal class WorkspaceStore(
 		require(expected > 0) { "Stored raster dimensions must be positive" }
 		val png = project.resolve("blobs/${fileKey(hash)}-${width}x${height}.png")
         if (Files.isRegularFile(png)) {
-            val image = javax.imageio.ImageIO.read(png.toFile()) ?: error("Invalid PNG: $hash")
+            val encoded = Files.readAllBytes(png)
+            // The store's own RGBA PNGs decode directly; anything else, or a result that does not match, through ImageIO.
+            PngRgbaDecoder.decode(encoded, width, height)?.let { bytes -> if (sha256(bytes) == hash) return verifiedRaster(bytes, hash) }
+            val image = javax.imageio.ImageIO.read(javax.imageio.stream.MemoryCacheImageInputStream(java.io.ByteArrayInputStream(encoded))) ?: error("Invalid PNG: $hash")
             require(image.width == width && image.height == height) { "Raster dimensions mismatch" }
-            val bytes = ByteArray(expected)
-            for (y in 0 until height) for (x in 0 until width) {
-                val pixel = image.getRGB(x, y); val i = (y * width + x) * 4
-                bytes[i] = (pixel ushr 16).toByte(); bytes[i+1] = (pixel ushr 8).toByte()
-                bytes[i+2] = pixel.toByte(); bytes[i+3] = (pixel ushr 24).toByte()
-            }
+            val bytes = rgbaOf(image)
             require(sha256(bytes) == hash) { "Stored raster hash mismatch: $hash" }
-            return bytes
+            return verifiedRaster(bytes, hash)
         }
         val file = project.resolve("blobs/${fileKey(hash)}.rgba.gz")
 		require(Files.isRegularFile(file)) { "Stored raster blob is missing: $hash" }
 		val rgba = GZIPInputStream(Files.newInputStream(file)).use { input -> input.readNBytes(expected + 1) }
 		require(rgba.size == expected) { "Stored raster length mismatch for $hash" }
 		require(sha256(rgba) == hash) { "Stored raster hash mismatch for $hash" }
+		return verifiedRaster(rgba, hash)
+	}
+
+	/**
+	 * Every distinct raster the [snapshots]' sources name, by digest, decoded on several threads: each blob is an
+	 * independent immutable file. Threads are bounded by the cores and by the heap the decodes hold at once (a
+	 * file's bytes and its pixels). The first failure, in snapshot order, is thrown.
+	 */
+	private fun loadRasters(project: Path, snapshots: Collection<JsonObject>): Map<String, ByteArray> {
+		class Blob(val hash: String, val width: Int, val height: Int)
+		val blobs = LinkedHashMap<String, Blob>()
+		for (snapshot in snapshots) {
+			val sources = listOf(snapshot) + listOf("generationSource", "meshSource", "placementSource").mapNotNull { snapshot[it] as? JsonObject }
+			for (source in sources) for (element in source.optionalArray("layers")) {
+				val layer = element as? JsonObject ?: continue
+				val hash = layer.optionalString("rgbaBlob") ?: continue
+				val width = layer["rasterWidth"]?.jsonPrimitive?.intOrNull ?: continue
+				val height = layer["rasterHeight"]?.jsonPrimitive?.intOrNull ?: continue
+				blobs.getOrPut(hash) { Blob(hash, width, height) }
+			}
+		}
+		if (blobs.isEmpty()) return emptyMap()
+		val largest = blobs.values.maxOf { it.width.toLong() * it.height * 4 }
+		val threads = minOf(Runtime.getRuntime().availableProcessors().toLong(), 8L, blobs.size.toLong(),
+			Runtime.getRuntime().maxMemory() / 4 / maxOf(1L, largest * 2)).toInt().coerceAtLeast(1)
+		if (threads == 1) return blobs.mapValues { (_, blob) -> loadRaster(project, blob.hash, blob.width, blob.height) }
+		val pool = java.util.concurrent.Executors.newFixedThreadPool(threads) { task -> Thread(task, "psd2live-raster-load").apply { isDaemon = true } }
+		try {
+			val futures = blobs.mapValues { (_, blob) -> pool.submit<ByteArray> { loadRaster(project, blob.hash, blob.width, blob.height) } }
+			return futures.mapValues { (_, future) ->
+				try { future.get() } catch (failure: java.util.concurrent.ExecutionException) {
+					futures.values.forEach { it.cancel(true) }
+					throw failure.cause ?: failure
+				} catch (interrupted: InterruptedException) {
+					futures.values.forEach { it.cancel(true) }
+					Thread.currentThread().interrupt()
+					throw interrupted
+				}
+			}
+		} finally {
+			pool.shutdownNow()
+		}
+	}
+
+	/** The raster digest is the SHA-256 just checked: the revision and rig-stage memos take it instead of hashing again. */
+	private fun verifiedRaster(rgba: ByteArray, hash: String): ByteArray {
+		WorkspaceRevisions.seedRasterDigest(rgba, hash)
+		io.github.psd2live.core.RasterDigest.seed(rgba, hash)
 		return rgba
+	}
+
+	/**
+	 * [assetId]'s metadata as [loadAsset] reads it, checking that its raster file is there without decoding it;
+	 * null when the asset is not stored. The raster's pixels are checked against their digest when loaded.
+	 */
+	private fun storedAsset(project: Path, assetId: String): WorkspaceImportedPngAsset? {
+		val (metadata, public) = assetMetadata(project, assetId) ?: return null
+		val hash = metadata.requiredString("rgbaBlob")
+		require(public.pixelWidth > 0 && public.pixelHeight > 0) { "Stored raster dimensions must be positive" }
+		val blobs = project.resolve("blobs")
+		require(Files.isRegularFile(blobs.resolve(rasterFileName(hash, public.pixelWidth, public.pixelHeight))) ||
+			Files.isRegularFile(blobs.resolve("${fileKey(hash)}.rgba.gz"))) { "Stored raster blob is missing: $hash" }
+		return public
 	}
 
 	internal fun projectRoot(projectId: String): Path {
@@ -1176,6 +1248,84 @@ internal class WorkspaceStore(
 			}
 			if (changes.isEmpty()) return snapshot
 			return JsonObject(snapshot + ("rigEdits" to JsonObject(rig + changes)))
+		}
+
+		/**
+		 * [image]'s pixels as non-premultiplied RGBA bytes, exactly as [BufferedImage.getRGB] gives them. 8-bit
+		 * sRGB interleaved rasters (what the PNG reader returns for RGB and RGBA files) and int ARGB images are read
+		 * from their buffer directly; any other layout goes through `getRGB` a block of rows at a time.
+		 */
+		internal fun rgbaOf(image: java.awt.image.BufferedImage): ByteArray {
+			val width = image.width
+			val height = image.height
+			val out = ByteArray(Math.multiplyExact(Math.multiplyExact(width, height), 4))
+			if (copyInterleaved(image, out) || copyIntArgb(image, out)) return out
+			val rows = maxOf(1, 65536 / maxOf(1, width))
+			val argb = IntArray(width * minOf(rows, height))
+			var y = 0
+			while (y < height) {
+				val count = minOf(rows, height - y)
+				image.getRGB(0, y, width, count, argb, 0, width)
+				var o = y * width * 4
+				for (i in 0 until width * count) {
+					val pixel = argb[i]
+					out[o] = (pixel ushr 16).toByte(); out[o + 1] = (pixel ushr 8).toByte()
+					out[o + 2] = pixel.toByte(); out[o + 3] = (pixel ushr 24).toByte()
+					o += 4
+				}
+				y += count
+			}
+			return out
+		}
+
+		/** An 8-bit sRGB RGB or non-premultiplied RGBA image with one interleaved byte buffer, copied into [out]. */
+		private fun copyInterleaved(image: java.awt.image.BufferedImage, out: ByteArray): Boolean {
+			val model = image.colorModel as? java.awt.image.ComponentColorModel ?: return false
+			val raster = image.raster
+			val sample = raster.sampleModel as? java.awt.image.PixelInterleavedSampleModel ?: return false
+			val buffer = raster.dataBuffer as? java.awt.image.DataBufferByte ?: return false
+			val bands = sample.numBands
+			val alpha = model.hasAlpha()
+			if (!model.colorSpace.isCS_sRGB || model.isAlphaPremultiplied || bands != (if (alpha) 4 else 3) ||
+				model.componentSize.any { it != 8 } || buffer.numBanks != 1 || raster.parent != null ||
+				raster.sampleModelTranslateX != 0 || raster.sampleModelTranslateY != 0) return false
+			val stride = sample.scanlineStride
+			val step = sample.pixelStride
+			val offsets = sample.bandOffsets
+			val base = buffer.offset
+			val data = buffer.data
+			val r = offsets[0]; val g = offsets[1]; val b = offsets[2]; val a = if (alpha) offsets[3] else -1
+			var o = 0
+			for (y in 0 until image.height) {
+				var i = base + y * stride
+				for (x in 0 until image.width) {
+					out[o] = data[i + r]; out[o + 1] = data[i + g]; out[o + 2] = data[i + b]
+					out[o + 3] = if (a >= 0) data[i + a] else -1
+					o += 4; i += step
+				}
+			}
+			return true
+		}
+
+		/** A `TYPE_INT_ARGB` image with one int buffer, copied into [out]. */
+		private fun copyIntArgb(image: java.awt.image.BufferedImage, out: ByteArray): Boolean {
+			if (image.type != java.awt.image.BufferedImage.TYPE_INT_ARGB) return false
+			val raster = image.raster
+			val sample = raster.sampleModel as? java.awt.image.SinglePixelPackedSampleModel ?: return false
+			val buffer = raster.dataBuffer as? java.awt.image.DataBufferInt ?: return false
+			if (buffer.numBanks != 1 || raster.parent != null || raster.sampleModelTranslateX != 0 || raster.sampleModelTranslateY != 0) return false
+			val data = buffer.data
+			var o = 0
+			for (y in 0 until image.height) {
+				var i = buffer.offset + y * sample.scanlineStride
+				for (x in 0 until image.width) {
+					val pixel = data[i++]
+					out[o] = (pixel ushr 16).toByte(); out[o + 1] = (pixel ushr 8).toByte()
+					out[o + 2] = pixel.toByte(); out[o + 3] = (pixel ushr 24).toByte()
+					o += 4
+				}
+			}
+			return true
 		}
 
 		/** Working-store folders holding content shared by snapshots; [expandSnapshot] reads them. */

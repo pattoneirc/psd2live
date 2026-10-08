@@ -70,6 +70,9 @@ internal object RasterDigest {
 
 	fun of(rgba: ByteArray): String = digests[rgba] ?: compute(rgba).also { digests[rgba] = it }
 
+	/** Records [digest] as [rgba]'s SHA-256 when the caller has just verified it, so [of] does not hash it again. */
+	fun seed(rgba: ByteArray, digest: String) { digests[rgba] = digest }
+
 	/** The digest computed afresh, without the per-array memo. */
 	fun compute(rgba: ByteArray): String = java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(rgba))
 }

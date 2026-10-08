@@ -84,6 +84,9 @@ internal object WorkspaceRevisions {
 	/** SHA-256 of an immutable raster, cached by array identity. */
 	fun rasterDigest(rgba: ByteArray): String = rasterDigests[rgba] ?: sha256(rgba).also { rasterDigests[rgba] = it }
 
+	/** Records [digest] as [rgba]'s SHA-256 when the caller has just verified it (a raster loaded from its digest-named blob). */
+	fun seedRasterDigest(rgba: ByteArray, digest: String) { rasterDigests[rgba] = digest }
+
 	internal fun sha256(value: ByteArray): String = hex(MessageDigest.getInstance("SHA-256").digest(value))
 	internal fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it.toInt() and 255) }
 

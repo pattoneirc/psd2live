@@ -750,8 +750,8 @@ class DesktopWorkspace(
         val preview = previewBuilder.build(document, state.previewModel, state.drawOrderOverrides)
         val tasks = store.loadTasks(id) // Validate before replacing the live session.
         val restoredTasks = WorkspaceTaskRecords().also { it.restore(tasks) }
+        // ProjectRepository.open validated this catalog against the store it opened.
         val catalog = io.github.psd2live.project.WorkspaceAssetCatalog.read(auxiliary) ?: store.existingAssetCatalog(id)
-        store.validateAssetCatalog(id, catalog)
         currentCoroutineContext().ensureActive()
         lateinit var installed: WorkspaceCapture<io.github.psd2live.core.RigPreviewModel>
         synchronized(historyLock) {
