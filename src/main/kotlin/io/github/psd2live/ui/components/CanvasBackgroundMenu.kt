@@ -1,6 +1,5 @@
 package io.github.psd2live.ui.components
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,10 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -145,20 +141,18 @@ private fun SizeChip(size: Int, active: Boolean, onClick: () -> Unit) {
 	)
 }
 
+/** The background kind as a swatch: checkered, filled, or empty for transparent. */
 @Composable
-private fun BackgroundKindIcon(kind: CanvasBackgroundKind, tint: Color) {
-	Canvas(Modifier.size(12.dp)) {
-		val cell = size.width / 2
-		when (kind) {
-			CanvasBackgroundKind.CHECKER -> {
-				drawRect(tint, Offset.Zero, Size(cell, cell))
-				drawRect(tint, Offset(cell, cell), Size(cell, cell))
-			}
-			CanvasBackgroundKind.SOLID -> drawRect(tint)
-			CanvasBackgroundKind.TRANSPARENT -> {}
+private fun BackgroundKindIcon(kind: CanvasBackgroundKind, tint: Color) = GridIcon(Modifier.size(12.dp), tint) {
+	when (kind) {
+		CanvasBackgroundKind.CHECKER -> {
+			fill(path { m(1.6f, 9f); l(1.6f, 2.8f); q(1.6f, 1.6f, 2.8f, 1.6f); l(9f, 1.6f); l(9f, 9f); z() })
+			fill(path { m(16.4f, 9f); l(16.4f, 15.2f); q(16.4f, 16.4f, 15.2f, 16.4f); l(9f, 16.4f); l(9f, 9f); z() })
 		}
-		drawRect(tint, style = Stroke(width = 1.dp.toPx()))
+		CanvasBackgroundKind.SOLID -> fillBox(1.6f, 1.6f, 14.8f, 14.8f, 1.2f)
+		CanvasBackgroundKind.TRANSPARENT -> {}
 	}
+	box(1.6f, 1.6f, 14.8f, 14.8f, 1.2f)
 }
 
 private fun rgbColor(rgb: Int): Color = Color(0xFF000000L or (rgb.toLong() and 0xFFFFFF))

@@ -5,7 +5,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -37,7 +36,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -61,6 +59,7 @@ import io.github.psd2live.ui.components.CompactCheckbox
 import io.github.psd2live.ui.components.CompactDropdown
 import io.github.psd2live.ui.components.CompactNumberSpinner
 import io.github.psd2live.ui.components.CompactTextField
+import io.github.psd2live.ui.components.GridIcon
 import io.github.psd2live.ui.components.IconChevron
 import io.github.psd2live.ui.components.IconReset
 import io.github.psd2live.ui.state.PSD2LiveState
@@ -1243,36 +1242,24 @@ private fun ActionButton(
     }
 }
 
-/**
- * List Icon for Clip ID row
- */
+/** A list: pick the clip ID from the known ones. */
 @Composable
-private fun ListIcon(color: Color, modifier: Modifier = Modifier.size(13.dp)) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = 1.2f
-        drawLine(color, Offset(w * 0.15f, h * 0.28f), Offset(w * 0.85f, h * 0.28f), strokeWidth = stroke)
-        drawLine(color, Offset(w * 0.15f, h * 0.52f), Offset(w * 0.85f, h * 0.52f), strokeWidth = stroke)
-        drawLine(color, Offset(w * 0.15f, h * 0.76f), Offset(w * 0.85f, h * 0.76f), strokeWidth = stroke)
+private fun ListIcon(color: Color, modifier: Modifier = Modifier.size(13.dp)) = GridIcon(modifier, color) {
+    for (y in floatArrayOf(4.6f, 9f, 13.4f)) {
+        dot(3.4f, y, 1.3f)
+        line(6.6f, y, 15.2f, y)
     }
 }
 
-/**
- * Target / Crosshair Icon for Clip ID row
- */
+/** A crosshair: pick the clip ID on the canvas. */
 @Composable
-private fun TargetIcon(color: Color, modifier: Modifier = Modifier.size(13.dp)) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = 1.2f
-        drawCircle(color, radius = w * 0.35f, center = Offset(w * 0.5f, h * 0.5f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke))
-        drawLine(color, Offset(w * 0.5f, h * 0.05f), Offset(w * 0.5f, h * 0.3f), strokeWidth = stroke)
-        drawLine(color, Offset(w * 0.5f, h * 0.7f), Offset(w * 0.5f, h * 0.95f), strokeWidth = stroke)
-        drawLine(color, Offset(w * 0.05f, h * 0.5f), Offset(w * 0.3f, h * 0.5f), strokeWidth = stroke)
-        drawLine(color, Offset(w * 0.7f, h * 0.5f), Offset(w * 0.95f, h * 0.5f), strokeWidth = stroke)
-    }
+private fun TargetIcon(color: Color, modifier: Modifier = Modifier.size(13.dp)) = GridIcon(modifier, color) {
+    ring(9f, 9f, 5.6f)
+    line(9f, 1.6f, 9f, 5.4f)
+    line(9f, 12.6f, 9f, 16.4f)
+    line(1.6f, 9f, 5.4f, 9f)
+    line(12.6f, 9f, 16.4f, 9f)
+    dot(9f, 9f, 1.2f)
 }
 
 // Helpers for Color conversion

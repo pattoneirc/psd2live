@@ -26,10 +26,6 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -45,7 +41,10 @@ import androidx.compose.ui.window.PopupProperties
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.AppMenuItem
 import io.github.psd2live.ui.components.CheckerboardBackground
+import io.github.psd2live.ui.components.GridIcon
 import io.github.psd2live.ui.components.IconChevron
+import io.github.psd2live.ui.components.copySheets
+import io.github.psd2live.ui.components.trashCan
 import io.github.psd2live.ui.state.*
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.ToolColors
@@ -454,62 +453,21 @@ private fun OverflowEllipsis(
 	}
 }
 
+/** Follow the newest line: an arrow down to the floor. */
 @Composable
-private fun IconLogAutoScroll(tint: Color) {
-	Canvas(modifier = Modifier.size(12.dp)) {
-		val stroke = Stroke(width = 1.25.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val cx = size.width / 2f
-		val top = size.height * 0.12f
-		val shaftEnd = size.height * 0.62f
-		val tip = size.height * 0.78f
-		val floor = size.height * 0.90f
-		drawLine(tint, Offset(cx, top), Offset(cx, shaftEnd), stroke.width, cap = stroke.cap)
-		val head = Path().apply {
-			moveTo(size.width * 0.22f, shaftEnd)
-			lineTo(cx, tip)
-			lineTo(size.width * 0.78f, shaftEnd)
-		}
-		drawPath(head, tint, style = stroke)
-		drawLine(
-			tint,
-			Offset(size.width * 0.16f, floor),
-			Offset(size.width * 0.84f, floor),
-			stroke.width,
-			cap = stroke.cap,
-		)
-	}
+private fun IconLogAutoScroll(tint: Color) = GridIcon(Modifier.size(12.dp), tint) {
+	line(9f, 2.4f, 9f, 12.4f)
+	chevron(9f, 12.4f, 0f, 1f, 4.4f)
+	line(3f, 15.6f, 15f, 15.6f)
 }
 
+/** Clear the log: the shared bin. */
 @Composable
-private fun IconLogClear(tint: Color) {
-	Canvas(modifier = Modifier.size(12.dp)) {
-		val stroke = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-		drawLine(tint, Offset(size.width * 0.18f, size.height * 0.30f), Offset(size.width * 0.82f, size.height * 0.30f), stroke.width, cap = stroke.cap)
-		drawLine(tint, Offset(size.width * 0.38f, size.height * 0.16f), Offset(size.width * 0.62f, size.height * 0.16f), stroke.width, cap = stroke.cap)
-		drawLine(tint, Offset(size.width * 0.28f, size.height * 0.30f), Offset(size.width * 0.34f, size.height * 0.86f), stroke.width, cap = stroke.cap)
-		drawLine(tint, Offset(size.width * 0.72f, size.height * 0.30f), Offset(size.width * 0.66f, size.height * 0.86f), stroke.width, cap = stroke.cap)
-		drawLine(tint, Offset(size.width * 0.34f, size.height * 0.86f), Offset(size.width * 0.66f, size.height * 0.86f), stroke.width, cap = stroke.cap)
-	}
-}
+private fun IconLogClear(tint: Color) = GridIcon(Modifier.size(12.dp), tint) { trashCan() }
 
+/** Copy the log: the shared two sheets. */
 @Composable
-private fun IconLogCopy(tint: Color) {
-	Canvas(modifier = Modifier.size(12.dp)) {
-		val stroke = Stroke(width = 1.15.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-		drawRect(
-			color = tint,
-			topLeft = Offset(size.width * 0.28f, size.height * 0.10f),
-			size = Size(size.width * 0.58f, size.height * 0.58f),
-			style = stroke,
-		)
-		drawRect(
-			color = tint,
-			topLeft = Offset(size.width * 0.10f, size.height * 0.32f),
-			size = Size(size.width * 0.58f, size.height * 0.58f),
-			style = stroke,
-		)
-	}
-}
+private fun IconLogCopy(tint: Color) = GridIcon(Modifier.size(12.dp), tint) { copySheets() }
 
 /** Source-chip colors for a log row, from the theme's tag tokens the history tree shares. */
 private fun logSourceBadge(source: LogSource, colors: ToolColors): Triple<Color, Color, String> = when (source) {

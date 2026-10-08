@@ -35,7 +35,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -55,30 +54,27 @@ import java.awt.Cursor
 import javax.swing.JColorChooser
 import javax.swing.SwingUtilities
 
-/** Vector Palette Icon */
+/** A painter's palette, its wells holding the theme's colours: pick a colour. */
 @Composable
 fun IconPalette(
     modifier: Modifier = Modifier.size(16.dp),
     tint: Color = LocalToolColors.current.textPrimary,
 ) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round)
-        val path = Path().apply {
-            moveTo(w * 0.5f, h * 0.1f)
-            cubicTo(w * 0.85f, h * 0.1f, w * 0.95f, h * 0.4f, w * 0.9f, h * 0.65f)
-            cubicTo(w * 0.85f, h * 0.9f, w * 0.6f, h * 0.95f, w * 0.5f, h * 0.85f)
-            cubicTo(w * 0.45f, h * 0.8f, w * 0.35f, h * 0.8f, w * 0.3f, h * 0.85f)
-            cubicTo(w * 0.15f, h * 0.95f, w * 0.05f, h * 0.75f, w * 0.1f, h * 0.5f)
-            cubicTo(w * 0.15f, h * 0.2f, w * 0.3f, h * 0.1f, w * 0.5f, h * 0.1f)
-            close()
+    val colors = LocalToolColors.current
+    val wells = listOf(colors.error, colors.warning, colors.success, colors.accent)
+    GridIcon(modifier, tint) {
+        shape(path {
+            m(9f, 2f)
+            c(15f, 2f, 16.8f, 7.2f, 16f, 11.6f)
+            c(15.2f, 15.8f, 10.8f, 16.6f, 9f, 15f)
+            c(8.1f, 14.2f, 6.4f, 14.2f, 5.6f, 15f)
+            c(3f, 16.6f, 1.2f, 13.4f, 2f, 9f)
+            c(2.8f, 3.8f, 5.6f, 2f, 9f, 2f)
+            z()
+        })
+        listOf(5.8f to 6.2f, 9.4f to 5f, 12.8f to 6.6f, 13.4f to 10.4f).zip(wells).forEach { (at, well) ->
+            dot(at.first, at.second, 1.5f, tone(well))
         }
-        drawPath(path, color = tint, style = stroke)
-        drawCircle(tint, radius = w * 0.06f, center = Offset(w * 0.32f, h * 0.32f))
-        drawCircle(tint, radius = w * 0.06f, center = Offset(w * 0.52f, h * 0.26f))
-        drawCircle(tint, radius = w * 0.06f, center = Offset(w * 0.72f, h * 0.35f))
-        drawCircle(tint, radius = w * 0.06f, center = Offset(w * 0.76f, h * 0.58f))
     }
 }
 
@@ -282,60 +278,24 @@ fun PaintFgBgSwatch(
 /** Photoshop's default-colours control: a small black square over a small white one. */
 @Composable
 fun IconPaintDefaultColors(modifier: Modifier = Modifier.size(10.dp)) {
-    val border = LocalToolColors.current.textMuted
-    Canvas(modifier = modifier) {
-        val cell = size.width * 0.58f
-        val back = Offset(size.width - cell, size.height - cell)
-        drawRect(Color.White, back, androidx.compose.ui.geometry.Size(cell, cell))
-        drawRect(border, back, androidx.compose.ui.geometry.Size(cell, cell), style = Stroke(0.8f))
-        drawRect(Color.Black, Offset.Zero, androidx.compose.ui.geometry.Size(cell, cell))
-        drawRect(border, Offset.Zero, androidx.compose.ui.geometry.Size(cell, cell), style = Stroke(0.8f))
+    GridIcon(modifier, LocalToolColors.current.textMuted) {
+        fillBox(7.4f, 7.4f, 9.6f, 9.6f, 0.8f, tone(Color.White))
+        box(7.4f, 7.4f, 9.6f, 9.6f, 0.8f, ICON_FINE)
+        fillBox(1f, 1f, 9.6f, 9.6f, 0.8f, tone(Color.Black))
+        box(1f, 1f, 9.6f, 9.6f, 0.8f, ICON_FINE)
     }
 }
 
-/** Tiny double-curved arrows for swapping foreground and background, like Photoshop's swatch control. */
+/** Two curved arrows trading places: swap foreground and background, like Photoshop's swatch control. */
 @Composable
 fun IconPaintColorSwap(
     modifier: Modifier = Modifier.size(10.dp),
     tint: Color = LocalToolColors.current.textMuted,
-) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(width = (w * 0.14f).coerceAtLeast(1f), cap = StrokeCap.Round)
-        // Upper arc: right → left with arrowhead on the left.
-        val top = Path().apply {
-            moveTo(w * 0.78f, h * 0.28f)
-            quadraticTo(w * 0.5f, h * 0.02f, w * 0.22f, h * 0.28f)
-        }
-        drawPath(top, color = tint, style = stroke)
-        drawPath(
-            Path().apply {
-                moveTo(w * 0.22f, h * 0.28f)
-                lineTo(w * 0.32f, h * 0.12f)
-                moveTo(w * 0.22f, h * 0.28f)
-                lineTo(w * 0.36f, h * 0.34f)
-            },
-            color = tint,
-            style = stroke,
-        )
-        // Lower arc: left → right with arrowhead on the right.
-        val bottom = Path().apply {
-            moveTo(w * 0.22f, h * 0.72f)
-            quadraticTo(w * 0.5f, h * 0.98f, w * 0.78f, h * 0.72f)
-        }
-        drawPath(bottom, color = tint, style = stroke)
-        drawPath(
-            Path().apply {
-                moveTo(w * 0.78f, h * 0.72f)
-                lineTo(w * 0.68f, h * 0.88f)
-                moveTo(w * 0.78f, h * 0.72f)
-                lineTo(w * 0.64f, h * 0.66f)
-            },
-            color = tint,
-            style = stroke,
-        )
-    }
+) = GridIcon(modifier, tint) {
+    outline(path { m(14f, 5f); q(9f, 0.4f, 4f, 5f) }, 1.6f)
+    chevron(4f, 5f, -5f, 4.6f, 3.4f, 1.6f)
+    outline(path { m(4f, 13f); q(9f, 17.6f, 14f, 13f) }, 1.6f)
+    chevron(14f, 13f, 5f, -4.6f, 3.4f, 1.6f)
 }
 
 /**

@@ -5,19 +5,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.PathOperation
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.psd2live.ui.BrushShape
@@ -27,81 +21,26 @@ import io.github.psd2live.ui.GlueSubTool
 import io.github.psd2live.ui.PaintShape
 import io.github.psd2live.ui.SkeletonEditSubTool
 import io.github.psd2live.ui.SkeletonPoseSubTool
+import io.github.psd2live.ui.components.ICON_LINE
+import io.github.psd2live.ui.components.IconPen
+import io.github.psd2live.ui.components.deformPath
 import io.github.psd2live.ui.components.drawSingleBoneIcon
+import io.github.psd2live.ui.components.glue
+import io.github.psd2live.ui.components.meshPatch
+import io.github.psd2live.ui.components.rotationDeformer
+import io.github.psd2live.ui.components.subdivide
+import io.github.psd2live.ui.components.warpLattice
 import io.github.psd2live.ui.components.drawBoneIcon
 import org.umamo.runtime.model.VertexGroupKind
 import kotlin.math.PI
 import kotlin.math.cos
-import kotlin.math.hypot
 import kotlin.math.sin
 
 /*
- * The canvas toolbar's icons. Every one is drawn on the same 18-unit grid with the same round 1.4-unit
- * stroke and scaled to whatever box it is given, so the tool rows and the shape rows under them read as
- * one set. Hand tools (brush, pencil, knife ...) are drawn lying flat with the working end on the left
- * and turned 45 degrees, so they all point the same way.
+ * The canvas toolbar's icons, drawn with the shared [IconPen] so the tool rows, the shape rows under
+ * them and the panels' icons read as one set. Hand tools (brush, pencil, knife ...) are drawn lying flat
+ * with the working end on the left and turned 45 degrees, so they all point the same way.
  */
-
-private const val GRID = 18f
-private const val LINE_WIDTH = 1.4f
-
-/** Grid-unit drawing helpers bound to one icon's scope and tint. */
-private class IconPen(val scope: DrawScope, val color: Color) {
-    val s = scope.size.minDimension / GRID
-    val soft = color.copy(alpha = color.alpha * 0.28f)
-
-    fun p(x: Float, y: Float) = Offset(x * s, y * s)
-
-    fun stroke(width: Float = LINE_WIDTH) = Stroke(width * s, cap = StrokeCap.Round, join = StrokeJoin.Round)
-
-    fun path(block: GridPath.() -> Unit): Path = GridPath(s).apply(block).path
-
-    fun line(x1: Float, y1: Float, x2: Float, y2: Float, width: Float = LINE_WIDTH, tint: Color = color) =
-        scope.drawLine(tint, p(x1, y1), p(x2, y2), width * s, cap = StrokeCap.Round)
-
-    fun outline(path: Path, width: Float = LINE_WIDTH) = scope.drawPath(path, color, style = stroke(width))
-
-    fun fill(path: Path, tint: Color = color) = scope.drawPath(path, tint)
-
-    fun ring(x: Float, y: Float, r: Float, width: Float = LINE_WIDTH) =
-        scope.drawCircle(color, r * s, p(x, y), style = stroke(width))
-
-    fun dot(x: Float, y: Float, r: Float, tint: Color = color) = scope.drawCircle(tint, r * s, p(x, y))
-
-    fun box(x: Float, y: Float, w: Float, h: Float, r: Float = 1f, width: Float = LINE_WIDTH) =
-        scope.drawRoundRect(color, p(x, y), Size(w * s, h * s), CornerRadius(r * s), style = stroke(width))
-
-    fun fillBox(x: Float, y: Float, w: Float, h: Float, r: Float = 1f, tint: Color = color) =
-        scope.drawRoundRect(tint, p(x, y), Size(w * s, h * s), CornerRadius(r * s))
-
-    /** An open arrowhead at ([x], [y]) pointing along ([dx], [dy]). */
-    fun chevron(x: Float, y: Float, dx: Float, dy: Float, length: Float = 3f) {
-        val n = hypot(dx, dy)
-        val ux = dx / n
-        val uy = dy / n
-        val c = cos(0.7f)
-        val sn = sin(0.7f)
-        outline(path {
-            m(x - length * (ux * c - uy * sn), y - length * (uy * c + ux * sn))
-            l(x, y)
-            l(x - length * (ux * c + uy * sn), y - length * (uy * c - ux * sn))
-        })
-    }
-
-    /** Draws [block] turned [degrees] about ([x], [y]). */
-    fun turned(degrees: Float, x: Float = 9f, y: Float = 9f, block: () -> Unit) =
-        scope.rotate(degrees, p(x, y)) { block() }
-}
-
-private class GridPath(private val s: Float) {
-    val path = Path()
-    fun m(x: Float, y: Float) = path.moveTo(x * s, y * s)
-    fun l(x: Float, y: Float) = path.lineTo(x * s, y * s)
-    fun q(x1: Float, y1: Float, x: Float, y: Float) = path.quadraticTo(x1 * s, y1 * s, x * s, y * s)
-    fun c(x1: Float, y1: Float, x2: Float, y2: Float, x: Float, y: Float) =
-        path.cubicTo(x1 * s, y1 * s, x2 * s, y2 * s, x * s, y * s)
-    fun z() = path.close()
-}
 
 @Composable
 internal fun ToolIcon(
@@ -223,16 +162,7 @@ internal fun DrawScope.drawModeIcon(mode: EditHierarchyMode, color: Color) {
             pen.outline(bent)
         }
         // Edit: the mesh itself, its triangles and vertices.
-        EditHierarchyMode.EDIT -> {
-            val a = 2.8f to 14.6f
-            val b = 7.6f to 3.2f
-            val c = 15.2f to 5.4f
-            val d = 12.6f to 15f
-            listOf(a to b, b to c, c to d, d to a, b to d).forEach { (p, q) ->
-                pen.line(p.first, p.second, q.first, q.second, width = if (p == b && q == d) 1f else LINE_WIDTH)
-            }
-            listOf(a, b, c, d).forEach { (x, y) -> pen.dot(x, y, 1.9f) }
-        }
+        EditHierarchyMode.EDIT -> pen.meshPatch()
         // Simulate: a cloth pinned along its top edge, its hem swinging free.
         EditHierarchyMode.SIMULATE -> {
             val cloth = pen.path {
@@ -367,7 +297,7 @@ private fun IconPen.brushSelect() {
     val period = (2 * PI * r / 10).toFloat()
     scope.drawCircle(
         color, r * s, p(9f, 9f),
-        style = Stroke(LINE_WIDTH * s, pathEffect = PathEffect.dashPathEffect(floatArrayOf(period * 0.55f * s, period * 0.45f * s))),
+        style = Stroke(ICON_LINE * s, pathEffect = PathEffect.dashPathEffect(floatArrayOf(period * 0.55f * s, period * 0.45f * s))),
     )
     dot(9f, 9f, 2.6f)
 }
@@ -425,13 +355,13 @@ private fun IconPen.skeletonEditSubTool(subTool: SkeletonEditSubTool) {
         SkeletonEditSubTool.BIND -> glue()
         SkeletonEditSubTool.WEIGHTS -> weightPaint()
         SkeletonEditSubTool.NEW_BONE -> {
-            scope.drawBoneIcon(p(3.5f, 13f), p(11f, 5.5f), color, stroke = 1.2f * s, headRadius = 1.6f * s)
+            scope.drawBoneIcon(p(3.5f, 13f), p(11f, 5.5f), color, stroke = px(1.2f), headRadius = 1.6f * s)
             line(11.5f, 13.5f, 16.5f, 13.5f)
             line(14f, 11f, 14f, 16f)
         }
         SkeletonEditSubTool.EXTRUDE -> {
-            scope.drawBoneIcon(p(2.5f, 15.5f), p(8.5f, 9.5f), color, stroke = 1.2f * s, headRadius = 1.5f * s)
-            scope.drawBoneIcon(p(8.5f, 9.5f), p(14.5f, 3.5f), color, stroke = 1.2f * s, headRadius = 1.5f * s)
+            scope.drawBoneIcon(p(2.5f, 15.5f), p(8.5f, 9.5f), color, stroke = px(1.2f), headRadius = 1.5f * s)
+            scope.drawBoneIcon(p(8.5f, 9.5f), p(14.5f, 3.5f), color, stroke = px(1.2f), headRadius = 1.5f * s)
             line(11.5f, 13.5f, 16f, 9f)
             chevron(16f, 9f, 1f, -1f, 2.5f)
         }
@@ -440,7 +370,7 @@ private fun IconPen.skeletonEditSubTool(subTool: SkeletonEditSubTool) {
 
 /** Pose: a bone swung about its head. */
 private fun IconPen.skeletonPose() {
-    scope.drawBoneIcon(p(4.2f, 13.8f), p(12.2f, 5.8f), color, stroke = 1.2f * s, headRadius = 1.9f * s)
+    scope.drawBoneIcon(p(4.2f, 13.8f), p(12.2f, 5.8f), color, stroke = px(1.2f), headRadius = 1.9f * s)
     val r = 12f
     val start = -80f
     val end = -12f
@@ -454,7 +384,7 @@ private fun IconPen.skeletonPose() {
 
 /** Edit: a bone with both joints opened as handles. */
 private fun IconPen.skeletonEdit() {
-    scope.drawBoneIcon(p(4.8f, 13.2f), p(13.2f, 4.8f), color, stroke = 1.2f * s, headRadius = 0f)
+    scope.drawBoneIcon(p(4.8f, 13.2f), p(13.2f, 4.8f), color, stroke = px(1.2f), headRadius = 0f)
     listOf(3.6f to 14.4f, 14.4f to 3.6f).forEach { (x, y) ->
         dot(x, y, 2.4f, soft)
         ring(x, y, 2.4f)
@@ -463,76 +393,7 @@ private fun IconPen.skeletonEdit() {
 
 // --- deformers -------------------------------------------------------------------------------------------
 
-/** Warp: a lattice bowed out by the deformer, corners as handles. */
-private fun IconPen.warpLattice() {
-    fun at(u: Float, v: Float): Offset {
-        val bulge = 0.16f
-        val x = 9f + (u - 0.5f) * 12f * (1f + bulge * sin(PI.toFloat() * v))
-        val y = 9f + (v - 0.5f) * 12f * (1f + bulge * sin(PI.toFloat() * u))
-        return Offset(x, y)
-    }
-    val steps = 12
-    for (i in 0..3) {
-        val t = i / 3f
-        val edge = i == 0 || i == 3
-        val width = if (edge) LINE_WIDTH else 1f
-        listOf<(Float) -> Offset>({ at(t, it) }, { at(it, t) }).forEach { curve ->
-            outline(path {
-                val first = curve(0f)
-                m(first.x, first.y)
-                for (k in 1..steps) curve(k / steps.toFloat()).let { l(it.x, it.y) }
-            }, width)
-        }
-    }
-    listOf(0f to 0f, 1f to 0f, 0f to 1f, 1f to 1f).forEach { (u, v) -> at(u, v).let { dot(it.x, it.y, 1.7f) } }
-}
-
-/** Rotation: a pivot with its handle and the turn it gives. */
-private fun IconPen.rotationDeformer() {
-    val cx = 9f
-    val cy = 12.4f
-    val r = 7f
-    val start = -158f
-    val end = -22f
-    scope.drawArc(color, start, end - start, false, p(cx - r, cy - r), Size(2 * r * s, 2 * r * s), style = stroke())
-    val a = Math.toRadians(end.toDouble())
-    chevron(cx + r * cos(a).toFloat(), cy + r * sin(a).toFloat(), -sin(a).toFloat(), cos(a).toFloat(), 2.8f)
-    line(cx, cy - 2.4f, cx, 2.6f)
-    dot(cx, 2.6f, 1.4f)
-    dot(cx, cy, 2.4f, soft)
-    ring(cx, cy, 2.4f)
-}
-
-/** Deform path: a curve through anchors, the middle one showing its tangent handles. */
-private fun IconPen.deformPath() {
-    outline(path { m(3f, 14.6f); c(3f, 7f, 15f, 11f, 15f, 3.4f) })
-    line(5.2f, 10.2f, 12.8f, 7.8f, width = 1f)
-    ring(5.2f, 10.2f, 1.1f, width = 1f)
-    ring(12.8f, 7.8f, 1.1f, width = 1f)
-    dot(9f, 9f, 1.8f)
-    fillBox(1.6f, 13.2f, 2.8f, 2.8f, 0.5f)
-    fillBox(13.6f, 2f, 2.8f, 2.8f, 0.5f)
-}
-
 // --- mesh editing ----------------------------------------------------------------------------------------
-
-/** Glue: two meshes whose overlap is welded into one. */
-private fun IconPen.glue() {
-    val a = Path().apply { addOval(androidx.compose.ui.geometry.Rect(p(6.4f, 9f), 4.8f * s)) }
-    val b = Path().apply { addOval(androidx.compose.ui.geometry.Rect(p(11.6f, 9f), 4.8f * s)) }
-    fill(Path().apply { op(a, b, PathOperation.Intersect) })
-    outline(a)
-    outline(b)
-}
-
-/** Subdivide: a triangle split at its edge midpoints. */
-private fun IconPen.subdivide() {
-    outline(path { m(9f, 2.6f); l(16f, 15.2f); l(2f, 15.2f); z() })
-    outline(path { m(5.5f, 8.9f); l(12.5f, 8.9f); l(9f, 15.2f); z() }, width = 1f)
-    dot(5.5f, 8.9f, 1.5f)
-    dot(12.5f, 8.9f, 1.5f)
-    dot(9f, 15.2f, 1.5f)
-}
 
 private fun IconPen.knife() = turned(-45f) {
     val blade = path {
@@ -545,22 +406,21 @@ private fun IconPen.knife() = turned(-45f) {
     fillBox(12f, 7.2f, 5.6f, 3.4f, 1.4f)
 }
 
-/** A triangle whose corners carry falling weights, under a brush ring's arc. */
+/** A triangle whose corners carry falling weights, each dot in the weight colour the canvas paints it. */
 private fun IconPen.weightPaint() {
     val face = path { m(3f, 14.5f); l(9f, 4f); l(15f, 14.5f); z() }
     fill(face, soft)
     outline(face)
-    dot(3f, 14.5f, 2.4f)
-    dot(9f, 4f, 1.7f)
-    dot(15f, 14.5f, 1.1f)
+    dot(3f, 14.5f, 2.4f, tone(weightHeatColor(1f)))
+    dot(9f, 4f, 2f, tone(weightHeatColor(0.5f)))
+    dot(15f, 14.5f, 1.6f, tone(weightHeatColor(0f)))
 }
 
-/** A ramp from full to empty along the drag, with the drag's two ends. */
+/** A ramp from full to empty along the drag, in the weight colours, with the drag's two ends. */
 private fun IconPen.weightGradient() {
     val bands = 5
     for (i in 0 until bands) {
-        val alpha = 1f - i / bands.toFloat()
-        fillBox(2.6f + i * 2.56f, 5f, 2.56f, 8f, 0f, color.copy(alpha = color.alpha * (0.12f + 0.5f * alpha)))
+        fillBox(2.6f + i * 2.56f, 5f, 2.56f, 8f, 0f, tone(weightHeatColor(1f - i / (bands - 1f)), 0.75f))
     }
     box(2.6f, 5f, 12.8f, 8f, 0.8f)
     line(3.6f, 9f, 14.4f, 9f, width = 1.1f)
@@ -582,7 +442,7 @@ private fun IconPen.paintBrush() = turned(-45f) {
     outline(path { m(10f, 7.6f); l(16.2f, 8.1f); q(17.8f, 9f, 16.2f, 9.9f); l(10f, 10.4f) })
 }
 
-private fun IconPen.pencil() = turned(-45f) {
+internal fun IconPen.pencil() = turned(-45f) {
     fillBox(14f, 6.8f, 3.4f, 4.4f, 1.2f, soft)
     outline(path {
         m(5f, 6.8f); l(16.2f, 6.8f)

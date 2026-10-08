@@ -2,7 +2,6 @@ package io.github.psd2live.ui.views
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -29,9 +28,6 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path as ComposePath
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
@@ -40,11 +36,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.EditHierarchyMode
+import io.github.psd2live.ui.components.GridIcon
 import io.github.psd2live.ui.components.IconChevron
 import io.github.psd2live.ui.components.IconFolder
 import io.github.psd2live.ui.components.IconPhysics
 import io.github.psd2live.ui.components.IconPlay
 import io.github.psd2live.ui.components.IconSkeleton
+import io.github.psd2live.ui.components.document
 import io.github.psd2live.ui.state.RecentFile
 import io.github.psd2live.ui.state.RecentFileKind
 import io.github.psd2live.ui.state.WorkspacePreset
@@ -248,49 +246,27 @@ private fun FeatureUpdateRow(
 	}
 }
 
+/** A route that forks: a start and two ways on, the fork as a point. */
 @Composable
 private fun IconRoute(
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color,
-) {
-	Canvas(modifier) {
-		val stroke = Stroke(1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val start = Offset(size.width * .20f, size.height * .72f)
-		val branch = Offset(size.width * .50f, size.height * .34f)
-		val upper = Offset(size.width * .82f, size.height * .18f)
-		val lower = Offset(size.width * .82f, size.height * .76f)
-		drawLine(tint, start, branch, stroke.width, stroke.cap)
-		drawLine(tint, branch, upper, stroke.width, stroke.cap)
-		drawLine(tint, branch, lower, stroke.width, stroke.cap)
-		listOf(start, upper, lower).forEach { drawCircle(tint, size.width * .10f, it, style = stroke) }
-		drawCircle(tint, size.width * .09f, branch)
+) = GridIcon(modifier, tint) {
+	val stops = listOf(3.6f to 13f, 14.6f to 3.4f, 14.6f to 13.6f)
+	val holes = ComposePath().apply { stops.forEach { (x, y) -> addPath(circlePath(x, y, 2f)) } }
+	behind(holes) { stops.forEach { (x, y) -> line(9f, 6.2f, x, y) } }
+	stops.forEach { (x, y) ->
+		dot(x, y, 2f, soft)
+		ring(x, y, 2f)
 	}
+	dot(9f, 6.2f, 1.7f)
 }
 
 @Composable
 private fun IconDocument(
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color,
-) {
-	Canvas(modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val page = ComposePath().apply {
-			moveTo(w * .20f, h * .10f)
-			lineTo(w * .62f, h * .10f)
-			lineTo(w * .82f, h * .30f)
-			lineTo(w * .82f, h * .90f)
-			lineTo(w * .20f, h * .90f)
-			close()
-		}
-		drawPath(page, tint, style = stroke)
-		drawLine(tint, Offset(w * .62f, h * .10f), Offset(w * .62f, h * .31f), stroke.width, stroke.cap)
-		drawLine(tint, Offset(w * .62f, h * .31f), Offset(w * .82f, h * .31f), stroke.width, stroke.cap)
-		drawLine(tint.copy(alpha = .75f), Offset(w * .33f, h * .53f), Offset(w * .69f, h * .53f), stroke.width, stroke.cap)
-		drawLine(tint.copy(alpha = .75f), Offset(w * .33f, h * .69f), Offset(w * .64f, h * .69f), stroke.width, stroke.cap)
-	}
-}
+) = GridIcon(modifier, tint) { document() }
 
 @Composable
 private fun StartActionRow(
@@ -393,8 +369,9 @@ private fun RecentFileRow(
 		horizontalArrangement = Arrangement.spacedBy(10.dp),
 	) {
 		when (file.kind) {
-			RecentFileKind.PROJECT -> IconFolder(modifier = Modifier.size(14.dp), tint = colors.textMuted)
-			RecentFileKind.PSD -> IconDocument(modifier = Modifier.size(14.dp), tint = colors.textMuted)
+			// A faint tone tells a project folder from a PSD at a glance.
+			RecentFileKind.PROJECT -> IconFolder(modifier = Modifier.size(14.dp), tint = if (enabled) colors.warning.copy(alpha = 0.8f) else colors.textMuted)
+			RecentFileKind.PSD -> IconDocument(modifier = Modifier.size(14.dp), tint = if (enabled) colors.accent.copy(alpha = 0.85f) else colors.textMuted)
 		}
 		Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
 			Text(

@@ -12,7 +12,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.rememberTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.TooltipArea
 import androidx.compose.foundation.background
@@ -51,13 +50,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -72,6 +66,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import io.github.psd2live.ui.components.GridIcon
+import io.github.psd2live.ui.components.ICON_FINE
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
@@ -186,10 +182,8 @@ internal fun BarChip(
 @Composable
 internal fun Chevron(tint: Color, open: Boolean) {
 	val turn by animateFloatAsState(if (open) 180f else 0f, tween(100, easing = FastOutSlowInEasing))
-	Canvas(Modifier.size(10.dp).rotate(turn)) {
-		val w = size.width; val h = size.height
-		drawLine(tint, Offset(w * 0.2f, h * 0.38f), Offset(w * 0.5f, h * 0.66f), 1.4f, StrokeCap.Round)
-		drawLine(tint, Offset(w * 0.5f, h * 0.66f), Offset(w * 0.8f, h * 0.38f), 1.4f, StrokeCap.Round)
+	GridIcon(Modifier.size(10.dp).rotate(turn), tint) {
+		outline(path { m(3.6f, 6.8f); l(9f, 11.8f); l(14.4f, 6.8f) }, 1.6f)
 	}
 }
 
@@ -433,12 +427,11 @@ internal fun FloatingMenuRadio(label: String, selected: Boolean, onSelect: () ->
 @Composable
 internal fun RadioMark(selected: Boolean, enabled: Boolean = true) {
 	val colors = LocalToolColors.current
-	val dot by animateFloatAsState(if (selected) 1f else 0f, tween(120, easing = FastOutSlowInEasing))
-	val ring = if (selected) colors.accent else colors.textMuted.copy(alpha = 0.8f)
-	Canvas(Modifier.size(12.dp).alpha(if (enabled) 1f else 0.5f)) {
-		val r = size.minDimension / 2f
-		drawCircle(ring, r - 0.75f, style = Stroke(1.3f))
-		if (dot > 0f) drawCircle(colors.accent, (r - 3f) * dot)
+	val mark by animateFloatAsState(if (selected) 1f else 0f, tween(120, easing = FastOutSlowInEasing))
+	val rim = if (selected) colors.accent else colors.textMuted.copy(alpha = 0.8f)
+	GridIcon(Modifier.size(12.dp).alpha(if (enabled) 1f else 0.5f), rim) {
+		ring(9f, 9f, 7.4f)
+		if (mark > 0f) dot(9f, 9f, 4.2f * mark, colors.accent)
 	}
 }
 
@@ -456,13 +449,11 @@ internal fun NoticeBanner(messages: List<Pair<String, Color>>, onClose: (() -> U
 			.padding(start = 6.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
 		verticalAlignment = Alignment.Top,
 	) {
-		Canvas(Modifier.padding(top = 1.dp).size(14.dp)) {
+		GridIcon(Modifier.padding(top = 1.dp).size(14.dp), accent) {
 			// A warning triangle with its mark.
-			val w = size.width; val h = size.height
-			val path = androidx.compose.ui.graphics.Path().apply { moveTo(w / 2f, 1f); lineTo(w - 1f, h - 1.5f); lineTo(1f, h - 1.5f); close() }
-			drawPath(path, accent.copy(alpha = 0.2f)); drawPath(path, accent, style = Stroke(1.2f))
-			drawLine(accent, Offset(w / 2f, h * 0.38f), Offset(w / 2f, h * 0.62f), 1.4f, StrokeCap.Round)
-			drawCircle(accent, 0.9f, Offset(w / 2f, h * 0.76f))
+			shape(path { m(9f, 1.8f); l(16.4f, 15.6f); l(1.6f, 15.6f); z() })
+			line(9f, 6.8f, 9f, 10.8f)
+			dot(9f, 13.2f, 1.1f)
 		}
 		Column(Modifier.weight(1f, fill = false).padding(start = 6.dp, end = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
 			for ((message, color) in messages) {
@@ -476,63 +467,38 @@ internal fun NoticeBanner(messages: List<Pair<String, Color>>, onClose: (() -> U
 
 /** Arranged by mesh shape: two triangles nested in one square. */
 @Composable
-internal fun IconArrangeMesh(tint: Color, modifier: Modifier = Modifier) {
-	Canvas(modifier.size(14.dp)) {
-		val s = size.width
-		val a = androidx.compose.ui.graphics.Path().apply { moveTo(1f, 1f); lineTo(1f, s - 1f); lineTo(s - 2.5f, s - 1f); close() }
-		val b = androidx.compose.ui.graphics.Path().apply { moveTo(2.5f, 1f); lineTo(s - 1f, 1f); lineTo(s - 1f, s - 2.5f); close() }
-		drawPath(a, tint); drawPath(b, tint.copy(alpha = 0.5f))
-	}
+internal fun IconArrangeMesh(tint: Color, modifier: Modifier = Modifier) = GridIcon(modifier.size(14.dp), tint) {
+	shape(path { m(2.4f, 4.6f); l(2.4f, 15.6f); l(13.4f, 15.6f); z() })
+	shape(path { m(4.6f, 2.4f); l(15.6f, 2.4f); l(15.6f, 13.4f); z() })
 }
 
 /** Arranged by rectangle: two rectangles side by side. */
 @Composable
-internal fun IconArrangeRect(tint: Color, modifier: Modifier = Modifier) {
-	Canvas(modifier.size(14.dp)) {
-		val s = size.width
-		drawRect(tint, Offset(1f, 2f), Size(s * 0.5f - 1.5f, s - 4f))
-		drawRect(tint.copy(alpha = 0.5f), Offset(s * 0.5f + 0.5f, 2f), Size(s * 0.5f - 1.5f, s * 0.55f))
-	}
+internal fun IconArrangeRect(tint: Color, modifier: Modifier = Modifier) = GridIcon(modifier.size(14.dp), tint) {
+	panel(2.4f, 2.6f, 5.8f, 12.8f)
+	panel(9.8f, 2.6f, 5.8f, 8.4f)
 }
 
 /** Only the selection: a dashed frame round one tile. */
 @Composable
-internal fun IconArrangeSelection(tint: Color, modifier: Modifier = Modifier) {
-	Canvas(modifier.size(14.dp)) {
-		val s = size.width
-		drawRect(tint, Offset(1f, 1f), Size(s - 2f, s - 2f),
-			style = Stroke(1f, pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(2f, 2f))))
-		drawRect(tint, Offset(s * 0.3f, s * 0.3f), Size(s * 0.4f, s * 0.4f))
-	}
+internal fun IconArrangeSelection(tint: Color, modifier: Modifier = Modifier) = GridIcon(modifier.size(14.dp), tint) {
+	box(2f, 2f, 14f, 14f, 1.6f, ICON_FINE, dash = floatArrayOf(1.6f, 2.6f))
+	panel(5.6f, 5.6f, 6.8f, 6.8f, 1f)
 }
 
-/** The atlas budget: a stack of pages. */
+/** The atlas budget: a stack of pages, the front one divided into tiles. */
 @Composable
-internal fun IconAtlasPages(tint: Color, modifier: Modifier = Modifier) {
-	Canvas(modifier.size(14.dp)) {
-		val s = size.width
-		drawRect(tint.copy(alpha = 0.5f), Offset(3.5f, 0.5f), Size(s - 4f, s - 4f), style = Stroke(1f))
-		drawRect(tint, Offset(0.5f, 3.5f), Size(s - 4f, s - 4f), style = Stroke(1.1f))
-		drawLine(tint, Offset(0.5f, s * 0.6f), Offset(s - 3.5f, s * 0.6f), 0.8f)
-		drawLine(tint, Offset(s * 0.45f, 3.5f), Offset(s * 0.45f, s - 0.5f), 0.8f)
-	}
+internal fun IconAtlasPages(tint: Color, modifier: Modifier = Modifier) = GridIcon(modifier.size(14.dp), tint) {
+	behind(rectPath(2f, 5f, 11f, 11f, 1.2f)) { box(5f, 2f, 11f, 11f, 1.2f, ICON_FINE) }
+	panel(2f, 5f, 11f, 11f)
+	line(2f, 11.2f, 13f, 11.2f, ICON_FINE)
+	line(7.4f, 5f, 7.4f, 16f, ICON_FINE)
 }
 
 /** The automatic arrangement: two tiles with a circling arrow round them. */
 @Composable
-internal fun IconArrangeAuto(tint: Color, modifier: Modifier = Modifier) {
-	Canvas(modifier.size(14.dp)) {
-		val s = size.width
-		drawRect(tint, Offset(s * 0.3f, s * 0.3f), Size(s * 0.18f, s * 0.4f))
-		drawRect(tint.copy(alpha = 0.55f), Offset(s * 0.52f, s * 0.3f), Size(s * 0.18f, s * 0.22f))
-		drawArc(tint, -60f, 270f, false, Offset(1f, 1f), Size(s - 2f, s - 2f), style = Stroke(1.1f, cap = StrokeCap.Round))
-		// The arrowhead where the circle ends, pointing on round it.
-		val r = s / 2f - 1f
-		val at = Math.toRadians(210.0)
-		val tip = Offset(s / 2f + r * kotlin.math.cos(at).toFloat(), s / 2f + r * kotlin.math.sin(at).toFloat())
-		for (side in floatArrayOf(-1f, 1f)) {
-			val back = at + Math.PI / 2 + Math.PI + side * Math.toRadians(35.0)
-			drawLine(tint, tip, tip + Offset(3f * kotlin.math.cos(back).toFloat(), 3f * kotlin.math.sin(back).toFloat()), 1.1f, StrokeCap.Round)
-		}
-	}
+internal fun IconArrangeAuto(tint: Color, modifier: Modifier = Modifier) = GridIcon(modifier.size(14.dp), tint) {
+	panel(5.4f, 5.4f, 3.2f, 7.2f, 0.8f, ICON_FINE)
+	panel(9.6f, 5.4f, 3.2f, 4f, 0.8f, ICON_FINE)
+	arcArrow(9f, 9f, 7.2f, -60f, 210f)
 }

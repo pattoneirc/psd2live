@@ -24,7 +24,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -50,10 +49,14 @@ import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactCheckbox
 import io.github.psd2live.ui.components.CompactIconButton
 import io.github.psd2live.ui.components.CompactTextField
+import io.github.psd2live.ui.components.GridIcon
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconEye
 import io.github.psd2live.ui.components.IconRedo
 import io.github.psd2live.ui.components.IconUndo
+import io.github.psd2live.ui.components.brackets
+import io.github.psd2live.ui.components.copySheets
+import io.github.psd2live.ui.components.document
 import io.github.psd2live.project.HistoryAnnotation
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -568,7 +571,7 @@ private fun HistoryNodeCard(
 						modifier = Modifier.weight(1f),
 					)
 					if (!annotation?.note.isNullOrBlank()) {
-						IconNote(tint = metaColor, modifier = Modifier.size((9 * scale).dp))
+						IconNote(tint = metaColor, modifier = Modifier.size((10 * scale).dp))
 						Spacer(Modifier.width((4 * scale).dp))
 					}
 					Text(
@@ -624,7 +627,7 @@ private fun NodeTooltip(node: WorkspaceHistoryNodeSnapshot, annotation: HistoryA
 			}
 			if (note != null) {
 				Row(verticalAlignment = Alignment.Top) {
-					IconNote(tint = colors.textMuted, modifier = Modifier.padding(top = 2.dp).size(9.dp))
+					IconNote(tint = colors.textMuted, modifier = Modifier.padding(top = 2.dp).size(10.dp))
 					Spacer(Modifier.width(4.dp))
 					Text(text = note, style = typography.caption.copy(fontSize = 10.sp), color = colors.textPrimary)
 				}
@@ -1151,78 +1154,30 @@ private fun shortTime(createdAt: String): String =
 
 /** Three list lines with bullets: the operation list. */
 @Composable
-private fun IconOperationList(tint: Color) {
-	Canvas(Modifier.size(12.dp)) {
-		val w = size.width
-		val h = size.height
-		listOf(0.22f, 0.5f, 0.78f).forEach { y ->
-			drawCircle(tint, radius = w * 0.07f, center = Offset(w * 0.14f, h * y))
-			drawLine(tint, Offset(w * 0.34f, h * y), Offset(w * 0.9f, h * y), strokeWidth = 1.3f, cap = StrokeCap.Round)
-		}
+private fun IconOperationList(tint: Color) = GridIcon(Modifier.size(12.dp), tint) {
+	listOf(4f, 9f, 14f).forEach { y ->
+		dot(2.8f, y, 1.4f)
+		line(6.4f, y, 15.8f, y)
 	}
 }
 
 @Composable
-private fun IconZoomStep(plus: Boolean, tint: Color) {
-	Canvas(Modifier.size(9.dp)) {
-		val c = size.width / 2f
-		drawLine(tint, Offset(0f, c), Offset(size.width, c), strokeWidth = 1.3f, cap = StrokeCap.Round)
-		if (plus) drawLine(tint, Offset(c, 0f), Offset(c, size.height), strokeWidth = 1.3f, cap = StrokeCap.Round)
-	}
+private fun IconZoomStep(plus: Boolean, tint: Color) = GridIcon(Modifier.size(9.dp), tint) {
+	line(1.6f, 9f, 16.4f, 9f, 1.6f)
+	if (plus) line(9f, 1.6f, 9f, 16.4f, 1.6f)
 }
 
 /** Four corner brackets: fit the whole tree in view. */
 @Composable
-private fun IconFitView(tint: Color) {
-	Canvas(Modifier.size(11.dp)) {
-		val w = size.width
-		val h = size.height
-		val arm = w * 0.3f
-		val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		listOf(
-			Triple(Offset(0f, 0f), 1f, 1f),
-			Triple(Offset(w, 0f), -1f, 1f),
-			Triple(Offset(0f, h), 1f, -1f),
-			Triple(Offset(w, h), -1f, -1f),
-		).forEach { (corner, dx, dy) ->
-			drawPath(Path().apply {
-				moveTo(corner.x + dx * arm, corner.y)
-				lineTo(corner.x, corner.y)
-				lineTo(corner.x, corner.y + dy * arm)
-			}, tint, style = stroke)
-		}
-	}
-}
+private fun IconFitView(tint: Color) = GridIcon(Modifier.size(11.dp), tint) { brackets(1.8f, 1.8f, 16.2f, 16.2f, arm = 5f) }
 
 /** A page with a folded corner and two lines: the node carries a note. */
 @Composable
-private fun IconNote(tint: Color, modifier: Modifier = Modifier.size(9.dp)) {
-	Canvas(modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-		drawPath(Path().apply {
-			moveTo(w * 0.15f, h * 0.05f)
-			lineTo(w * 0.6f, h * 0.05f)
-			lineTo(w * 0.85f, h * 0.3f)
-			lineTo(w * 0.85f, h * 0.95f)
-			lineTo(w * 0.15f, h * 0.95f)
-			close()
-		}, tint, style = stroke)
-		drawLine(tint, Offset(w * 0.32f, h * 0.5f), Offset(w * 0.68f, h * 0.5f), strokeWidth = stroke.width, cap = StrokeCap.Round)
-		drawLine(tint, Offset(w * 0.32f, h * 0.72f), Offset(w * 0.68f, h * 0.72f), strokeWidth = stroke.width, cap = StrokeCap.Round)
-	}
-}
+private fun IconNote(tint: Color, modifier: Modifier = Modifier.size(10.dp)) = GridIcon(modifier, tint) { document() }
 
 /** Two overlapping sheets, as the log's copy button draws them. */
 @Composable
-private fun IconCopy(tint: Color) {
-	Canvas(Modifier.size(10.dp)) {
-		val stroke = Stroke(width = 1.1.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-		drawRect(tint, topLeft = Offset(size.width * 0.28f, size.height * 0.10f), size = Size(size.width * 0.62f, size.height * 0.62f), style = stroke)
-		drawRect(tint, topLeft = Offset(size.width * 0.10f, size.height * 0.30f), size = Size(size.width * 0.62f, size.height * 0.62f), style = stroke)
-	}
-}
+private fun IconCopy(tint: Color) = GridIcon(Modifier.size(10.dp), tint) { copySheets() }
 
 /**
  * Hierarchical tree positioning algorithm for rooted append-only DAG.

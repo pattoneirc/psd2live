@@ -33,10 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -49,8 +46,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.AppMenuHeader
+import io.github.psd2live.ui.components.GridIcon
+import io.github.psd2live.ui.components.ICON_FINE
 import io.github.psd2live.ui.components.IconEye
 import io.github.psd2live.ui.components.IconPhysics
+import io.github.psd2live.ui.components.meshPatch
 import io.github.psd2live.ui.state.CanvasMode
 import io.github.psd2live.ui.state.WorkspacePreset
 import io.github.psd2live.ui.theme.LocalToolColors
@@ -284,91 +284,51 @@ internal fun WorkspacePresetIcon(preset: WorkspacePreset, tint: Color, modifier:
 		WorkspacePreset.EDIT -> IconPencil(tint, modifier)
 		WorkspacePreset.PREVIEW -> IconEye(visible = true, modifier = modifier, tint = tint)
 		WorkspacePreset.PHYSICS -> IconPhysics(active = false, modifier = modifier, tint = tint)
-		else -> Canvas(modifier) {
-			val w = size.width
-			val h = size.height
-			val line = 1.3f
-			val stroke = Stroke(width = line, cap = StrokeCap.Round, join = StrokeJoin.Round)
+		else -> GridIcon(modifier, tint) {
 			when (preset) {
-				// A triangulated patch.
-				WorkspacePreset.MESH -> {
-					val a = Offset(w * 0.15f, h * 0.82f)
-					val b = Offset(w * 0.5f, h * 0.15f)
-					val c = Offset(w * 0.85f, h * 0.82f)
-					val m = Offset(w * 0.5f, h * 0.60f)
-					drawPath(Path().apply { moveTo(a.x, a.y); lineTo(b.x, b.y); lineTo(c.x, c.y); close() }, tint, style = stroke)
-					listOf(a, b, c).forEach { drawLine(tint.copy(alpha = 0.7f), it, m, strokeWidth = 1f) }
-					drawCircle(tint, radius = w * 0.07f, center = m)
-				}
+				// The mesh, as the hierarchy and the mode bar draw it.
+				WorkspacePreset.MESH -> meshPatch()
 				// Two parameter sliders.
-				WorkspacePreset.RIG -> {
-					listOf(0.32f to 0.32f, 0.70f to 0.64f).forEach { (y, knob) ->
-						drawLine(tint.copy(alpha = 0.7f), Offset(w * 0.12f, h * y), Offset(w * 0.88f, h * y), strokeWidth = line, cap = StrokeCap.Round)
-						drawCircle(tint, radius = w * 0.11f, center = Offset(w * knob, h * y))
-					}
+				WorkspacePreset.RIG -> listOf(5.8f to 5.8f, 12.4f to 11.6f).forEach { (y, knob) ->
+					behind(circlePath(knob, y, 2.4f)) { line(2.4f, y, 15.6f, y, ICON_FINE) }
+					dot(knob, y, 2.2f, soft)
+					ring(knob, y, 2.2f)
 				}
-				// A timeline with keyframes.
+				// A timeline with keyframes and the playhead.
 				WorkspacePreset.ANIMATION -> {
-					drawLine(tint.copy(alpha = 0.7f), Offset(w * 0.08f, h * 0.62f), Offset(w * 0.92f, h * 0.62f), strokeWidth = line, cap = StrokeCap.Round)
-					listOf(0.24f, 0.52f, 0.78f).forEach { x ->
-						val r = w * 0.11f
-						drawPath(Path().apply {
-							moveTo(w * x, h * 0.62f - r); lineTo(w * x + r, h * 0.62f)
-							lineTo(w * x, h * 0.62f + r); lineTo(w * x - r, h * 0.62f); close()
-						}, tint)
+					line(1.8f, 11f, 16.2f, 11f, ICON_FINE)
+					listOf(3.8f, 10f, 14.4f).forEach { x ->
+						fill(path { m(x, 9.1f); l(x + 1.9f, 11f); l(x, 12.9f); l(x - 1.9f, 11f); z() })
 					}
-					drawLine(tint, Offset(w * 0.40f, h * 0.18f), Offset(w * 0.40f, h * 0.86f), strokeWidth = 1f)
+					line(7f, 4.4f, 7f, 15.4f)
+					fill(path { m(5.2f, 2.6f); l(8.8f, 2.6f); l(7f, 4.8f); z() })
 				}
 				// An atlas page: a frame packed with tiles of different sizes.
 				WorkspacePreset.TEXTURE -> {
-					drawRect(tint, topLeft = Offset(w * 0.12f, h * 0.12f), size = Size(w * 0.76f, h * 0.76f), style = stroke)
-					drawRect(tint, topLeft = Offset(w * 0.22f, h * 0.22f), size = Size(w * 0.30f, h * 0.30f))
-					drawRect(tint.copy(alpha = 0.6f), topLeft = Offset(w * 0.58f, h * 0.22f), size = Size(w * 0.20f, h * 0.20f))
-					drawRect(tint.copy(alpha = 0.6f), topLeft = Offset(w * 0.22f, h * 0.58f), size = Size(w * 0.18f, h * 0.20f))
-					drawRect(tint.copy(alpha = 0.35f), topLeft = Offset(w * 0.46f, h * 0.50f), size = Size(w * 0.32f, h * 0.28f))
+					box(2f, 2f, 14f, 14f, 1.2f)
+					val packed = color.copy(alpha = color.alpha * 0.55f)
+					fillBox(4f, 4f, 5f, 5f, 0.8f)
+					fillBox(10.4f, 4f, 3.6f, 3.6f, 0.8f, packed)
+					fillBox(4f, 10.4f, 3.2f, 3.6f, 0.8f, packed)
+					fillBox(8.6f, 9.4f, 5.4f, 4.6f, 0.8f, soft)
 				}
 				// A trunk with one branch forking off, like the history tree.
 				WorkspacePreset.HISTORY -> {
-					val root = Offset(w * 0.30f, h * 0.84f)
-					val fork = Offset(w * 0.30f, h * 0.50f)
-					val head = Offset(w * 0.30f, h * 0.16f)
-					val branch = Offset(w * 0.74f, h * 0.24f)
-					drawLine(tint.copy(alpha = 0.7f), root, head, strokeWidth = line, cap = StrokeCap.Round)
-					drawPath(Path().apply {
-						moveTo(fork.x, fork.y)
-						quadraticTo(branch.x, fork.y, branch.x, branch.y)
-					}, tint.copy(alpha = 0.7f), style = stroke)
-					listOf(root, fork, head, branch).forEach { drawCircle(tint, radius = w * 0.1f, center = it) }
+					line(5.4f, 15f, 5.4f, 3f)
+					outline(path { m(5.4f, 9f); q(13.2f, 9f, 13.2f, 4.4f) })
+					listOf(5.4f to 15f, 5.4f to 9f, 5.4f to 3f, 13.2f to 4.4f).forEach { (x, y) -> dot(x, y, 1.8f) }
 				}
 				// An empty dashed frame with a plus.
 				else -> {
-					drawRoundRect(
-						tint, topLeft = Offset(w * 0.12f, h * 0.12f), size = Size(w * 0.76f, h * 0.76f),
-						cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.1f),
-						style = Stroke(width = 1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.2f, 1.8f))),
-					)
-					drawLine(tint, Offset(w * 0.5f, h * 0.34f), Offset(w * 0.5f, h * 0.66f), strokeWidth = line, cap = StrokeCap.Round)
-					drawLine(tint, Offset(w * 0.34f, h * 0.5f), Offset(w * 0.66f, h * 0.5f), strokeWidth = line, cap = StrokeCap.Round)
+					box(2.2f, 2.2f, 13.6f, 13.6f, 2f, ICON_FINE, dash = floatArrayOf(1.6f, 2.4f))
+					line(9f, 5.8f, 9f, 12.2f)
+					line(5.8f, 9f, 12.2f, 9f)
 				}
 			}
 		}
 	}
 }
 
+/** The edit canvas: the paint pencil. */
 @Composable
-private fun IconPencil(tint: Color, modifier: Modifier) {
-	Canvas(modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		drawPath(Path().apply {
-			moveTo(w * 0.18f, h * 0.82f)
-			lineTo(w * 0.22f, h * 0.62f)
-			lineTo(w * 0.68f, h * 0.16f)
-			lineTo(w * 0.84f, h * 0.32f)
-			lineTo(w * 0.38f, h * 0.78f)
-			close()
-		}, tint, style = stroke)
-		drawLine(tint, Offset(w * 0.58f, h * 0.26f), Offset(w * 0.74f, h * 0.42f), strokeWidth = 1.1f)
-	}
-}
+private fun IconPencil(tint: Color, modifier: Modifier) = GridIcon(modifier, tint) { pencil() }

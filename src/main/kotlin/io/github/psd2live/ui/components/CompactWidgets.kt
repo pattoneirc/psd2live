@@ -95,7 +95,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -124,97 +123,58 @@ import java.awt.Cursor
 fun Modifier.scrimDismiss(enabled: Boolean = true, onDismiss: () -> Unit): Modifier =
 	clickable(interactionSource = null, indication = null, enabled = enabled, onClick = onDismiss)
 
-/** Vector Eye Icon (Visible or Hidden/Crossed-out) */
+/** An eye, open when [visible]; struck through when hidden. */
 @Composable
 fun IconEye(
 	visible: Boolean,
 	modifier: Modifier = Modifier.size(16.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.4f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val eyePath = Path().apply {
-			moveTo(w * 0.1f, h * 0.5f)
-			cubicTo(w * 0.3f, h * 0.2f, w * 0.7f, h * 0.2f, w * 0.9f, h * 0.5f)
-			cubicTo(w * 0.7f, h * 0.8f, w * 0.3f, h * 0.8f, w * 0.1f, h * 0.5f)
-		}
-		drawPath(eyePath, color = tint, style = stroke)
-		if (visible) {
-			drawCircle(color = tint, radius = w * 0.18f, center = Offset(w * 0.5f, h * 0.5f), style = Fill)
-		} else {
-			drawLine(
-				color = tint,
-				start = Offset(w * 0.2f, h * 0.2f),
-				end = Offset(w * 0.8f, h * 0.8f),
-				strokeWidth = 1.4f,
-				cap = StrokeCap.Round,
-			)
-		}
+) = GridIcon(modifier, tint) {
+	val eye = path {
+		m(1.8f, 9f)
+		c(4.2f, 4.2f, 13.8f, 4.2f, 16.2f, 9f)
+		c(13.8f, 13.8f, 4.2f, 13.8f, 1.8f, 9f)
+		z()
+	}
+	if (visible) {
+		shape(eye)
+		ring(9f, 9f, 2.6f)
+		dot(9f, 9f, 1.1f)
+	} else {
+		// The slash cuts a gap through the eye so it reads at small sizes.
+		behind(path { m(1.6f, 4.4f); l(13.6f, 16.4f); l(16.4f, 13.6f); l(4.4f, 1.6f); z() }) { outline(eye) }
+		line(3f, 3f, 15f, 15f)
 	}
 }
 
-/** Vector Play Icon */
+/** Play: a rounded triangle. */
 @Composable
 fun IconPlay(
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val path = Path().apply {
-			moveTo(w * 0.25f, h * 0.15f)
-			lineTo(w * 0.85f, h * 0.5f)
-			lineTo(w * 0.25f, h * 0.85f)
-			close()
-		}
-		drawPath(path, color = tint, style = Fill)
-	}
+) = GridIcon(modifier, tint) {
+	val play = path { m(5.2f, 3.4f); l(14.8f, 9f); l(5.2f, 14.6f); z() }
+	fill(play)
+	outline(play)
 }
 
-/** Vector Pause Icon */
+/** Pause: two rounded bars. */
 @Composable
 fun IconPause(
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val barW = w * 0.22f
-		drawRect(color = tint, topLeft = Offset(w * 0.22f, h * 0.18f), size = Size(barW, h * 0.64f))
-		drawRect(color = tint, topLeft = Offset(w * 0.56f, h * 0.18f), size = Size(barW, h * 0.64f))
-	}
+) = GridIcon(modifier, tint) {
+	fillBox(4.4f, 3.4f, 3.4f, 11.2f, 1f)
+	fillBox(10.2f, 3.4f, 3.4f, 11.2f, 1f)
 }
 
-/** Vector Reset / Revert Arrow Icon */
+/** Reset: a turn back round to the start. */
 @Composable
 fun IconReset(
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.4f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val arcPath = Path().apply {
-			arcTo(
-				rect = androidx.compose.ui.geometry.Rect(w * 0.15f, h * 0.15f, w * 0.85f, h * 0.85f),
-				startAngleDegrees = 45f,
-				sweepAngleDegrees = 270f,
-				forceMoveTo = false,
-			)
-		}
-		drawPath(arcPath, color = tint, style = stroke)
-		val arrowPath = Path().apply {
-			moveTo(w * 0.55f, h * 0.1f)
-			lineTo(w * 0.85f, h * 0.28f)
-			lineTo(w * 0.62f, h * 0.45f)
-		}
-		drawPath(arrowPath, color = tint, style = stroke)
-	}
+) = GridIcon(modifier, tint) {
+	arcArrow(9f, 9.4f, 6.2f, 180f, -125f, head = 3.2f)
 }
 
 /** Curved back arrow for undo. */
@@ -222,81 +182,30 @@ fun IconReset(
 fun IconUndo(
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val stroke = Stroke(width = size.minDimension * 0.12f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val arc = Path().apply {
-			moveTo(size.width * 0.78f, size.height * 0.38f)
-			cubicTo(
-				size.width * 0.78f, size.height * 0.14f,
-				size.width * 0.52f, size.height * 0.08f,
-				size.width * 0.32f, size.height * 0.22f,
-			)
-		}
-		drawPath(arc, color = tint, style = stroke)
-		val head = Path().apply {
-			moveTo(size.width * 0.18f, size.height * 0.12f)
-			lineTo(size.width * 0.18f, size.height * 0.38f)
-			lineTo(size.width * 0.42f, size.height * 0.38f)
-		}
-		drawPath(head, color = tint, style = stroke)
-	}
-}
+) = GridIcon(modifier, tint) { undoArrow() }
 
-/** Curved forward arrow for redo. */
+/** Curved forward arrow for redo: [IconUndo] mirrored. */
 @Composable
 fun IconRedo(
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val stroke = Stroke(width = size.minDimension * 0.12f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val arc = Path().apply {
-			moveTo(size.width * 0.22f, size.height * 0.38f)
-			cubicTo(
-				size.width * 0.22f, size.height * 0.14f,
-				size.width * 0.48f, size.height * 0.08f,
-				size.width * 0.68f, size.height * 0.22f,
-			)
-		}
-		drawPath(arc, color = tint, style = stroke)
-		val head = Path().apply {
-			moveTo(size.width * 0.82f, size.height * 0.12f)
-			lineTo(size.width * 0.82f, size.height * 0.38f)
-			lineTo(size.width * 0.58f, size.height * 0.38f)
-		}
-		drawPath(head, color = tint, style = stroke)
-	}
-}
+) = GridIcon(modifier, tint) { mirrored { undoArrow() } }
 
-/** Blender-style Auto-Keying / Record Dot Icon */
+/** Blender-style auto-keying: a record dot, red while it records. */
 @Composable
 fun IconAutoKey(
 	modifier: Modifier = Modifier.size(12.dp),
 	active: Boolean = false,
 	tint: Color = LocalToolColors.current.textPrimary,
 ) {
-	Canvas(modifier = modifier) {
-		val stroke = Stroke(width = 1.3f)
-		val center = Offset(size.width / 2f, size.height / 2f)
-		val radius = size.minDimension * 0.42f
-		drawCircle(
-			color = tint,
-			radius = radius,
-			center = center,
-			style = stroke,
-		)
-		val innerRadius = if (active) radius * 0.58f else radius * 0.32f
-		drawCircle(
-			color = tint,
-			radius = innerRadius,
-			center = center,
-			style = Fill,
-		)
+	val record = LocalToolColors.current.error
+	GridIcon(modifier, tint) {
+		ring(9f, 9f, 6.8f)
+		if (active) dot(9f, 9f, 4.2f, tone(record)) else dot(9f, 9f, 2.6f)
 	}
 }
 
-/** Vector Lock / Unlock Icon */
+/** A padlock, its shackle closed when [locked]. */
 @Composable
 fun IconLock(
 	locked: Boolean,
@@ -305,89 +214,30 @@ fun IconLock(
 ) {
 	// The keyhole is punched in the panel colour the icon sits on.
 	val keyhole = LocalToolColors.current.panelBackground
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-
-		val bodyTop = h * 0.45f
-		val bodyH = h * 0.45f
-		val bodyW = w * 0.72f
-		val bodyL = (w - bodyW) * 0.5f
-
+	GridIcon(modifier, tint) {
 		if (locked) {
-			// Closed Shackle
-			val shacklePath = Path().apply {
-				moveTo(w * 0.30f, bodyTop)
-				lineTo(w * 0.30f, h * 0.28f)
-				arcTo(
-					rect = androidx.compose.ui.geometry.Rect(w * 0.30f, h * 0.12f, w * 0.70f, h * 0.44f),
-					startAngleDegrees = 180f,
-					sweepAngleDegrees = 180f,
-					forceMoveTo = false,
-				)
-				lineTo(w * 0.70f, bodyTop)
-			}
-			drawPath(shacklePath, color = tint, style = stroke)
+			outline(path { m(5.8f, 8.2f); l(5.8f, 6f); c(5.8f, 1.8f, 12.2f, 1.8f, 12.2f, 6f); l(12.2f, 8.2f) })
+			fillBox(3.4f, 8f, 11.2f, 8f, 1.6f)
+			dot(9f, 11.4f, 1.3f, keyhole)
+			line(9f, 11.6f, 9f, 13.4f, tint = keyhole)
 		} else {
-			// Open Shackle
-			val shacklePath = Path().apply {
-				moveTo(w * 0.28f, bodyTop)
-				lineTo(w * 0.28f, h * 0.22f)
-				arcTo(
-					rect = androidx.compose.ui.geometry.Rect(w * 0.28f, h * 0.06f, w * 0.68f, h * 0.38f),
-					startAngleDegrees = 180f,
-					sweepAngleDegrees = 180f,
-					forceMoveTo = false,
-				)
-				lineTo(w * 0.68f, h * 0.26f)
-			}
-			drawPath(shacklePath, color = tint, style = stroke)
-		}
-
-		// Body
-		drawRoundRect(
-			color = tint,
-			topLeft = Offset(bodyL, bodyTop),
-			size = Size(bodyW, bodyH),
-			cornerRadius = androidx.compose.ui.geometry.CornerRadius(2f, 2f),
-			style = if (locked) Fill else stroke,
-		)
-
-		if (locked) {
-			drawCircle(
-				color = keyhole,
-				radius = 1.3f,
-				center = Offset(w * 0.5f, bodyTop + bodyH * 0.45f),
-				style = Fill,
-			)
+			outline(path { m(5.8f, 8.2f); l(5.8f, 5.4f); c(5.8f, 1.4f, 11.6f, 1f, 12.2f, 4.6f) })
+			panel(3.4f, 8f, 11.2f, 8f, 1.6f)
 		}
 	}
 }
 
-/** Vector Mouse Pointer / Tracking Icon */
+/** The pointer, filled while the model follows it. */
 @Composable
 fun IconMouse(
 	active: Boolean,
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val cursorPath = Path().apply {
-			moveTo(w * 0.20f, h * 0.10f)
-			lineTo(w * 0.20f, h * 0.88f)
-			lineTo(w * 0.44f, h * 0.64f)
-			lineTo(w * 0.68f, h * 0.88f)
-			lineTo(w * 0.82f, h * 0.74f)
-			lineTo(w * 0.56f, h * 0.52f)
-			lineTo(w * 0.85f, h * 0.52f)
-			close()
-		}
-		drawPath(cursorPath, color = tint, style = if (active) Fill else stroke)
+) = GridIcon(modifier, tint) {
+	val arrow = path {
+		m(4.5f, 2.5f); l(4.5f, 14.5f); l(7.6f, 11.8f); l(9.5f, 16f); l(11.6f, 15.1f); l(9.7f, 10.9f); l(13.8f, 10.8f); z()
 	}
+	shape(arrow, body = if (active) color else soft)
 }
 
 /** Physics: a swinging pendulum, its bob filled while physics runs. */
@@ -396,42 +246,23 @@ fun IconPhysics(
 	active: Boolean,
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val pivot = Offset(w * 0.5f, h * 0.12f)
-		val bob = Offset(w * 0.72f, h * 0.70f)
-		drawLine(tint, Offset(w * 0.28f, pivot.y), Offset(w * 0.72f, pivot.y), strokeWidth = 1.3f, cap = StrokeCap.Round)
-		drawLine(tint, pivot, bob, strokeWidth = 1.3f, cap = StrokeCap.Round)
-		drawCircle(tint, radius = w * 0.15f, center = bob, style = if (active) Fill else stroke)
-		// The swing it came from.
-		drawArc(tint.copy(alpha = 0.55f), startAngle = 100f, sweepAngle = 45f, useCenter = false,
-			topLeft = Offset(pivot.x - h * 0.62f, pivot.y - h * 0.62f), size = androidx.compose.ui.geometry.Size(h * 1.24f, h * 1.24f),
-			style = Stroke(width = 1f, cap = StrokeCap.Round))
-	}
+) = GridIcon(modifier, tint) {
+	// The swing it came from.
+	arc(9f, 2.8f, 11.6f, 98f, 30f, width = ICON_FINE, tint = color.copy(alpha = color.alpha * 0.55f))
+	line(4.6f, 2.8f, 13.4f, 2.8f)
+	line(9f, 2.8f, 11.8f, 11.2f)
+	dot(12.6f, 13.4f, 2.6f, if (active) color else soft)
+	ring(12.6f, 13.4f, 2.6f)
 }
 
-/** Vector Search Glass Icon */
+/** A magnifying glass. */
 @Composable
 fun IconSearch(
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color = LocalToolColors.current.textMuted,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round)
-		drawCircle(color = tint, radius = w * 0.32f, center = Offset(w * 0.42f, h * 0.42f), style = stroke)
-		drawLine(
-			color = tint,
-			start = Offset(w * 0.66f, h * 0.66f),
-			end = Offset(w * 0.88f, h * 0.88f),
-			strokeWidth = 1.4f,
-			cap = StrokeCap.Round,
-		)
-	}
+) = GridIcon(modifier, tint) {
+	ring(7.8f, 7.8f, 5.2f)
+	line(11.7f, 11.7f, 15.6f, 15.6f, width = 1.8f)
 }
 
 /**
@@ -442,28 +273,16 @@ fun IconSearch(
 fun IconLanguage(
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f)
-		val radius = minOf(w, h) * 0.42f
-		val center = Offset(w / 2f, h / 2f)
-		drawCircle(color = tint, radius = radius, center = center, style = stroke)
-		// Meridian: an ellipse half as wide as the globe.
-		drawOval(
-			color = tint,
-			topLeft = Offset(center.x - radius * 0.45f, center.y - radius),
-			size = androidx.compose.ui.geometry.Size(radius * 0.9f, radius * 2f),
-			style = stroke,
-		)
-		drawLine(tint, Offset(center.x, center.y - radius), Offset(center.x, center.y + radius), strokeWidth = stroke.width)
-		drawLine(tint, Offset(center.x - radius, center.y), Offset(center.x + radius, center.y), strokeWidth = stroke.width)
-		val parallel = radius * 0.5f
-		val half = radius * 0.866f
-		drawLine(tint, Offset(center.x - half, center.y - parallel), Offset(center.x + half, center.y - parallel), strokeWidth = stroke.width)
-		drawLine(tint, Offset(center.x - half, center.y + parallel), Offset(center.x + half, center.y + parallel), strokeWidth = stroke.width)
-	}
+) = GridIcon(modifier, tint) {
+	val r = 7f
+	dot(9f, 9f, r, soft)
+	// Meridians: an ellipse half as wide as the globe, and its axis; the equator and two parallels.
+	scope.drawOval(color, p(9f - r * 0.45f, 9f - r), Size(r * 0.9f * s, 2 * r * s), style = stroke(ICON_FINE))
+	line(9f, 9f - r, 9f, 9f + r, ICON_FINE)
+	line(9f - r, 9f, 9f + r, 9f, ICON_FINE)
+	line(9f - r * 0.866f, 9f - r * 0.5f, 9f + r * 0.866f, 9f - r * 0.5f, ICON_FINE)
+	line(9f - r * 0.866f, 9f + r * 0.5f, 9f + r * 0.866f, 9f + r * 0.5f, ICON_FINE)
+	ring(9f, 9f, r)
 }
 
 /** Parameter chain with rounded links and clear negative space at small sizes. */
@@ -533,167 +352,81 @@ fun IconParameterLink(
 	}
 }
 
-/** Vector Plus / Add Icon */
+/** Plus: add. */
 @Composable
 fun IconAdd(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val stroke = 1.4f
-		drawLine(tint, Offset(size.width / 2f, 0f), Offset(size.width / 2f, size.height), stroke, StrokeCap.Round)
-		drawLine(tint, Offset(0f, size.height / 2f), Offset(size.width, size.height / 2f), stroke, StrokeCap.Round)
-	}
+) = GridIcon(modifier, tint) {
+	line(9f, 2f, 9f, 16f, 1.6f)
+	line(2f, 9f, 16f, 9f, 1.6f)
 }
 
-/** Vector Camera Icon: a saved snapshot of the current pose. */
+/** A camera: a saved snapshot of the current pose. */
 @Composable
 fun IconSnapshot(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val body = Path().apply {
-			moveTo(w * 0.08f, h * 0.32f)
-			lineTo(w * 0.30f, h * 0.32f)
-			lineTo(w * 0.38f, h * 0.18f)
-			lineTo(w * 0.62f, h * 0.18f)
-			lineTo(w * 0.70f, h * 0.32f)
-			lineTo(w * 0.92f, h * 0.32f)
-			lineTo(w * 0.92f, h * 0.84f)
-			lineTo(w * 0.08f, h * 0.84f)
-			close()
-		}
-		drawPath(body, color = tint, style = stroke)
-		drawCircle(tint, radius = minOf(w, h) * 0.17f, center = Offset(w * 0.5f, h * 0.57f), style = stroke)
-	}
+) = GridIcon(modifier, tint) {
+	shape(path {
+		m(1.8f, 6.6f); q(1.8f, 5.2f, 3.2f, 5.2f); l(5.4f, 5.2f); l(6.8f, 3f); l(11.2f, 3f); l(12.6f, 5.2f)
+		l(14.8f, 5.2f); q(16.2f, 5.2f, 16.2f, 6.6f); l(16.2f, 13.6f); q(16.2f, 15f, 14.8f, 15f)
+		l(3.2f, 15f); q(1.8f, 15f, 1.8f, 13.6f); z()
+	})
+	ring(9f, 10f, 2.9f)
 }
 
-/** Vector Folder Icon */
+/** A folder: a project, a part. */
 @Composable
 fun IconFolder(
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val path = Path().apply {
-			moveTo(w * 0.1f, h * 0.25f)
-			lineTo(w * 0.4f, h * 0.25f)
-			lineTo(w * 0.5f, h * 0.38f)
-			lineTo(w * 0.9f, h * 0.38f)
-			lineTo(w * 0.9f, h * 0.8f)
-			lineTo(w * 0.1f, h * 0.8f)
-			close()
-		}
-		drawPath(path, color = tint, style = stroke)
-	}
-}
+) = GridIcon(modifier, tint) { folder() }
 
-/** Vector Chevron / Triangle Icon */
+/** A disclosure chevron, pointing down when [expanded] and right when not. */
 @Composable
 fun IconChevron(
 	expanded: Boolean,
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textMuted,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.4f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val path = Path().apply {
-			if (expanded) {
-				moveTo(w * 0.25f, h * 0.35f)
-				lineTo(w * 0.5f, h * 0.65f)
-				lineTo(w * 0.75f, h * 0.35f)
-			} else {
-				moveTo(w * 0.35f, h * 0.25f)
-				lineTo(w * 0.65f, h * 0.5f)
-				lineTo(w * 0.35f, h * 0.75f)
-			}
-		}
-		drawPath(path, color = tint, style = stroke)
-	}
+) = GridIcon(modifier, tint) {
+	if (expanded) outline(path { m(4.2f, 6.6f); l(9f, 11.4f); l(13.8f, 6.6f) }, 1.6f)
+	else outline(path { m(6.6f, 4.2f); l(11.4f, 9f); l(6.6f, 13.8f) }, 1.6f)
 }
 
-/** Vector Checkmark Icon */
+/** A check mark. */
 @Composable
 fun IconCheck(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = Color.White,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val path = Path().apply {
-			moveTo(w * 0.2f, h * 0.5f)
-			lineTo(w * 0.45f, h * 0.75f)
-			lineTo(w * 0.8f, h * 0.25f)
-		}
-		drawPath(path, color = tint, style = Stroke(width = 1.6f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-	}
-}
+) = GridIcon(modifier, tint) { checkMark() }
 
-/** Vector Close / Cross Icon */
+/** A cross: close, remove. */
 @Composable
 fun IconClose(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round)
-		drawLine(color = tint, start = Offset.Zero, end = Offset(size.width, size.height), strokeWidth = stroke.width, cap = stroke.cap)
-		drawLine(color = tint, start = Offset(size.width, 0f), end = Offset(0f, size.height), strokeWidth = stroke.width, cap = stroke.cap)
-	}
-}
+) = GridIcon(modifier, tint) { cross(reach = 7f, width = 1.5f) }
 
 /** Circle with a lowercase “i” — toggle for optional help captions. */
 @Composable
 fun IconInfo(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textMuted,
-) {
-	Canvas(modifier = modifier) {
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round)
-		val r = minOf(size.width, size.height) / 2f
-		val c = Offset(size.width / 2f, size.height / 2f)
-		drawCircle(color = tint, radius = r - stroke.width / 2f, center = c, style = stroke)
-		drawCircle(color = tint, radius = r * 0.12f, center = Offset(c.x, c.y - r * 0.38f), style = Fill)
-		drawLine(
-			color = tint,
-			start = Offset(c.x, c.y - r * 0.12f),
-			end = Offset(c.x, c.y + r * 0.42f),
-			strokeWidth = stroke.width,
-			cap = StrokeCap.Round,
-		)
-	}
+) = GridIcon(modifier, tint) {
+	ring(9f, 9f, 7.6f)
+	dot(9f, 5.4f, 1.2f)
+	line(9f, 8.4f, 9f, 13f, 1.5f)
 }
 
-/** Vector Deform Path / Bezier Curve Icon */
+/** A deform path, its middle anchor in the highlight colour the canvas draws a selected point in. */
 @Composable
 fun IconDeformPath(
 	modifier: Modifier = Modifier.size(14.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
 ) {
 	val highlight = LocalToolColors.current.highlight
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val curvePath = Path().apply {
-			moveTo(w * 0.15f, h * 0.78f)
-			cubicTo(w * 0.18f, h * 0.22f, w * 0.82f, h * 0.78f, w * 0.85f, h * 0.22f)
-		}
-		drawPath(curvePath, color = tint, style = stroke)
-		drawCircle(color = tint, radius = w * 0.12f, center = Offset(w * 0.15f, h * 0.78f), style = Fill)
-		drawCircle(color = tint, radius = w * 0.12f, center = Offset(w * 0.85f, h * 0.22f), style = Fill)
-		drawCircle(color = highlight, radius = w * 0.09f, center = Offset(w * 0.5f, h * 0.5f), style = Fill)
-	}
+	GridIcon(modifier, tint) { deformPath(anchor = tone(highlight)) }
 }
 
 /** The skeleton overlay: one bone, as the icon is too small to read a chain. */
@@ -714,84 +447,27 @@ fun IconBone(
 	}
 }
 
-/** Vector Trash Can / Delete Icon */
+/** A bin: delete. */
 @Composable
 fun IconTrash(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textMuted,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		// Can lid / handle
-		drawLine(color = tint, start = Offset(w * 0.38f, h * 0.12f), end = Offset(w * 0.62f, h * 0.12f), strokeWidth = 1.2f, cap = StrokeCap.Round)
-		drawLine(color = tint, start = Offset(w * 0.20f, h * 0.24f), end = Offset(w * 0.80f, h * 0.24f), strokeWidth = 1.2f, cap = StrokeCap.Round)
-		// Can body
-		val bodyPath = Path().apply {
-			moveTo(w * 0.28f, h * 0.24f)
-			lineTo(w * 0.32f, h * 0.86f)
-			quadraticTo(w * 0.33f, h * 0.92f, w * 0.40f, h * 0.92f)
-			lineTo(w * 0.60f, h * 0.92f)
-			quadraticTo(w * 0.67f, h * 0.92f, w * 0.68f, h * 0.86f)
-			lineTo(w * 0.72f, h * 0.24f)
-		}
-		drawPath(bodyPath, color = tint, style = stroke)
-		// Vertical slats inside bin
-		drawLine(color = tint, start = Offset(w * 0.43f, h * 0.38f), end = Offset(w * 0.43f, h * 0.78f), strokeWidth = 1.0f, cap = StrokeCap.Round)
-		drawLine(color = tint, start = Offset(w * 0.57f, h * 0.38f), end = Offset(w * 0.57f, h * 0.78f), strokeWidth = 1.0f, cap = StrokeCap.Round)
-	}
-}
+) = GridIcon(modifier, tint) { trashCan() }
 
-/** Rotation deformer: pivot + direction arrow. */
+/** Rotation deformer: a pivot, its handle and the turn it gives, as the toolbar draws it. */
 @Composable
 fun IconRotationDeformer(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round)
-		val pivot = Offset(w * 0.28f, h * 0.72f)
-		val tip = Offset(w * 0.82f, h * 0.18f)
-		val dx = tip.x - pivot.x
-		val dy = tip.y - pivot.y
-		val len = kotlin.math.hypot(dx, dy).coerceAtLeast(1e-3f)
-		val ux = dx / len
-		val uy = dy / len
-		val head = minOf(w, h) * 0.28f
-		val shaftEnd = Offset(tip.x - ux * head * 0.85f, tip.y - uy * head * 0.85f)
-		drawCircle(tint, w * 0.14f, pivot, style = Fill)
-		drawLine(tint, pivot, shaftEnd, stroke.width, cap = stroke.cap)
-		val headPath = Path().apply {
-			moveTo(tip.x, tip.y)
-			lineTo(tip.x - ux * head + -uy * head * 0.45f, tip.y - uy * head + ux * head * 0.45f)
-			lineTo(tip.x - ux * head - -uy * head * 0.45f, tip.y - uy * head - ux * head * 0.45f)
-			close()
-		}
-		drawPath(headPath, tint)
-	}
-}
+) = GridIcon(modifier, tint) { rotationDeformer() }
 
 /** Six-dot grip used as a drag handle (e.g. parameter-panel reorder). */
 @Composable
 fun IconDragHandle(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textMuted,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val r = 1.05f
-		val xs = floatArrayOf(w * 0.32f, w * 0.68f)
-		val ys = floatArrayOf(h * 0.22f, h * 0.5f, h * 0.78f)
-		for (x in xs) {
-			for (y in ys) {
-				drawCircle(tint, r, Offset(x, y))
-			}
-		}
-	}
+) = GridIcon(modifier, tint) {
+	for (x in floatArrayOf(6.4f, 11.6f)) for (y in floatArrayOf(4f, 9f, 14f)) dot(x, y, 1.4f)
 }
 
 /** Move / float an item to the armature root. */
@@ -799,55 +475,35 @@ fun IconDragHandle(
 fun IconMoveToRoot(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		drawLine(tint, Offset(w * 0.18f, h * 0.18f), Offset(w * 0.82f, h * 0.18f), stroke.width, cap = stroke.cap)
-		drawLine(tint, Offset(w * 0.5f, h * 0.28f), Offset(w * 0.5f, h * 0.88f), stroke.width, cap = stroke.cap)
-		val arrow = Path().apply {
-			moveTo(w * 0.5f, h * 0.28f)
-			lineTo(w * 0.32f, h * 0.48f)
-			moveTo(w * 0.5f, h * 0.28f)
-			lineTo(w * 0.68f, h * 0.48f)
-		}
-		drawPath(arrow, tint, style = stroke)
-	}
+) = GridIcon(modifier, tint) {
+	line(3f, 3f, 15f, 3f)
+	line(9f, 6.4f, 9f, 15.6f)
+	chevron(9f, 6.4f, 0f, -1f, 3.8f)
 }
 
-/** Expand a tree branch. */
+/** Expand a tree branch: the stem with its children out. */
 @Composable
 fun IconExpandBranch(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round)
-		drawLine(tint, Offset(w * 0.22f, h * 0.28f), Offset(w * 0.22f, h * 0.78f), stroke.width, cap = stroke.cap)
-		drawLine(tint, Offset(w * 0.22f, h * 0.5f), Offset(w * 0.72f, h * 0.5f), stroke.width, cap = stroke.cap)
-		drawLine(tint, Offset(w * 0.22f, h * 0.78f), Offset(w * 0.72f, h * 0.78f), stroke.width, cap = stroke.cap)
-		drawCircle(tint, w * 0.1f, Offset(w * 0.72f, h * 0.5f), style = Fill)
-		drawCircle(tint, w * 0.1f, Offset(w * 0.72f, h * 0.78f), style = Fill)
-	}
+) = GridIcon(modifier, tint) {
+	outline(path { m(4f, 3.4f); l(4f, 14f); l(11.4f, 14f) })
+	line(4f, 9f, 11.4f, 9f)
+	dot(13.4f, 9f, 2f)
+	dot(13.4f, 14f, 2f)
+	dot(4f, 3.4f, 2f)
 }
 
-/** Collapse a tree branch. */
+/** Collapse a tree branch: the stem with its children folded into one box. */
 @Composable
 fun IconCollapseBranch(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round)
-		drawLine(tint, Offset(w * 0.22f, h * 0.28f), Offset(w * 0.22f, h * 0.72f), stroke.width, cap = stroke.cap)
-		drawLine(tint, Offset(w * 0.22f, h * 0.5f), Offset(w * 0.55f, h * 0.5f), stroke.width, cap = stroke.cap)
-		drawRect(tint, Offset(w * 0.55f, h * 0.38f), Size(w * 0.28f, h * 0.24f), style = Stroke(width = 1.1f))
-	}
+) = GridIcon(modifier, tint) {
+	line(4f, 3.4f, 4f, 9f)
+	line(4f, 9f, 9.6f, 9f)
+	dot(4f, 3.4f, 2f)
+	panel(9.6f, 6.4f, 6f, 5.2f, 1f)
 }
 
 /** Expand all items in tree hierarchy (chevrons pointing outward). */
@@ -855,26 +511,9 @@ fun IconCollapseBranch(
 fun IconExpandAll(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		// Top chevron pointing UP
-		val pathUp = Path().apply {
-			moveTo(w * 0.22f, h * 0.38f)
-			lineTo(w * 0.5f, h * 0.16f)
-			lineTo(w * 0.78f, h * 0.38f)
-		}
-		// Bottom chevron pointing DOWN
-		val pathDown = Path().apply {
-			moveTo(w * 0.22f, h * 0.62f)
-			lineTo(w * 0.5f, h * 0.84f)
-			lineTo(w * 0.78f, h * 0.62f)
-		}
-		drawPath(pathUp, tint, style = stroke)
-		drawPath(pathDown, tint, style = stroke)
-	}
+) = GridIcon(modifier, tint) {
+	outline(path { m(4f, 7.2f); l(9f, 2.6f); l(14f, 7.2f) }, 1.6f)
+	outline(path { m(4f, 10.8f); l(9f, 15.4f); l(14f, 10.8f) }, 1.6f)
 }
 
 /** Collapse all items in tree hierarchy (chevrons pointing inward). */
@@ -882,42 +521,20 @@ fun IconExpandAll(
 fun IconCollapseAll(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		// Top chevron pointing DOWN
-		val pathDown = Path().apply {
-			moveTo(w * 0.22f, h * 0.16f)
-			lineTo(w * 0.5f, h * 0.38f)
-			lineTo(w * 0.78f, h * 0.16f)
-		}
-		// Bottom chevron pointing UP
-		val pathUp = Path().apply {
-			moveTo(w * 0.22f, h * 0.84f)
-			lineTo(w * 0.5f, h * 0.62f)
-			lineTo(w * 0.78f, h * 0.84f)
-		}
-		drawPath(pathDown, tint, style = stroke)
-		drawPath(pathUp, tint, style = stroke)
-	}
+) = GridIcon(modifier, tint) {
+	outline(path { m(4f, 2.6f); l(9f, 7.2f); l(14f, 2.6f) }, 1.6f)
+	outline(path { m(4f, 15.4f); l(9f, 10.8f); l(14f, 15.4f) }, 1.6f)
 }
 
-/** Draw-order / stacking icon. */
+/** Draw order: a stack of layers. */
 @Composable
 fun IconDrawOrder(
 	modifier: Modifier = Modifier.size(12.dp),
 	tint: Color = LocalToolColors.current.textPrimary,
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.1f, cap = StrokeCap.Round)
-		drawRect(tint, Offset(w * 0.18f, h * 0.42f), Size(w * 0.64f, h * 0.42f), style = stroke)
-		drawRect(tint, Offset(w * 0.28f, h * 0.28f), Size(w * 0.64f, h * 0.42f), style = stroke)
-		drawRect(tint, Offset(w * 0.38f, h * 0.14f), Size(w * 0.48f, h * 0.36f), style = stroke)
-	}
+) = GridIcon(modifier, tint) {
+	outline(path { m(2f, 12.2f); l(9f, 15.8f); l(16f, 12.2f) })
+	outline(path { m(2f, 9f); l(9f, 12.6f); l(16f, 9f) })
+	shape(path { m(9f, 2.2f); l(16f, 5.8f); l(9f, 9.4f); l(2f, 5.8f); z() })
 }
 
 /**

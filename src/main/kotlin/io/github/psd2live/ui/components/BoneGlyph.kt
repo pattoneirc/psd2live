@@ -39,7 +39,7 @@ internal class BoneShape(val head: Offset, val tail: Offset, val left: Offset, v
 internal fun DrawScope.drawSingleBoneIcon(tint: Color) {
 	val w = size.width
 	val h = size.height
-	drawBoneIcon(Offset(w * 0.16f, h * 0.84f), Offset(w * 0.88f, h * 0.12f), tint, stroke = 1.1f, headRadius = w * 0.13f)
+	drawBoneIcon(Offset(w * 0.16f, h * 0.84f), Offset(w * 0.88f, h * 0.12f), tint, stroke = IconPen(this, tint).px(1.2f), headRadius = w * 0.13f)
 }
 
 /** A bone icon: shaded octahedron with a solid head, in [tint] at icon scale. */

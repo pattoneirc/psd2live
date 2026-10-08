@@ -1,372 +1,117 @@
 package io.github.psd2live.ui.components
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import kotlin.math.PI
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Fill
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.state.TabViewOptions
 
 // ============================================================================
-// DCC Vector Icons for Canvas & View Options
+// View option icons
 // ============================================================================
 
-/** Vector Texture / Artwork Surface Icon */
+/** Texture: a picture, its hills and sun. */
 @Composable
 fun IconTextureView(
 	tint: Color,
 	modifier: Modifier = Modifier.size(14.dp),
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		// Frame / picture border
-		drawRoundRect(
-			color = tint,
-			topLeft = Offset(w * 0.12f, h * 0.12f),
-			size = Size(w * 0.76f, h * 0.76f),
-			cornerRadius = CornerRadius(1.5f, 1.5f),
-			style = stroke,
-		)
-		// Artwork landscape peaks
-		val path = Path().apply {
-			moveTo(w * 0.20f, h * 0.70f)
-			lineTo(w * 0.42f, h * 0.44f)
-			lineTo(w * 0.58f, h * 0.60f)
-			lineTo(w * 0.70f, h * 0.48f)
-			lineTo(w * 0.80f, h * 0.68f)
-		}
-		drawPath(path, color = tint, style = stroke)
-		// Artwork sun
-		drawCircle(
-			color = tint,
-			radius = w * 0.08f,
-			center = Offset(w * 0.35f, h * 0.32f),
-			style = Fill,
-		)
-	}
+) = GridIcon(modifier, tint) {
+	panel(2.2f, 2.2f, 13.6f, 13.6f, 1.6f)
+	outline(path { m(3.6f, 12.6f); l(7.6f, 7.9f); l(10.4f, 10.8f); l(12.6f, 8.6f); l(14.4f, 12.2f) })
+	dot(6.3f, 5.8f, 1.4f)
 }
 
-/** Vector Mesh Wireframe / Polygonal Tessellation Icon */
+/** Mesh wireframe: the shared mesh glyph. */
 @Composable
 fun IconMeshWireframe(
 	tint: Color,
 	modifier: Modifier = Modifier.size(14.dp),
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val pTop = Offset(w * 0.5f, h * 0.14f)
-		val pLeft = Offset(w * 0.14f, h * 0.84f)
-		val pRight = Offset(w * 0.86f, h * 0.84f)
+) = GridIcon(modifier, tint) { meshPatch() }
 
-		val outline = Path().apply {
-			moveTo(pTop.x, pTop.y)
-			lineTo(pRight.x, pRight.y)
-			lineTo(pLeft.x, pLeft.y)
-			close()
-		}
-		drawPath(outline, color = tint, style = stroke)
-
-		val dotR = 1.4f
-		drawCircle(tint, dotR, pTop, style = Fill)
-		drawCircle(tint, dotR, pLeft, style = Fill)
-		drawCircle(tint, dotR, pRight, style = Fill)
-	}
-}
-
-/** Vector Live2D Warp Deformer Curved Lattice Icon */
+/** Warp deformer: the shared lattice. */
 @Composable
 fun IconWarpDeformer(
 	tint: Color,
 	modifier: Modifier = Modifier.size(14.dp),
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+) = GridIcon(modifier, tint) { warpLattice() }
 
-		val pTL = Offset(w * 0.18f, h * 0.22f)
-		val pTR = Offset(w * 0.82f, h * 0.16f)
-		val pBR = Offset(w * 0.84f, h * 0.78f)
-		val pBL = Offset(w * 0.16f, h * 0.84f)
-
-		val outerPath = Path().apply {
-			moveTo(pTL.x, pTL.y)
-			quadraticTo(w * 0.50f, h * 0.12f, pTR.x, pTR.y)
-			quadraticTo(w * 0.88f, h * 0.48f, pBR.x, pBR.y)
-			quadraticTo(w * 0.50f, h * 0.76f, pBL.x, pBL.y)
-			quadraticTo(w * 0.12f, h * 0.52f, pTL.x, pTL.y)
-			close()
-		}
-		drawPath(outerPath, color = tint, style = stroke)
-
-		// Subtle internal dashed curve grid
-		val hLine = Path().apply {
-			moveTo(w * 0.14f, h * 0.53f)
-			quadraticTo(w * 0.50f, h * 0.45f, w * 0.86f, h * 0.47f)
-		}
-		drawPath(hLine, color = tint, style = Stroke(width = 1.0f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.5f, 2f))))
-
-		val vLine = Path().apply {
-			moveTo(w * 0.50f, h * 0.14f)
-			quadraticTo(w * 0.53f, h * 0.46f, w * 0.50f, h * 0.76f)
-		}
-		drawPath(vLine, color = tint, style = Stroke(width = 1.0f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.5f, 2f))))
-
-		// Control points at corners
-		val dotR = 1.5f
-		drawCircle(tint, dotR, pTL, style = Fill)
-		drawCircle(tint, dotR, pTR, style = Fill)
-		drawCircle(tint, dotR, pBR, style = Fill)
-		drawCircle(tint, dotR, pBL, style = Fill)
-	}
-}
-
-/** Vector Selection Transform Bounding Box with Corner Handles Icon */
+/** Selection bounds: a dashed box with its corner handles. */
 @Composable
 fun IconSelectionBounds(
 	tint: Color,
 	modifier: Modifier = Modifier.size(14.dp),
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val l = w * 0.20f
-		val r = w * 0.80f
-		val t = h * 0.20f
-		val b = h * 0.80f
-
-		val boxPath = Path().apply {
-			moveTo(l, t); lineTo(r, t); lineTo(r, b); lineTo(l, b); close()
-		}
-		drawPath(
-			boxPath,
-			color = tint,
-			style = Stroke(width = 1.1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.5f, 2f))),
-		)
-
-		val handleSize = 2.2f
-		fun drawHandle(cx: Float, cy: Float) {
-			drawRect(
-				color = tint,
-				topLeft = Offset(cx - handleSize, cy - handleSize),
-				size = Size(handleSize * 2f, handleSize * 2f),
-				style = Fill,
-			)
-		}
-		drawHandle(l, t)
-		drawHandle(r, t)
-		drawHandle(r, b)
-		drawHandle(l, b)
-	}
+) = GridIcon(modifier, tint) {
+	box(3.6f, 3.6f, 10.8f, 10.8f, 0f, ICON_FINE, dash = floatArrayOf(1.6f, 2.2f))
+	for (x in floatArrayOf(3.6f, 14.4f)) for (y in floatArrayOf(3.6f, 14.4f)) fillBox(x - 1.6f, y - 1.6f, 3.2f, 3.2f, 0.5f)
 }
 
-/** Vector Contextual / Parent-Child Hierarchy Warp Icon */
+/** Contextual warp: the deformer above the selection, linked to it. */
 @Composable
 fun IconContextualWarp(
 	tint: Color,
 	modifier: Modifier = Modifier.size(14.dp),
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-
-		// Parent node (top-left) - dashed deformer box
-		val pBoxW = w * 0.36f
-		val pBoxH = h * 0.32f
-		val pLeft = w * 0.14f
-		val pTop = h * 0.14f
-		drawRoundRect(
-			color = tint,
-			topLeft = Offset(pLeft, pTop),
-			size = Size(pBoxW, pBoxH),
-			cornerRadius = CornerRadius(1.5f, 1.5f),
-			style = Stroke(width = 1.1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.5f, 1.5f))),
-		)
-
-		// Child node (bottom-right) - solid selected element box
-		val cBoxW = w * 0.36f
-		val cBoxH = h * 0.32f
-		val cLeft = w * 0.50f
-		val cTop = h * 0.54f
-		drawRoundRect(
-			color = tint,
-			topLeft = Offset(cLeft, cTop),
-			size = Size(cBoxW, cBoxH),
-			cornerRadius = CornerRadius(1.5f, 1.5f),
-			style = stroke,
-		)
-		drawCircle(tint, radius = 1.2f, center = Offset(cLeft + cBoxW * 0.5f, cTop + cBoxH * 0.5f), style = Fill)
-
-		// Hierarchy connector link
-		val linkPath = Path().apply {
-			moveTo(pLeft + pBoxW * 0.5f, pTop + pBoxH)
-			lineTo(pLeft + pBoxW * 0.5f, cTop + cBoxH * 0.5f)
-			lineTo(cLeft, cTop + cBoxH * 0.5f)
-		}
-		drawPath(linkPath, color = tint, style = stroke)
-	}
+) = GridIcon(modifier, tint) {
+	box(2.5f, 2.5f, 6.5f, 5.8f, 1.2f, ICON_FINE, dash = floatArrayOf(1.6f, 1.8f))
+	outline(path { m(5.75f, 8.3f); l(5.75f, 12.6f); l(9f, 12.6f) })
+	panel(9f, 9.7f, 6.5f, 5.8f, 1.2f)
+	dot(12.25f, 12.6f, 1.2f)
 }
 
-/** Vector Isolate / Selected Only Focus Brackets Icon */
+/** Selected only: framing brackets round the one element shown. */
 @Composable
 fun IconSelectedOnly(
 	tint: Color,
 	modifier: Modifier = Modifier.size(14.dp),
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val bracketLen = w * 0.22f
-
-		// 4 corner focus brackets
-		val tlPath = Path().apply {
-			moveTo(w * 0.14f, h * 0.14f + bracketLen)
-			lineTo(w * 0.14f, h * 0.14f)
-			lineTo(w * 0.14f + bracketLen, h * 0.14f)
-		}
-		drawPath(tlPath, color = tint, style = stroke)
-
-		val trPath = Path().apply {
-			moveTo(w * 0.86f - bracketLen, h * 0.14f)
-			lineTo(w * 0.86f, h * 0.14f)
-			lineTo(w * 0.86f, h * 0.14f + bracketLen)
-		}
-		drawPath(trPath, color = tint, style = stroke)
-
-		val blPath = Path().apply {
-			moveTo(w * 0.14f, h * 0.86f - bracketLen)
-			lineTo(w * 0.14f, h * 0.86f)
-			lineTo(w * 0.14f + bracketLen, h * 0.86f)
-		}
-		drawPath(blPath, color = tint, style = stroke)
-
-		val brPath = Path().apply {
-			moveTo(w * 0.86f - bracketLen, h * 0.86f)
-			lineTo(w * 0.86f, h * 0.86f)
-			lineTo(w * 0.86f, h * 0.86f - bracketLen)
-		}
-		drawPath(brPath, color = tint, style = stroke)
-
-		// Center isolated element
-		drawRoundRect(
-			color = tint,
-			topLeft = Offset(w * 0.36f, h * 0.36f),
-			size = Size(w * 0.28f, h * 0.28f),
-			cornerRadius = CornerRadius(1.2f, 1.2f),
-			style = Fill,
-		)
-	}
+) = GridIcon(modifier, tint) {
+	brackets(2.5f, 2.5f, 15.5f, 15.5f, arm = 4f)
+	fillBox(6.5f, 6.5f, 5f, 5f, 1.2f)
 }
 
-/** Vector Dim Unselected / Ghosting Layers Icon */
+/** Dim unselected: the selected layer in front, the others faint behind it. */
 @Composable
 fun IconDimUnselected(
 	tint: Color,
 	modifier: Modifier = Modifier.size(14.dp),
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-
-		// Background unselected layer: dimmed/dashed
-		val bgPath = Path().apply {
-			moveTo(w * 0.44f, h * 0.14f)
-			lineTo(w * 0.86f, h * 0.14f)
-			lineTo(w * 0.86f, h * 0.56f)
-			lineTo(w * 0.60f, h * 0.56f)
-		}
-		drawPath(
-			bgPath,
-			color = tint.copy(alpha = 0.4f),
-			style = Stroke(width = 1.1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.5f, 2f))),
-		)
-
-		// Foreground selected layer: solid
-		drawRoundRect(
-			color = tint,
-			topLeft = Offset(w * 0.14f, h * 0.40f),
-			size = Size(w * 0.46f, h * 0.46f),
-			cornerRadius = CornerRadius(1.5f, 1.5f),
-			style = stroke,
-		)
-		drawCircle(
-			color = tint,
-			radius = 1.4f,
-			center = Offset(w * 0.37f, h * 0.63f),
-			style = Fill,
-		)
+) = GridIcon(modifier, tint) {
+	behind(rectPath(1.4f, 6.1f, 10.5f, 10.5f, 2.2f)) {
+		box(7.2f, 2.5f, 8.3f, 8.3f, 1.5f, ICON_FINE, color.copy(alpha = color.alpha * 0.45f), floatArrayOf(1.6f, 2f))
 	}
+	panel(2.5f, 7.2f, 8.3f, 8.3f, 1.5f)
+	dot(6.65f, 11.35f, 1.4f)
 }
 
-/** Vector Text Label / Typography 'T' Icon */
+/** Names: a serif T. */
 @Composable
 fun IconWarpShowNames(
 	tint: Color,
 	modifier: Modifier = Modifier.size(14.dp),
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		drawLine(tint, Offset(w * 0.20f, h * 0.22f), Offset(w * 0.80f, h * 0.22f), strokeWidth = 1.4f, cap = StrokeCap.Round)
-		drawLine(tint, Offset(w * 0.20f, h * 0.22f), Offset(w * 0.20f, h * 0.32f), strokeWidth = 1.2f, cap = StrokeCap.Round)
-		drawLine(tint, Offset(w * 0.80f, h * 0.22f), Offset(w * 0.80f, h * 0.32f), strokeWidth = 1.2f, cap = StrokeCap.Round)
-		drawLine(tint, Offset(w * 0.50f, h * 0.22f), Offset(w * 0.50f, h * 0.78f), strokeWidth = 1.4f, cap = StrokeCap.Round)
-		drawLine(tint, Offset(w * 0.35f, h * 0.78f), Offset(w * 0.65f, h * 0.78f), strokeWidth = 1.2f, cap = StrokeCap.Round)
-	}
+) = GridIcon(modifier, tint) {
+	outline(path { m(3.6f, 5.8f); l(3.6f, 4f); l(14.4f, 4f); l(14.4f, 5.8f) })
+	line(9f, 4f, 9f, 14f)
+	line(6.3f, 14f, 11.7f, 14f)
 }
 
-/** Vector Point Indices / Vertex Number '#' Icon */
+/** Point indices: a number sign. */
 @Composable
 fun IconWarpShowIndices(
 	tint: Color,
 	modifier: Modifier = Modifier.size(14.dp),
-) {
-	Canvas(modifier = modifier) {
-		val w = size.width
-		val h = size.height
-		val stroke = 1.2f
-		drawLine(tint, Offset(w * 0.16f, h * 0.38f), Offset(w * 0.84f, h * 0.38f), strokeWidth = stroke, cap = StrokeCap.Round)
-		drawLine(tint, Offset(w * 0.16f, h * 0.64f), Offset(w * 0.84f, h * 0.64f), strokeWidth = stroke, cap = StrokeCap.Round)
-		drawLine(tint, Offset(w * 0.40f, h * 0.18f), Offset(w * 0.34f, h * 0.84f), strokeWidth = stroke, cap = StrokeCap.Round)
-		drawLine(tint, Offset(w * 0.66f, h * 0.18f), Offset(w * 0.60f, h * 0.84f), strokeWidth = stroke, cap = StrokeCap.Round)
-	}
+) = GridIcon(modifier, tint) {
+	line(2.9f, 6.8f, 15.1f, 6.8f)
+	line(2.9f, 11.5f, 15.1f, 11.5f)
+	line(7.2f, 3.2f, 6.1f, 15.1f)
+	line(11.9f, 3.2f, 10.8f, 15.1f)
 }
 
 /** The deform path icon's end anchors, as the canvas draws a path's points: each with its own ring. */
-private val PATH_ICON_ENDS = listOf(0.2f to 0.76f, 0.8f to 0.24f)
+private val PATH_ICON_ENDS = listOf(3.6f to 13.7f, 14.4f to 4.3f)
 
-private fun DrawScope.drawPathIconBase(tint: Color) {
-	val w = size.width
-	val h = size.height
-	drawPath(
-		Path().apply {
-			moveTo(w * 0.2f, h * 0.76f)
-			cubicTo(w * 0.28f, h * 0.3f, w * 0.72f, h * 0.7f, w * 0.8f, h * 0.24f)
-		},
-		color = tint,
-		style = Stroke(width = 1.3f, cap = StrokeCap.Round),
-	)
-	PATH_ICON_ENDS.forEach { (x, y) -> drawCircle(tint, w * 0.07f, Offset(w * x, h * y)) }
+/** The deform path glyph's curve and end anchors, drawn over each end's ring. */
+private fun IconPen.pathIconBase() {
+	outline(path { m(3.6f, 13.7f); c(3.6f, 7.3f, 14.4f, 10.7f, 14.4f, 4.3f) })
+	PATH_ICON_ENDS.forEach { (x, y) -> fillBox(x - 1.4f, y - 1.4f, 2.8f, 2.8f, 0.5f) }
 }
 
 /** Path width: each point's reach, drawn as the dashed radius ring the canvas shows around it. */
@@ -374,18 +119,9 @@ private fun DrawScope.drawPathIconBase(tint: Color) {
 fun IconPathWidth(
 	tint: Color,
 	modifier: Modifier = Modifier.size(14.dp),
-) {
-	Canvas(modifier = modifier) {
-		val r = size.width * 0.19f
-		val dash = (2 * PI * r / 8).toFloat()
-		PATH_ICON_ENDS.forEach { (x, y) ->
-			drawCircle(
-				tint, r, Offset(size.width * x, size.height * y),
-				style = Stroke(width = 1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(dash * 0.55f, dash * 0.45f))),
-			)
-		}
-		drawPathIconBase(tint)
-	}
+) = GridIcon(modifier, tint) {
+	PATH_ICON_ENDS.forEach { (x, y) -> ring(x, y, 3.2f, ICON_FINE, dash = floatArrayOf(1.2f, 1.3f)) }
+	pathIconBase()
 }
 
 /** Path hardness: each point's solid core, drawn as the filled hardness disc the canvas shows around it. */
@@ -393,16 +129,12 @@ fun IconPathWidth(
 fun IconPathHardness(
 	tint: Color,
 	modifier: Modifier = Modifier.size(14.dp),
-) {
-	Canvas(modifier = modifier) {
-		val r = size.width * 0.17f
-		PATH_ICON_ENDS.forEach { (x, y) ->
-			val c = Offset(size.width * x, size.height * y)
-			drawCircle(tint.copy(alpha = tint.alpha * 0.35f), r, c)
-			drawCircle(tint, r, c, style = Stroke(width = 1f))
-		}
-		drawPathIconBase(tint)
+) = GridIcon(modifier, tint) {
+	PATH_ICON_ENDS.forEach { (x, y) ->
+		dot(x, y, 3f, soft)
+		ring(x, y, 3f, ICON_FINE)
 	}
+	pathIconBase()
 }
 
 // ============================================================================

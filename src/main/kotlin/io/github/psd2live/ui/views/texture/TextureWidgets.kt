@@ -22,7 +22,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -33,6 +32,7 @@ import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactDropdown
 import io.github.psd2live.ui.components.CompactNumberSpinner
+import io.github.psd2live.ui.components.GridIcon
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.state.TextureDensity
 import io.github.psd2live.ui.state.TextureSnapshot
@@ -75,22 +75,16 @@ internal fun HeatLegend(modifier: Modifier = Modifier, marker: Float? = null, sh
 
 /** The heatmap toggle's glyph: a ramp of the heat colours. */
 @Composable
-internal fun IconHeatmap(modifier: Modifier = Modifier) {
-	Canvas(modifier.size(14.dp)) {
-		val cell = size.width / 2f - 1f
-		val ramp = listOf(HEAT_LOW, HEAT_MID, HEAT_MID, HEAT_HIGH)
-		for (i in 0 until 4) drawRect(ramp[i], Offset((i % 2) * (cell + 2f), (i / 2) * (cell + 2f)), Size(cell, cell))
-	}
+internal fun IconHeatmap(modifier: Modifier = Modifier) = GridIcon(modifier.size(14.dp), Color.White) {
+	val ramp = listOf(HEAT_LOW, HEAT_MID, HEAT_MID, HEAT_HIGH)
+	for (i in 0 until 4) fillBox(1.6f + (i % 2) * 8f, 1.6f + (i / 2) * 8f, 6.8f, 6.8f, 1.4f, tone(ramp[i]))
 }
 
 /** The outline toggle's glyph: two tile outlines. */
 @Composable
-internal fun IconTileOutlines(tint: Color, modifier: Modifier = Modifier) {
-	Canvas(modifier.size(14.dp)) {
-		val stroke = Stroke(1.2f)
-		drawRect(tint, Offset(1f, 1f), Size(size.width * 0.55f, size.height * 0.55f), style = stroke)
-		drawRect(tint, Offset(size.width * 0.38f, size.height * 0.38f), Size(size.width * 0.6f - 1f, size.height * 0.6f - 1f), style = stroke)
-	}
+internal fun IconTileOutlines(tint: Color, modifier: Modifier = Modifier) = GridIcon(modifier.size(14.dp), tint) {
+	box(2f, 2f, 9.2f, 9.2f, 1.2f)
+	box(6.8f, 6.8f, 9.2f, 9.2f, 1.2f)
 }
 
 /**

@@ -56,16 +56,10 @@ import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.DpOffset
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.RoundRect
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import kotlin.math.PI
 import kotlin.math.cos
@@ -873,9 +867,7 @@ fun AppTitleBar(
 			WindowControlButton(
 				onClick = { windowState.isMinimized = true },
 			) {
-				Canvas(modifier = Modifier.size(10.dp, 1.dp)) {
-					drawRect(colors.textPrimary)
-				}
+				GridIcon(Modifier.size(10.dp), colors.textPrimary) { line(1f, 9f, 17f, 9f) }
 			}
 
 			// Maximize / Restore
@@ -889,36 +881,13 @@ fun AppTitleBar(
 					}
 				},
 			) {
-				Canvas(modifier = Modifier.size(10.dp)) {
+				GridIcon(Modifier.size(10.dp), colors.textPrimary) {
 					if (isMaximized) {
-						// Restore icon (overlapping boxes)
-						val stroke = 1.dp.toPx()
-						// Back box
-						drawRect(
-							colors.textPrimary,
-							topLeft = Offset(2.dp.toPx(), 0f),
-							size = Size(8.dp.toPx(), 8.dp.toPx()),
-							style = Stroke(stroke),
-						)
-						// Front box
-						drawRect(
-							colors.panelElevated,
-							topLeft = Offset(0f, 2.dp.toPx()),
-							size = Size(8.dp.toPx(), 8.dp.toPx()),
-						)
-						drawRect(
-							colors.textPrimary,
-							topLeft = Offset(0f, 2.dp.toPx()),
-							size = Size(8.dp.toPx(), 8.dp.toPx()),
-							style = Stroke(stroke),
-						)
+						// Restore: the front window hides the back one's lines.
+						behind(rectPath(0.7f, 4.3f, 13f, 13f, 0.8f)) { box(4.3f, 0.7f, 13f, 13f, 0.8f) }
+						box(0.7f, 4.3f, 13f, 13f, 0.8f)
 					} else {
-						// Single box
-						drawRect(
-							colors.textPrimary,
-							size = size,
-							style = Stroke(1.dp.toPx()),
-						)
+						box(0.7f, 0.7f, 16.6f, 16.6f, 0.8f)
 					}
 				}
 			}
@@ -928,21 +897,7 @@ fun AppTitleBar(
 				isClose = true,
 				onClick = onClose,
 			) {
-				Canvas(modifier = Modifier.size(10.dp)) {
-					val stroke = 1.25.dp.toPx()
-					drawLine(
-						colors.textPrimary,
-						start = Offset(0f, 0f),
-						end = Offset(size.width, size.height),
-						strokeWidth = stroke,
-					)
-					drawLine(
-						colors.textPrimary,
-						start = Offset(size.width, 0f),
-						end = Offset(0f, size.height),
-						strokeWidth = stroke,
-					)
-				}
+				GridIcon(Modifier.size(10.dp), colors.textPrimary) { cross(reach = 8f, width = 1.6f) }
 			}
 		}
 	}
@@ -1333,65 +1288,26 @@ private fun TitleBarLayoutToggle(
 				.clickable(onClick = onClick),
 			contentAlignment = Alignment.Center,
 		) {
-			Canvas(modifier = Modifier.size(14.dp)) {
-				val stroke = 1.15.dp.toPx()
-				val inset = 0.5.dp.toPx()
-				val band = size.width * (0.14f + 0.16f * open)
-				val corner = CornerRadius(1.75.dp.toPx())
-				val outline = lerp(colors.textMuted, colors.textPrimary, maxOf(open, hover))
+			val frameTint = lerp(colors.textMuted, colors.textPrimary, maxOf(open, hover))
+			GridIcon(Modifier.size(14.dp), frameTint) {
+				val band = 2.6f + 2.9f * open
 				val fill = lerp(
 					lerp(colors.textMuted.copy(alpha = 0.35f), colors.textPrimary.copy(alpha = 0.45f), hover),
 					colors.textPrimary.copy(alpha = 0.75f),
 					open,
 				)
-				val frame = Path().apply {
-					addRoundRect(
-						RoundRect(
-							left = inset,
-							top = inset,
-							right = size.width - inset,
-							bottom = size.height - inset,
-							cornerRadius = corner,
-						),
-					)
-				}
-
+				val frame = rectPath(1.2f, 1.2f, 15.6f, 15.6f, 2.2f)
 				// Clip to the rounded frame so outer corners follow the outline,
 				// while the inner divider stays a hard straight edge.
-				clipPath(frame) {
+				scope.clipPath(frame) {
 					when (side) {
-						SidebarSide.TOP -> {
-							drawRect(
-								color = fill,
-								topLeft = Offset(inset, inset),
-								size = Size(size.width - inset * 2, band),
-							)
-						}
-						SidebarSide.LEFT -> {
-							drawRect(
-								color = fill,
-								topLeft = Offset(inset, inset),
-								size = Size(band, size.height - inset * 2),
-							)
-						}
-						SidebarSide.BOTTOM -> {
-							drawRect(
-								color = fill,
-								topLeft = Offset(inset, size.height - inset - band),
-								size = Size(size.width - inset * 2, band),
-							)
-						}
-						SidebarSide.RIGHT -> {
-							drawRect(
-								color = fill,
-								topLeft = Offset(size.width - inset - band, inset),
-								size = Size(band, size.height - inset * 2),
-							)
-						}
+						SidebarSide.TOP -> fillBox(1.2f, 1.2f, 15.6f, band, 0f, fill)
+						SidebarSide.LEFT -> fillBox(1.2f, 1.2f, band, 15.6f, 0f, fill)
+						SidebarSide.BOTTOM -> fillBox(1.2f, 16.8f - band, 15.6f, band, 0f, fill)
+						SidebarSide.RIGHT -> fillBox(16.8f - band, 1.2f, band, 15.6f, 0f, fill)
 					}
 				}
-
-				drawPath(frame, color = outline, style = Stroke(stroke))
+				outline(frame)
 			}
 		}
 	}
@@ -1511,41 +1427,22 @@ private fun TitleBarThemeToggle(
 				.clickable(onClick = onClick),
 			contentAlignment = Alignment.Center,
 		) {
-			Canvas(modifier = Modifier.size(14.dp)) {
-				val tint = if (isHovered) colors.textPrimary else colors.textMuted
-				val stroke = 1.15.dp.toPx()
+			GridIcon(Modifier.size(14.dp), if (isHovered) colors.textPrimary else colors.textMuted) {
 				if (darkTheme) {
-					val cx = size.width / 2f
-					val cy = size.height / 2f
-					val core = size.minDimension * 0.22f
-					drawCircle(tint, core, Offset(cx, cy), style = Stroke(stroke))
-					val inner = core + 1.6.dp.toPx()
-					val outer = size.minDimension * 0.48f
+					// Sun: switch to the light theme.
+					dot(9f, 9f, 3.8f, soft)
+					ring(9f, 9f, 3.8f)
 					for (i in 0 until 8) {
 						val angle = i * PI / 4.0
 						val cosA = cos(angle).toFloat()
 						val sinA = sin(angle).toFloat()
-						drawLine(
-							color = tint,
-							start = Offset(cx + cosA * inner, cy + sinA * inner),
-							end = Offset(cx + cosA * outer, cy + sinA * outer),
-							strokeWidth = stroke,
-							cap = StrokeCap.Round,
-						)
+						line(9f + cosA * 6.2f, 9f + sinA * 6.2f, 9f + cosA * 8.2f, 9f + sinA * 8.2f)
 					}
 				} else {
-					val r = size.minDimension * 0.38f
-					val center = Offset(size.width * 0.46f, size.height * 0.50f)
-					val moon = Path().apply {
-						addOval(Rect(center.x - r, center.y - r, center.x + r, center.y + r))
-					}
-					val cutCenter = Offset(center.x + r * 0.42f, center.y - r * 0.18f)
-					val cutR = r * 0.88f
-					val cut = Path().apply {
-						addOval(Rect(cutCenter.x - cutR, cutCenter.y - cutR, cutCenter.x + cutR, cutCenter.y + cutR))
-					}
-					val crescent = Path().apply { op(moon, cut, PathOperation.Difference) }
-					drawPath(crescent, color = tint)
+					// Moon: switch to the dark theme.
+					val moon = circlePath(8.3f, 9f, 6.6f)
+					val cut = circlePath(11.1f, 7.8f, 5.8f)
+					shape(Path().apply { op(moon, cut, PathOperation.Difference) })
 				}
 			}
 		}

@@ -50,6 +50,8 @@ import io.github.psd2live.ui.components.IconRotationDeformer
 import io.github.psd2live.ui.components.IconSelectedOnly
 import io.github.psd2live.ui.components.IconTextureView
 import io.github.psd2live.ui.components.IconWarpDeformer
+import io.github.psd2live.ui.components.GridIcon
+import io.github.psd2live.ui.components.ICON_FINE
 import io.github.psd2live.ui.state.TabViewOptions
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.frostedGlass
@@ -297,17 +299,11 @@ private fun ViewOptionRow(
 
 /** Atlas pixels: a coarse 2x2 grid; source pixels: a fine 4x4 grid. */
 @Composable
-private fun IconPixelSource(source: Boolean, tint: Color, modifier: Modifier) {
-	androidx.compose.foundation.Canvas(modifier) {
-		val cells = if (source) 4 else 2
-		val inset = size.width * 0.12f
-		val side = (size.width - inset * 2) / cells
-		for (y in 0 until cells) for (x in 0 until cells) {
-			if ((x + y) % 2 != 0) continue
-			drawRect(tint, topLeft = androidx.compose.ui.geometry.Offset(inset + x * side, inset + y * side),
-				size = androidx.compose.ui.geometry.Size(side, side))
-		}
-		drawRect(tint, topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
-			size = androidx.compose.ui.geometry.Size(side * cells, side * cells), style = androidx.compose.ui.graphics.drawscope.Stroke(1f))
+private fun IconPixelSource(source: Boolean, tint: Color, modifier: Modifier) = GridIcon(modifier, tint) {
+	val cells = if (source) 4 else 2
+	val side = 13.2f / cells
+	for (y in 0 until cells) for (x in 0 until cells) {
+		if ((x + y) % 2 == 0) fillBox(2.4f + x * side, 2.4f + y * side, side, side, 0f)
 	}
+	box(2.4f, 2.4f, 13.2f, 13.2f, 0.6f, ICON_FINE)
 }

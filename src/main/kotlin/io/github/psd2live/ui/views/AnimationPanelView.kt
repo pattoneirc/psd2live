@@ -5,7 +5,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -49,9 +48,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -77,6 +73,7 @@ import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactMenuSection
 import io.github.psd2live.ui.components.CompactNumberSpinner
 import io.github.psd2live.ui.components.CompactTextField
+import io.github.psd2live.ui.components.GridIcon
 import io.github.psd2live.ui.components.IconAdd
 import io.github.psd2live.ui.components.IconChevron
 import io.github.psd2live.ui.components.IconPause
@@ -617,17 +614,8 @@ private fun MotionBadge(label: String, tint: Color) {
 
 /** An eased curve between two keys: opens the motion in the animation editor. */
 @Composable
-private fun IconMotionCurve(tint: Color) {
-	Canvas(Modifier.size(11.dp)) {
-		val w = size.width
-		val h = size.height
-		val curve = Path().apply {
-			moveTo(w * 0.1f, h * 0.85f)
-			cubicTo(w * 0.55f, h * 0.85f, w * 0.45f, h * 0.15f, w * 0.9f, h * 0.15f)
-		}
-		drawPath(curve, tint, style = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round))
-		val r = 1.6.dp.toPx()
-		drawCircle(tint, r, Offset(w * 0.1f, h * 0.85f))
-		drawCircle(tint, r, Offset(w * 0.9f, h * 0.15f))
-	}
+private fun IconMotionCurve(tint: Color) = GridIcon(Modifier.size(11.dp), tint) {
+	outline(path { m(2.6f, 14.6f); c(9.6f, 14.6f, 8.4f, 3.4f, 15.4f, 3.4f) })
+	dot(2.6f, 14.6f, 1.9f)
+	dot(15.4f, 3.4f, 1.9f)
 }

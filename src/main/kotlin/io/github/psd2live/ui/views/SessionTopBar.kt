@@ -25,12 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,6 +33,10 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.psd2live.ui.components.GridIcon
+import io.github.psd2live.ui.components.checkMark
+import io.github.psd2live.ui.components.cross
+import io.github.psd2live.ui.components.undoArrow
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.views.texture.AccentButton
 import io.github.psd2live.ui.views.texture.BarChip
@@ -144,55 +143,22 @@ private fun PendingDot(color: Color) {
 	}
 }
 
-/** Undo: an arrow that turns back to the left. */
+/** Undo: the app's one undo arrow. */
 @Composable
-internal fun IconSessionUndo(tint: Color, modifier: Modifier = Modifier) {
-	Canvas(modifier.size(14.dp)) {
-		val s = size.width
-		val stroke = Stroke(1.4f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		drawPath(Path().apply {
-			moveTo(s * 0.22f, s * 0.42f)
-			lineTo(s * 0.6f, s * 0.42f)
-			cubicTo(s * 0.98f, s * 0.42f, s * 0.98f, s * 0.86f, s * 0.6f, s * 0.86f)
-			lineTo(s * 0.4f, s * 0.86f)
-		}, tint, style = stroke)
-		drawPath(Path().apply { moveTo(s * 0.4f, s * 0.22f); lineTo(s * 0.2f, s * 0.42f); lineTo(s * 0.4f, s * 0.62f) }, tint, style = stroke)
-	}
-}
+internal fun IconSessionUndo(tint: Color, modifier: Modifier = Modifier) = GridIcon(modifier.size(14.dp), tint) { undoArrow() }
 
 /** Redo: [IconSessionUndo] mirrored. */
 @Composable
-internal fun IconSessionRedo(tint: Color, modifier: Modifier = Modifier) {
-	Canvas(modifier.size(14.dp)) {
-		val s = size.width
-		val stroke = Stroke(1.4f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-		drawPath(Path().apply {
-			moveTo(s * 0.78f, s * 0.42f)
-			lineTo(s * 0.4f, s * 0.42f)
-			cubicTo(s * 0.02f, s * 0.42f, s * 0.02f, s * 0.86f, s * 0.4f, s * 0.86f)
-			lineTo(s * 0.6f, s * 0.86f)
-		}, tint, style = stroke)
-		drawPath(Path().apply { moveTo(s * 0.6f, s * 0.22f); lineTo(s * 0.8f, s * 0.42f); lineTo(s * 0.6f, s * 0.62f) }, tint, style = stroke)
-	}
-}
+internal fun IconSessionRedo(tint: Color, modifier: Modifier = Modifier) =
+	GridIcon(modifier.size(14.dp), tint) { mirrored { undoArrow() } }
 
 /** Discard: a cross in a ring. */
 @Composable
-internal fun IconSessionDiscard(tint: Color, modifier: Modifier = Modifier) {
-	Canvas(modifier.size(14.dp)) {
-		val s = size.width
-		drawCircle(tint, s / 2f - 1f, style = Stroke(1.2f))
-		drawLine(tint, Offset(s * 0.35f, s * 0.35f), Offset(s * 0.65f, s * 0.65f), 1.4f, StrokeCap.Round)
-		drawLine(tint, Offset(s * 0.65f, s * 0.35f), Offset(s * 0.35f, s * 0.65f), 1.4f, StrokeCap.Round)
-	}
+internal fun IconSessionDiscard(tint: Color, modifier: Modifier = Modifier) = GridIcon(modifier.size(14.dp), tint) {
+	ring(9f, 9f, 7.2f)
+	cross(reach = 2.9f)
 }
 
 /** Apply: a check mark. */
 @Composable
-internal fun IconSessionApply(tint: Color, modifier: Modifier = Modifier) {
-	Canvas(modifier.size(14.dp)) {
-		val s = size.width
-		drawPath(Path().apply { moveTo(s * 0.18f, s * 0.52f); lineTo(s * 0.42f, s * 0.76f); lineTo(s * 0.84f, s * 0.26f) },
-			tint, style = Stroke(1.7f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-	}
-}
+internal fun IconSessionApply(tint: Color, modifier: Modifier = Modifier) = GridIcon(modifier.size(14.dp), tint) { checkMark() }

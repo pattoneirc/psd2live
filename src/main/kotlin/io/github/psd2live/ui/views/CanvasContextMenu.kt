@@ -52,24 +52,25 @@ import io.github.psd2live.ui.components.CompactMenuDivider
 import io.github.psd2live.ui.components.CompactMenuItem
 import io.github.psd2live.ui.components.CompactSlider
 import io.github.psd2live.ui.components.CompactToggleChip
+import io.github.psd2live.ui.components.GridIcon
+import io.github.psd2live.ui.components.ICON_FINE
 import io.github.psd2live.ui.components.IconCheck
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.components.IconDeformPath
 import io.github.psd2live.ui.components.IconDrawOrder
+import io.github.psd2live.ui.components.IconRedo
 import io.github.psd2live.ui.components.IconRotationDeformer
 import io.github.psd2live.ui.components.IconTrash
+import io.github.psd2live.ui.components.IconUndo
 import io.github.psd2live.ui.components.IconWarpDeformer
 import io.github.psd2live.ui.components.PaintFgBgSwatch
 import io.github.psd2live.ui.components.TreeContextMenu
+import io.github.psd2live.ui.components.copySheets
+import io.github.psd2live.ui.components.subdivide
 import io.github.psd2live.ui.components.toHex
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
-import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.Fill
 
 internal fun canvasContextMenuHasContent(editor: CanvasEditor): Boolean {
     if (editor.placement != null) return true
@@ -442,7 +443,7 @@ private fun ColumnScope.EditModeContextMenu(
                     ActionSpec(
                         tr("editor.undoPoint"),
                         enabled = !editor.busy && editor.knifeDraft.isNotEmpty(),
-                        icon = { IconMenuUndo(it, Modifier.size(12.dp)) },
+                        icon = { IconUndo(Modifier.size(12.dp), it) },
                     ) { editor.undoDraftPoint(); onAction() },
                 )
             )
@@ -710,7 +711,7 @@ private fun ColumnScope.CreationToolContextMenuContent(
                         ActionSpec(
                             tr("editor.undoPoint"),
                             enabled = editor.draft.isNotEmpty(),
-                            icon = { IconMenuUndo(it, Modifier.size(12.dp)) },
+                            icon = { IconUndo(Modifier.size(12.dp), it) },
                         ) {
                             editor.undoDraftPoint(); onAction()
                         },
@@ -1037,22 +1038,19 @@ private fun ColumnScope.DeformBrushParamsSection(editor: CanvasEditor) {
 
 /** The profile itself drawn as a bump, the way Blender's falloff menu pictures each entry. */
 @Composable
-private fun FalloffCurveIcon(falloff: BrushFalloff, tint: Color, modifier: Modifier = Modifier.size(12.dp)) {
-    Canvas(modifier) {
-        val w = size.width
-        val h = size.height
+private fun FalloffCurveIcon(falloff: BrushFalloff, tint: Color, modifier: Modifier = Modifier.size(12.dp)) =
+    GridIcon(modifier, tint) {
         val samples = 24
-        val path = Path()
-        for (s in 0..samples) {
-            val x = s / samples.toFloat()
-            val y = falloff.weight(1f - kotlin.math.abs(x * 2f - 1f), s)
-            val px = w * x
-            val py = h * (0.9f - 0.8f * y)
-            if (s == 0) path.moveTo(px, py) else path.lineTo(px, py)
-        }
-        drawPath(path, tint, style = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        outline(path {
+            for (i in 0..samples) {
+                val x = i / samples.toFloat()
+                val y = falloff.weight(1f - kotlin.math.abs(x * 2f - 1f), i)
+                val gx = 1.6f + 14.8f * x
+                val gy = 15.6f - 12.6f * y
+                if (i == 0) m(gx, gy) else l(gx, gy)
+            }
+        })
     }
-}
 
 @Composable
 private fun ColumnScope.PaintHistorySection(
@@ -1067,14 +1065,14 @@ private fun ColumnScope.PaintHistorySection(
             ActionSpec(
                 tr("editor.undo"),
                 enabled = session != null && editor.canUndoPaint(),
-                icon = { IconMenuUndo(it, Modifier.size(12.dp)) },
+                icon = { IconUndo(Modifier.size(12.dp), it) },
             ) {
                 editor.undoPaint(); onAction(); onDismissRequest()
             },
             ActionSpec(
                 tr("editor.redo"),
                 enabled = session != null && editor.canRedoPaint(),
-                icon = { IconMenuRedo(it, Modifier.size(12.dp)) },
+                icon = { IconRedo(Modifier.size(12.dp), it) },
             ) {
                 editor.redoPaint(); onAction(); onDismissRequest()
             },
@@ -1290,200 +1288,80 @@ private fun rememberPaintSwatches(): List<Color> = listOf(
 
 @Composable
 private fun TopologyActionIcon(action: String, tint: Color) {
+    val modifier = Modifier.size(12.dp)
     when (action) {
-        "split" -> IconMenuSplit(tint, Modifier.size(12.dp))
-        "subdivide" -> IconMenuSubdivide(tint, Modifier.size(12.dp))
-        "connect" -> IconMenuConnect(tint, Modifier.size(12.dp))
-        "merge" -> IconMenuMerge(tint, Modifier.size(12.dp))
-        "delete" -> IconTrash(modifier = Modifier.size(11.dp), tint = tint)
-        "duplicate" -> IconMenuDuplicate(tint, Modifier.size(12.dp))
+        "split" -> IconMenuSplit(tint, modifier)
+        "subdivide" -> IconMenuSubdivide(tint, modifier)
+        "connect" -> IconMenuConnect(tint, modifier)
+        "merge" -> IconMenuMerge(tint, modifier)
+        "delete" -> IconTrash(modifier = modifier, tint = tint)
+        "duplicate" -> IconMenuDuplicate(tint, modifier)
         else -> Unit
     }
 }
 
+/** Select all: everything inside the frame checked. */
 @Composable
-private fun IconMenuUndo(tint: Color, modifier: Modifier = Modifier.size(12.dp)) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        val arc = Path().apply {
-            moveTo(w * 0.78f, h * 0.32f)
-            cubicTo(w * 0.72f, h * 0.12f, w * 0.28f, h * 0.12f, w * 0.22f, h * 0.42f)
-        }
-        drawPath(arc, tint, style = stroke)
-        val head = Path().apply {
-            moveTo(w * 0.12f, h * 0.28f)
-            lineTo(w * 0.22f, h * 0.48f)
-            lineTo(w * 0.38f, h * 0.36f)
-        }
-        drawPath(head, tint, style = stroke)
-        drawLine(tint, Offset(w * 0.22f, h * 0.72f), Offset(w * 0.78f, h * 0.72f), 1.3f, cap = StrokeCap.Round)
-    }
+private fun IconMenuSelectAll(tint: Color, modifier: Modifier = Modifier.size(12.dp)) = GridIcon(modifier, tint) {
+    panel(2.4f, 2.4f, 13.2f, 13.2f, 2f)
+    outline(path { m(5.6f, 9.2f); l(8f, 11.6f); l(12.6f, 6.4f) }, 1.6f)
 }
 
+/** Invert selection: a disc half filled. */
 @Composable
-private fun IconMenuRedo(tint: Color, modifier: Modifier = Modifier.size(12.dp)) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        val arc = Path().apply {
-            moveTo(w * 0.22f, h * 0.32f)
-            cubicTo(w * 0.28f, h * 0.12f, w * 0.72f, h * 0.12f, w * 0.78f, h * 0.42f)
-        }
-        drawPath(arc, tint, style = stroke)
-        val head = Path().apply {
-            moveTo(w * 0.88f, h * 0.28f)
-            lineTo(w * 0.78f, h * 0.48f)
-            lineTo(w * 0.62f, h * 0.36f)
-        }
-        drawPath(head, tint, style = stroke)
-        drawLine(tint, Offset(w * 0.22f, h * 0.72f), Offset(w * 0.78f, h * 0.72f), 1.3f, cap = StrokeCap.Round)
-    }
+private fun IconMenuInvert(tint: Color, modifier: Modifier = Modifier.size(12.dp)) = GridIcon(modifier, tint) {
+    fill(Path().apply {
+        moveTo(p(9f, 2.4f).x, p(9f, 2.4f).y)
+        lineTo(p(9f, 15.6f).x, p(9f, 15.6f).y)
+        arcTo(androidx.compose.ui.geometry.Rect(p(2.4f, 2.4f), p(15.6f, 15.6f)), 90f, 180f, forceMoveTo = false)
+        close()
+    })
+    ring(9f, 9f, 6.6f)
 }
 
+/** Select linked: two vertices joined by an edge. */
 @Composable
-private fun IconMenuSelectAll(tint: Color, modifier: Modifier = Modifier.size(12.dp)) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        drawRoundRect(
-            tint,
-            Offset(w * 0.12f, h * 0.12f),
-            androidx.compose.ui.geometry.Size(w * 0.76f, h * 0.76f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.5f, 1.5f),
-            style = stroke,
-        )
-        drawLine(tint, Offset(w * 0.28f, h * 0.38f), Offset(w * 0.42f, h * 0.55f), 1.3f, cap = StrokeCap.Round)
-        drawLine(tint, Offset(w * 0.42f, h * 0.55f), Offset(w * 0.72f, h * 0.28f), 1.3f, cap = StrokeCap.Round)
-    }
+private fun IconMenuLinked(tint: Color, modifier: Modifier = Modifier.size(12.dp)) = GridIcon(modifier, tint) {
+    line(7.6f, 9f, 10.4f, 9f)
+    shape(circlePath(4.8f, 9f, 2.8f))
+    shape(circlePath(13.2f, 9f, 2.8f))
 }
 
+/** Split: a vertex inserted in the middle of an edge. */
 @Composable
-private fun IconMenuInvert(tint: Color, modifier: Modifier = Modifier.size(12.dp)) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(1.2f, cap = StrokeCap.Round)
-        drawCircle(tint, w * 0.36f, Offset(w * 0.5f, h * 0.5f), style = stroke)
-        drawPath(
-            Path().apply {
-                moveTo(w * 0.5f, h * 0.14f)
-                lineTo(w * 0.5f, h * 0.86f)
-                arcTo(
-                    androidx.compose.ui.geometry.Rect(w * 0.14f, h * 0.14f, w * 0.86f, h * 0.86f),
-                    90f,
-                    180f,
-                    forceMoveTo = false,
-                )
-                close()
-            },
-            tint,
-            style = Fill,
-        )
-    }
+private fun IconMenuSplit(tint: Color, modifier: Modifier = Modifier.size(12.dp)) = GridIcon(modifier, tint) {
+    line(4.8f, 11.4f, 13.2f, 6.6f)
+    ring(3.4f, 12.2f, 1.6f, ICON_FINE)
+    ring(14.6f, 5.8f, 1.6f, ICON_FINE)
+    dot(9f, 9f, 1.9f)
 }
 
+/** Subdivide: the shared split triangle. */
 @Composable
-private fun IconMenuLinked(tint: Color, modifier: Modifier = Modifier.size(12.dp)) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(1.2f, cap = StrokeCap.Round)
-        drawCircle(tint, w * 0.18f, Offset(w * 0.28f, h * 0.5f), style = stroke)
-        drawCircle(tint, w * 0.18f, Offset(w * 0.72f, h * 0.5f), style = stroke)
-        drawLine(tint, Offset(w * 0.42f, h * 0.5f), Offset(w * 0.58f, h * 0.5f), 1.3f, cap = StrokeCap.Round)
-    }
+private fun IconMenuSubdivide(tint: Color, modifier: Modifier = Modifier.size(12.dp)) =
+    GridIcon(modifier, tint) { subdivide() }
+
+/** Connect: an edge drawn between two vertices. */
+@Composable
+private fun IconMenuConnect(tint: Color, modifier: Modifier = Modifier.size(12.dp)) = GridIcon(modifier, tint) {
+    line(4f, 13f, 14f, 5f)
+    dot(4f, 13f, 1.9f)
+    dot(14f, 5f, 1.9f)
 }
 
+/** Merge: two vertices drawn into one. */
 @Composable
-private fun IconMenuSplit(tint: Color, modifier: Modifier = Modifier.size(12.dp)) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        drawLine(tint, Offset(w * 0.12f, h * 0.72f), Offset(w * 0.88f, h * 0.28f), 1.3f, cap = StrokeCap.Round)
-        drawCircle(tint, w * 0.12f, Offset(w * 0.5f, h * 0.5f), style = Fill)
-        drawCircle(tint, w * 0.1f, Offset(w * 0.18f, h * 0.68f), style = Stroke(1.1f))
-        drawCircle(tint, w * 0.1f, Offset(w * 0.82f, h * 0.32f), style = Stroke(1.1f))
-    }
+private fun IconMenuMerge(tint: Color, modifier: Modifier = Modifier.size(12.dp)) = GridIcon(modifier, tint) {
+    ring(3.6f, 4f, 1.5f, ICON_FINE)
+    ring(14.4f, 4f, 1.5f, ICON_FINE)
+    line(4.8f, 5.4f, 7.6f, 8.8f)
+    chevron(7.6f, 8.8f, 1f, 1.2f, 2.6f)
+    line(13.2f, 5.4f, 10.4f, 8.8f)
+    chevron(10.4f, 8.8f, -1f, 1.2f, 2.6f)
+    dot(9f, 12.6f, 2.2f)
 }
 
+/** Duplicate: the shared copy sheets. */
 @Composable
-private fun IconMenuSubdivide(tint: Color, modifier: Modifier = Modifier.size(12.dp)) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        val path = Path().apply {
-            moveTo(w * 0.5f, h * 0.12f)
-            lineTo(w * 0.12f, h * 0.86f)
-            lineTo(w * 0.88f, h * 0.86f)
-            close()
-        }
-        drawPath(path, tint, style = stroke)
-        drawCircle(tint, w * 0.09f, Offset(w * 0.31f, h * 0.49f), style = Fill)
-        drawCircle(tint, w * 0.09f, Offset(w * 0.69f, h * 0.49f), style = Fill)
-        drawCircle(tint, w * 0.09f, Offset(w * 0.5f, h * 0.86f), style = Fill)
-    }
-}
-
-@Composable
-private fun IconMenuConnect(tint: Color, modifier: Modifier = Modifier.size(12.dp)) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        drawCircle(tint, w * 0.14f, Offset(w * 0.22f, h * 0.72f), style = Fill)
-        drawCircle(tint, w * 0.14f, Offset(w * 0.78f, h * 0.28f), style = Fill)
-        drawLine(tint, Offset(w * 0.3f, h * 0.64f), Offset(w * 0.7f, h * 0.36f), 1.3f, cap = StrokeCap.Round)
-    }
-}
-
-@Composable
-private fun IconMenuMerge(tint: Color, modifier: Modifier = Modifier.size(12.dp)) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        drawLine(tint, Offset(w * 0.18f, h * 0.28f), Offset(w * 0.5f, h * 0.5f), 1.3f, cap = StrokeCap.Round)
-        drawLine(tint, Offset(w * 0.82f, h * 0.28f), Offset(w * 0.5f, h * 0.5f), 1.3f, cap = StrokeCap.Round)
-        drawLine(tint, Offset(w * 0.5f, h * 0.5f), Offset(w * 0.5f, h * 0.82f), 1.3f, cap = StrokeCap.Round)
-        drawCircle(tint, w * 0.12f, Offset(w * 0.5f, h * 0.5f), style = Fill)
-        val left = Path().apply {
-            moveTo(w * 0.18f, h * 0.28f)
-            lineTo(w * 0.28f, h * 0.18f)
-            lineTo(w * 0.3f, h * 0.34f)
-        }
-        val right = Path().apply {
-            moveTo(w * 0.82f, h * 0.28f)
-            lineTo(w * 0.72f, h * 0.18f)
-            lineTo(w * 0.7f, h * 0.34f)
-        }
-        drawPath(left, tint, style = stroke)
-        drawPath(right, tint, style = stroke)
-    }
-}
-
-@Composable
-private fun IconMenuDuplicate(tint: Color, modifier: Modifier = Modifier.size(12.dp)) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        drawRoundRect(
-            tint,
-            Offset(w * 0.12f, h * 0.28f),
-            androidx.compose.ui.geometry.Size(w * 0.52f, h * 0.58f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.2f, 1.2f),
-            style = stroke,
-        )
-        drawRoundRect(
-            tint,
-            Offset(w * 0.34f, h * 0.12f),
-            androidx.compose.ui.geometry.Size(w * 0.52f, h * 0.58f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.2f, 1.2f),
-            style = stroke,
-        )
-    }
-}
+private fun IconMenuDuplicate(tint: Color, modifier: Modifier = Modifier.size(12.dp)) =
+    GridIcon(modifier, tint) { copySheets() }
