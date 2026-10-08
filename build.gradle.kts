@@ -13,7 +13,7 @@ plugins {
 }
 
 group = "io.github.psd2live"
-version = "3.0.0"
+version = "3.0.1"
 
 // Cubism proprietary binaries under src/main/resources/cubism/ are opt-in only.
 // Default jars/distributions must NOT embed them. Enable with:
@@ -243,7 +243,7 @@ compose.desktop {
 			// installers are built below from the app image instead, with our own WiX project.
 			targetFormats(org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb)
 			packageName = "PSD2Live"
-			packageVersion = "3.0.0"
+			packageVersion = "3.0.1"
 			description = "PSD2Live - Automated Live2D Rigging Pipeline"
 			copyright = "© 2026 PSD2Live. Licensed under GPL-3.0."
 			vendor = "PSD2Live"
