@@ -17,8 +17,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
  *   colour, so they never read as one;
  * - selected: the accent, larger, cased in white over a dark rim, so it holds on art of the accent's own hue;
  * - hovered: a white ring round the point (a white fill when it is not selected), the thing a click would take;
- * - reach: a ring in the tool's colour round the point, from a hairline close in to a wide firm ring at a full
- *   dab - the brush's hover preview, and its falloff while a stroke is in hand;
+ * - reach: a fine ring in the tool's colour round the point, larger and firmer the more the brush would move it -
+ *   the brush's hover preview, and its falloff while a stroke is in hand;
  * - data (weights, glue sides) washes the artwork under the wires, it does not recolour the structure.
  *
  * What a point is shows in its shape, not its colour: a mesh vertex is round, a warp control point square, a
@@ -45,8 +45,8 @@ internal object MeshLook {
 	const val CASING = 1.4f
 
 	/** The reach ring's radius just inside the brush's edge and at a full dab. */
-	const val REACH_MIN = 3.2f
-	const val REACH_MAX = 11f
+	const val REACH_MIN = 3f
+	const val REACH_MAX = 8f
 
 	/** The tone brushes that move points ring their reach in. */
 	val Reach = Color(0xFFFF5A4E)
@@ -107,11 +107,10 @@ internal fun DrawScope.drawMeshHandle(
 /** How far a brush would move the point at [center], [reach] 0..1: a ring in [tint] that grows and firms with it. */
 internal fun DrawScope.drawReachRing(center: Offset, reach: Float, tint: Color) {
 	if (reach <= 0.001f) return
-	// Size carries the reach, so a falloff reads as rings swelling towards the centre; weight and opacity follow.
+	// Size carries the reach, so a falloff reads as rings swelling towards the centre; the line stays fine.
 	val r = MeshLook.REACH_MIN + reach * (MeshLook.REACH_MAX - MeshLook.REACH_MIN)
-	val width = 1f + reach * 1.2f
-	drawCircle(Color.Black.copy(alpha = 0.25f + 0.35f * reach), r, center, style = Stroke(width + 1.6f))
-	drawCircle(tint.copy(alpha = 0.45f + 0.55f * reach), r, center, style = Stroke(width))
+	drawCircle(Color.Black.copy(alpha = 0.45f * reach), r, center, style = Stroke(2.4f))
+	drawCircle(tint.copy(alpha = 0.35f + 0.65f * reach), r, center, style = Stroke(1.2f))
 }
 
 /** A filled triangle of the face selection, in the accent. */
