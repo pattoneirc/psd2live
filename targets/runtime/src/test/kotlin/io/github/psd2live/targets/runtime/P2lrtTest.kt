@@ -71,17 +71,36 @@ class P2lrtTest {
 
 	@Test fun theSameRigWritesTheSameBytes() {
 		assertContentEquals(P2lrt.write(rig), P2lrt.write(rig.copy()))
-		assertContentEquals(P2lrt.write(rig, P2lrt.Options(compress = true)), P2lrt.write(rig, P2lrt.Options(compress = true)))
+		for (c in P2lrt.Compression.entries) assertContentEquals(P2lrt.write(rig, P2lrt.Options(compression = c)), P2lrt.write(rig, P2lrt.Options(compression = c)))
 	}
 
 	@Test fun compressionChangesOnlyHowChunksAreStored() {
 		val plain = chunks(P2lrt.write(rig))
-		val packed = chunks(P2lrt.write(rig, P2lrt.Options(compress = true)))
+		val packed = chunks(P2lrt.write(rig, P2lrt.Options(compression = P2lrt.Compression.DEFLATE)))
 		assertEquals(plain.map { it.tag }, packed.map { it.tag })
 		for ((p, c) in plain.zip(packed)) assertContentEquals(p.data, c.data, p.tag)
 		// Texture pages are never compressed, and a chunk that would grow is stored as it is.
 		assertEquals(0, packed.single { it.tag == "TEXR" }.flags shr 2 and 3)
 		assertTrue(packed.all { it.stored.size <= it.data.size })
+	}
+
+	@Test fun zstdChunksAreFramesOfTheSameRecords() {
+		val plain = chunks(P2lrt.write(rig))
+		val bytes = P2lrt.write(rig, P2lrt.Options(compression = P2lrt.Compression.ZSTD))
+		val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+		var packed = 0
+		for ((i, p) in plain.withIndex()) {
+			val at = 32 + i * 40
+			val flags = b.getShort(at + 6).toInt()
+			val stored = bytes.copyOfRange(b.getLong(at + 8).toInt(), b.getLong(at + 8).toInt() + b.getLong(at + 16).toInt())
+			val raw = b.getLong(at + 24).toInt()
+			val data = if (flags shr 2 and 3 == 2) {
+				packed++
+				ByteArray(raw).also { io.airlift.compress.zstd.ZstdDecompressor().decompress(stored, 0, stored.size, it, 0, raw) }
+			} else stored
+			assertContentEquals(p.data, data, p.tag)
+		}
+		assertTrue(packed > 0)
 	}
 
 	@Test fun strippedNamesKeepTheIds() {

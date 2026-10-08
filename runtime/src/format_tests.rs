@@ -331,6 +331,42 @@ fn the_parameter_panel_and_information_read_back() {
 }
 
 #[test]
+fn a_pose_switches_parts_and_fades_their_meshes() {
+    use crate::pose::PosePlayer;
+    // Two parts: the first holds the mesh, the second nothing; one pose group switching between them.
+    let part = |w: W, mesh: bool| {
+        let w = w.u32(0).u32(0).u8(1).u8(0).i32(500);
+        let w = if mesh { w.u32(1).u8(1).u32(0) } else { w.u32(0) };
+        w.u8(0).u8(0).u8(0).u32(0).u32(0).u8(0).f32(1.0).f32(1.0).f32(1.0).f32(1.0).f32(0.0).f32(0.0).f32(0.0).u16(0)
+    };
+    let mut chunks = with(core(), "PART", |c| c.data = part(part(W::default().u32(2), true), false).0);
+    chunks.push(C { flags: 0, ..chunk("POSE", W::default().f32(0.5).u32(1).u32(2).u32(0).u32(0).u32(1).u32(0)) });
+    let rig = read(&chunks).unwrap();
+    assert_eq!(rig.poses.len(), 1);
+    assert_eq!(rig.pose_fade_in, 0.5);
+    let mut evaluator = crate::eval::Evaluator::new();
+    let mut poses = PosePlayer::new(&rig);
+    let opacity = |poses: &PosePlayer, evaluator: &mut crate::eval::Evaluator| {
+        evaluator.evaluate(&rig, &[0.0]);
+        poses.apply(&rig, &mut evaluator.pose);
+        evaluator.pose.opacity[0]
+    };
+    // The first part shows: its mesh draws at full opacity.
+    assert_eq!(opacity(&poses, &mut evaluator), 1.0);
+    assert!(poses.show(&rig, 0, 1));
+    assert!(!poses.show(&rig, 0, 2));
+    poses.update(&rig, 0.1);
+    let fading = opacity(&poses, &mut evaluator);
+    assert!(fading < 1.0 && fading > 0.0, "{}", fading);
+    for _ in 0..10 {
+        poses.update(&rig, 0.1);
+    }
+    assert_eq!(opacity(&poses, &mut evaluator), 0.0);
+    assert_eq!(poses.part_opacity(1), 1.0);
+    assert_eq!(poses.shown(0), Some(1));
+}
+
+#[test]
 fn expressions_hit_areas_and_user_data_read_back_and_work() {
     use crate::expression::{apply, Blend, Expression, ExpressionPlayer};
     let mut chunks = core();

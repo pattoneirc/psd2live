@@ -23,6 +23,7 @@ a `P2LCharacter` node and set **Rig Path** to an exported `.p2lrt`.
 | `get_expression_ids()`, `set_expression(id)` | Expressions faded in over the motion; an empty id fades out |
 | `hit_test(global)` | The hit area under a point (`HitAreaHead`, `HitAreaBody`), or an empty string |
 | `advanced_features`, `get_advanced_available()`, `set_advanced(features)` | Advanced mode where the rig offers it: 1 skinning along true arcs, 2 exact links, 4 live cloth and hair, 8 collision; 0 (default) plays the Cubism-equivalent rig |
+| `get_pose_group_sizes()`, `show_pose(group, entry)` | Part poses: each group shows one of its parts, the others fading out |
 | `get_bone_ids()`, `get_bone_transform(id)` | Skeleton bones' frames in the node's space, to attach things to |
 
 Each mesh draws in its own canvas item in the rig's draw order. Cubism's add and multiply use a

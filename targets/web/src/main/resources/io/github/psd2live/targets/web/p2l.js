@@ -179,6 +179,16 @@ export class P2LPlayer {
     return Array.from({ length: n }, (_, i) => flat.slice(i * 6, i * 6 + 6));
   }
 
+  /** How many parts each pose group switches between. */
+  poseGroups() {
+    return Array.from({ length: this.rt.p2l_pose_group_count(this.rig) }, (_, g) => this.rt.p2l_pose_group_size(this.rig, g));
+  }
+
+  /** Shows part [entry] of pose group [group], fading the others out. */
+  showPose(group, entry) {
+    return this.rt.p2l_pose_show(this.rig, group, entry);
+  }
+
   /** Starts the simulations again at rest. */
   resetSimulation() {
     this.rt.p2l_sim_reset(this.rig);

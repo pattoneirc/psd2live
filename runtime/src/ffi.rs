@@ -7,6 +7,7 @@ use crate::behavior::Behaviors;
 use crate::clip::Player;
 use crate::eval::Evaluator;
 use crate::expression::ExpressionPlayer;
+use crate::pose::PosePlayer;
 use crate::physics::Physics;
 use crate::rig::{Rig, TextureKind};
 use std::ffi::{c_char, CStr, CString};
@@ -28,6 +29,7 @@ pub struct Handle {
     hit_area_ids: Vec<CString>,
     user_data: Vec<CString>,
     expressions: ExpressionPlayer,
+    poses: PosePlayer,
     advanced: Advanced,
     render_order: Vec<u32>,
 }
@@ -85,6 +87,7 @@ pub unsafe extern "C" fn p2l_rig_load_ex(bytes: *const u8, len: usize, flags: u3
                     c_strings(texts.iter())
                 },
                 expressions: ExpressionPlayer::new(),
+                poses: PosePlayer::new(&rig),
                 advanced: Advanced::new(),
                 evaluator: Evaluator::new(),
                 player: Player::new(),
@@ -120,6 +123,7 @@ fn evaluate(handle: &mut Handle) {
     let advanced = if handle.advanced.enabled() != 0 { Some(&mut handle.advanced) } else { None };
     let pose = handle.evaluator.evaluate_ext(&handle.rig, &handle.values, advanced);
     handle.render_order = crate::eval::render_order(&handle.rig, pose);
+    handle.poses.apply(&handle.rig, &mut handle.evaluator.pose);
 }
 
 macro_rules! with {
@@ -238,6 +242,7 @@ pub unsafe extern "C" fn p2l_update(handle: *mut Handle, dt: f32) {
         h.player.update(&h.rig, dt, &mut h.values);
         h.expressions.update(&h.rig, dt, &mut h.values);
         h.behaviors.update(&h.rig, dt, &mut h.values);
+        h.poses.update(&h.rig, dt);
         let skip = h.advanced.skipped_physics(&h.rig);
         h.physics.step_skipping(&h.rig, dt, &mut h.values, &skip);
         evaluate(h);
@@ -555,6 +560,29 @@ pub unsafe extern "C" fn p2l_hit_area_meshes(handle: *const Handle, index: u32, 
         }
         meshes.len() as u32
     })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn p2l_pose_group_count(handle: *const Handle) -> u32 {
+    with!(handle, 0, |h| h.rig.poses.len() as u32)
+}
+
+/// How many parts pose group [group] switches between.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_pose_group_size(handle: *const Handle, group: u32) -> u32 {
+    with!(handle, 0, |h| h.rig.poses.get(group as usize).map_or(0, |g| g.entries.len() as u32))
+}
+
+/// Shows part [entry] of pose group [group], fading the others out over the next updates.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_pose_show(handle: *mut Handle, group: u32, entry: u32) -> bool {
+    with_mut!(handle, false, |h| h.poses.show(&h.rig, group as usize, entry as usize))
+}
+
+/// The part pose group [group] shows, or -1.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_pose_shown(handle: *const Handle, group: u32) -> i32 {
+    with!(handle, -1, |h| h.poses.shown(group as usize).map_or(-1, |e| e as i32))
 }
 
 /// Mesh [index]'s user data, empty when it has none.

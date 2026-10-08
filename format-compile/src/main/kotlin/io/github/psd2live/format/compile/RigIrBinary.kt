@@ -15,7 +15,7 @@ import java.io.IOException
  * A field added to the IR must be added here in the same change, with [VERSION] raised.
  */
 public object RigIrBinary {
-	public const val VERSION: Int = 3
+	public const val VERSION: Int = 4
 	private const val MAGIC = 0x50524952 // "PRIR"
 
 	public fun encode(ir: RigIR): ByteArray {
@@ -114,6 +114,7 @@ public object RigIrBinary {
 				list(e.parameters) { string(it.parameter); enum(it.blend); float(it.value) }
 			}
 			list(a.hitAreas) { string(it.id); string(it.name); list(it.meshes, ::string) }
+			nullable(a.pose) { p -> float(p.fadeIn); list(p.groups) { g -> list(g) { string(it.part); list(it.links, ::string) } } }
 		}
 
 		fun parameterNode(node: ParameterNode) {
@@ -341,7 +342,8 @@ public object RigIrBinary {
 			}
 			val expressions = list { ExpressionIR(string(), string(), float(), float(), list { ExpressionParameter(string(), enum(), float()) }) }
 			val hitAreas = list { HitAreaIR(string(), string(), list(::string)) }
-			return AdvancedIR(bones, simulations, colliders, expressions, hitAreas)
+			val pose = nullable { PoseIR(float(), list { list { PoseEntry(string(), list(::string)) } }) }
+			return AdvancedIR(bones, simulations, colliders, expressions, hitAreas, pose)
 		}
 
 		fun parameterNode(): ParameterNode = when (tag(1)) {

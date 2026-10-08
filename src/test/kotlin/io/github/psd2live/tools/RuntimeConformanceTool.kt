@@ -270,11 +270,12 @@ class RuntimeConformanceTool {
 		File(dir, "trace.bin").writeBytes(buffer.array())
 	}
 
-	/** The rig as version 2 (rig.p2lrt), version 1 and compressed version 2; the runtime must read all three alike. */
+	/** The rig as version 2 (rig.p2lrt), version 1 and version 2 deflated and zstd-packed; the runtime must read them alike. */
 	private fun variants(dir: File, ir: RigIR) {
 		File(dir, "rig.p2lrt").writeBytes(P2lrt.write(ir))
 		File(dir, "rig.v1.p2lrt").writeBytes(P2lrt.write(ir, P2lrt.Options(version = 1)))
-		File(dir, "rig.packed.p2lrt").writeBytes(P2lrt.write(ir, P2lrt.Options(compress = true)))
+		File(dir, "rig.packed.p2lrt").writeBytes(P2lrt.write(ir, P2lrt.Options(compression = P2lrt.Compression.DEFLATE)))
+		File(dir, "rig.zstd.p2lrt").writeBytes(P2lrt.write(ir, P2lrt.Options(compression = P2lrt.Compression.ZSTD)))
 	}
 
 	private fun write(dir: File, ir: RigIR, random: Random) {

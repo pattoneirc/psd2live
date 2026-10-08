@@ -2,7 +2,7 @@
 
 [运行时](RUNTIME.md) · [工程、运行时与导出边界](RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)
 
-状态：容器、核心块、`PGUI`、`META`、扩展块 `BONE`、`SKIN`、`COLL`、`SIMS` 和附带块 `EXPR`、`HITA`、`UDAT` 已实现，导出默认写版本 2；`POSE` 只登记了标签。读取器支持全部压缩方式、数组编码与贴图页类型；写出器目前只写 deflate 压缩、f32 浮点数组和内嵌 PNG。
+状态：容器、核心块、`PGUI`、`META`、扩展块 `BONE`、`SKIN`、`COLL`、`SIMS` 和附带块 `EXPR`、`HITA`、`UDAT`、`POSE` 已实现，导出默认写版本 2。读取器支持全部压缩方式、数组编码与贴图页类型；写出器可写 deflate 与 zstd 压缩，数组为 f32，贴图页为内嵌 PNG。
 
 ## 目标
 
@@ -400,13 +400,17 @@ u32 n × { u8 kind (0 = 网格), ref target, sref value }
 
 网格的用户数据（来自导入的 CMO3），通过 `p2l_mesh_user_data` 读取。
 
-## 已登记的后续块
+### `POSE`
 
-| 标签 | 层 | 内容 | 必需 |
-| --- | --- | --- | --- |
-| `POSE` | 附带 | 部件互斥组与切换淡化 | 否 |
+```
+f32 fadeIn, u32 n × { u32 n × { ref part, u32 n × ref linkedPart } }
+```
 
-`POSE` 尚未实现。Cubism 的 Pose 通过部件透明度切换互斥部件，而核心求值中部件透明度不计入网格透明度；实现它需要先定义部件透明度如何作用于网格，PSD2Live 目前也没有生成互斥部件组的数据。
+部件互斥组与 Cubism 的 pose3 一致：每组同时只显示一个部件，切换时被选中的部件在 fadeIn 秒内淡入，其余按 Cubism 的规则（φ = 0.5，背面透明度阈值 0.15）淡出；链接部件跟随所属部件。
+
+它是求值之后的一步：网格透明度乘以其所有祖先部件的姿势透明度。不在任何组里的部件为 1，所以不带 `POSE` 的文件求值不变；核心求值中部件透明度仍不计入网格透明度。初始时每组显示第一个部件。
+
+宿主通过 `p2l_pose_show(group, entry)` 切换。导出设置 `pose_groups` 以 `部件|部件; 部件|部件` 指定分组，`部件+链接部件` 表示链接。
 
 扩展块的共同约束：
 
@@ -419,7 +423,7 @@ u32 n × { u8 kind (0 = 网格), ref target, sref value }
 - **读取**：同时支持 v1 与 v2，两者解析为同一个内存结构 `Rig`，求值代码只有一份。
 - **写出**：`P2lrtTarget` 默认写 v2；导出选项 `v1` 只写核心内容的 v1 布局，此时若有扩展数据，`CapabilityScan` 报告其以烘焙形式保留。`compress` 用 deflate 压缩能变小的块，`strip_names` 剥离名称。
 - **能力查询**：新增 `p2l_format_support()`，返回支持的主版本和块标签及版本列表；`p2l_rig_load_ex(bytes, len, flags)` 的 flags bit0 要求校验 CRC。
-- **压缩依赖**：Rust 读取端用纯 Rust 的 `miniz_oxide`（deflate）与 `ruzstd`（zstd 解码），可编译到 WASM，运行时只需解码。WASM 构建因此从 208 KB 增至 400 KB，其中版本 2 读取与 deflate 约 79 KB，zstd 约 113 KB。Kotlin 写出端 deflate 用 JDK `Deflater`；zstd 写出需要纯 Java 实现，尚未接入。
+- **压缩依赖**：Rust 读取端用纯 Rust 的 `miniz_oxide`（deflate）与 `ruzstd`（zstd 解码），可编译到 WASM，运行时只需解码。WASM 构建因此从 208 KB 增至 400 KB，其中版本 2 读取与 deflate 约 79 KB，zstd 约 113 KB。Kotlin 写出端 deflate 用 JDK `Deflater`；zstd 用纯 Java 的 aircompressor。
 - **字节稳定**：同一 IR 两次写出字节相同；名称剥离和数组编码由导出选项决定，不受环境影响。
 
 ## 验证
@@ -446,6 +450,6 @@ u32 n × { u8 kind (0 = 网格), ref target, sref value }
 
 ## 已定事项
 
-- 块压缩：定义 deflate 与 zstd 两种，读取器都必须支持，写出器默认不压缩。
+- 块压缩：定义 deflate 与 zstd 两种，读取器都必须支持；写出器默认不压缩，导出设置 `compress` 选 deflate，再加 `zstd` 选 zstd。
 - 偏移与长度宽度：u64。
 - 参数分组、二维摇杆与吸附值放入非必需的 `PGUI` 块，`PARM` 与 v1 一一对应；`restPose` 不写出。

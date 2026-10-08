@@ -11,6 +11,8 @@ kotlin {
 
 dependencies {
 	api(project(":format-compile"))
+	// zstd chunk compression, pure Java (Apache-2.0).
+	implementation("io.airlift:aircompressor:0.27")
 	testImplementation(kotlin("test"))
 }
 

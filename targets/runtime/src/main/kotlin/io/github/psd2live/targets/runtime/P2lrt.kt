@@ -40,17 +40,20 @@ public object P2lrt {
 	public const val VERSION: Int = 2
 
 	/**
-	 * How to write: [version] 1 or 2; in version 2, [compress] deflates the chunks that shrink (never the PNG
+	 * How to write: [version] 1 or 2; in version 2, [compression] packs the chunks that shrink (never the PNG
 	 * pages), [stripNames] leaves every display name empty, keeping the ids, and [advanced] adds what the runtime's
 	 * advanced mode reads.
 	 */
 	public data class Options(
-		val version: Int = VERSION, val compress: Boolean = false, val stripNames: Boolean = false,
+		val version: Int = VERSION, val compression: Compression = Compression.NONE, val stripNames: Boolean = false,
 		/** Version 2 only: the chunks the runtime's advanced mode reads (bones, arcs, skins). */
 		val advanced: Boolean = true,
 	) {
 		init { require(version == 1 || version == 2) { "Unsupported .p2lrt version $version" } }
 	}
+
+	/** How version 2 stores its chunks: as they are, as zlib streams, or as zstd frames. */
+	public enum class Compression { NONE, DEFLATE, ZSTD }
 
 	public fun write(ir: RigIR, options: Options = Options()): ByteArray =
 		if (options.version == 1) Writer(ir, Out(null), false).v1() else Writer(ir, Out(Strings()), options.stripNames).v2(options)
@@ -102,7 +105,8 @@ public object P2lrt {
 	private const val U8 = 32
 	private const val REQUIRED = 1
 	private const val HAS_CRC = 2
-	private const val DEFLATE = 1 shl 2
+	private const val DEFLATED = 1 shl 2
+	private const val ZSTD_FRAME = 2 shl 2
 	private const val NAMES_STRIPPED = 1
 	// Advanced features and the evaluation hooks extension chunks declare.
 	private const val SKIN = 1
@@ -196,6 +200,16 @@ public object P2lrt {
 			if (hitAreas.isNotEmpty()) chunks += chunk("HITA", required = false) {
 				out.u32(hitAreas.size)
 				for ((h, meshes) in hitAreas) { out.str(h.id); name(h.name); out.u32(meshes.size); meshes.forEach { out.u32(mesh(it)) } }
+			}
+			// Pose groups of parts the file has; a group left with one part has nothing to switch.
+			val poseGroups = ir.advanced.pose?.groups.orEmpty().map { g -> g.filter { it.part in partIndex } }.filter { it.size > 1 }
+			if (poseGroups.isNotEmpty()) chunks += chunk("POSE", required = false) {
+				out.f32(ir.advanced.pose!!.fadeIn)
+				out.u32(poseGroups.size)
+				for (g in poseGroups) {
+					out.u32(g.size)
+					for (e in g) { out.u32(part(e.part)); val links = e.links.filter { it in partIndex }; out.u32(links.size); links.forEach { out.u32(part(it)) } }
+				}
 			}
 			val userData = ir.meshes.filter { it.userData.isNotEmpty() }
 			if (userData.isNotEmpty()) chunks += chunk("UDAT", required = false) {
@@ -365,9 +379,9 @@ public object P2lrt {
 		/** The header, the chunk table and the chunks, each 16-byte aligned. */
 		private fun container(chunks: List<Chunk>, options: Options): ByteArray {
 			val stored = chunks.map { c ->
-				if (!options.compress || !c.compressible) return@map c.data to 0
-				val packed = deflate(c.data)
-				if (packed.size < c.data.size) packed to DEFLATE else c.data to 0
+				if (options.compression == Compression.NONE || !c.compressible) return@map c.data to 0
+				val (packed, flag) = if (options.compression == Compression.ZSTD) zstd(c.data) to ZSTD_FRAME else deflate(c.data) to DEFLATED
+				if (packed.size < c.data.size) packed to flag else c.data to 0
 			}
 			val file = Out(null)
 			"P2LRT".forEach { file.u8(it.code) }; file.u8(0); file.u8(0); file.u8(0)
@@ -386,6 +400,14 @@ public object P2lrt {
 			}
 			for ((bytes, _) in stored) { file.pad(16); file.raw(bytes) }
 			return file.result()
+		}
+
+		/** One zstd frame of [data] (aircompressor's pure-Java encoder). */
+		private fun zstd(data: ByteArray): ByteArray {
+			val compressor = io.airlift.compress.zstd.ZstdCompressor()
+			val out = ByteArray(compressor.maxCompressedLength(data.size))
+			val n = compressor.compress(data, 0, data.size, out, 0, out.size)
+			return out.copyOf(n)
 		}
 
 		private fun deflate(data: ByteArray): ByteArray {
@@ -573,18 +595,40 @@ public object P2lrtTarget : ExportTarget {
 	)
 
 	/**
-	 * `v1` writes version 1 for players that predate version 2; `compress`, `strip_names` and `advanced` (the data
-	 * the runtime's advanced mode reads) apply to version 2.
+	 * `v1` writes version 1 for players that predate version 2; `compress` (deflate, or zstd with `zstd`),
+	 * `strip_names` and `advanced` (the data the runtime's advanced mode reads) apply to version 2.
 	 */
 	override val settings: List<TargetSetting> = listOf(
-		TargetSetting.Flag("v1", false), TargetSetting.Flag("compress", false), TargetSetting.Flag("strip_names", false),
+		TargetSetting.Flag("v1", false), TargetSetting.Flag("compress", false), TargetSetting.Flag("zstd", false),
+		TargetSetting.Flag("strip_names", false), TargetSetting.Text("pose_groups", "PartArmA|PartArmB; PartHatA|PartHatB"),
 		TargetSetting.Flag("advanced", true),
 	)
 
+	/**
+	 * Pose groups written as `part|part; part|part`: each group's parts by id, one shown at a time, half-second fades.
+	 * A part followed by `+linked` carries that part along (`PartArmA+PartHandA|PartArmB+PartHandB`).
+	 */
+	public fun poseGroups(text: String): PoseIR? {
+		val groups = text.split(';').map { group ->
+			group.split('|').map { it.trim() }.filter { it.isNotEmpty() }.map { entry ->
+				val parts = entry.split('+').map { it.trim() }.filter { it.isNotEmpty() }
+				PoseEntry(parts.first(), parts.drop(1))
+			}
+		}.filter { it.size > 1 }
+		return if (groups.isEmpty()) null else PoseIR(0.5f, groups)
+	}
+
 	override fun plan(ir: RigIR, options: ExportOptions): LoweredExport {
+		val posed = options.setting("pose_groups")?.let(::poseGroups)
+		val ir = if (posed == null) ir else ir.copy(advanced = ir.advanced.copy(pose = posed))
 		val bytes = P2lrt.write(ir, P2lrt.Options(
 			version = if (options.flag("v1", false)) 1 else 2,
-			compress = options.flag("compress", false), stripNames = options.flag("strip_names", false),
+			compression = when {
+				!options.flag("compress", false) -> P2lrt.Compression.NONE
+				options.flag("zstd", false) -> P2lrt.Compression.ZSTD
+				else -> P2lrt.Compression.DEFLATE
+			},
+			stripNames = options.flag("strip_names", false),
 			advanced = options.flag("advanced", true),
 		))
 		return object : LoweredExport {

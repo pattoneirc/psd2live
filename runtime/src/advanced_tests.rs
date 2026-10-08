@@ -25,7 +25,7 @@ fn base_rig(parameters: Vec<Parameter>, deformers: Vec<Deformer>, meshes: Vec<Me
         canvas: Canvas { width: 512.0, height: 512.0, origin_x: 0.0, origin_y: 0.0, pixels_per_unit: None },
         parameters, deformers, parts: vec![], meshes, glues: vec![],
         render: RenderGroup { part: None, draw_order: 500, channels: vec![], composite: None, children: vec![] },
-        textures: vec![], physics_fps: 0.0, physics: vec![], clips: vec![], roles: vec![], gui: None, meta: vec![], expressions: vec![], hit_areas: vec![], user_data: vec![],
+        textures: vec![], physics_fps: 0.0, physics: vec![], clips: vec![], roles: vec![], gui: None, meta: vec![], expressions: vec![], hit_areas: vec![], user_data: vec![], poses: vec![], pose_fade_in: 0.0,
         extensions: Extensions::default(),
     }
 }

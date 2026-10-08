@@ -16,6 +16,7 @@ use p2l_runtime::behavior::Behaviors;
 use p2l_runtime::clip::Player;
 use p2l_runtime::advanced::{Advanced, Affine};
 use p2l_runtime::expression::ExpressionPlayer;
+use p2l_runtime::pose::PosePlayer;
 use p2l_runtime::rig::TextureKind;
 use p2l_runtime::{render_order, Evaluator, Physics, Rig};
 
@@ -58,6 +59,7 @@ pub struct P2LCharacter {
     behavior: Behaviors,
     physics: Option<Physics>,
     expressions: ExpressionPlayer,
+    poses: PosePlayer,
     advanced: Advanced,
     /// The pose set through set_parameter, under clips and behaviors.
     pose: Vec<f32>,
@@ -77,7 +79,7 @@ impl INode2D for P2LCharacter {
         P2LCharacter {
             rig_path: GString::new(), centered: true, autoplay: GString::new(), behaviors: 3, look_at_mouse: false, advanced_features: 0,
             rig: None, evaluator: Evaluator::new(), player: Player::new(), behavior: Behaviors::default(), physics: None,
-            expressions: ExpressionPlayer::new(), advanced: Advanced::new(),
+            expressions: ExpressionPlayer::new(), poses: PosePlayer::default(), advanced: Advanced::new(),
             pose: Vec::new(), values: Vec::new(), textures: Vec::new(), materials: Vec::new(), screens: Vec::new(),
             slots: Vec::new(), base,
         }
@@ -199,6 +201,7 @@ impl P2LCharacter {
         self.behavior = Behaviors::default();
         self.physics = Some(Physics::new(&rig));
         self.expressions = ExpressionPlayer::new();
+        self.poses = PosePlayer::new(&rig);
         self.advanced = Advanced::new();
         self.advanced.set(&rig, self.advanced_features);
         let autoplay = rig.clips.iter().position(|c| c.id == self.autoplay.to_string());
@@ -327,6 +330,19 @@ impl P2LCharacter {
         p2l_runtime::eval::hit_area_at(rig, &self.evaluator.pose, p.x, p.y).map_or(GString::new(), |i| GString::from(rig.hit_areas[i].0.as_str()))
     }
 
+    /// How many parts each pose group switches between.
+    #[func]
+    fn get_pose_group_sizes(&self) -> PackedInt32Array {
+        self.rig.iter().flat_map(|r| r.poses.iter().map(|g| g.entries.len() as i32)).collect()
+    }
+
+    /// Shows part [entry] of pose group [group], fading the others out.
+    #[func]
+    fn show_pose(&mut self, group: i32, entry: i32) -> bool {
+        let Some(rig) = &self.rig else { return false };
+        group >= 0 && entry >= 0 && self.poses.show(rig, group as usize, entry as usize)
+    }
+
     #[func]
     fn get_bone_ids(&self) -> PackedStringArray {
         self.rig.iter().flat_map(|r| r.extensions.bones.iter().map(|(_, id)| GString::from(id.as_str()))).collect()
@@ -368,6 +384,7 @@ impl P2LCharacter {
         self.player.update(rig, dt, &mut self.values);
         self.expressions.update(rig, dt, &mut self.values);
         self.behavior.update(rig, dt, &mut self.values);
+        self.poses.update(rig, dt);
         if let Some(physics) = &mut self.physics {
             let skip = self.advanced.skipped_physics(rig);
             physics.step_skipping(rig, dt, &mut self.values, &skip);
@@ -379,6 +396,7 @@ impl P2LCharacter {
             self.advanced.step_simulations(rig, &values, dt, &mut self.evaluator.pose);
         }
         let order = render_order(rig, &self.evaluator.pose);
+        self.poses.apply(rig, &mut self.evaluator.pose);
         let offset = self.offset(rig);
         let mut rs = RenderingServer::singleton();
         for slot in &self.slots {

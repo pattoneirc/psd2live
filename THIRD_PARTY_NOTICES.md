@@ -23,6 +23,10 @@ The built-in local Agent bridge uses the official Model Context Protocol Kotlin 
 
 The PSD2Live runtime (`runtime/`, and the `p2l_runtime` library and WebAssembly module built from it) reads compressed `.p2lrt` chunks with [miniz_oxide](https://github.com/Frommi/miniz_oxide) (MIT, Zlib or Apache-2.0) and its dependency adler2 (0BSD, MIT or Apache-2.0), and with [ruzstd](https://github.com/KillingSpark/zstd-rs) (MIT) and its dependency twox-hash (MIT).
 
+## aircompressor
+
+The `.p2lrt` exporter (`:targets:runtime`) writes zstd-compressed chunks with [aircompressor](https://github.com/airlift/aircompressor) (Apache-2.0), a pure-Java implementation.
+
 ## FFmpeg
 
 The Windows packages whose names end in `-ffmpeg` include `ffmpeg.exe` from the [Gyan.dev](https://www.gyan.dev/ffmpeg/builds/) essentials build (via [GyanD/codexffmpeg](https://github.com/GyanD/codexffmpeg/releases)), licensed under GNU GPL version 3. It sits in the app's `resources/ffmpeg/` with that build's `LICENSE.txt` and `README.txt`, which names the FFmpeg source commit and the versions of the libraries built in. PSD2Live runs it as a separate program to encode video and animated images; the other packages do not include it.

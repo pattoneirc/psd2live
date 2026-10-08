@@ -117,6 +117,11 @@ const char *p2l_hit_area_id(const P2lRig *rig, uint32_t index);
 int32_t p2l_hit_test(const P2lRig *rig, float x, float y);
 /* The meshes a hit area covers, written into out up to capacity; returns how many there are. */
 uint32_t p2l_hit_area_meshes(const P2lRig *rig, uint32_t index, uint32_t *out, uint32_t capacity);
+/* Part poses (Cubism pose3): each group shows one of its parts, fading the others out as p2l_update steps. */
+uint32_t p2l_pose_group_count(const P2lRig *rig);
+uint32_t p2l_pose_group_size(const P2lRig *rig, uint32_t group);
+bool p2l_pose_show(P2lRig *rig, uint32_t group, uint32_t entry);
+int32_t p2l_pose_shown(const P2lRig *rig, uint32_t group);
 /* A mesh's user data, empty when it has none. */
 const char *p2l_mesh_user_data(const P2lRig *rig, uint32_t index);
 

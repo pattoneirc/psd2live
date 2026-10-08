@@ -17,9 +17,17 @@ public data class AdvancedIR(
 	val expressions: List<ExpressionIR> = emptyList(),
 	/** Named regions a host hit-tests, such as Head and Body. */
 	val hitAreas: List<HitAreaIR> = emptyList(),
+	/** Part poses: groups of parts of which one shows at a time. */
+	val pose: PoseIR? = null,
 ) {
-	val isEmpty: Boolean get() = virtualBones.isEmpty() && simulations.isEmpty() && colliders.isEmpty() && expressions.isEmpty() && hitAreas.isEmpty()
+	val isEmpty: Boolean get() = virtualBones.isEmpty() && simulations.isEmpty() && colliders.isEmpty() && expressions.isEmpty() &&
+		hitAreas.isEmpty() && pose == null
 }
+
+/** Cubism's pose3: per group the parts (by id) of which one shows, each with parts that follow it; [fadeIn] seconds to switch. */
+public data class PoseIR(val fadeIn: Float, val groups: List<List<PoseEntry>>)
+
+public data class PoseEntry(val part: String, val links: List<String> = emptyList())
 
 /** An expression as Cubism's exp3 has one: parameters added to, multiplied into or overwriting the motion's values. */
 public data class ExpressionIR(val id: String, val name: String, val fadeIn: Float, val fadeOut: Float, val parameters: List<ExpressionParameter>)

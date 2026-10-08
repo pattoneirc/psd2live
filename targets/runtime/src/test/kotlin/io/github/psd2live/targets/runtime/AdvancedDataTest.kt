@@ -1,5 +1,6 @@
 package io.github.psd2live.targets.runtime
 
+import io.github.psd2live.format.compile.*
 import io.github.psd2live.format.model.*
 import kotlin.math.cos
 import kotlin.math.sin
@@ -72,6 +73,18 @@ class AdvancedDataTest {
 		val text = String(bytes, Charsets.UTF_8)
 		assertTrue("bend" in text && "HitAreaArm" in text && "{\"grab\":true}" in text)
 		assertFalse("gone" in text)
+	}
+
+	@Test fun poseGroupsComeFromTheExportSetting() {
+		assertEquals(PoseIR(0.5f, listOf(listOf(PoseEntry("A", listOf("a")), PoseEntry("B")), listOf(PoseEntry("C"), PoseEntry("D")))),
+			P2lrtTarget.poseGroups("A+a | B; C|D ; lonely"))
+		assertNull(P2lrtTarget.poseGroups(" ; X "))
+		val withParts = rig.copy(parts = listOf(Part("A", "A", emptyList()), Part("B", "B", emptyList())))
+		val files = LinkedHashMap<String, ByteArray>()
+		Compiler.export(P2lrtTarget, withParts, ExportOptions("posed", settings = mapOf("pose_groups" to "A|B|missing"))) { p, b -> files[p] = b }
+		val bytes = files.getValue("posed.p2lrt")
+		val b = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+		assertTrue((0 until b.getInt(16)).any { String(bytes, 32 + it * 40, 4, Charsets.US_ASCII) == "POSE" })
 	}
 
 	@Test fun theAdvancedChunksAreOptionalAndCanBeLeftOut() {

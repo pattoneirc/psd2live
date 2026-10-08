@@ -4,16 +4,17 @@
 
 use crate::container::{self, Chunk};
 use crate::expression::{Blend, Expression};
+use crate::pose::PoseGroup;
 use crate::sim::Simulation;
 use std::fmt;
 
 /// The newest major version this reader understands; version 1 is read too.
 pub const VERSION: u32 = 2;
 /// The chunks this reader understands, with the newest version of each.
-pub const CHUNKS: [(&str, u16); 21] = [
+pub const CHUNKS: [(&str, u16); 22] = [
     ("STRS", 1), ("CANV", 1), ("PARM", 1), ("DEFM", 1), ("PART", 1), ("MESH", 1), ("GLUE", 1),
     ("DRAW", 1), ("TEXR", 1), ("PHYS", 1), ("CLIP", 1), ("ROLE", 1), ("PGUI", 1), ("META", 1),
-    ("BONE", 1), ("SKIN", 1), ("COLL", 1), ("SIMS", 1), ("EXPR", 1), ("HITA", 1), ("UDAT", 1),
+    ("BONE", 1), ("SKIN", 1), ("COLL", 1), ("SIMS", 1), ("EXPR", 1), ("HITA", 1), ("UDAT", 1), ("POSE", 1),
 ];
 
 #[derive(Debug)]
@@ -577,6 +578,9 @@ pub struct Rig {
     pub hit_areas: Vec<(String, String, Vec<usize>)>,
     /// User data per mesh.
     pub user_data: Vec<(usize, String)>,
+    /// Part poses and how long the shown part takes to fade in.
+    pub poses: Vec<PoseGroup>,
+    pub pose_fade_in: f32,
 }
 
 impl Rig {
@@ -888,7 +892,7 @@ impl<'a> Reader<'a> {
         }
         Ok(Rig {
             canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui: None, meta: vec![],
-            extensions: Extensions::default(), expressions: vec![], hit_areas: vec![], user_data: vec![],
+            extensions: Extensions::default(), expressions: vec![], hit_areas: vec![], user_data: vec![], poses: vec![], pose_fade_in: 0.0,
         })
     }
 
@@ -1259,6 +1263,27 @@ impl<'a> Reader<'a> {
                 Ok((id, name, (0..count).map(|_| self.index(self.meshes, "mesh")).collect::<Result<Vec<_>>>()?))
             })
             .collect()
+    }
+
+    /// POSE: the fade-in time, then per group its parts, each with the parts linked to it.
+    fn poses(&mut self) -> Result<(f32, Vec<PoseGroup>)> {
+        let fade = self.f32()?;
+        let n = self.count(4)?;
+        let mut groups = Vec::with_capacity(n);
+        for _ in 0..n {
+            let count = self.count(8)?;
+            let mut entries = Vec::with_capacity(count);
+            for _ in 0..count {
+                let part = self.index(self.parts, "part")?;
+                let links = self.count(4)?;
+                entries.push((part, (0..links).map(|_| self.index(self.parts, "part")).collect::<Result<Vec<_>>>()?));
+            }
+            if entries.is_empty() {
+                return err("A pose group without parts");
+            }
+            groups.push(PoseGroup { entries });
+        }
+        Ok((fade, groups))
     }
 
     fn user_data(&mut self) -> Result<Vec<(usize, String)>> {
@@ -1713,9 +1738,15 @@ fn read_chunks(bytes: &[u8], verify_crc: bool) -> Result<Rig> {
         user_data = r.user_data()?;
         r.end("UDAT")?;
     }
+    let (mut pose_fade_in, mut poses) = (0.0, vec![]);
+    if let Some(data) = chunk("POSE") {
+        let mut r = reader(data);
+        (pose_fade_in, poses) = r.poses()?;
+        r.end("POSE")?;
+    }
     let rig = Rig {
         canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui, meta, extensions,
-        expressions, hit_areas, user_data,
+        expressions, hit_areas, user_data, poses, pose_fade_in,
     };
     rig.validate_extensions()?;
     Ok(rig)

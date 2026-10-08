@@ -11,6 +11,7 @@ pub mod eval;
 pub mod expression;
 pub mod ffi;
 pub mod physics;
+pub mod pose;
 pub mod rig;
 pub mod sim;
 pub mod warp;

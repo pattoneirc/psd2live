@@ -68,6 +68,7 @@ class RigIrBinaryTest {
 				colliders = listOf(ColliderIR("head", true, deformer = "rot", ax = 1f, by = 2f, radiusA = 5f, radiusB = 3f, friction = 0.2f)),
 				expressions = listOf(ExpressionIR("smile", "Smile", 0.5f, 0.75f, listOf(ExpressionParameter("ParamA", ExpressionBlend.MULTIPLY, 0.5f)))),
 				hitAreas = listOf(HitAreaIR("HitAreaHead", "Head", listOf("mesh"))),
+				pose = PoseIR(0.5f, listOf(listOf(PoseEntry("armA", listOf("handA")), PoseEntry("armB")))),
 			),
 		)
 	}

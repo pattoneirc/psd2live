@@ -47,16 +47,21 @@ fn compare_variants(dir: &Path) -> Result<(), String> {
     let mut main = read("rig.p2lrt")?;
     main.meta.clear();
     let poses = fs::read(dir.join("poses.bin")).ok();
-    for name in ["rig.v1.p2lrt", "rig.packed.p2lrt"] {
+    for name in ["rig.v1.p2lrt", "rig.packed.p2lrt", "rig.zstd.p2lrt"] {
         if !dir.join(name).exists() {
             continue;
         }
         let mut other = read(name)?;
         other.meta.clear();
-        // Version 1 has no parameter panel and no advanced data.
+        // Version 1 has no parameter panel, advanced data, expressions, hit areas, user data or poses.
         if name == "rig.v1.p2lrt" {
             other.gui = main.gui.clone();
             other.extensions = main.extensions.clone();
+            other.expressions = main.expressions.clone();
+            other.hit_areas = main.hit_areas.clone();
+            other.user_data = main.user_data.clone();
+            other.poses = main.poses.clone();
+            other.pose_fade_in = main.pose_fade_in;
         }
         if other != main {
             return Err(format!("{} reads differently from rig.p2lrt", name));
