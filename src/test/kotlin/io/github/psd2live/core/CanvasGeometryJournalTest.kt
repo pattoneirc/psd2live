@@ -61,6 +61,24 @@ class CanvasGeometryJournalTest {
 		RigBezierJournal.replay(model, record)
 	}
 
+	@Test fun anEditAtTheDefaultOfAGeneratedAxisReplaysBeforeTheAxisExists() {
+		// A baked simulation adds ParamSimS_1 to the mesh after the journal replays; an edit made with it at its default
+		// keeps it out of its key and pose, and replays on the rig without it as the same edit.
+		val model = model()
+		val bake = io.github.psd2live.core.sim.SimBakeResult("f", mapOf("m" to 36), emptyList(), listOf(io.github.psd2live.core.sim.SimBakedMode(
+			io.github.psd2live.core.sim.SimBakedAxis("ParamSimS_1", floatArrayOf(-1f, 1f), emptyMap()), 1f, 1f)))
+		val overlay = RigEditOverlay(simEdits = listOf(io.github.psd2live.core.sim.RigSimEdit("s", "S", io.github.psd2live.core.sim.SimKind.CLOTH, listOf("m"), bake = bake)))
+		val generated = model.copy(parameters = model.parameters + Parameter(ParameterId("ParamSimS_1"), "Sim", -1f, 1f, 0f))
+		val shown = RigGeometryTools.geometry(model, "mesh", "m", mapOf("P" to 1f)).points
+		val moved = shown.copyOf().also { it[14] += 0.05f }
+		val sim = mapOf("P" to 1f, "ParamSimS_1" to 0f)
+		val cleaned = GeneratedOverrides.journalOnly(generated, overlay, listOf(command("mesh", "m", sim, moved, sim))).single()
+		assertEquals(setOf("P"), cleaned.getValue("key").jsonObject.keys)
+		assertEquals(setOf("P"), cleaned.getValue("pose").jsonObject.keys)
+		assertContentEquals(meshCell(CanvasEdits.apply(model, command("mesh", "m", mapOf("P" to 1f), moved)), 1),
+			meshCell(RigAuthoringJournal.apply(model, cleaned), 1))
+	}
+
 	@Test fun aSparseMeshMoveCompilesToTheMovedVerticesOnly() {
 		val model = model()
 		val shown = RigGeometryTools.geometry(model, "mesh", "m", emptyMap()).points
