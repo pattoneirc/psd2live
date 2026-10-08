@@ -357,12 +357,22 @@ interface WorkspaceSplitUpgradePort {
     suspend fun upgradeSplitRecords(state: String, indexes: List<Int>?, author: MutationAuthor = MutationAuthor.AGENT): JsonObject
 }
 
+/** The explicit regeneration with this build's generators; GUI and MCP commit through the same command. */
+interface WorkspaceGenerationUpdatePort {
+    /**
+     * Merges what this build's generators make onto the user's edits in one history node, none when they make what
+     * the journal's last checkpoint stores. Returns the lifecycle fields, `updated` and the merge's `issues`.
+     */
+    suspend fun updateGeneration(state: String, author: MutationAuthor = MutationAuthor.AGENT): JsonObject
+}
+
 /** Composition at the host boundary only. Command consumers depend on the relevant narrow port. */
 interface WorkspaceBackend :
     WorkspaceEditorDraftPort,
     WorkspaceReadPort,
     WorkspaceSourcePort,
     WorkspaceSplitUpgradePort,
+    WorkspaceGenerationUpdatePort,
     WorkspaceTexturePort,
     WorkspacePaintPort,
     WorkspaceSettingsPort,

@@ -514,6 +514,7 @@ class DesktopWorkspace(
     private val generationCommands = WorkspaceGenerationCommands(runtime)
     private val partitionCommands = WorkspacePartitionCommands(runtime)
     private val splitUpgradeCommands = WorkspaceSplitUpgradeCommands(runtime)
+    private val generationUpdateCommands = WorkspaceGenerationUpdateCommands(runtime)
     private val warpCommands = WorkspaceWarpCommands(runtime)
     private val warpControlCommands = WorkspaceWarpControlCommands(runtime)
     private val previewCommands = WorkspacePreviewCommands(runtime)
@@ -1145,6 +1146,24 @@ class DesktopWorkspace(
         if (current.isAnalyzing || current.isGenerating) throw WorkspaceBusy()
         val summary = "Upgraded split records"
         val result = splitUpgradeCommands.execute(before.projectId, before.state, indexes, summary, mutationAuthor(author)) { _, document, model ->
+            applyPreviewOrThrow(model, documentFrom(current), document, summary, current)
+        }
+        if (result.commit.applied) {
+            scheduleHistoryPersistence(before.projectId)
+            viewModel.updateHistorySnapshot(history())
+            viewModel.refreshWorkspaceRenderer(result.commit.capture.model)
+        }
+        result.result
+    }
+
+    override suspend fun updateGeneration(state: String, author: MutationAuthor): JsonObject = editMutex.withLock {
+        val before = captureForMutation()
+        requireExpected(state, before)
+        require(recoveringProjectId != before.projectId) { "Workspace is still being restored; retry shortly" }
+        val current = viewModel.state.value
+        if (current.isAnalyzing || current.isGenerating) throw WorkspaceBusy()
+        val summary = "Updated the generated rig"
+        val result = generationUpdateCommands.execute(before.projectId, before.state, summary, mutationAuthor(author)) { _, document, model ->
             applyPreviewOrThrow(model, documentFrom(current), document, summary, current)
         }
         if (result.commit.applied) {

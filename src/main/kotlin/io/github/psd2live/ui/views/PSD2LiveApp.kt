@@ -580,6 +580,8 @@ fun FrameWindowScope.PSD2LiveApp(
 						onStartScreen = { viewModel.requestStartScreen() },
 						canUpgradeSplitRecords = viewModel.canUpgradeSplitRecords(state),
 						onUpgradeSplitRecords = { viewModel.upgradeSplitRecords() },
+						canUpdateGeneration = viewModel.canUpdateGeneration(state),
+						onUpdateGeneration = { viewModel.updateGeneration() },
 						onShowHistory = { viewModel.showHistoryModule() },
 						onNewEditTab = { viewModel.addWorkspace() },
 						onNewPreviewTab = { viewModel.addCanvas(CanvasMode.PREVIEW) },

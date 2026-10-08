@@ -14,9 +14,11 @@ import java.util.WeakHashMap
  * entries stay as history only. A regeneration writes one ([RigRegeneration]) where the generated rig changed under
  * the journal, so later builds never replay old entries on a base they were not written for.
  *
- * Record: `{op, v: 1, authored: {header, frame, deformers, meshes}, issues: [{kind, target, detail}]}` - a
- * [MaterializedRigCodec] index whose objects live in [RigObjects] and are persisted with the document, and what the
- * regeneration that wrote it could not carry over cleanly ([RigRegeneration.Issue]). Texture coordinates address the atlas the header's
+ * Record: `{op, v: 1, authored: {header, frame, deformers, meshes}, generated: {...}, issues: [{kind, target, detail}]}`:
+ * [MaterializedRigCodec] indexes of the authored rig and of the generated rig it was merged from (the generation as
+ * the journal saw it there, [BuiltRig.resolvedPuppet]) - objects in [RigObjects], persisted with the document and
+ * shared between the two where unchanged - and what the merge could not carry over cleanly ([RigRegeneration.Issue]).
+ * The generated rig is what a later regeneration with a newer generator compares against ([RigRegenerationCheckpoint.updated]). Texture coordinates address the atlas the header's
  * binding key names; a build on another atlas re-binds them through canvas texture coordinates ([reboundTo]).
  */
 internal object RigCheckpoint {
@@ -25,8 +27,9 @@ internal object RigCheckpoint {
 
 	fun isRecord(command: JsonObject) = command["op"]?.jsonPrimitive?.contentOrNull == OP
 
-	fun encode(authored: AuthoredRig, bindingKey: String, issues: List<RigRegeneration.Issue> = emptyList()): JsonObject = buildJsonObject {
+	fun encode(authored: AuthoredRig, bindingKey: String, issues: List<RigRegeneration.Issue> = emptyList(), generated: AuthoredRig? = null): JsonObject = buildJsonObject {
 		put("op", OP); put("v", VERSION); put("authored", MaterializedRigCodec.index(authored, bindingKey))
+		generated?.let { put("generated", MaterializedRigCodec.index(it, bindingKey)) }
 		put("issues", JsonArray(issues.map { issue -> buildJsonObject {
 			put("kind", issue.kind.code); put("target", issue.target); if (issue.detail.isNotEmpty()) put("detail", issue.detail)
 		} }))
@@ -43,8 +46,14 @@ internal object RigCheckpoint {
 	fun latest(journal: List<JsonObject>): Int = journal.indexOfLast(::isRecord)
 
 	/** Every object hash the checkpoints in [journal] name. */
-	fun hashes(journal: List<JsonObject>): List<String> =
-		journal.filter(::isRecord).flatMap { MaterializedRigCodec.hashes(it.getValue("authored").jsonObject) }
+	fun hashes(journal: List<JsonObject>): List<String> = journal.filter(::isRecord).flatMap { record ->
+		MaterializedRigCodec.hashes(record.getValue("authored").jsonObject) +
+			(record["generated"] as? JsonObject)?.let(MaterializedRigCodec::hashes).orEmpty()
+	}
+
+	/** The generated rig [record] was merged from, or null when it stores none. */
+	fun generated(record: JsonObject): MaterializedRigCodec.Decoded? =
+		(record["generated"] as? JsonObject)?.let(MaterializedRigCodec::fromIndex)
 
 	private val decoded = Collections.synchronizedMap(WeakHashMap<JsonObject, MaterializedRigCodec.Decoded>())
 

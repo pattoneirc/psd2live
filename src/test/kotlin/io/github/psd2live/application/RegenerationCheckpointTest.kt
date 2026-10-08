@@ -126,6 +126,44 @@ class RegenerationCheckpointTest {
 		}
 	}
 
+	@Test fun updatingTheGenerationTakesWhatTheGeneratorsMakeNowWhereTheUserLeftIt() = runBlocking<Unit> {
+		val edited = edited()
+		val document = edited.simulated.document
+		val journal = document.rigEdits.authoringJournal
+		val at = RigCheckpoint.latest(journal)
+		val record = journal[at]
+		val face = edited.simulated.model.rig.layerIdByDrawableId.entries.single { it.value == "face" }.key
+		// As an older generator left it: the face 2 px to the right, in the stored generation and, untouched, in the rig.
+		fun older(rig: AuthoredRig) = rig.copy(rig = rig.rig.copy(puppet = rig.rig.puppet.copy(drawables = rig.rig.puppet.drawables.map { drawable ->
+			if (drawable.id.raw != face) drawable else drawable.mesh!!.let { mesh ->
+				val unit = 2f / 64f
+				drawable.copy(mesh = org.umamo.runtime.model.DrawableMesh(FloatArray(mesh.positions.size) { mesh.positions[it] + if (it % 2 == 0) unit else 0f }, mesh.uvs, mesh.indices))
+			}
+		})))
+		val stored = RigCheckpoint.decode(record)
+		val aged = RigCheckpoint.encode(older(stored.authored), stored.bindingKey, generated = older(assertNotNull(RigCheckpoint.generated(record)).authored))
+		val old = document.copy(rigEdits = document.rigEdits.copy(authoringJournal = journal.subList(0, at) + aged + journal.subList(at + 1, journal.size)))
+		val runtime = runtime()
+		runtime.install(runtime.state.value.state, "project", old, builder.build(old))
+		assertTrue(WorkspaceGenerationUpdate.updatable(old.rigEdits))
+		val before = runtime.capture()
+		val shifted = before.model.rig.puppet.drawables.single { it.id.raw == face }.mesh!!.positions
+		val result = WorkspaceGenerationUpdateCommands(runtime).execute(before.projectId, before.state, "Update", MutationAuthor.USER)
+		assertTrue(result.result.getValue("updated").jsonPrimitive.boolean)
+		val after = runtime.capture()
+		assertTrue(RigCheckpoint.isRecord(after.document.rigEdits.authoringJournal.last()))
+		val now = after.model.rig.puppet.drawables.single { it.id.raw == face }.mesh!!.positions
+		val generated = edited.simulated.model.rig.puppet.drawables.single { it.id.raw == face }.mesh!!.positions
+		generated.indices.forEach { assertEquals(generated[it], now[it], 1e-5f, "face[$it] follows the generators") }
+		assertFalse(shifted.contentEquals(now))
+		// The user's parts did not move, and a second update finds nothing to do.
+		for (id in edited.parts) assertContentEquals(before.model.rig.puppet.drawables.single { it.id == id }.mesh!!.positions,
+			after.model.rig.puppet.drawables.single { it.id == id }.mesh!!.positions)
+		val again = WorkspaceGenerationUpdateCommands(runtime).execute(after.projectId, after.state, "Update", MutationAuthor.USER)
+		assertFalse(again.result.getValue("updated").jsonPrimitive.boolean)
+		assertFalse(again.commit.applied)
+	}
+
 	@Test fun undoRedoAndAReopenedArchiveKeepTheCheckpoint() = runBlocking<Unit> {
 		val edited = edited()
 		val runtime = edited.runtime

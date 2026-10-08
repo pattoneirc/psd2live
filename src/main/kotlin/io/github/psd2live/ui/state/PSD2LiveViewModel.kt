@@ -1441,6 +1441,38 @@ class PSD2LiveViewModel : AutoCloseable {
         }
     }
 
+    /** Tools > Update Generated Rig is offered once the journal holds a checkpoint storing the generation it came from. */
+    internal fun canUpdateGeneration(state: PSD2LiveState): Boolean =
+        io.github.psd2live.application.WorkspaceGenerationUpdate.updatable(state.rigEdits)
+
+    /** Merges what this build's generators make onto the user's edits through the shared command, as one undoable edit. */
+    internal fun updateGeneration() {
+        val current = _state.value
+        if (current.isBusy || current.workspaceEditBusy || !canUpdateGeneration(current)) return
+        val port: io.github.psd2live.application.WorkspaceGenerationUpdatePort = workspaceBackend ?: return
+        val expected = workspaceBackend?.snapshot() ?: return
+        updateState { it.copy(canvasEditBusy = true, statusText = tr("status.generationUpdate.working")) }
+        scope.launch {
+            try {
+                val result = withContext(Dispatchers.Default + io.github.psd2live.application.WorkspaceExecution(
+                    expected.projectId, expected.state, MutationAuthor.USER)) {
+                    port.updateGeneration(requireNotNull(expected.state), MutationAuthor.USER)
+                }
+                val issues = result.getValue("issues").jsonArray.size
+                updateState { it.copy(statusText = when {
+                    !result.getValue("updated").jsonPrimitive.boolean -> tr("status.generationUpdate.unchanged")
+                    issues == 0 -> tr("status.generationUpdate.done")
+                    else -> tr("status.generationUpdate.issues", issues)
+                }) }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                setErrorMessage(failure.message ?: tr("status.generationUpdate.failed"))
+            } finally {
+                updateState { it.copy(canvasEditBusy = false) }
+            }
+        }
+    }
+
     internal fun confirmDepthSplit(middleId: String) {
         val offer = pendingDepthSplit ?: return
         if (_state.value.workspaceEditBusy) return

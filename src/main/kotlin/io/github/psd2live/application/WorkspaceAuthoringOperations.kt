@@ -32,11 +32,12 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
         val generation = id in WorkspaceGenerationCommands.supported
         val partition = id in WorkspacePartitionCommands.supported
         val upgrade = id in WorkspaceSplitUpgradeEdits.supported
+        val regeneration = id in WorkspaceGenerationUpdate.supported
         val warp = id in WorkspaceWarpEdits.supported
         val asset = id in WorkspaceAssetSessions.supported
         val pose = id == "preview_pose"
         val swing = id in setOf("swing_preview", "swing_preview_commit")
-        val background = id in WorkspaceSimulationEdits.supported || physics || raster || layer || generation || partition || upgrade || warp || asset || sampling || motionObservation || pose || swing
+        val background = id in WorkspaceSimulationEdits.supported || physics || raster || layer || generation || partition || upgrade || regeneration || warp || asset || sampling || motionObservation || pose || swing
         registry.register(WorkspaceOperationDefinition(id,
             description + if (background) " Returns a process-owned job handle; use job_wait/job_get for the result, state and diagnostics. Disconnecting does not cancel execution." else "",
             schema, kind, jobBacked = background, workspaceBound = background || kind != WorkspaceOperationKind.QUERY,
@@ -52,6 +53,7 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
                     else if (generation) WorkspaceGenerationJobExecution(id, completion)
                     else if (partition) WorkspacePartitionJobExecution(id, completion)
                     else if (upgrade) WorkspaceSplitUpgradeJobExecution(completion)
+                    else if (regeneration) WorkspaceGenerationUpdateJobExecution(completion)
                     else if (warp) WorkspaceWarpJobExecution(completion)
                     else if (asset) WorkspaceAssetJobExecution(id, completion)
                     else if (pose) WorkspacePoseJobExecution(completion)
@@ -112,6 +114,11 @@ internal fun registerAuthoringOperations(registry: WorkspaceOperationRegistry, w
             put("record_indexes", JsonObject(arraySchema(integer(0), 1, 4096) + ("uniqueItems" to JsonPrimitive(true))))
         }, listOf("state")), WorkspaceOperationKind.DOCUMENT) { request ->
         WorkspaceOperationOutput(workspace.upgradeSplitRecords(request.text("state"), request["record_indexes"]?.jsonArray?.map { it.jsonPrimitive.int }))
+    }
+
+    register(WorkspaceGenerationUpdate.OP, "Regenerate the rig with this build's generators. A project whose journal has a regeneration checkpoint keeps what the generators made when it was written, even after an update; this merges what they make now onto the user's edits: what the user left follows the new output, the user's changes stay, and what does not carry over cleanly is reported in issues (also in workspace_inspect quality.regeneration). Commits one undoable history node, or none when the generators make the same rig (updated: false). Imported CMO3 models have no generated rig and are refused.",
+        objectSchema(buildJsonObject { put("state", string()) }, listOf("state")), WorkspaceOperationKind.DOCUMENT) { request ->
+        WorkspaceOperationOutput(workspace.updateGeneration(request.text("state")))
     }
 
     registerJsonOperation("inspect", "Read project context, find objects/layers/parameters, or inspect one kind:id's direct axes, channels and parent. No point arrays. Query and page before expanding.",
