@@ -224,15 +224,15 @@ private fun printUsage() {
     """.trimIndent())
 }
 
-private data class CliOptions(val values: Map<String, String>, val flags: Set<String>) {
+internal data class CliOptions(val values: Map<String, String>, val flags: Set<String>) {
 	fun value(name: String): String? = values[name]
 	fun required(name: String): String = value(name) ?: error(tr("cli.missingRequired", name))
 	fun int(name: String, default: Int): Int = value(name)?.toIntOrNull() ?: default
 	fun float(name: String, default: Float): Float = value(name)?.toFloatOrNull() ?: default
 
 	companion object {
-		private val flagNames = setOf("--no-upscale-neural-alpha", "--upscale-neural-alpha", "--no-physics", "--no-cmo3", "--no-moc3", "--mesh-only", "--no-deformers", "--no-motions", "--no-json")
-		private val valueNames = setOf("--upscale", "--upscale-noise", "--upscale-python", "--nunif-dir", "--upscale-model", "--upscale-tile", "--input", "--output", "--lang", "--atlas", "--mesh-spacing", "--mesh-wrap", "--head-strength", "--body-strength")
+		internal val flagNames = setOf("--no-upscale-neural-alpha", "--upscale-neural-alpha", "--no-physics", "--no-cmo3", "--no-moc3", "--mesh-pixels", "--mesh-only", "--no-deformers", "--no-motions", "--no-json")
+		internal val valueNames = setOf("--upscale", "--upscale-noise", "--upscale-python", "--nunif-dir", "--upscale-model", "--upscale-tile", "--input", "--output", "--lang", "--atlas", "--mesh-spacing", "--mesh-wrap", "--head-strength", "--body-strength")
 		fun parse(arguments: Array<String>): CliOptions {
 			val values = linkedMapOf<String, String>()
 			val flags = linkedSetOf<String>()
