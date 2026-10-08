@@ -174,7 +174,12 @@ internal object ProjectArchive {
             // Verify the actual completed archive before replacing the previous saved project.
             verify(temporary, written, manifest)
             beforeReplace()
-            Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            // On Windows a scanner or previewer briefly holding the old project refuses the replace; wait it out.
+            var attempt = 0
+            while (true) {
+                try { Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); break }
+                catch (denied: java.nio.file.AccessDeniedException) { if (++attempt >= 5) throw denied; Thread.sleep(100L * attempt) }
+            }
         } finally { Files.deleteIfExists(temporary) }
     }
 
@@ -254,7 +259,9 @@ internal object ProjectArchive {
     /** Only accepts directories created by this project subsystem in the OS temporary directory. */
     fun deleteTemporaryDirectory(root: Path) {
         val path = root.toAbsolutePath().normalize()
-        require(path.parent == Path.of(System.getProperty("java.io.tmpdir")).toAbsolutePath().normalize() && path.fileName.toString().startsWith("psd2live-project-"))
+        // The temporary directory may be named through a link or a Windows short name; compare where both lead.
+        fun real(of: Path) = runCatching { of.toRealPath() }.getOrElse { of.toAbsolutePath().normalize() }
+        require(real(path.parent) == real(Path.of(System.getProperty("java.io.tmpdir"))) && path.fileName.toString().startsWith("psd2live-project-"))
         Files.walk(path).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
     }
 }
