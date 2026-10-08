@@ -45,6 +45,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalDensity
@@ -497,6 +498,11 @@ fun FrameWindowScope.PSD2LiveApp(
 						?: return@onPreviewKeyEvent false
 					runAppAction(action)
 				}
+				// A lone Alt released unconsumed puts a Windows window into its menu mode: the system menu takes the
+				// keys that follow and the app seems stuck until Alt or Esc is pressed again (after an Alt + drag
+				// brush adjustment too). Every view has seen the release by the time it bubbles up here, so taking
+				// it now only keeps it from Windows.
+				.onKeyEvent { event -> event.type == KeyEventType.KeyUp && (event.key == Key.AltLeft || event.key == Key.AltRight) }
 				// The mouse twin of the key handler above: a wheel notch or a button bound to an application
 				// shortcut fires it before any view sees the input, and anything unbound passes untouched.
 				// While a shortcut is being recorded the recording cell takes the mouse instead.

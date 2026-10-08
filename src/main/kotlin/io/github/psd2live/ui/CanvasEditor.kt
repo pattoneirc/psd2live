@@ -1383,6 +1383,9 @@ internal class CanvasEditor(
             if (activeElementMode != value) { selectedEdges = emptySet(); selectedFaces = emptySet() }
             activeElementMode = value.coerceIn(0, 2)
         }
+    /** Whether the mode picks a mesh's points by vertex, edge or face ([elementMode]): Deform and Edit alike. */
+    fun pointElementModes(): Boolean = hierarchyMode == EditHierarchyMode.EDIT || hierarchyMode == EditHierarchyMode.DEFORM
+
     var selectedEdges by mutableStateOf<Set<MeshElement.Edge>>(emptySet())
     var selectedFaces by mutableStateOf<Set<Int>>(emptySet())
 
@@ -3143,9 +3146,18 @@ internal class CanvasEditor(
         clearHover()
     }
 
+    /**
+     * Whether the deform levels apply to the target in hand: only a warp has a lattice of its own for each, its grid
+     * points at level 1 and its Bezier handles at level 2; everything else deforms alike at either.
+     */
+    fun deformLevelsShown(): Boolean = hierarchyMode == EditHierarchyMode.DEFORM && target()?.kind == "warp"
+
     @JvmName("changeEditLevel")
     fun setEditLevel(level: Int) {
         editLevel = level
+        // The lattice's points take no edits at the Bezier level, so a selection of them would only be moved by
+        // the transform box unseen.
+        if (level == 2 && target()?.kind == "warp") selection = emptyMap()
         if (level == 2 && hierarchyMode == EditHierarchyMode.DEFORM) {
             ensureBezierState()
         }
@@ -3405,7 +3417,11 @@ internal class CanvasEditor(
     fun activeWarpIds(): Set<String> {
         if (skeletonSelected) return emptySet()
         val preview = drawnPreview ?: return emptySet()
-        return visibleCanvasGuideIds(preview, state, warp = true)
+        val ids = visibleCanvasGuideIds(preview, state, warp = true)
+        // Deform and Edit draw the warp in hand on the overlay, as editable points; the guide's copy of it would
+        // lie under those in other colours and sizes.
+        val held = target()?.takeIf { it.kind == "warp" && (hierarchyMode == EditHierarchyMode.DEFORM || hierarchyMode == EditHierarchyMode.EDIT) }
+        return if (held != null) ids - held.id else ids
     }
 
     /**
@@ -3949,10 +3965,10 @@ internal class CanvasEditor(
             }
             selection = weldGroups().expand(all).filterValues { it.isNotEmpty() }
         } else target()?.let { t ->
-            if (hierarchyMode == EditHierarchyMode.EDIT && t.kind == "mesh" && elementMode == 1) {
+            if (pointElementModes() && t.kind == "mesh" && elementMode == 1) {
                 selectedEdges = MeshTopology.uniqueEdges(t.indices).filterTo(LinkedHashSet()) { !invert || it !in selectedEdges }
                 vertices = selectedEdges.flatMapTo(LinkedHashSet()) { listOf(it.endpointLow, it.endpointHigh) }
-            } else if (hierarchyMode == EditHierarchyMode.EDIT && t.kind == "mesh" && elementMode == 2) {
+            } else if (pointElementModes() && t.kind == "mesh" && elementMode == 2) {
                 selectedFaces = (0 until t.indices.size / 3).filterTo(LinkedHashSet()) { !invert || it !in selectedFaces }
                 vertices = selectedFaces.flatMapTo(LinkedHashSet()) { MeshTopology.verticesOfTriangle(t.indices, it) }
             } else {
@@ -4414,6 +4430,28 @@ internal class CanvasEditor(
             CanvasDeformStroke.begin(source, deformStrokeRequest(source, targets, edited),
                 CanvasDeformStroke.Sample(weightCanvasPoint(center, viewport))).weights.mapKeys { it.key.substringAfter(':') }
         } catch (_: IllegalArgumentException) { emptyMap() }
+    }
+
+    /** A brush weight [w] as the share of a full dab it is, 0..1, for the reach rings. */
+    fun reachShown(w: Float): Float = if (w <= 0.0001f) 0f else if (strength > 0.001f) (w / strength).coerceIn(0f, 1f) else w.coerceIn(0f, 1f)
+
+    private var hoverReachKey: List<Any?>? = null
+    private var hoverReach: Map<String, FloatArray> = emptyMap()
+
+    /**
+     * What a deform brush pressed at the pointer would move, for the hover preview, by target id: nothing while a
+     * stroke is in hand or the tip is being retuned, which show their own. Kept while nothing it reads changes, as
+     * the overlay asks on every frame.
+     */
+    fun brushHoverReach(viewport: CanvasViewport): Map<String, FloatArray> {
+        if (tool !in DEFORM_BRUSH_TOOLS || dragging || adjustingBrush || meshStroke != null || cursor == null) return emptyMap()
+        val key = listOf(cursor, viewport, state.previewModel?.rig?.puppet, pose, radius, hardness, brushShape, brushAngle,
+            brushAspect, brushFalloff, strength, connectedOnly, tool, hierarchyMode, selection, vertices, target()?.id)
+        if (key != hoverReachKey) {
+            hoverReach = runCatching { brushPreviewWeights(viewport) }.getOrDefault(emptyMap()).filterValues { w -> w.any { it > 0.0001f } }
+            hoverReachKey = key
+        }
+        return hoverReach
     }
 
     private fun beginDeformStroke(pos: Offset, viewport: CanvasViewport, source: PuppetModel, targets: List<CanvasTarget>, editedSet: Boolean) {
@@ -5212,6 +5250,10 @@ internal class CanvasEditor(
                 }
             }
         }
+        // At the Bezier level a warp is edited through its anchors and handles alone; the lattice under them is
+        // shown for reference and takes no edits.
+        val bezierOnly = hierarchyMode == EditHierarchyMode.DEFORM && editLevel == 2 && target()?.kind == "warp" &&
+            tool !in CREATION_TOOLS
 
         // 2b. A corner badge picks the deformer it belongs to, in every mode.
         //
@@ -5232,6 +5274,7 @@ internal class CanvasEditor(
                 return true
             }
         }
+        if (bezierOnly) return true
 
         // 2c. The subdivide brush. It takes every edge whose two ends fall inside the radius, which is
         //     the same rule the panel button uses, so the two entry points cannot disagree. The mesh is
@@ -5271,7 +5314,11 @@ internal class CanvasEditor(
             return true
         }
 
-        if (tool == CanvasTool.TRANSFORM) {
+        // With nothing selected the transform tool has no box to hold, so it picks the way the select tool does:
+        // a click takes what is under it, a drag frames a selection - and the box appears on it.
+        val transformPicks = tool == CanvasTool.TRANSFORM && transformFrame(viewport) == null
+        val selects = tool == CanvasTool.SELECT || transformPicks
+        if (tool == CanvasTool.TRANSFORM && !transformPicks) {
             val frame = transformFrame(viewport) ?: return true
             val handle = transformHandleAt(pos, frame)
             if (handle == BoundingHandle.NONE) return true
@@ -5293,7 +5340,7 @@ internal class CanvasEditor(
         }
 
         // Select picks objects or starts a marquee; only Transform drags the object box.
-        if (hierarchyMode == EditHierarchyMode.SELECT && tool == CanvasTool.SELECT) {
+        if (hierarchyMode == EditHierarchyMode.SELECT && selects) {
             // A bone sits over the art it moves, so it is tried first: clicking one picks the skeleton.
             objectModeBoneHit(pos, viewport)?.let { hit ->
                 selectSkeleton(hit.boneId)
@@ -5329,7 +5376,7 @@ internal class CanvasEditor(
             }
         }
 
-        if (editsMeshes() && (tool == CanvasTool.SELECT || tool in DEFORM_BRUSH_TOOLS)) {
+        if (editsMeshes() && (selects || tool in DEFORM_BRUSH_TOOLS)) {
             clearPathPointSelection()
             return pressEditMeshes(pos, viewport, shift, alt)
         }
@@ -5338,7 +5385,7 @@ internal class CanvasEditor(
         // Mesh / topology gestures are separate from path handles — drop any lingering path-point grab.
         clearPathPointSelection()
         val brush = tool in DEFORM_BRUSH_TOOLS
-        if (hierarchyMode == EditHierarchyMode.DEFORM && (brush || tool == CanvasTool.SELECT)) {
+        if (hierarchyMode == EditHierarchyMode.DEFORM && (brush || selects)) {
             if (viewModel.snapToNearestKeys(editTarget.kind, editTarget.id) {
                 press(pos, viewport, shift, alt, ctrl)
             }) return true
@@ -5360,7 +5407,7 @@ internal class CanvasEditor(
         var picked = points.indices.filter { (points[it] - pos).getDistance() < 10f }.minByOrNull { (points[it] - pos).getDistance() }?.let { setOf(it) }.orEmpty()
         var pickedEdge: MeshElement.Edge? = null
         var pickedFace: Int? = null
-        if (hierarchyMode == EditHierarchyMode.EDIT && editTarget.kind == "mesh") {
+        if (pointElementModes() && editTarget.kind == "mesh") {
             when (elementMode) {
                 1 -> {
                     pickedEdge = MeshTopology.uniqueEdges(editTarget.indices).minByOrNull { edge -> distanceToSegment(pos, points[edge.endpointLow], points[edge.endpointHigh]) }
@@ -5397,7 +5444,7 @@ internal class CanvasEditor(
         if (alt && picked.isNotEmpty() && editTarget.kind != "rotation") dragging = false
         // Edge and face picks on a rest mesh drag through the transform gesture too, which is what moves
         // the glued partners of the vertices they cover instead of tearing them off.
-        if (tool == CanvasTool.SELECT && picked.isNotEmpty() && !alt && editsMeshGeometry()) {
+        if (selects && picked.isNotEmpty() && !alt && editsMeshGeometry()) {
             val source = state.previewModel?.rig?.puppet ?: return true
             beginTransformDrag(source, transformTargets(source), BoundingHandle.BODY, transformFrame(viewport), viewport)
         }

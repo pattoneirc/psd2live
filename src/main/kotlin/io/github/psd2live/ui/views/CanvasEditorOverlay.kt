@@ -95,7 +95,9 @@ import io.github.psd2live.ui.views.texture.AccentButton
 import io.github.psd2live.ui.views.texture.BarChip
 import io.github.psd2live.ui.views.texture.BarDivider
 import io.github.psd2live.ui.views.texture.FloatingBar
+import io.github.psd2live.ui.views.tooloptions.ModeBarToolOptions
 import io.github.psd2live.ui.views.tooloptions.ToolOptionsBar
+import io.github.psd2live.ui.tooloptions.topOptions
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -303,13 +305,7 @@ internal fun BoxScope.CanvasEditorOverlay(
                     if (face in 0 until primaryMesh.indices.size / 3) {
                         val corners = (0..2).mapNotNull { pts.getOrNull(primaryMesh.indices[face * 3 + it]) }
                         if (corners.size == 3) {
-                            val shape = Path().apply {
-                                moveTo(corners[0].x, corners[0].y)
-                                lineTo(corners[1].x, corners[1].y)
-                                lineTo(corners[2].x, corners[2].y)
-                                close()
-                            }
-                            drawPath(shape, colors.accent.copy(alpha = 0.2f))
+                            drawSelectedFace(corners[0], corners[1], corners[2], colors.accent)
                         }
                     }
                 }
@@ -319,7 +315,7 @@ internal fun BoxScope.CanvasEditorOverlay(
             for (t in meshTargets) {
                 if (simulating && !showMesh) continue
                 val pts = screens.getValue(t.id)
-                val meshColor = meshColors[t.id] ?: colors.accent
+                val meshColor = meshColors[t.id] ?: MeshLook.Structure
                 val primary = t.id == primaryMesh?.id
                 // One draw per kind of stroke rather than two per edge: a dense mesh has thousands of edges,
                 // and this runs on every frame the overlay draws (each cursor move).
@@ -333,22 +329,26 @@ internal fun BoxScope.CanvasEditorOverlay(
                     val into = if (selectedEdges.isNotEmpty() && edge in selectedEdges) chosen else plain
                     into.add(a); into.add(b)
                 }
-                drawPoints(plain, PointMode.Lines, Color.Black.copy(alpha = 0.45f), 2.5f)
-                if (chosen.isNotEmpty()) drawPoints(chosen, PointMode.Lines, Color.Black.copy(alpha = 0.45f), 2.5f)
-                drawPoints(plain, PointMode.Lines, meshColor.copy(alpha = 0.65f), 1f)
-                if (chosen.isNotEmpty()) drawPoints(chosen, PointMode.Lines, meshColor, 3f)
+                drawMeshWires(plain, meshColor)
+                drawSelectedWires(chosen, colors.accent)
             }
 
-            // 1d. Vertices. A glued point is skipped here and drawn once in 1e.
+            // 1d. Vertices, in the shared look (MeshLook). A glued point is skipped here and drawn once in 1e.
+            //     A brush shows what it would move - on hover, and while its stroke is in hand - as a ring on each
+            //     point it reaches, as the weight brush does.
             val welds = if (editing) editor.weldGroups() else io.github.psd2live.core.WeldGroups.EMPTY
             val hovered = editor.hoveredMeshVertex
             val hoveredGroup = hovered?.let { welds.members(it) }.orEmpty()
+            val hoverReach = editor.brushHoverReach(viewport)
+            // The selection brush rings, in the selection's colour, the points a press would take.
+            val selectReach = if (editor.tool == CanvasTool.BRUSH_SELECT && !editor.inGesture)
+                editor.cursor?.let { it to (editor.radius * viewport.scale).toFloat() } else null
             for (t in meshTargets) {
                 val pts = screens.getValue(t.id)
                 val selected = selection[t.id].orEmpty()
-                val meshColor = meshColors[t.id] ?: colors.accent
+                val meshColor = meshColors[t.id] ?: MeshLook.Structure
                 val primary = t.id == primaryMesh?.id
-                val brushWeights = editor.activeMeshBrushWeights[t.id] ?: editor.activeBrushWeights?.takeIf { primary }
+                val reach = editor.activeMeshBrushWeights[t.id] ?: editor.activeBrushWeights?.takeIf { primary } ?: hoverReach[t.id]
                 val stroked = when (t.id) {
                     gluePair?.first -> editor.glueStrokeA
                     gluePair?.second -> editor.glueStrokeB
@@ -356,48 +356,23 @@ internal fun BoxScope.CanvasEditorOverlay(
                 }
                 if (simulating) {
                     val weights = groupWeights[t.id]
-                    val reach = weightReach[t.id]
+                    val weightReachHere = weightReach[t.id]
                     pts.forEachIndexed { i, p ->
-                        val r = reach?.getOrNull(i) ?: 0f
                         if (showMesh) {
-                            drawCircle(Color.Black.copy(alpha = 0.6f), 2.7f, p)
-                            drawCircle(weightHeatColor(weights?.getOrNull(i) ?: 0f), 1.9f, p)
+                            drawCircle(MeshLook.Halo, MeshLook.POINT + MeshLook.HALO_RIM, p)
+                            drawCircle(weightHeatColor(weights?.getOrNull(i) ?: 0f), MeshLook.POINT, p)
                         }
-                        // The hover preview: a ring on every point the press would reach, as strong as the reach.
-                        if (r > 0.001f && !editor.adjustingBrush) {
-                            drawCircle(Color.Black.copy(alpha = 0.45f * r), 3.2f + r * 3.2f, p, style = Stroke(2.4f))
-                            drawCircle(weightTint.copy(alpha = 0.35f + 0.65f * r), 3.2f + r * 3.2f, p, style = Stroke(1.2f))
-                        }
+                        if (!editor.adjustingBrush) drawReachRing(p, weightReachHere?.getOrNull(i) ?: 0f, weightTint)
                     }
                     continue
                 }
                 pts.forEachIndexed { i, p ->
                     val vertex = io.github.psd2live.core.MeshVertex(t.id, i)
                     if (editing && welds.isWelded(vertex) && welds.members(vertex).any { it.mesh in screens }) return@forEachIndexed
-                    val isSelected = i in selected
                     val isHovered = vertex == hovered || (primary && hovered == null && i == editor.hoveredVertex)
-                    val w = brushWeights?.getOrNull(i) ?: 0f
-                    if (brushWeights != null) {
-                        if (w > 0.001f) {
-                            val normW = if (editor.strength > 0.001f) (w / editor.strength).coerceIn(0f, 1f) else w.coerceIn(0f, 1f)
-                            val r = 1.6f + normW * 0.8f
-                            drawCircle(Color.Black.copy(alpha = 0.75f), r + 0.8f, p)
-                            drawCircle(Color(1.0f - normW * 0.08f, 1.0f - normW * 0.90f, 1.0f - normW * 0.88f), r, p)
-                        } else {
-                            drawCircle(Color.Black.copy(alpha = 0.65f), 2.2f, p)
-                            drawCircle(Color.White.copy(alpha = 0.9f), 1.5f, p)
-                        }
-                        if (isHovered) drawCircle(Color.White, 6f, p, style = Stroke(1.5f))
-                    } else if (isHovered) {
-                        drawCircle(Color.White, 7.5f, p, style = Stroke(1.8f))
-                        drawCircle(meshColor, 4.5f, p)
-                    } else if (isSelected || i in stroked) {
-                        drawCircle(colors.windowBackground, 5f, p)
-                        drawCircle(meshColor, 3.8f, p)
-                    } else {
-                        drawCircle(colors.windowBackground, 3.5f, p)
-                        drawCircle(meshColor.copy(alpha = 0.7f), 2.2f, p)
-                    }
+                    drawMeshHandle(p, meshColor, colors.accent, selected = i in selected || i in stroked, hovered = isHovered)
+                    reach?.getOrNull(i)?.let { w -> drawReachRing(p, editor.reachShown(w), MeshLook.Reach) }
+                    selectReach?.let { (center, r) -> if ((p - center).getDistance() <= r) drawReachRing(p, 1f, colors.accent) }
                 }
             }
 
@@ -414,10 +389,14 @@ internal fun BoxScope.CanvasEditorOverlay(
                     val selected = group.any { it.index in selection[it.mesh].orEmpty() }
                     val hot = group.any { it in hoveredGroup } ||
                         group.any { (it.mesh == gluePair?.first && it.index in editor.glueStrokeA) || (it.mesh == gluePair?.second && it.index in editor.glueStrokeB) }
-                    val radius = if (selected || hot) 5.2f else 4.2f
-                    if (hot) drawCircle(Color.White, radius + 3f, anchor, style = Stroke(1.6f))
-                    drawGluePoint(if (selected) Color.White else colors.windowBackground, radius + 1.2f, anchor)
-                    drawGluePoint(GlueColorWeld, radius, anchor)
+                    // The shared point look (MeshLook), in the glue's colour and a diamond's shape.
+                    val radius = if (selected) 5.2f else 4.2f
+                    if (hot) {
+                        drawCircle(MeshLook.Halo, MeshLook.HOVER_RING + 1.4f, anchor, style = Stroke(3f))
+                        drawCircle(Color.White, MeshLook.HOVER_RING + 1.4f, anchor, style = Stroke(1.4f))
+                    }
+                    drawGluePoint(if (selected) Color.White else MeshLook.Halo, radius + 1.4f, anchor)
+                    drawGluePoint(if (selected) colors.accent else GlueColorWeld, radius, anchor)
                 }
             }
 
@@ -473,131 +452,82 @@ internal fun BoxScope.CanvasEditorOverlay(
                 editor.ensureBezierState()
                 val bState = editor.bezierState
                 if (bState != null) {
-                    // Faint underlying lattice lines
+                    // The lattice the curves bend, faint and neutral: it is there for reference and takes no edits.
                     val columns = target.geometry.columns!! + 1
+                    val lattice = colors.textMuted.copy(alpha = 0.28f)
                     pts.indices.flatMap { i ->
                         listOfNotNull(
                             if (i % columns < columns - 1) i to i + 1 else null,
                             if (i + columns < pts.size) i to i + columns else null
                         )
-                    }.forEach { (a, b) ->
-                        drawLine(colors.accent.copy(alpha = 0.22f), pts[a], pts[b], 1f)
-                    }
+                    }.forEach { (a, b) -> drawLine(lattice, pts[a], pts[b], 0.8f) }
 
-                    // Cubic Bezier boundary and internal curves
+                    fun screenOf(x: Float, y: Float) = editor.screen(floatArrayOf(x, y), target, viewport)[0]
+                    // Each curve over a dark halo, so it reads on light and dark art alike.
+                    fun curve(p0: Offset, c0: Offset, c1: Offset, p1: Offset) {
+                        val path = Path().apply { moveTo(p0.x, p0.y); cubicTo(c0.x, c0.y, c1.x, c1.y, p1.x, p1.y) }
+                        drawPath(path, Color.Black.copy(alpha = 0.45f), style = Stroke(3.6f))
+                        drawPath(path, BezierCurveColor, style = Stroke(1.6f))
+                    }
                     for (r in 0..bState.bezierRows) {
                         for (c in 0 until bState.bezierCols) {
                             val a0 = bState.anchors[r to c] ?: continue
                             val a1 = bState.anchors[r to (c + 1)] ?: continue
-                            val h0 = bState.handles[Triple(r, c, BezierHandleDir.RIGHT)]
-                            val h1 = bState.handles[Triple(r, c + 1, BezierHandleDir.LEFT)]
-                            val p0 = editor.screen(floatArrayOf(a0.x, a0.y), target, viewport)[0]
-                            val p1 = editor.screen(floatArrayOf(a1.x, a1.y), target, viewport)[0]
-                            val c0 = h0?.let { editor.screen(floatArrayOf(it.x, it.y), target, viewport)[0] } ?: (p0 + (p1 - p0) / 3f)
-                            val c1 = h1?.let { editor.screen(floatArrayOf(it.x, it.y), target, viewport)[0] } ?: (p1 - (p1 - p0) / 3f)
-                            val curvePath = Path().apply {
-                                moveTo(p0.x, p0.y)
-                                cubicTo(c0.x, c0.y, c1.x, c1.y, p1.x, p1.y)
-                            }
-                            drawLine(Color.Black.copy(alpha = 0.35f), p0, p1, 1f)
-                            drawPath(curvePath, colors.accent, style = Stroke(2f))
+                            val p0 = screenOf(a0.x, a0.y)
+                            val p1 = screenOf(a1.x, a1.y)
+                            val c0 = bState.handles[Triple(r, c, BezierHandleDir.RIGHT)]?.let { screenOf(it.x, it.y) } ?: (p0 + (p1 - p0) / 3f)
+                            val c1 = bState.handles[Triple(r, c + 1, BezierHandleDir.LEFT)]?.let { screenOf(it.x, it.y) } ?: (p1 - (p1 - p0) / 3f)
+                            curve(p0, c0, c1, p1)
                         }
                     }
                     for (r in 0 until bState.bezierRows) {
                         for (c in 0..bState.bezierCols) {
                             val a0 = bState.anchors[r to c] ?: continue
                             val a1 = bState.anchors[(r + 1) to c] ?: continue
-                            val h0 = bState.handles[Triple(r, c, BezierHandleDir.BOTTOM)]
-                            val h1 = bState.handles[Triple(r + 1, c, BezierHandleDir.TOP)]
-                            val p0 = editor.screen(floatArrayOf(a0.x, a0.y), target, viewport)[0]
-                            val p1 = editor.screen(floatArrayOf(a1.x, a1.y), target, viewport)[0]
-                            val c0 = h0?.let { editor.screen(floatArrayOf(it.x, it.y), target, viewport)[0] } ?: (p0 + (p1 - p0) / 3f)
-                            val c1 = h1?.let { editor.screen(floatArrayOf(it.x, it.y), target, viewport)[0] } ?: (p1 - (p1 - p0) / 3f)
-                            val curvePath = Path().apply {
-                                moveTo(p0.x, p0.y)
-                                cubicTo(c0.x, c0.y, c1.x, c1.y, p1.x, p1.y)
-                            }
-                            drawPath(curvePath, colors.accent, style = Stroke(2f))
+                            val p0 = screenOf(a0.x, a0.y)
+                            val p1 = screenOf(a1.x, a1.y)
+                            val c0 = bState.handles[Triple(r, c, BezierHandleDir.BOTTOM)]?.let { screenOf(it.x, it.y) } ?: (p0 + (p1 - p0) / 3f)
+                            val c1 = bState.handles[Triple(r + 1, c, BezierHandleDir.TOP)]?.let { screenOf(it.x, it.y) } ?: (p1 - (p1 - p0) / 3f)
+                            curve(p0, c0, c1, p1)
                         }
                     }
 
-                    // Tangent handle stems and end markers
+                    // Tangent handles: amber stems ending in small hollow rings, lit when hovered or held.
                     bState.handles.forEach { (key, handle) ->
                         val anchor = bState.anchors[key.first to key.second] ?: return@forEach
-                        val ap = editor.screen(floatArrayOf(anchor.x, anchor.y), target, viewport)[0]
-                        val hp = editor.screen(floatArrayOf(handle.x, handle.y), target, viewport)[0]
-                        val isHovered = editor.hoveredBezierHandle == key
-                        val isActive = editor.activeBezierHandle == key
-                        drawLine(colors.textPrimary.copy(alpha = 0.55f), ap, hp, 1.2f)
-                        if (isHovered || isActive) {
-                            drawCircle(Color.White, 6.5f, hp, style = Stroke(1.8f))
-                            drawCircle(colors.accent, 4.5f, hp)
-                        } else {
-                            drawCircle(colors.windowBackground, 4.5f, hp)
-                            drawCircle(Color(0xFFE5A823), 3f, hp)
-                        }
+                        val ap = screenOf(anchor.x, anchor.y)
+                        val hp = screenOf(handle.x, handle.y)
+                        val lit = editor.hoveredBezierHandle == key || editor.activeBezierHandle == key
+                        drawLine(BezierHandleColor.copy(alpha = if (lit) 1f else 0.7f), ap, hp, 1.1f)
+                        drawCircle(Color.Black.copy(alpha = 0.55f), if (lit) 6f else 4.6f, hp)
+                        if (lit) drawCircle(BezierHandleColor, 4.4f, hp)
+                        else drawCircle(BezierHandleColor, 3f, hp, style = Stroke(1.4f))
                     }
 
-                    // Bezier anchor points
+                    // Anchors: white with the curve's colour round them, larger when hovered or held.
                     bState.anchors.forEach { (key, anchor) ->
-                        val ap = editor.screen(floatArrayOf(anchor.x, anchor.y), target, viewport)[0]
-                        val isHovered = editor.hoveredBezierAnchor == key
-                        val isActive = editor.activeBezierAnchor == key
-                        if (isHovered || isActive) {
-                            drawCircle(Color.White, 8.5f, ap, style = Stroke(2f))
-                            drawCircle(colors.accent, 5.5f, ap)
-                        } else {
-                            drawCircle(colors.windowBackground, 5.5f, ap)
-                            drawCircle(colors.accent, 4f, ap)
-                        }
+                        val ap = screenOf(anchor.x, anchor.y)
+                        val lit = editor.hoveredBezierAnchor == key || editor.activeBezierAnchor == key
+                        val r = if (lit) 5.6f else 4.2f
+                        drawCircle(Color.Black.copy(alpha = 0.55f), r + 1.8f, ap)
+                        drawCircle(if (lit) BezierCurveColor else Color.White, r, ap)
+                        drawCircle(if (lit) Color.White else BezierCurveColor, r, ap, style = Stroke(1.5f))
                     }
                 }
             } else {
-                // Level 1: Warp lattice grid lines and vertices
+                // Level 1: the lattice in the mesh's look, its control points square.
                 val columns = target.geometry.columns!! + 1
-                pts.indices.flatMap { i ->
-                    listOfNotNull(
-                        if (i % columns < columns - 1) i to i + 1 else null,
-                        if (i + columns < pts.size) i to i + columns else null
-                    )
-                }.forEach { (a, b) ->
-                    drawLine(Color.Black.copy(alpha = 0.6f), pts[a], pts[b], 3f)
-                    drawLine(colors.accent.copy(alpha = 0.8f), pts[a], pts[b], 1.2f)
+                val wires = ArrayList<Offset>()
+                pts.indices.forEach { i ->
+                    if (i % columns < columns - 1) { wires += pts[i]; wires += pts[i + 1] }
+                    if (i + columns < pts.size) { wires += pts[i]; wires += pts[i + columns] }
                 }
-                val warpBrushWeights = editor.activeBrushWeights
+                drawMeshWires(wires, MeshLook.Structure)
+                val reach = editor.activeBrushWeights ?: editor.brushHoverReach(viewport)[target.id]
                 pts.forEachIndexed { i, p ->
-                    val isHovered = i == editor.hoveredVertex
-                    val isSelected = i in editor.vertices
-                    val w = warpBrushWeights?.getOrNull(i) ?: 0f
-                    if (warpBrushWeights != null) {
-                        if (w > 0.001f) {
-                            val normW = if (editor.strength > 0.001f) (w / editor.strength).coerceIn(0f, 1f) else w.coerceIn(0f, 1f)
-                            val r = 1.6f + normW * 0.8f
-                            drawCircle(Color.Black.copy(alpha = 0.75f), r + 0.8f, p)
-                            val redFill = Color(
-                                red = 1.0f - normW * 0.08f,
-                                green = 1.0f - normW * 0.90f,
-                                blue = 1.0f - normW * 0.88f,
-                                alpha = 1f
-                            )
-                            drawCircle(redFill, r, p)
-                        } else {
-                            drawCircle(Color.Black.copy(alpha = 0.65f), 2.2f, p)
-                            drawCircle(Color.White.copy(alpha = 0.9f), 1.5f, p)
-                        }
-                        if (isHovered) {
-                            drawCircle(Color.White, 6.5f, p, style = Stroke(1.5f))
-                        }
-                    } else if (isHovered) {
-                        drawCircle(Color.White, 8f, p, style = Stroke(2f))
-                        drawCircle(colors.accent, 5f, p)
-                    } else if (isSelected) {
-                        drawCircle(colors.windowBackground, 5.5f, p)
-                        drawCircle(colors.accent, 4f, p)
-                    } else {
-                        drawCircle(colors.windowBackground, 4f, p)
-                        drawCircle(colors.textPrimary, 2.8f, p)
-                    }
+                    drawMeshHandle(p, MeshLook.Structure, colors.accent, selected = i in editor.vertices,
+                        hovered = i == editor.hoveredVertex, shape = HandleShape.SQUARE)
+                    reach?.getOrNull(i)?.let { w -> drawReachRing(p, editor.reachShown(w), MeshLook.Reach) }
                 }
             }
         }
@@ -1502,12 +1432,18 @@ internal fun BoxScope.CanvasEditorOverlay(
 
             // 2. The bones themselves, the selected one on top.
             if (subTool == SkeletonEditSubTool.WEIGHTS && weightMap != null) {
+                // Weights read as Simulate's do: the weight colours on the shared point, the brush ringed alike.
                 for (v in weightMap.weights.indices) {
                     val value = (weightMap.weights[v][editor.selectedBoneId] ?: 0f).coerceIn(0f, 1f)
-                    drawCircle(androidx.compose.ui.graphics.lerp(Color(0xFF386BDB), Color(0xFFFF754A), value), 2.8f,
-                        screen(weightMap.positions[v * 2], weightMap.positions[v * 2 + 1]))
+                    val p = screen(weightMap.positions[v * 2], weightMap.positions[v * 2 + 1])
+                    drawCircle(MeshLook.Halo, MeshLook.POINT + MeshLook.HALO_RIM, p)
+                    drawCircle(weightHeatColor(value), MeshLook.POINT, p)
                 }
-                weightPointer?.let { p -> drawCircle(colors.accent, editor.skeletonWeightRadius * viewport.scale.toFloat(), p, style = Stroke(1.5f)) }
+                weightPointer?.let { p ->
+                    val r = editor.skeletonWeightRadius * viewport.scale.toFloat()
+                    drawCircle(Color.Black.copy(alpha = 0.7f), r, p, style = Stroke(3f))
+                    drawCircle(Color.White, r, p, style = Stroke(1.2f))
+                }
             }
             if (subTool == SkeletonEditSubTool.BIND) for (id in editor.pendingSkeletonDrawableIds) {
                 val positions = neutralGeometry?.worldPositions?.get(DrawableId(id)) ?: continue
@@ -1550,17 +1486,11 @@ internal fun BoxScope.CanvasEditorOverlay(
         if (editor.hierarchyMode == EditHierarchyMode.PAINT) editor.ensurePaintSession()
     }
 
-    // The tool in hand's settings and actions, under the mode bar; the palette makes room under it.
-    var optionsBarHeight by remember { mutableStateOf(0) }
-    ToolOptionsBar(editor, focus, onHeight = { optionsBarHeight = it })
-    val density = LocalDensity.current
-    val paletteTop by animateDpAsState(
-        targetValue = if (optionsBarHeight > 0) 42.dp + with(density) { optionsBarHeight.toDp() } + 4.dp else 44.dp,
-        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
-    )
+    // The values that tune the tool in hand, at the bottom left.
+    ToolOptionsBar(editor, focus)
 
     // Left Animated Hover Toolbar (edit / deform / paint tools)
-    CanvasToolBar(editor = editor, keymap = keymap, focus = focus, top = paletteTop)
+    CanvasToolBar(editor = editor, keymap = keymap, focus = focus)
 
     // Top Left Hierarchy / Layer Mode Toolbar
     var modeBarWidth by remember { mutableStateOf(0) }
@@ -2193,7 +2123,6 @@ private fun BoxScope.CanvasToolBar(
     editor: CanvasEditor,
     keymap: Keymap,
     focus: () -> Unit,
-    top: Dp,
 ) {
     val rows = toolbarRows(editor.hierarchyMode)
     val shown = rows.flatten().toSet()
@@ -2210,10 +2139,10 @@ private fun BoxScope.CanvasToolBar(
     CanvasOptionsRail(
         modifier = Modifier
             .align(Alignment.TopStart)
-            .padding(start = 8.dp, top = top)
+            .padding(start = 8.dp, top = 44.dp)
             .tutorialTarget(TutorialTargetId.CANVAS_TOOLBAR),
         leading = true,
-        expandedWidth = 156.dp,
+        expandedWidth = 140.dp,
         scrollable = true,
     ) {
         // Every tool is walked in one fixed order, each row's visibility following the mode. Walking the mode's own
@@ -2236,7 +2165,7 @@ private fun BoxScope.CanvasToolBar(
                         ToolIcon(
                             tool = tool,
                             color = color,
-                            brushShape = if (tool == CanvasTool.BRUSH) editor.brushShape else null,
+                            brushShape = if (tool == CanvasTool.BRUSH || tool == CanvasTool.WEIGHT_PAINT) editor.brushShape else null,
                             paintShape = if (tool == CanvasTool.PAINT_SHAPE) editor.paintShape else null,
                             skeletonEditSubTool = if (tool == CanvasTool.SKELETON_EDIT) editor.skeletonEditSubTool else null,
                         )
@@ -2245,6 +2174,68 @@ private fun BoxScope.CanvasToolBar(
                         editor.activateTool(tool)
                         focus()
                     },
+                )
+            }
+        }
+
+        // A tool's variants unfold under it while it is in hand - Glue's sub-tools, the skeleton tools' sub-tools,
+        // the brushes' tips, the paint shape's faces and the vertex groups the weight tools write - each with the
+        // number key that picks it.
+        RailVariants(editor.tool == CanvasTool.GLUE, GLUE_SUB_TOOL_LABELS.map { it.first }, { editor.glueSubTool == it },
+            { tr(GLUE_SUB_TOOL_LABELS.first { p -> p.first == it }.second) }, { color, sub -> GlueSubToolIcon(subTool = sub, color = color) },
+            keys = { pickKey(keymap, it) }) { sub ->
+            editor.glueSubTool = sub
+            editor.activateTool(CanvasTool.GLUE)
+            focus()
+        }
+        RailVariants(editor.tool == CanvasTool.SKELETON_EDIT && CanvasTool.SKELETON_EDIT in shown, SkeletonEditSubTool.entries,
+            { editor.skeletonEditSubTool == it }, { tr(it.labelKey) }, { color, sub -> SkeletonEditSubToolIcon(subTool = sub, color = color) },
+            keys = { pickKey(keymap, it) }) { sub -> editor.skeletonEditSubTool = sub; focus() }
+        RailVariants(editor.tool == CanvasTool.SKELETON_POSE && CanvasTool.SKELETON_POSE in shown, SkeletonPoseSubTool.entries,
+            { editor.skeletonPoseSubTool == it }, { tr(it.labelKey) }, { color, sub -> SkeletonPoseSubToolIcon(sub, color) },
+            keys = { pickKey(keymap, it) }) { sub -> editor.skeletonPoseSubTool = sub; focus() }
+        // The deform brushes and the weight brush share their tip. The number keys reach it only where nothing
+        // else of the mode answers to them (Deform's levels on a warp, Simulate's group kinds).
+        val tipKeys = editor.hierarchyMode != EditHierarchyMode.SIMULATE && !editor.deformLevelsShown()
+        RailVariants(editor.tool in DEFORM_BRUSH_TOOLS || editor.tool == CanvasTool.WEIGHT_PAINT, BrushShape.entries,
+            { editor.brushShape == it }, { tr(it.labelKey) }, { color, shape -> BrushShapeIcon(shape = shape, color = color) },
+            keys = { if (tipKeys) pickKey(keymap, it) else "" }) { shape -> editor.brushShape = shape; focus() }
+        // The shape tool's three faces live under it the way the deform brush carries its tips.
+        RailVariants(editor.hierarchyMode == EditHierarchyMode.PAINT && editor.tool == CanvasTool.PAINT_SHAPE, PaintShape.entries,
+            { editor.paintShape == it }, { tr(it.labelKey) }, { color, shape -> PaintShapeIcon(shape = shape, color = color) },
+            keys = { keymap.labelFor(PaintShape.entries[it].action).orEmpty() }) { shape -> editor.selectPaintShape(shape); focus() }
+        // Picking a group kind is picking which group of the mesh the weight strokes write.
+        RailVariants(editor.hierarchyMode == EditHierarchyMode.SIMULATE, PAINTED_GROUP_KINDS, { editor.weightGroupKind == it },
+            { tr("sim.group.${it.jsonName}") }, { _, kind -> VertexGroupKindIcon(kind = kind, color = vertexGroupKindColor(kind)) },
+            keys = { pickKey(keymap, it) }) { kind ->
+            editor.weightGroupKind = kind
+            if (editor.tool !in WEIGHT_TOOLS) editor.activateTool(CanvasTool.WEIGHT_PAINT)
+            focus()
+        }
+    }
+}
+
+/** The variants of the tool in hand as rows under the palette, behind a rule, sliding in and out with the tool. */
+@Composable
+private fun <T> CanvasRailScope.RailVariants(
+    visible: Boolean,
+    choices: List<T>,
+    selected: (T) -> Boolean,
+    label: (T) -> String,
+    icon: @Composable (Color, T) -> Unit,
+    keys: (Int) -> String,
+    onPick: (T) -> Unit,
+) {
+    RailRows(visible) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            RailDivider(strong = true)
+            choices.forEachIndexed { i, choice ->
+                RailItem(
+                    label = label(choice),
+                    selected = selected(choice),
+                    keyLabel = keys(i),
+                    icon = { color -> icon(color, choice) },
+                    onClick = { onPick(choice) },
                 )
             }
         }
@@ -2305,8 +2296,9 @@ private fun BoxScope.HierarchyModeBar(
         )
 
         // 1 2 3 deformation level expansion animation
+        // Only a warp keys its levels apart - 1 its grid points, 2 its Bezier handles - so only a warp shows them.
         AnimatedVisibility(
-            visible = editor.hierarchyMode == EditHierarchyMode.DEFORM,
+            visible = editor.deformLevelsShown(),
             enter = expandHorizontally(
                 animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                 expandFrom = Alignment.Start,
@@ -2321,12 +2313,12 @@ private fun BoxScope.HierarchyModeBar(
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 BarDivider()
-                (1..3).map { lvl ->
+                (1..2).map { lvl ->
                     val key = pickKey(editor.state.keymap, lvl - 1)
-                    lvl to (tr("editor.level.$lvl") + " · " + tr("editor.level.$lvl.desc") + if (key.isEmpty()) "" else "  ($key)")
+                    lvl to (tr("editor.level.$lvl.desc") + if (key.isEmpty()) "" else "  ($key)")
                 }.forEach { (lvl, tooltip) ->
                     BarChip(
-                        label = "$lvl",
+                        label = tr("editor.level.$lvl"),
                         selected = editor.editLevel == lvl,
                         tooltip = tooltip,
                         onClick = {
@@ -2440,6 +2432,21 @@ private fun BoxScope.HierarchyModeBar(
                     },
                 )
             }
+        }
+
+        // The tool's element mode and the confirm and cancel of a step in hand.
+        AnimatedVisibility(
+            visible = topOptions(editor).isNotEmpty(),
+            enter = expandHorizontally(
+                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                expandFrom = Alignment.Start,
+            ) + fadeIn(animationSpec = tween(150)),
+            exit = shrinkHorizontally(
+                animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
+                shrinkTowards = Alignment.Start,
+            ) + fadeOut(animationSpec = tween(100)),
+        ) {
+            ModeBarToolOptions(editor, focus)
         }
 
         // Current edit target badge — shown whenever a mesh/deformer is selected so the label
@@ -2855,15 +2862,9 @@ private fun DrawScope.drawDeformPathCurve(screenPoints: List<Offset>, stroke: Co
     }
 }
 
-private fun DrawScope.drawDeformPathHandle(p: Offset, colors: ToolColors, hovered: Boolean, active: Boolean) {
-    if (hovered) {
-        drawCircle(Color.White, 8f, p, style = Stroke(2f))
-        drawCircle(colors.accent, 5f, p)
-    } else {
-        drawCircle(colors.windowBackground, 5.5f, p)
-        drawCircle(if (active) colors.accent else colors.textPrimary, 4f, p)
-    }
-}
+/** A path's control point, in the shared point look ([MeshLook]). */
+private fun DrawScope.drawDeformPathHandle(p: Offset, colors: ToolColors, hovered: Boolean, active: Boolean) =
+    drawMeshHandle(p, MeshLook.Structure, colors.accent, selected = active, hovered = hovered)
 
 /** Live width (outer dashed) / hardness (inner) rings while placing a deform path. */
 private fun DrawScope.drawDeformPathInfluencePreview(
@@ -2963,3 +2964,9 @@ private val uniqueEdgeCache = java.util.WeakHashMap<IntArray, List<org.umamo.edi
 private fun cachedUniqueEdges(indices: IntArray): List<org.umamo.edit.MeshElement.Edge> =
     uniqueEdgeCache.getOrPut(indices) { MeshTopology.uniqueEdges(indices) }
 
+
+/** The Bezier level's curves and anchor rings, apart from the lattice's accent so the two never read as one. */
+private val BezierCurveColor = Color(0xFF5CC8F0)
+
+/** The Bezier level's tangent handles and their stems. */
+private val BezierHandleColor = Color(0xFFF2B84B)

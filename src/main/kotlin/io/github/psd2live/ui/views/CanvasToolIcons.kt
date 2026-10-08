@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.psd2live.ui.BrushShape
@@ -21,6 +22,7 @@ import io.github.psd2live.ui.GlueSubTool
 import io.github.psd2live.ui.PaintShape
 import io.github.psd2live.ui.SkeletonEditSubTool
 import io.github.psd2live.ui.SkeletonPoseSubTool
+import io.github.psd2live.ui.components.ICON_FINE
 import io.github.psd2live.ui.components.ICON_LINE
 import io.github.psd2live.ui.components.IconPen
 import io.github.psd2live.ui.components.deformPath
@@ -406,26 +408,37 @@ private fun IconPen.knife() = turned(-45f) {
     fillBox(12f, 7.2f, 5.6f, 3.4f, 1.4f)
 }
 
-/** A triangle whose corners carry falling weights, each dot in the weight colour the canvas paints it. */
+/** Weight paint: the paint brush pressed into the patch of falloff it lays its weight over. */
 private fun IconPen.weightPaint() {
-    val face = path { m(3f, 14.5f); l(9f, 4f); l(15f, 14.5f); z() }
-    fill(face, soft)
-    outline(face)
-    dot(3f, 14.5f, 2.4f, tone(weightHeatColor(1f)))
-    dot(9f, 4f, 2f, tone(weightHeatColor(0.5f)))
-    dot(15f, 14.5f, 1.6f, tone(weightHeatColor(0f)))
+    dot(4.6f, 13.4f, 3.4f, soft)
+    ring(4.6f, 13.4f, 3.4f, width = ICON_FINE, dash = floatArrayOf(1.4f, 1.1f))
+    scope.translate(1.6f * s, -1.6f * s) {
+        turned(-45f) {
+            fill(path {
+                m(0.6f, 9f)
+                c(2f, 7.4f, 3.8f, 6.9f, 5.8f, 7.1f)
+                l(5.8f, 10.9f)
+                c(3.8f, 11.1f, 2f, 10.6f, 0.6f, 9f)
+                z()
+            })
+            box(6.4f, 6.9f, 3f, 4.2f, 0.6f)
+            outline(path { m(10f, 7.6f); l(16.2f, 8.1f); q(17.8f, 9f, 16.2f, 9.9f); l(10f, 10.4f) })
+        }
+    }
 }
 
-/** A ramp from full to empty along the drag, in the weight colours, with the drag's two ends. */
+/**
+ * Weight gradient: the gradient tool's I standing upright - full weight at the bar it starts from, none at the bar it
+ * ends on, and the stem between fading from one to the other.
+ */
 private fun IconPen.weightGradient() {
-    val bands = 5
-    for (i in 0 until bands) {
-        fillBox(2.6f + i * 2.56f, 5f, 2.56f, 8f, 0f, tone(weightHeatColor(1f - i / (bands - 1f)), 0.75f))
+    fillBox(3.6f, 2.4f, 10.8f, 2.6f, 1.1f)
+    val steps = 5
+    for (i in 0 until steps) {
+        val y0 = 5f + i * 8f / steps
+        line(9f, y0, 9f, y0 + 8f / steps, tint = color.copy(alpha = color.alpha * (1f - 0.75f * (i + 0.5f) / steps)))
     }
-    box(2.6f, 5f, 12.8f, 8f, 0.8f)
-    line(3.6f, 9f, 14.4f, 9f, width = 1.1f)
-    dot(3.6f, 9f, 1.8f)
-    ring(14.4f, 9f, 1.6f, width = 1.1f)
+    box(3.6f, 13f, 10.8f, 2.6f, 1.1f)
 }
 
 // --- painting --------------------------------------------------------------------------------------------

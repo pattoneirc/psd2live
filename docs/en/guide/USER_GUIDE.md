@@ -55,7 +55,7 @@ The catalog has 19 topics. The beginner path contains the 18 lessons below; the 
 | 9 | Edit mode | Subdivide, connect, cut or remove mesh elements; inspect existing poses afterward. |
 | 10 | Paint mode | Select a layer, paint pixels and use session-local undo. Apply or discard the session. |
 | 11 | Inspector | Edit properties for the selected object: name, ownership, masks, drawing order, opacity and colors. |
-| 12 | Tool options | The options bar under the mode bar sets the current tool's radius, hardness, strength and so on; the context menu shows the same values plus the tool's actions; the Tools dock keeps advanced settings. |
+| 12 | Tool options | The options bar at the canvas's bottom left sets the current tool's radius, hardness, strength and so on; the context menu shows the same values plus the tool's actions; the Tools dock keeps advanced settings. |
 | 13 | Skeleton rigging and editing | Create, extrude, duplicate and mirror bones in Skeleton mode, batch-bind ArtMeshes, pose with FK/IK, paint and clean skin weights and save poses; configure parameter sampling limits in the panel. Export bakes this into Cubism parameters, deformers and keyforms. |
 | 14 | Animation editor | Tune generated motions with each preset's knobs; edit parameter tracks and keyframes on the timeline with auto-keying, default Bezier easing, track key marks, and shared poses across canvases. |
 | 15 | Physics canvas | Configure inputs, pendulums and outputs, then calibrate output scale against the observed range. |
@@ -98,7 +98,7 @@ These are the default (Photoshop-style) bindings. **Settings** can switch to Ble
 | Turn the brush | `Alt+WheelUp` / `Alt+WheelDown`, 45° steps with Shift |
 | Frame selection / reset camera | `F` / `Home` or `0` |
 | Brush size / hardness / opacity | `[` `]` / `Shift+[` `Shift+]` / `Alt+Shift+[` `Alt+Shift+]`, on the current tool's value in the options bar |
-| Choice 1–5 of the mode or tool | `1`–`5`: Deform picks levels 1–3; Edit's selection tools pick vertex / edge / face; otherwise the variants the toolbar lists under the tool (brush tips, glue and skeleton sub-tools, weight group kinds, paint shapes) |
+| Choice 1–5 of the mode or tool | `1`–`5`: Deform picks levels 1–2 on a warp; Edit's selection tools pick vertex / edge / face; otherwise the variants the toolbar lists under the tool (brush tips, glue and skeleton sub-tools, weight group kinds, paint shapes) |
 | Temporary selection / toggle quick preview | Hold `Z`, release to restore / grave accent key (below Esc) |
 | Confirm / cancel | `Enter` / `Esc`; the current tool shows its own gestures |
 | Motion timeline: play / key the pose / step a frame | `Space` / `K` / `Left` `Right` (while the timeline has focus) |

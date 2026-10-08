@@ -161,7 +161,7 @@ private const val PAUSED_PHYSICS_POLL_MILLIS = 16L
 private const val ZOOM_DRAG_NOTCH_PX = 24f
 
 /** The tools whose tip has an angle a wheel notch can turn. */
-private val ANGLED_BRUSH_TOOLS = setOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE)
+private val ANGLED_BRUSH_TOOLS = setOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE, CanvasTool.WEIGHT_PAINT)
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -1379,15 +1379,6 @@ fun CanvasViewportComposable(
 							val mesh = item.drawable.mesh ?: continue
 							val positions = geometry.worldPositions[item.drawable.id] ?: continue
 							val strokeWidth = MeshWireframe.strokeWidth(item)
-							if (item.selected) {
-								g.color = java.awt.Color.WHITE
-								val radius = 2
-								for (i in 0 until mesh.vertexCount) {
-									val vx = viewport.x(positions[i * 2]).toInt()
-									val vy = viewport.yFromWorld(positions[i * 2 + 1]).toInt()
-									g.fillOval(vx - radius, vy - radius, radius * 2 + 1, radius * 2 + 1)
-								}
-							}
 							// Opaque artwork needs a dark halo under every wire so the mesh stays readable.
 							fun drawEdges(color: java.awt.Color, width: Float) {
 								g.color = color
@@ -1404,7 +1395,7 @@ fun CanvasViewportComposable(
 									)
 								}
 							}
-							if (showTexture && !item.dimmed) drawEdges(java.awt.Color(12, 13, 16, 150), strokeWidth + 1.6f)
+							if (showTexture && !item.dimmed) drawEdges(java.awt.Color(12, 13, 16, 140), strokeWidth + 1.6f)
 							drawEdges(MeshWireframe.wireColor(item), strokeWidth)
 						}
 					}
@@ -1677,13 +1668,8 @@ fun CanvasViewportComposable(
 					previewModel.hasRuntimePhysics -> "${fpsStr}${tr("canvas.preview.physicsOn", zoomPct)}"
 					else -> "${fpsStr}${tr("canvas.preview.physicsOff", zoomPct)}"
 				} + if (!referenceSimulation && canvasState.rigEdits.simEdits.any { it.enabled && it.bake == null }) tr("canvas.preview.simUnbaked") else ""
-				CanvasMode.EDIT -> if (showMesh) {
-					val vertexCount = previewModel.rig.puppet.drawables.sumOf { it.mesh?.vertexCount ?: 0 }
-					val triangleCount = previewModel.rig.puppet.drawables.sumOf { it.mesh?.triangleCount ?: 0 }
-					tr("canvas.mesh.stats", previewModel.rig.puppet.drawables.size, vertexCount, triangleCount, zoomPct)
-				} else {
-					"$zoomPct%"
-				}
+				// The edit canvas keeps its bottom left for the tool options bar.
+				CanvasMode.EDIT -> ""
 			}
 
 			// Bottom-left: zoom/FPS/physics stats pill.

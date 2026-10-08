@@ -24,9 +24,13 @@ internal enum class OptionIcon {
     FILL, ERASE, SWAP, REMERGE, RESET, SELECTION, TOPOLOGY, CREATE, GROUP,
 }
 
-/** Where an option shows: the options bar, the context menu, or both. */
-internal enum class OptionPlace(val bar: Boolean, val menu: Boolean) {
-    BOTH(true, true), BAR(true, false), MENU(false, true),
+/**
+ * Where an option shows: the options bar at the bottom left, the context menu, or both - or the mode bar at the top
+ * and the menu ([TOP]), for what decides how the canvas is worked: the element mode, the confirm and cancel of a
+ * step in hand. The bottom bar keeps to the values that tune the tool.
+ */
+internal enum class OptionPlace(val bar: Boolean, val menu: Boolean, val top: Boolean = false) {
+    BOTH(true, true), BAR(true, false), MENU(false, true), TOP(false, true, true),
 }
 
 internal sealed interface ToolOption {
@@ -116,6 +120,8 @@ internal class ChoiceOption<T>(
     val inline: Boolean = true,
     override val place: OptionPlace = OptionPlace.BOTH,
     val variant: Boolean = false,
+    /** Whether a row of it in the menu carries its name; off for choices that name themselves. */
+    val captioned: Boolean = true,
 ) : ToolOption
 
 /** On or off. */

@@ -108,6 +108,50 @@ internal object GeneratedOverrides {
 		})
 	}
 
+	/**
+	 * Compiled [journal] entries of a generated [model] as the journal replays them, before the generators run: each
+	 * `canvas_geometry` edit and Bezier record without the parameters a generator adds that it was made at the
+	 * default of (see the single-entry form below). The points are unchanged: at those defaults the generated rig
+	 * shows the geometry the journal does.
+	 */
+	fun journalOnly(model: PuppetModel, overlay: RigEditOverlay, journal: List<JsonObject>, skins: PrimitiveSkins = PrimitiveSkins.None): List<JsonObject> {
+		val graph by lazy { DocumentGenerators.graph(overlay, primitives = skins) }
+		return journal.map { command ->
+			val op = command["op"]?.jsonPrimitive?.contentOrNull
+			if (op == RigBezierJournal.OP || op == "canvas_geometry") journalOnly(graph, model, command, skins) else command
+		}
+	}
+
+	/**
+	 * [command] (a `canvas_geometry` edit or a Bezier record) as the journal replays it, before the generators run:
+	 * without the parameters a generator adds that it was made at the default of. Its key leaves out a generated axis
+	 * there, so it lands on the rest cell the generator builds from; the viewing pose leaves out every parameter at
+	 * its default, which reads the same left out. Either would otherwise name a parameter the replay has not got yet.
+	 */
+	private fun journalOnly(graph: io.github.psd2live.format.compile.document.GeneratorGraph, model: PuppetModel, command: JsonObject,
+							skins: PrimitiveSkins): JsonObject {
+		val bezier = command["op"]?.jsonPrimitive?.contentOrNull == RigBezierJournal.OP
+		val kind = if (bezier) "warp" else kindOf(command) ?: return command
+		val id = command.getValue("id").jsonPrimitive.content
+		val defaults = model.parameters.associate { it.id.raw to it.default }
+		fun atDefault(parameterId: String, value: JsonElement) =
+			defaults[parameterId]?.let { abs(value.jsonPrimitive.float - it) <= org.umamo.runtime.eval.EPS_KEY } == true
+		fun generated(parameterId: String) =
+			(if (kind == "mesh") skins.owner(DrawableId(id), ParameterId(parameterId)) else null) != null ||
+				DocumentGenerators.owner(graph, DocumentGenerators.keyform(kind, id, parameterId)) != null
+		fun cleaned(edit: JsonObject): JsonObject {
+			val key = edit["key"]?.jsonObject ?: return edit
+			val keptKey = JsonObject(key.filter { (parameterId, value) -> !(atDefault(parameterId, value) && generated(parameterId)) })
+			val keptPose = edit["pose"]?.jsonObject?.let { pose -> JsonObject(pose.filter { (parameterId, value) -> !atDefault(parameterId, value) }) }
+			if (keptKey.size == key.size && keptPose?.size == edit["pose"]?.jsonObject?.size) return edit
+			return JsonObject(edit + ("key" to keptKey) + (keptPose?.let { mapOf("pose" to it) } ?: emptyMap()))
+		}
+		val outer = cleaned(command)
+		if (!bezier) return outer
+		val geometry = command["geometry"]?.takeIf { it != JsonNull }?.jsonObject ?: return outer
+		return JsonObject(outer + ("geometry" to cleaned(geometry)))
+	}
+
 	/** The coordinate of the cell at exactly [key] in [grid] (every axis keyed, at one of its keys), or null. */
 	private fun coordinate(grid: KeyformGrid<*>, key: Map<String, Float>): IntArray? {
 		// The key names exactly the grid's axes: a generator that no longer adds its axis leaves no generated cell,
