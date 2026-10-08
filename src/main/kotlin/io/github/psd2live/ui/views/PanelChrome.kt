@@ -103,11 +103,21 @@ private val PanelSearchDockWidth = 240.dp
 private const val PanelSearchFieldShare = 0.4f
 private val PanelSearchFieldWidths = 120.dp..220.dp
 
-/** The search a [PanelToolbar] puts first. */
+/** A content-fitted search field is never narrower than this, nor wider than [PanelSearchFitShare] of the toolbar. */
+private val PanelSearchFitMin = 96.dp
+private const val PanelSearchFitShare = 0.5f
+/** The field's padding, search icon and clear button around its text. */
+private val PanelSearchChrome = 52.dp
+
+/**
+ * The search a [PanelToolbar] puts first. With [fitContent] a docked field is as wide as its query, or its placeholder
+ * while empty, so the controls beside it keep the rest of the row.
+ */
 internal class PanelSearch(
 	val query: String,
 	val onQueryChange: (String) -> Unit,
 	val placeholder: String,
+	val fitContent: Boolean = false,
 )
 
 /**
@@ -129,6 +139,12 @@ internal fun PanelToolbar(
 	content: @Composable RowScope.(labelsShown: Int) -> Unit,
 ) {
 	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val textMeasurer = rememberTextMeasurer()
+	val fitText = search?.takeIf { it.fitContent }?.let { it.query.ifEmpty { it.placeholder } }
+	val fitTextWidth = if (fitText == null) 0.dp else with(LocalDensity.current) {
+		remember(fitText, typography.body) { textMeasurer.measure(fitText, typography.body).size.width }.toDp()
+	}
 	Column(Modifier.fillMaxWidth()) {
 		Column(
 			modifier = modifier
@@ -141,7 +157,11 @@ internal fun PanelToolbar(
 				val docked = search != null && maxWidth >= PanelSearchDockWidth
 				var opened by remember { mutableStateOf(false) }
 				val expanded = search != null && !docked && (opened || search.query.isNotEmpty())
-				val fieldWidth = (maxWidth * PanelSearchFieldShare).coerceIn(PanelSearchFieldWidths.start, PanelSearchFieldWidths.endInclusive)
+				val fieldWidth = if (fitText != null) {
+					(fitTextWidth + PanelSearchChrome).coerceIn(PanelSearchFitMin, (maxWidth * PanelSearchFitShare).coerceAtLeast(PanelSearchFitMin))
+				} else {
+					(maxWidth * PanelSearchFieldShare).coerceIn(PanelSearchFieldWidths.start, PanelSearchFieldWidths.endInclusive)
+				}
 				val room = maxWidth - reservedWidth
 				val labelRoom = when {
 					search == null -> room

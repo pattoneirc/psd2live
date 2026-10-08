@@ -1,6 +1,15 @@
 package io.github.psd2live.ui.views
 
 import io.github.psd2live.ui.utils.toImageBitmapFast
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.unit.Dp
+import io.github.psd2live.ui.components.ICON_FINE
+import io.github.psd2live.ui.state.AppSettings
+import kotlinx.coroutines.flow.drop
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -115,6 +124,7 @@ fun BottomLogDock(
 	var minLevel by remember { mutableStateOf(LogLevel.INFO) }
 	var searchQuery by remember { mutableStateOf("") }
 	var autoScroll by remember { mutableStateOf(true) }
+	var columns by remember { mutableStateOf(LogColumnLayout.decode(AppSettings.logColumns)) }
 
 	val listState = rememberLazyListState()
 
@@ -140,9 +150,24 @@ fun BottomLogDock(
 	val rows = remember(filteredEntries) { foldRepeats(filteredEntries) }
 	val expandedIds = remember { mutableStateMapOf<String, Boolean>() }
 
+	// Our own scroll to the end must not read as the user leaving it.
+	var following by remember { mutableStateOf(false) }
 	LaunchedEffect(rows.size, rows.lastOrNull()?.count, autoScroll) {
 		if (autoScroll && rows.isNotEmpty()) {
-			listState.scrollToItem(rows.size - 1)
+			following = true
+			try {
+				// The offset clamps to the list's end, so a last line taller than the view is shown to its bottom.
+				listState.scrollToItem(rows.size - 1, Int.MAX_VALUE)
+			} finally {
+				following = false
+			}
+		}
+	}
+	// Scrolling up leaves the newest line and stops following; scrolling back down to the end follows again.
+	LaunchedEffect(listState) {
+		// Only the end of a scroll decides, not the state the list starts in.
+		snapshotFlow { listState.isScrollInProgress }.drop(1).collect { scrolling ->
+			if (!scrolling && !following) autoScroll = !listState.canScrollForward
 		}
 	}
 
@@ -211,7 +236,7 @@ fun BottomLogDock(
 
 		PanelToolbar(
 			iconCount = 3,
-			search = if (expanded) PanelSearch(searchQuery, { searchQuery = it }, tr("log.dock.search")) else null,
+			search = if (expanded) PanelSearch(searchQuery, { searchQuery = it }, tr("log.dock.search"), fitContent = true) else null,
 		) {
 			if (!fillDock) {
 				PanelIconButton(
@@ -242,7 +267,7 @@ fun BottomLogDock(
 					active = autoScroll,
 					tooltip = tr("log.dock.autoScroll"),
 				) {
-					IconLogAutoScroll(tint = if (autoScroll) colors.accent else colors.textMuted)
+					IconLogAutoScroll(tint = if (autoScroll) colors.accent else colors.textMuted, following = autoScroll)
 				}
 				PanelToolbarSeparator()
 				PanelIconButton(onClick = { viewModel.clearLogs() }, tooltip = tr("log.dock.clear")) {
@@ -255,12 +280,18 @@ fun BottomLogDock(
 		}
 
 		if (expanded) {
-			Box(
+			Column(
 				modifier = Modifier
 					.fillMaxWidth()
 					.then(if (fillDock) Modifier.weight(1f) else Modifier.height(state.logPanelHeight.dp))
 					.background(colors.inputBackground),
 			) {
+				LogColumnHeader(
+					layout = columns,
+					onChange = { columns = it },
+					onCommit = { AppSettings.logColumns = columns.encode() },
+				)
+				Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
 				if (rows.isEmpty()) {
 					Box(
 						modifier = Modifier.fillMaxSize(),
@@ -281,6 +312,7 @@ fun BottomLogDock(
 							items(rows, key = { it.first.id }) { row ->
 								LogEntryRow(
 									entry = row.latest,
+									columns = columns,
 									count = row.count,
 									expanded = expandedIds[row.first.id] == true,
 									onToggle = { expandedIds[row.first.id] = expandedIds[row.first.id] != true },
@@ -291,6 +323,7 @@ fun BottomLogDock(
 							}
 						}
 					}
+				}
 				}
 			}
 		}
@@ -542,12 +575,20 @@ private fun LogLevelMenu(
 	}
 }
 
-/** Follow the newest line: an arrow down to the floor. */
+/**
+ * Follow the newest line: log lines on the left, an arrow down to the floor beside them. While following, the arrow
+ * reaches the floor and the newest line is drawn full; otherwise the arrow stops short and the floor is faint.
+ */
 @Composable
-private fun IconLogAutoScroll(tint: Color) = GridIcon(Modifier.size(12.dp), tint) {
-	line(9f, 2.4f, 9f, 12.4f)
-	chevron(9f, 12.4f, 0f, 1f, 4.4f)
-	line(3f, 15.6f, 15f, 15.6f)
+private fun IconLogAutoScroll(tint: Color, following: Boolean) = GridIcon(Modifier.size(13.dp), tint) {
+	line(2.4f, 3.6f, 8.6f, 3.6f, ICON_FINE)
+	line(2.4f, 7.4f, 8.6f, 7.4f, ICON_FINE)
+	line(2.4f, 11.2f, 6.6f, 11.2f, ICON_FINE)
+	if (following) fillBox(2f, 13.8f, 7f, 2.4f, 0.8f) else line(2.4f, 15f, 6.6f, 15f, ICON_FINE)
+	val tip = if (following) 12.6f else 11f
+	line(13f, 2.4f, 13f, tip)
+	chevron(13f, tip, 0f, 1f, 3.2f)
+	line(10.4f, 15.6f, 15.6f, 15.6f, tint = if (following) color else soft)
 }
 
 /** Clear the log: the shared bin. */
@@ -578,21 +619,230 @@ private fun levelStripe(level: LogLevel, colors: ToolColors): Color = when (leve
 }
 
 private val LOG_ROW_START = 3.dp
+/** The detail toggle's column, its gap included. */
 private val LOG_TOGGLE_WIDTH = 18.dp
-private val LOG_TIME_WIDTH = 50.dp
-private val LOG_SOURCE_WIDTH = 40.dp
-private val LOG_TAG_WIDTH = 64.dp
 private val LOG_GAP = 6.dp
+private val LOG_HEADER_HEIGHT = 18.dp
+
+/** A fixed column's width on screen, its trailing gap included, so header and rows line up cell for cell. */
+private fun LogColumnLayout.cellWidth(column: LogColumn) = width(column).dp + LOG_GAP
+
 /** Where the message column starts, for the detail and image under it. */
-private val LOG_MESSAGE_INSET = LOG_TOGGLE_WIDTH + LOG_TIME_WIDTH + LOG_SOURCE_WIDTH + LOG_TAG_WIDTH + LOG_GAP * 3
+private fun LogColumnLayout.messageInset(): Dp =
+	visible.takeWhile { it != LogColumn.MESSAGE }.fold(LOG_TOGGLE_WIDTH) { inset, column -> inset + cellWidth(column) }
+
+@Composable
+private fun LogColumn.title(): String = when (this) {
+	LogColumn.TIME -> tr("log.dock.column.time")
+	LogColumn.SOURCE -> tr("log.dock.column.source")
+	LogColumn.TAG -> tr("log.dock.column.tag")
+	LogColumn.MESSAGE -> tr("log.dock.column.message")
+}
 
 /**
- * One line: a level stripe at the edge, then a fixed column each for the detail toggle, time, source and tag, so
- * messages line up; errors and warnings carry a faint wash of their colour. The detail opens under the message.
+ * The column titles over the log. Dragging a title moves its column, dragging the edge after it sets its width, and
+ * the right-click menu shows or hides the time, source and tag columns or restores the defaults. [onChange] follows
+ * a drag as it goes; [onCommit] runs once it ends, to keep the layout.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun LogColumnHeader(
+	layout: LogColumnLayout,
+	onChange: (LogColumnLayout) -> Unit,
+	onCommit: () -> Unit,
+) {
+	val colors = LocalToolColors.current
+	val density = LocalDensity.current
+	val current by rememberUpdatedState(layout)
+	val change by rememberUpdatedState(onChange)
+	val commit by rememberUpdatedState(onCommit)
+	val cellWidths = remember { mutableStateMapOf<LogColumn, Int>() }
+	var dragging by remember { mutableStateOf<LogColumn?>(null) }
+	var dragOffset by remember { mutableStateOf(0f) }
+	var menuAt by remember { mutableStateOf<IntOffset?>(null) }
+
+	Box(
+		modifier = Modifier
+			.fillMaxWidth()
+			.height(LOG_HEADER_HEIGHT)
+			.background(colors.panelBackground)
+			.drawBehind {
+				val hairline = 1.dp.toPx()
+				drawRect(colors.divider, topLeft = Offset(0f, size.height - hairline), size = Size(size.width, hairline))
+			}
+			.pointerInput(Unit) {
+				awaitPointerEventScope {
+					while (true) {
+						val event = awaitPointerEvent()
+						if (event.type == PointerEventType.Press && event.buttons.isSecondaryPressed) {
+							val position = event.changes.first().position
+							menuAt = IntOffset(position.x.toInt(), position.y.toInt())
+						}
+					}
+				}
+			},
+	) {
+		Row(
+			modifier = Modifier.fillMaxSize().padding(start = LOG_ROW_START, end = 6.dp),
+			verticalAlignment = Alignment.CenterVertically,
+		) {
+			Spacer(Modifier.width(LOG_TOGGLE_WIDTH))
+			val visible = layout.visible
+			for (column in visible) {
+				key(column) {
+					val isMessage = column == LogColumn.MESSAGE
+					val active = dragging == column
+					Box(
+						modifier = Modifier
+							.then(if (isMessage) Modifier.weight(1f) else Modifier.width(layout.cellWidth(column)))
+							.fillMaxHeight()
+							.onGloballyPositioned { cellWidths[column] = it.size.width }
+							.zIndex(if (active) 1f else 0f)
+							.graphicsLayer { translationX = if (active) dragOffset else 0f },
+						contentAlignment = Alignment.CenterStart,
+					) {
+						LogHeaderTitle(
+							text = column.title(),
+							active = active,
+							modifier = Modifier
+								.fillMaxHeight()
+								.padding(end = LOG_GAP)
+								.fillMaxWidth()
+								.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)))
+								.pointerInput(column) {
+									// Several moves can land before the next composition hands back the layout.
+									var working = current
+									detectHorizontalDragGestures(
+										onDragStart = { working = current; dragging = column; dragOffset = 0f },
+										onDragEnd = { dragging = null; dragOffset = 0f; commit() },
+										onDragCancel = { dragging = null; dragOffset = 0f; commit() },
+									) { pointer, delta ->
+										pointer.consume()
+										dragOffset += delta
+										val shown = working.visible
+										val index = shown.indexOf(column)
+										val next = shown.getOrNull(index + 1)
+										val previous = shown.getOrNull(index - 1)
+										val nextWidth = next?.let { cellWidths[it] } ?: 0
+										val previousWidth = previous?.let { cellWidths[it] } ?: 0
+										// Past half of a neighbour, trade places with it; the offset carries over.
+										if (next != null && dragOffset > nextWidth / 2f) {
+											working = working.moved(column, index + 1)
+											change(working)
+											dragOffset -= nextWidth
+										} else if (previous != null && dragOffset < -previousWidth / 2f) {
+											working = working.moved(column, index - 1)
+											change(working)
+											dragOffset += previousWidth
+										}
+									}
+								},
+						)
+						if (!isMessage) {
+							Box(
+								modifier = Modifier
+									.align(Alignment.CenterEnd)
+									.width(LOG_GAP)
+									.fillMaxHeight()
+									.pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)))
+									.pointerInput(column) {
+										var start = 0f
+										var moved = 0f
+										detectHorizontalDragGestures(
+											onDragStart = { start = current.width(column); moved = 0f },
+											onDragEnd = { commit() },
+											onDragCancel = { commit() },
+										) { pointer, delta ->
+											pointer.consume()
+											moved += delta
+											change(current.resized(column, start + with(density) { moved.toDp() }.value))
+										}
+									},
+								contentAlignment = Alignment.Center,
+							) {
+								Box(Modifier.width(1.dp).height(10.dp).background(colors.divider))
+							}
+						}
+					}
+				}
+			}
+		}
+
+		menuAt?.let { position ->
+			Popup(
+				alignment = Alignment.TopStart,
+				offset = position,
+				onDismissRequest = { menuAt = null },
+				properties = PopupProperties(focusable = true),
+			) {
+				Surface(
+					color = colors.panelElevated,
+					border = BorderStroke(1.dp, colors.border),
+					shape = RoundedCornerShape(3.dp),
+					elevation = 8.dp,
+				) {
+					Column(modifier = Modifier.widthIn(min = 140.dp, max = 220.dp)) {
+						for (column in LogColumn.entries.filter { it != LogColumn.MESSAGE }) {
+							AppMenuItem(
+								text = column.title(),
+								isChecked = column !in layout.hidden,
+								onClick = { change(layout.toggled(column)); commit() },
+							)
+						}
+						AppMenuItem(
+							text = tr("log.dock.column.reset"),
+							onClick = {
+								change(LogColumnLayout())
+								commit()
+								menuAt = null
+							},
+						)
+					}
+				}
+			}
+		}
+	}
+}
+
+@Composable
+private fun LogHeaderTitle(text: String, active: Boolean, modifier: Modifier) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
+	Box(
+		modifier = modifier
+			.hoverable(interaction)
+			.clip(RoundedCornerShape(2.dp))
+			.background(
+				when {
+					active -> colors.controlActive
+					hovered -> colors.controlHover.copy(alpha = 0.6f)
+					else -> Color.Transparent
+				},
+			)
+			.padding(horizontal = 2.dp),
+		contentAlignment = Alignment.CenterStart,
+	) {
+		Text(
+			text = text,
+			style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+			color = if (active || hovered) colors.textPrimary else colors.textMuted,
+			maxLines = 1,
+			overflow = TextOverflow.Ellipsis,
+		)
+	}
+}
+
+/**
+ * One line: a level stripe at the edge, then the detail toggle and the [columns] in their order and widths, so
+ * messages line up under the header; errors and warnings carry a faint wash of their colour. The detail opens under
+ * the message.
  */
 @Composable
 private fun LogEntryRow(
 	entry: AppLogEntry,
+	columns: LogColumnLayout,
 	count: Int,
 	expanded: Boolean,
 	onToggle: () -> Unit,
@@ -618,6 +868,7 @@ private fun LogEntryRow(
 		else -> Color.Transparent
 	}
 	val hasDetail = !entry.detail.isNullOrBlank()
+	val inset = columns.messageInset()
 
 	Column(
 		modifier = Modifier
@@ -631,13 +882,11 @@ private fun LogEntryRow(
 			}
 			.padding(start = LOG_ROW_START, end = 6.dp, top = 2.dp, bottom = 2.dp),
 	) {
-		Row(
-			verticalAlignment = Alignment.Top,
-			horizontalArrangement = Arrangement.spacedBy(LOG_GAP),
-		) {
+		Row(verticalAlignment = Alignment.Top) {
 			Box(
 				modifier = Modifier
-					.width(LOG_TOGGLE_WIDTH - LOG_GAP)
+					.width(LOG_TOGGLE_WIDTH)
+					.padding(end = LOG_GAP)
 					.height(16.dp)
 					.then(
 						if (hasDetail) Modifier
@@ -655,46 +904,58 @@ private fun LogEntryRow(
 					)
 				}
 			}
-			Text(
-				text = timeText,
-				style = typography.monoSmall.copy(fontSize = 10.sp, lineHeight = 16.sp),
-				color = colors.textMuted,
-				modifier = Modifier.width(LOG_TIME_WIDTH),
-				maxLines = 1,
-			)
-			Box(
-				modifier = Modifier.width(LOG_SOURCE_WIDTH).height(16.dp),
-				contentAlignment = Alignment.CenterStart,
-			) {
-				Box(
-					modifier = Modifier
-						.clip(RoundedCornerShape(2.dp))
-						.background(sourceBg)
-						.padding(horizontal = 4.dp),
-				) {
-					Text(
-						text = sourceLabel,
-						style = typography.monoSmall.copy(fontSize = 9.sp, lineHeight = 13.sp, fontWeight = FontWeight.Bold),
-						color = sourceFg,
+			for (column in columns.visible) {
+				val cell = if (column == LogColumn.MESSAGE) Modifier.weight(1f) else Modifier.width(columns.cellWidth(column))
+				when (column) {
+					LogColumn.TIME -> Text(
+						text = timeText,
+						style = typography.monoSmall.copy(fontSize = 10.sp, lineHeight = 16.sp),
+						color = colors.textMuted,
+						modifier = cell.padding(end = LOG_GAP),
 						maxLines = 1,
+						overflow = TextOverflow.Clip,
 					)
+					LogColumn.SOURCE -> Box(
+						modifier = cell.padding(end = LOG_GAP).height(16.dp),
+						contentAlignment = Alignment.CenterStart,
+					) {
+						Box(
+							modifier = Modifier
+								.clip(RoundedCornerShape(2.dp))
+								.background(sourceBg)
+								.padding(horizontal = 4.dp),
+						) {
+							Text(
+								text = sourceLabel,
+								style = typography.monoSmall.copy(fontSize = 9.sp, lineHeight = 13.sp, fontWeight = FontWeight.Bold),
+								color = sourceFg,
+								maxLines = 1,
+								overflow = TextOverflow.Clip,
+							)
+						}
+					}
+					LogColumn.TAG -> Text(
+						text = entry.tag,
+						style = typography.caption.copy(fontSize = 10.sp, lineHeight = 16.sp),
+						color = colors.textMuted,
+						modifier = cell.padding(end = LOG_GAP),
+						maxLines = 1,
+						overflow = TextOverflow.Ellipsis,
+					)
+					LogColumn.MESSAGE -> Row(
+						modifier = cell.padding(end = if (column == columns.visible.last()) 0.dp else LOG_GAP),
+						horizontalArrangement = Arrangement.spacedBy(LOG_GAP),
+					) {
+						Text(
+							text = entry.message,
+							style = typography.mono.copy(fontSize = 11.sp, lineHeight = 16.sp),
+							color = textColor,
+							modifier = Modifier.weight(1f),
+						)
+						if (count > 1) RepeatBadge(count)
+					}
 				}
 			}
-			Text(
-				text = entry.tag,
-				style = typography.caption.copy(fontSize = 10.sp, lineHeight = 16.sp),
-				color = colors.textMuted,
-				modifier = Modifier.width(LOG_TAG_WIDTH),
-				maxLines = 1,
-				overflow = TextOverflow.Ellipsis,
-			)
-			Text(
-				text = entry.message,
-				style = typography.mono.copy(fontSize = 11.sp, lineHeight = 16.sp),
-				color = textColor,
-				modifier = Modifier.weight(1f),
-			)
-			if (count > 1) RepeatBadge(count)
 		}
 
 		if (hasDetail && expanded) {
@@ -703,14 +964,14 @@ private fun LogEntryRow(
 				style = typography.monoSmall.copy(fontSize = 10.sp, lineHeight = 14.sp),
 				color = colors.textMuted,
 				modifier = Modifier
-					.padding(start = LOG_MESSAGE_INSET, top = 2.dp, bottom = 2.dp)
+					.padding(start = inset, top = 2.dp, bottom = 2.dp)
 					.clip(RoundedCornerShape(2.dp))
 					.background(colors.codeBackground.copy(alpha = 0.6f))
 					.padding(horizontal = 6.dp, vertical = 3.dp),
 			)
 		}
 
-		if (entry.imageBytes != null) LogImageCard(entry, onImageClick)
+		if (entry.imageBytes != null) LogImageCard(entry, inset, onImageClick)
 	}
 }
 
@@ -736,7 +997,7 @@ private fun RepeatBadge(count: Int) {
 
 /** A returned render under its line: a thumbnail on the checkerboard, its size, and a click to open it large. */
 @Composable
-private fun LogImageCard(entry: AppLogEntry, onImageClick: (ByteArray, String?) -> Unit) {
+private fun LogImageCard(entry: AppLogEntry, inset: Dp, onImageClick: (ByteArray, String?) -> Unit) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	val imgBytes = entry.imageBytes ?: return
@@ -750,7 +1011,7 @@ private fun LogImageCard(entry: AppLogEntry, onImageClick: (ByteArray, String?) 
 
 	Row(
 		modifier = Modifier
-			.padding(start = LOG_MESSAGE_INSET, top = 3.dp, bottom = 2.dp)
+			.padding(start = inset, top = 3.dp, bottom = 2.dp)
 			.clip(RoundedCornerShape(4.dp))
 			.background(colors.inputBackground)
 			.border(BorderStroke(1.dp, if (hovered) colors.accent else colors.border), RoundedCornerShape(4.dp))

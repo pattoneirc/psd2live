@@ -278,6 +278,18 @@ object AppSettings {
 	/** The prompts the user turned off with "Don't show again". */
 	fun mutedPrompts(): Set<AppPrompt> = AppPrompt.entries.filterTo(mutableSetOf()) { !promptEnabled(it) }
 
+	private const val KEY_LOG_COLUMNS = "log_columns"
+
+	/** The log dock's column order, widths and hidden columns, as the dock encodes them; null for the defaults. */
+	var logColumns: String?
+		get() = runCatching { preferences.get(KEY_LOG_COLUMNS, null) }.getOrNull()
+		set(value) {
+			runCatching {
+				if (value == null) preferences.remove(KEY_LOG_COLUMNS) else preferences.put(KEY_LOG_COLUMNS, value)
+				preferences.flush()
+			}
+		}
+
 	// ---------------------------------------------------------------------------------------
 	// Keyboard shortcuts
 	//
