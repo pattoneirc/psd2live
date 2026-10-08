@@ -171,6 +171,9 @@ class WindowGpu internal constructor(
 	/** The `DirectContext` that draws the window; null before its first frame. */
 	internal fun directContext(): DirectContext? = runCatching { contextField.get(handler) as? DirectContext }.getOrNull()
 
+	internal fun isCurrentContext(): Boolean = isCurrent()
+	internal val pixelGeometry: org.jetbrains.skia.PixelGeometry? get() = runCatching { layer.pixelGeometry }.getOrNull()
+
 	/** Whether this context is current on the calling thread, which is what lets GL calls reach it. */
 	private fun isCurrent(): Boolean = when (platform) {
 		SkiaGpu.Platform.WGL -> org.lwjgl.opengl.WGL.wglGetCurrentContext(null) == glContext
@@ -235,8 +238,10 @@ class WindowGpu internal constructor(
 		val inner = current
 		val wrapper = object : SkikoRenderDelegate {
 			override fun onRender(canvas: org.jetbrains.skia.Canvas, width: Int, height: Int, nanoTime: Long) {
+				pacing.frame(System.nanoTime())
 				if (tasks.isNotEmpty()) turn { }
-				inner.onRender(canvas, width, height, nanoTime)
+				if (!multisampled.render(canvas, width, height) { inner.onRender(it, width, height, nanoTime) })
+					inner.onRender(canvas, width, height, nanoTime)
 			}
 		}
 		installed = wrapper
@@ -245,5 +250,104 @@ class WindowGpu internal constructor(
 
 	internal fun requestRedraw() {
 		runCatching { layer.needRedraw() }
+	}
+
+	private val pacing = AdaptiveVsync(layer, redrawer)
+	private val multisampled = MultisampledWindow(this)
+}
+
+/**
+ * Draws the window through a multisampled target. Skia turns a frame's draws into GPU work on the CPU, and without
+ * MSAA it makes the coverage of every antialiased path and shape there too; with MSAA the GPU's own rasterizer does,
+ * which halves that part of the frame. Skiko's window surface is single-sampled, so the frame Compose records is
+ * replayed into a multisampled texture of the window's size and the window draws that texture: Skiko then replays
+ * one image instead of the whole window. Drawing Compose straight into the texture instead of recording first is
+ * far slower: its layers are Skiko render nodes, which flush poorly into a GPU canvas.
+ *
+ * Samples from `psd2live.msaa` (default 4; 0 or 1 keeps Skiko's own path).
+ */
+internal class MultisampledWindow(private val gpu: WindowGpu) {
+	private val samples = System.getProperty("psd2live.msaa")?.toIntOrNull() ?: 4
+	private var surface: org.jetbrains.skia.Surface? = null
+	private var failed = false
+
+	/** Records [draw] and draws it into [canvas] through the multisampled target; false when it did not. */
+	fun render(canvas: org.jetbrains.skia.Canvas, width: Int, height: Int, draw: (org.jetbrains.skia.Canvas) -> Unit): Boolean {
+		if (samples <= 1 || failed || width <= 0 || height <= 0) return false
+		if (!gpu.isCurrentContext()) return false
+		val context = gpu.directContext() ?: return false
+		var surface = surface
+		if (surface == null || surface.width != width || surface.height != height) {
+			surface?.close()
+			surface = org.jetbrains.skia.Surface.makeRenderTarget(context, false, org.jetbrains.skia.ImageInfo.makeN32Premul(width, height),
+				samples, org.jetbrains.skia.SurfaceOrigin.TOP_LEFT, org.jetbrains.skia.SurfaceProps(pixelGeometry = gpu.pixelGeometry ?: org.jetbrains.skia.PixelGeometry.UNKNOWN), false)
+			this.surface = surface
+			if (surface == null) { failed = true; return false }
+		}
+		val picture = org.jetbrains.skia.PictureRecorder().use { recorder ->
+			draw(recorder.beginRecording(org.jetbrains.skia.Rect.makeWH(width.toFloat(), height.toFloat())))
+			recorder.finishRecordingAsPicture()
+		}
+		// Last frame's image may still be held by Skiko's last picture: give the surface new pixels rather than copy them.
+		surface.notifyContentWillChange(org.jetbrains.skia.ContentChangeMode.DISCARD)
+		surface.canvas.clear(0)
+		surface.canvas.drawPicture(picture)
+		picture.close()
+		surface.makeImageSnapshot().use { canvas.drawImage(it, 0f, 0f) }
+		return true
+	}
+}
+
+/**
+ * Skiko presents with swap interval 0 and, with vsync on, waits after every frame until the desktop composes
+ * (`DwmFlush`): a frame that takes a little longer than a refresh waits for the one after, so 240 Hz falls to
+ * 120 FPS. While frames keep missing the refresh, this turns that wait off, so each frame is presented as soon as
+ * it is drawn and the desktop shows the latest at every refresh (no tearing: the window is composed); once frames
+ * fit a refresh again, the wait comes back and paces them to the display.
+ */
+internal class AdaptiveVsync(private val layer: SkiaLayer, redrawer: Any) {
+	private val properties: Any? = runCatching {
+		redrawer.javaClass.getDeclaredField("properties").apply { isAccessible = true }.get(redrawer)
+	}.getOrNull()
+	private val vsync: Field? = properties?.let {
+		runCatching { it.javaClass.getDeclaredField("isVsyncEnabled").apply { isAccessible = true } }.getOrNull()
+	}
+	private val enabled = vsync != null && vsync.getBoolean(properties) &&
+		System.getProperty("psd2live.adaptiveVsync") == "true"
+	private var period = 0L
+	private var periodCheckedAt = 0L
+	private var last = 0L
+	private var late = 0
+	private var early = 0
+	/** Whether frames are presented without waiting for the desktop. */
+	@Volatile var free = false
+		private set
+
+	fun frame(now: Long) {
+		if (!enabled) return
+		if (now - periodCheckedAt > 1_000_000_000L) {
+			periodCheckedAt = now
+			val rate = runCatching { layer.graphicsConfiguration?.device?.displayMode?.refreshRate ?: 0 }.getOrDefault(0)
+			period = if (rate > 0) 1_000_000_000L / rate else 0L
+		}
+		val interval = now - last
+		last = now
+		if (period == 0L || interval > period * 4) { late = 0; early = 0; return }
+		if (!free) {
+			// Waiting made this frame take two refreshes or more.
+			if (interval > period * 3 / 2) late++ else late = 0
+			if (late >= 3) set(true)
+		} else {
+			// Drawn faster than the display refreshes: waiting would no longer drop a refresh.
+			if (interval < period * 17 / 20) early++ else early = 0
+			if (early >= 8) set(false)
+		}
+	}
+
+	private fun set(free: Boolean) {
+		this.free = free
+		late = 0
+		early = 0
+		runCatching { vsync!!.setBoolean(properties, !free) }
 	}
 }
