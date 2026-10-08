@@ -581,25 +581,45 @@ private fun LogLevelMenu(
 }
 
 /**
- * The lowest level shown: four bars rising from debug to error, solid from the chosen level up and hollow below it;
- * the warning and error bars take their colours.
+ * A level's sign, the one the button shows for the lowest level shown: a bug for debug, an i in a circle for info,
+ * an exclamation in a triangle for warning and a cross in a circle for error, in the level's colour.
  */
 @Composable
 private fun IconLogLevel(level: LogLevel, tint: Color) {
 	val colors = LocalToolColors.current
-	val chosen = LEVEL_THRESHOLDS.indexOfFirst { it.severity == level.severity }.coerceAtLeast(0)
 	GridIcon(Modifier.size(13.dp), tint) {
-		val tops = floatArrayOf(11.4f, 8.6f, 5.8f, 2.6f)
-		for (index in 0..3) {
-			val x = 2.2f + index * 3.6f
-			val top = tops[index]
-			val bar = when (index) {
-				2 -> tone(colors.warning)
-				3 -> tone(colors.error)
-				else -> color
+		when (level) {
+			LogLevel.DEBUG -> {
+				shape(rectPath(5.6f, 6f, 6.8f, 9.4f, 3.4f))
+				line(9f, 8.4f, 9f, 14.4f, ICON_FINE)
+				line(7f, 6.2f, 5.6f, 3f, ICON_FINE)
+				line(11f, 6.2f, 12.4f, 3f, ICON_FINE)
+				for (y in floatArrayOf(8.4f, 11f, 13.6f)) {
+					line(5.6f, y, 2.6f, y - 0.8f, ICON_FINE)
+					line(12.4f, y, 15.4f, y - 0.8f, ICON_FINE)
+				}
 			}
-			if (index >= chosen) fillBox(x, top, 2.6f, 15.6f - top, 0.6f, bar)
-			else box(x, top, 2.6f, 15.6f - top, 0.6f, ICON_FINE, bar.copy(alpha = bar.alpha * 0.5f))
+			LogLevel.INFO, LogLevel.SUCCESS -> {
+				val sign = tone(colors.accent)
+				fill(circlePath(9f, 9f, 7f), sign.copy(alpha = sign.alpha * 0.28f))
+				ring(9f, 9f, 7f, tint = sign)
+				dot(9f, 5.6f, 1.1f, sign)
+				line(9f, 8.4f, 9f, 12.6f, tint = sign)
+			}
+			LogLevel.WARNING -> {
+				val sign = tone(colors.warning)
+				val triangle = path { m(9f, 2.4f); l(16f, 15f); l(2f, 15f); z() }
+				shape(triangle, body = sign.copy(alpha = sign.alpha * 0.28f), tint = sign)
+				line(9f, 7f, 9f, 10.6f, tint = sign)
+				dot(9f, 12.8f, 1f, sign)
+			}
+			LogLevel.ERROR -> {
+				val sign = tone(colors.error)
+				fill(circlePath(9f, 9f, 7f), sign.copy(alpha = sign.alpha * 0.28f))
+				ring(9f, 9f, 7f, tint = sign)
+				line(6.4f, 6.4f, 11.6f, 11.6f, tint = sign)
+				line(11.6f, 6.4f, 6.4f, 11.6f, tint = sign)
+			}
 		}
 	}
 }
