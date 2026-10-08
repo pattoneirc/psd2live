@@ -6,18 +6,17 @@ import org.umamo.render.eval.DeformedGeometry
 import org.umamo.runtime.model.Drawable
 import java.util.WeakHashMap
 
-/** One mesh of the wireframe guide: selected meshes draw bright with their points, dimmed ones faint. */
+/** One mesh of the wireframe guide: selected meshes draw bright, dimmed ones faint. */
 internal class WireItem(val drawable: Drawable, val layerId: String, val selected: Boolean, val dimmed: Boolean)
 
 /** The mesh wireframe guide as GPU line and point batches, in the style the Java2D guide pass drew it. */
 internal object MeshWireframe {
-	private val HALO = argb(150, 12, 13, 16)
-	private val POINT = argb(255, 255, 255, 255)
+	private val HALO = argb(140, 12, 13, 16)
 
 	/** Each index array's unique edges as vertex pairs, kept while the array is alive. */
 	private val edgeCache = WeakHashMap<IntArray, IntArray>()
 
-	fun strokeWidth(item: WireItem): Float = if (item.selected) 2.2f else if (item.dimmed) 0.65f else 1.1f
+	fun strokeWidth(item: WireItem): Float = if (item.selected) 1.6f else if (item.dimmed) 0.65f else 1f
 
 	fun wireColor(item: WireItem): java.awt.Color {
 		val strong = ComponentPalette.strong(item.layerId)
@@ -29,13 +28,13 @@ internal object MeshWireframe {
 	}
 
 	/**
-	 * [items] in order, each mesh its own halo and wire batch so a later mesh's wire lies over an earlier one's,
-	 * and the selected meshes' points on top of every wire.
+	 * [items] in order, each mesh its own halo and wire batch so a later mesh's wire lies over an earlier one's.
+	 * The channel is passive: it draws wires alone, in each part's own colour. Points are drawn only where they can be
+	 * picked, by the editor overlay in the shared look (MeshLook), so the two never stack different dots on one mesh.
 	 */
 	fun overlay(geometry: DeformedGeometry, items: List<WireItem>, showTexture: Boolean): OverlayScene {
 		if (items.isEmpty()) return OverlayScene.EMPTY
 		val lines = ArrayList<OverlayItem>(items.size * 2)
-		val points = ArrayList<OverlayItem>()
 		for (item in items) {
 			val mesh = item.drawable.mesh ?: continue
 			val world = geometry.worldPositions[item.drawable.id] ?: continue
@@ -55,9 +54,8 @@ internal object MeshWireframe {
 			// Opaque artwork needs a dark halo under every wire so the mesh stays readable.
 			if (showTexture && !item.dimmed) lines += LineBatch(HALO, width + 1.6f, drawn)
 			lines += LineBatch(wireColor(item).rgb, width, drawn)
-			if (item.selected) points += PointBatch(POINT, POINT, 2.5f, 0f, world.copyOf(minOf(world.size, mesh.vertexCount * 2)))
 		}
-		return OverlayScene(lines + points)
+		return OverlayScene(lines)
 	}
 
 	fun uniqueEdges(indices: IntArray): IntArray = edgeCache.getOrPut(indices) {

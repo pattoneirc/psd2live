@@ -58,7 +58,8 @@ internal object RigInformationOverlay {
                 baseColor = baseColor,
                 wireColor = when {
                     isSelected -> baseColor.brighter()
-                    isHovered -> Color(0, 210, 255, 230)
+                    // Hover is white across the canvas: the thing a click would take.
+                    isHovered -> Color(255, 255, 255, 235)
                     // The faded guide was faint enough to read as absent, which made an unselected rig
                     // look like it had no deformers at all. It stays a background hint, just a legible one.
                     isDimmed -> Color(baseColor.red, baseColor.green, baseColor.blue, 90)

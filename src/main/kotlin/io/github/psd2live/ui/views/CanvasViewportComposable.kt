@@ -1379,15 +1379,6 @@ fun CanvasViewportComposable(
 							val mesh = item.drawable.mesh ?: continue
 							val positions = geometry.worldPositions[item.drawable.id] ?: continue
 							val strokeWidth = MeshWireframe.strokeWidth(item)
-							if (item.selected) {
-								g.color = java.awt.Color.WHITE
-								val radius = 2
-								for (i in 0 until mesh.vertexCount) {
-									val vx = viewport.x(positions[i * 2]).toInt()
-									val vy = viewport.yFromWorld(positions[i * 2 + 1]).toInt()
-									g.fillOval(vx - radius, vy - radius, radius * 2 + 1, radius * 2 + 1)
-								}
-							}
 							// Opaque artwork needs a dark halo under every wire so the mesh stays readable.
 							fun drawEdges(color: java.awt.Color, width: Float) {
 								g.color = color
@@ -1404,7 +1395,7 @@ fun CanvasViewportComposable(
 									)
 								}
 							}
-							if (showTexture && !item.dimmed) drawEdges(java.awt.Color(12, 13, 16, 150), strokeWidth + 1.6f)
+							if (showTexture && !item.dimmed) drawEdges(java.awt.Color(12, 13, 16, 140), strokeWidth + 1.6f)
 							drawEdges(MeshWireframe.wireColor(item), strokeWidth)
 						}
 					}

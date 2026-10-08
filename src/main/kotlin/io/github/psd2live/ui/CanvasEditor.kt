@@ -3418,9 +3418,10 @@ internal class CanvasEditor(
         if (skeletonSelected) return emptySet()
         val preview = drawnPreview ?: return emptySet()
         val ids = visibleCanvasGuideIds(preview, state, warp = true)
-        // At the Bezier level the overlay draws the target's lattice faint; its guide would draw it bright over that.
-        val bezier = editLevel == 2 && deformLevelsShown()
-        return if (bezier) ids - target()!!.id else ids
+        // Deform and Edit draw the warp in hand on the overlay, as editable points; the guide's copy of it would
+        // lie under those in other colours and sizes.
+        val held = target()?.takeIf { it.kind == "warp" && (hierarchyMode == EditHierarchyMode.DEFORM || hierarchyMode == EditHierarchyMode.EDIT) }
+        return if (held != null) ids - held.id else ids
     }
 
     /**
@@ -4429,6 +4430,28 @@ internal class CanvasEditor(
             CanvasDeformStroke.begin(source, deformStrokeRequest(source, targets, edited),
                 CanvasDeformStroke.Sample(weightCanvasPoint(center, viewport))).weights.mapKeys { it.key.substringAfter(':') }
         } catch (_: IllegalArgumentException) { emptyMap() }
+    }
+
+    /** A brush weight [w] as the share of a full dab it is, 0..1, for the reach rings. */
+    fun reachShown(w: Float): Float = if (w <= 0.0001f) 0f else if (strength > 0.001f) (w / strength).coerceIn(0f, 1f) else w.coerceIn(0f, 1f)
+
+    private var hoverReachKey: List<Any?>? = null
+    private var hoverReach: Map<String, FloatArray> = emptyMap()
+
+    /**
+     * What a deform brush pressed at the pointer would move, for the hover preview, by target id: nothing while a
+     * stroke is in hand or the tip is being retuned, which show their own. Kept while nothing it reads changes, as
+     * the overlay asks on every frame.
+     */
+    fun brushHoverReach(viewport: CanvasViewport): Map<String, FloatArray> {
+        if (tool !in DEFORM_BRUSH_TOOLS || dragging || adjustingBrush || meshStroke != null || cursor == null) return emptyMap()
+        val key = listOf(cursor, viewport, state.previewModel?.rig?.puppet, pose, radius, hardness, brushShape, brushAngle,
+            brushAspect, brushFalloff, strength, connectedOnly, tool, hierarchyMode, selection, vertices, target()?.id)
+        if (key != hoverReachKey) {
+            hoverReach = runCatching { brushPreviewWeights(viewport) }.getOrDefault(emptyMap()).filterValues { w -> w.any { it > 0.0001f } }
+            hoverReachKey = key
+        }
+        return hoverReach
     }
 
     private fun beginDeformStroke(pos: Offset, viewport: CanvasViewport, source: PuppetModel, targets: List<CanvasTarget>, editedSet: Boolean) {
