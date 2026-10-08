@@ -6864,8 +6864,9 @@ class PSD2LiveViewModel : AutoCloseable {
 	@Volatile private var latestLiveParameters: Map<ParameterId, Float> = emptyMap()
 
 	private val _livePose = MutableStateFlow<Map<ParameterId, Float>>(emptyMap())
+	private val _livePoseShown = MutableStateFlow<Map<ParameterId, Float>>(emptyMap())
 	/**
-	 * Per-parameter mirror of [livePose] for Compose. Reading [livePoseOf] only invalidates the caller when
+	 * Per-parameter mirror of [livePoseShown] for Compose. Reading [livePoseOf] only invalidates the caller when
 	 * that parameter's live value changes, so the parameters list does not recompose every row on every frame.
 	 */
 	private val _livePoseSnapshot: SnapshotStateMap<ParameterId, Float> = mutableStateMapOf()
@@ -6878,6 +6879,15 @@ class PSD2LiveViewModel : AutoCloseable {
 	val livePose: StateFlow<Map<ParameterId, Float>> = _livePose.asStateFlow()
 
 	/**
+	 * [livePose] as the panels and the edit canvas show it: at most once per [LIVE_POSE_SHOWN_INTERVAL_NANOS], its
+	 * last value always arriving, and an emptied pose at once. The preview renders at the display's rate (240 Hz
+	 * and more); following it there would recompose the sliders and redraw the edit canvas on every refresh.
+	 */
+	val livePoseShown: StateFlow<Map<ParameterId, Float>> = _livePoseShown.asStateFlow()
+	private var livePoseShownNanos = 0L
+	private val livePoseShowScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
+
+	/**
 	 * What every view shows for the active workspace: the authored pose (with changes still committing), the
 	 * evaluated frame and open motion over it ([livePose]), and the slider being dragged on top — the same order the
 	 * parameter sliders read it in.
@@ -6888,7 +6898,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		return if (scrub == null || scrub.overrides.isEmpty()) base else base + scrub.overrides
 	}
 
-	/** Compose-readable live value for [id]; reading it only invalidates when that entry changes. */
+	/** Compose-readable shown live value for [id]; reading it only invalidates when that entry changes. */
 	fun livePoseOf(id: ParameterId): Float? = _livePoseSnapshot[id]
 
 	/** The evaluated frame's part of [livePose]: animation, the pointer's look or paused physics. */
@@ -6910,12 +6920,30 @@ class PSD2LiveViewModel : AutoCloseable {
 		emitLivePose()
 	}
 
-	/** Publish the frame and timeline poses to both the StateFlow readers and the per-key Compose snapshot. */
+	/** Publish the frame and timeline poses to the StateFlow readers, and in time to what the panels show. */
 	private fun emitLivePose() {
 		val frame = liveFramePose; val motion = motionFramePose
 		val next = if (motion.isEmpty()) frame else if (frame.isEmpty()) motion else motion + frame
 		if (next == _livePose.value) return
 		_livePose.value = next
+		showLivePose()
+	}
+
+	/** Shows [livePose] now, or once [LIVE_POSE_SHOWN_INTERVAL_NANOS] has passed since it was last shown. */
+	private fun showLivePose() {
+		val next = _livePose.value
+		val wait = livePoseShownNanos + LIVE_POSE_SHOWN_INTERVAL_NANOS - System.nanoTime()
+		if (wait > 0 && next.isNotEmpty()) {
+			if (livePoseShowScheduled.compareAndSet(false, true)) scope.launch {
+				delay((wait + 999_999) / 1_000_000)
+				livePoseShowScheduled.set(false)
+				showLivePose()
+			}
+			return
+		}
+		livePoseShownNanos = System.nanoTime()
+		if (next == _livePoseShown.value) return
+		_livePoseShown.value = next
 		if (next.isEmpty()) {
 			if (_livePoseSnapshot.isNotEmpty()) _livePoseSnapshot.clear()
 			return
@@ -7217,7 +7245,14 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	private companion object {
-		const val SDK_PARAMETER_PUBLISH_INTERVAL_NANOS = 100_000_000L
+		/**
+		 * How often a playing preview's pose is written into the document state. The panels and canvases follow the
+		 * live pose ([livePose]); each write composes every panel that takes the state, and the window then draws its
+		 * whole picture again instead of the cached one, so it is rare.
+		 */
+		const val SDK_PARAMETER_PUBLISH_INTERVAL_NANOS = 500_000_000L
+		/** How often the panels follow the live pose: about 60 Hz, which a 60 Hz display shows every frame of. */
+		const val LIVE_POSE_SHOWN_INTERVAL_NANOS = 16_000_000L
 		/** Without a pump frame for this long, the fallback loop runs the clock. */
 		const val PUMP_IDLE_NANOS = 100_000_000L
 		/** The fallback loop's step when the rate is unlimited. */

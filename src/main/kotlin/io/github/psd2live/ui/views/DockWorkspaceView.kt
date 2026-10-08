@@ -989,6 +989,38 @@ private fun floatingTitle(id: String, state: PSD2LiveState, viewModel: PSD2LiveV
     return "${state.activeWorkspace.displayName()} · $name"
 }
 
+/** Modules that read nothing of [PSD2LiveState.previewParameterValues]; see [withoutPlayingPose]. */
+private val POSELESS_MODULES = setOf("hierarchy", "skeleton", "history", "log", "settings", "layers")
+
+/**
+ * [state], or the instance given last time when the two differ only in the pose the preview publishes, so a panel
+ * that does not show that pose skips its composition.
+ */
+@Composable
+private fun withoutPlayingPose(state: PSD2LiveState): PSD2LiveState {
+	val held = remember { arrayOfNulls<PSD2LiveState>(1) }
+	val previous = held[0]
+	val shown = if (previous != null && previous !== state && previous.withoutPreviewPose() == state.withoutPreviewPose()) previous else state
+	held[0] = shown
+	return shown
+}
+
+/** This state with the published preview pose left out wherever it is kept: the state, each workspace's pose and canvas. */
+private fun PSD2LiveState.withoutPreviewPose(): PSD2LiveState = copy(
+	previewParameterValues = emptyMap(),
+	workspaces = workspaces.map { workspace ->
+		workspace.copy(
+			pose = workspace.pose?.copy(previewParameterValues = emptyMap()),
+			canvases = workspace.canvases.map { canvas ->
+				canvas.copy(
+					editSession = canvas.editSession.copy(presentation = canvas.editSession.presentation.copy(previewParameterValues = emptyMap())),
+					previewSession = canvas.previewSession.copy(presentation = canvas.previewSession.presentation.copy(previewParameterValues = emptyMap())),
+				)
+			},
+		)
+	},
+)
+
 @Composable
 private fun DockModuleContent(
 	id: String,
@@ -1018,9 +1050,12 @@ private fun DockModuleContent(
 		)
 		return
 	}
+	// Panels that show nothing of the pose the preview plays keep the state they had while only that pose
+	// changes: it is published ten times a second during playback, and each would compose every row again.
+	val poseless = if (id in POSELESS_MODULES) withoutPlayingPose(state) else state
 	when (id) {
 		"hierarchy" -> DockHierarchyView(
-			state,
+			poseless,
 			vm,
 			state.activeCanvas.mode,
 			onRequestOpenDeformPaths = { vm.selectLayer(it); vm.requestCanvasPathTool() },
@@ -1028,16 +1063,16 @@ private fun DockModuleContent(
 				vm.editorForFocusedCanvas().beginTreeCreate(kind, relation, isDeformer, target)
 			},
 		)
-		"skeleton" -> SkeletonTreeView(state, vm)
-		"history" -> HistoryTreeView(state, vm, Modifier.fillMaxSize())
-		"log" -> BottomLogDock(state, vm, Modifier.fillMaxSize(), fillDock = true)
+		"skeleton" -> SkeletonTreeView(poseless, vm)
+		"history" -> HistoryTreeView(poseless, vm, Modifier.fillMaxSize())
+		"log" -> BottomLogDock(poseless, vm, Modifier.fillMaxSize(), fillDock = true)
 		"animationEditor" -> AnimationEditorView(state, vm)
 		"settings" -> {
 			Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-				ModelPresetsSection(state, vm)
+				ModelPresetsSection(poseless, vm)
 			}
 		}
-		"layers" -> LayersTableView(state, vm)
+		"layers" -> LayersTableView(poseless, vm)
 		"parameters" -> ParametersListView(state, vm)
 		"tools" -> ToolDetailsView(vm.canvasEditorFor(state.activeCanvas.id), vm, state)
 		"mesh" -> MeshPanelView(state, vm)

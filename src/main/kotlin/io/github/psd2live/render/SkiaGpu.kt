@@ -14,6 +14,7 @@ import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import kotlin.coroutines.resume
 
 /**
  * The application's one GPU renderer lives in Skia's own OpenGL context: every canvas (editing, preview, texture
@@ -124,7 +125,9 @@ object SkiaGpu {
 		if (context == 0L) return null
 		val handler = type.getDeclaredField("contextHandler").apply { isAccessible = true }.get(redrawer) ?: return null
 		val field = contextField ?: return null
-		return WindowGpu(layer, redrawer, context, handler, field, if (isLinux) Platform.GLX else Platform.WGL)
+		// The window's HDC, to make its context current outside Skiko's own draw (Windows only).
+		val device = if (isLinux) 0L else runCatching { type.getDeclaredField("device").apply { isAccessible = true }.getLong(redrawer) }.getOrDefault(0L)
+		return WindowGpu(layer, redrawer, context, device, handler, field, if (isLinux) Platform.GLX else Platform.WGL)
 	}
 
 	private fun findLayer(root: java.awt.Component): SkiaLayer? {
@@ -151,12 +154,33 @@ class WindowGpu internal constructor(
 	private val redrawer: Any,
 	/** The `HGLRC` or `GLXContext` Skia draws with. */
 	internal val glContext: Long,
+	/** The window's `HDC` on Windows, else 0. */
+	private val device: Long,
 	private val handler: Any,
 	private val contextField: Field,
 	private val platform: SkiaGpu.Platform,
 ) {
 	private val tasks = ConcurrentLinkedQueue<(GpuResources) -> Unit>()
 	private var installed: SkikoRenderDelegate? = null
+	private var compositor: WindowCompositor? = null
+	private val frameWaiters = ArrayList<kotlinx.coroutines.CancellableContinuation<Long>>()
+	private val _composited = androidx.compose.runtime.mutableStateOf(false)
+
+	/**
+	 * Whether the window draws its Compose picture over its [CompositedView]s ([WindowCompositor]): a preview canvas
+	 * then leaves a hole for its view instead of drawing its frame. Snapshot state, read where canvases draw, so they
+	 * draw again when it changes.
+	 */
+	val composited: androidx.compose.runtime.State<Boolean> get() = _composited
+
+	/** Whether the frame being rendered composites now, read from inside a canvas's draw. */
+	val compositing: Boolean get() = compositor?.active == true
+
+	/** The compositor's frames and the frames its picture was replayed in, for the development tools. */
+	val compositorFrames: Pair<Long, Long> get() = compositor?.let { it.frames.get() to it.pictureFrames.get() } ?: (0L to 0L)
+
+	internal val pixelGeometry: org.jetbrains.skia.PixelGeometry? get() = runCatching { layer.pixelGeometry }.getOrNull()
+	internal val contentScale: Float get() = runCatching { layer.contentScale }.getOrDefault(1f)
 	private var capabilities: org.lwjgl.opengl.GLCapabilities? = null
 	/** What this context holds for the renderer; touched only during a turn. */
 	internal val resources = GpuResources(this)
@@ -228,15 +252,62 @@ class WindowGpu internal constructor(
 		}
 	}
 
-	/** Runs posted tasks at the start of every frame the window renders, before Compose draws. */
+	/** Shows [view] under the window's picture until [hideView]; see [CompositedView]. */
+	fun showView(viewId: String, view: CompositedView) { compositor?.show(viewId, view) }
+
+	fun hideView(viewId: String) { compositor?.hide(viewId) }
+
+	/**
+	 * Suspends until the window next renders and returns its frame time, asking for that frame. A preview's frame
+	 * pump waits here rather than on Compose's frame clock: a waiter there makes Compose draw the whole window
+	 * every frame. Resumed at the start of the frame, before its GPU tasks run, so a caller on an immediate EDT
+	 * dispatcher requests its preview frame in time for this one.
+	 */
+	suspend fun awaitFrame(): Long = kotlinx.coroutines.suspendCancellableCoroutine { waiter ->
+		synchronized(frameWaiters) { frameWaiters += waiter }
+		waiter.invokeOnCancellation { synchronized(frameWaiters) { frameWaiters -= waiter } }
+		javax.swing.SwingUtilities.invokeLater { ensureInstalled(); requestRedraw() }
+	}
+
+	private fun resumeFrameWaiters(nanoTime: Long) {
+		val ready = synchronized(frameWaiters) {
+			if (frameWaiters.isEmpty()) return
+			ArrayList(frameWaiters).also { frameWaiters.clear() }
+		}
+		for (waiter in ready) if (waiter.isActive) runCatching { waiter.resume(nanoTime) }
+	}
+
+	/** Makes the window's context current for work before Skiko's own draw does; true when it is. */
+	private fun makeCurrent(): Boolean {
+		if (isCurrent()) return true
+		if (platform != SkiaGpu.Platform.WGL || device == 0L) return false
+		runCatching { wglMakeCurrent?.invoke(null, device, glContext) }
+		return isCurrent()
+	}
+
+	/** Runs posted tasks at the start of every frame the window renders, then draws it through the compositor. */
 	private fun ensureInstalled() {
 		val current = layer.renderDelegate ?: return
 		if (current === installed) return
 		val inner = current
+		// The replaced compositor is not closed: its wrapper may be rendering now (this runs inside a frame's turn).
+		val composer = WindowCompositor(this, inner)
+		compositor = composer
 		val wrapper = object : SkikoRenderDelegate {
 			override fun onRender(canvas: org.jetbrains.skia.Canvas, width: Int, height: Int, nanoTime: Long) {
+				// Replaced by a wrapper around this one (another delegate wrapped it meanwhile): that one does the work.
+				if (compositor !== composer) return inner.onRender(canvas, width, height, nanoTime)
+				resumeFrameWaiters(nanoTime)
 				if (tasks.isNotEmpty()) turn { }
-				inner.onRender(canvas, width, height, nanoTime)
+				if (compositor !== composer) return inner.onRender(canvas, width, height, nanoTime)
+				val skia = if (COMPOSITING && makeCurrent()) directContext() else null
+				val composited = skia != null && runCatching { composer.render(canvas, width, height, nanoTime, skia) }
+					.onFailure { System.err.println("Window compositor failed: $it") }.getOrDefault(false)
+				if (!composited) inner.onRender(canvas, width, height, nanoTime)
+				if (composited != _composited.value) {
+					_composited.value = composited
+					composer.invalidate()
+				}
 			}
 		}
 		installed = wrapper
@@ -245,5 +316,19 @@ class WindowGpu internal constructor(
 
 	internal fun requestRedraw() {
 		runCatching { layer.needRedraw() }
+	}
+
+	private companion object {
+		/** `-Dpsd2live.compositor=false` draws windows as Compose does, for comparison and in case of trouble. */
+		val COMPOSITING = System.getProperty("psd2live.compositor") != "false"
+
+		/** Skiko's `makeCurrent(HDC, HGLRC)`. */
+		val wglMakeCurrent: java.lang.reflect.Method? by lazy {
+			runCatching {
+				Class.forName("org.jetbrains.skiko.redrawer.WindowsOpenGLRedrawerKt")
+					.getDeclaredMethod("access\$makeCurrent", Long::class.javaPrimitiveType, Long::class.javaPrimitiveType)
+					.apply { isAccessible = true }
+			}.getOrNull()
+		}
 	}
 }
