@@ -79,6 +79,28 @@ class WorkspaceInspectionContractsTest {
         assertEquals(vertices, evidence.getValue("points").jsonPrimitive.int)
     }
 
+    @Test fun projectScopeReportsWhatTheLastRegenerationCouldNotCarryOver() = runBlocking<Unit> {
+        val runtime = runtime(); val seed = seed(runtime)
+        val clean = WorkspaceReadSession(runtime.read()).inspect(buildJsonObject { put("scope", "project") })
+        val cleanReport = clean.getValue("quality").jsonObject.getValue("regeneration").jsonObject
+        assertEquals("regeneration", cleanReport.getValue("domain").jsonPrimitive.content)
+        assertTrue(cleanReport.getValue("findings").jsonArray.isEmpty())
+        // A checkpoint whose merge kept a user value over a generated change, and re-homed a mesh.
+        val record = RigCheckpoint.encode(seed.model.authored, assertNotNull(seed.model.sources.bindingKey), listOf(
+            RigRegeneration.Issue(RigRegeneration.IssueKind.CONFLICT, "mesh:a", "opacity"),
+            RigRegeneration.Issue(RigRegeneration.IssueKind.REHOMED, "b", "DeformGone")))
+        val document = seed.document.copy(rigEdits = seed.document.rigEdits.copy(authoringJournal = seed.document.rigEdits.authoringJournal + record))
+        runtime.install(seed.state, seed.projectId, document, builder.build(document), discardUnsaved = true)
+        val result = WorkspaceReadSession(runtime.read()).inspect(buildJsonObject { put("scope", "project") })
+        validateOperationSchema(result, schema)
+        val report = result.getValue("quality").jsonObject.getValue("regeneration").jsonObject
+        assertTrue(report.getValue("can_proceed").jsonPrimitive.boolean)
+        val findings = report.getValue("findings").jsonArray.map { it.jsonObject }
+        assertEquals(listOf("REGENERATION_CONFLICT", "REGENERATION_REHOMED"), findings.map { it.getValue("code").jsonPrimitive.content })
+        assertEquals(listOf("warning", "info"), findings.map { it.getValue("severity").jsonPrimitive.content })
+        assertEquals("opacity", findings.first().getValue("evidence").jsonObject.getValue("detail").jsonPrimitive.content)
+    }
+
     @Test fun sparseV1SettingsExposeDefaultsAndAuthoritativeMeshOverridesWithoutChangingTheSavedDocument() = runBlocking<Unit> {
         val runtime = runtime(); val seed = seed(runtime)
         val layer = seed.document.source.layers.single().id.raw

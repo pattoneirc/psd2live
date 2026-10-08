@@ -90,12 +90,15 @@ internal object WorkspaceSimulationEdits {
         var model = preview
         if (flag != null && document.settings[flag]?.jsonPrimitive?.booleanOrNull != true) {
             next = document.copy(settings = JsonObject(document.settings + (flag to JsonPrimitive(true))))
-            // The same generation the preview uses: saved generation input, superseded split originals in their
-            // slots and the journal replayed onto it. The visible analysis alone would generate split parts as
-            // ordinary layers that their records then fail to create.
             val config = next.config()
-            model = pipeline.rebuildPreview(preview, preview.config.copy(hairSimulationFront = config.hairSimulationFront,
-                hairSimulationBack = config.hairSimulationBack))
+            val switched = preview.config.copy(hairSimulationFront = config.hairSimulationFront, hairSimulationBack = config.hairSimulationBack)
+            // The legacy sway goes from the generated rig: the journal's rig merges onto the new generation and is
+            // checkpointed, rather than replayed on it ([RigRegenerationCheckpoint]); the weights then address that rig.
+            val checkpointed = RigRegenerationCheckpoint.checkpointed(pipeline, preview, switched, document.source)
+            if (checkpointed != null) {
+                next = next.copy(rigEdits = checkpointed.rigEdits)
+                model = pipeline.buildPreview(document.source, checkpointed, previousAtlas = preview.atlas)
+            } else model = pipeline.rebuildPreview(preview, switched)
         }
         val base = model.baseRig
         // Parts of a materialized split exist only after the journal: address meshes by the replayed layer map.

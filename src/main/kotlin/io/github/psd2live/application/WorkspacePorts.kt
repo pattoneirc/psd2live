@@ -64,6 +64,8 @@ interface WorkspaceQueries : WorkspaceStatePort {
     fun generatedOverrideIssues(): List<io.github.psd2live.core.GeneratedOverrideIssue>
     /** Journal entries of the captured model that replay skipped because they address only what a later split supersedes. */
     fun supersededEntryNotes(): List<io.github.psd2live.core.SupersededEntryNote>
+    /** What the captured document's last regeneration checkpoint could not carry over cleanly, in merge order. */
+    fun regenerationIssues(): List<io.github.psd2live.core.RigRegeneration.Issue>
 }
 
 /** Capture once before composing a response; the returned queries never revisit live state. */

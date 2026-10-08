@@ -27,7 +27,7 @@ import io.github.psd2live.format.model.RigIR as Ir
  * G and G' are generated rigs as the document shows them before its edits: [BuiltRig.resolvedPuppet], with the parts of
  * version 2 splits in place of what they supersede, so a part the generators skin or re-parent is a generated object.
  */
-internal object RigRegeneration {
+object RigRegeneration {
 	enum class IssueKind(val code: String) {
 		/** A user object whose parent the generators dropped now hangs from the nearest surviving ancestor. */
 		REHOMED("rehomed"),
@@ -52,7 +52,7 @@ internal object RigRegeneration {
 	/** Where each of an object's three versions is: in G, G' and M. */
 	private class Versions<T>(val g: T?, val g2: T?, val m: T?)
 
-	fun merge(previous: PuppetModel, next: PuppetModel, authored: PuppetModel, checkpoint: () -> Unit = {}): Result =
+	internal fun merge(previous: PuppetModel, next: PuppetModel, authored: PuppetModel, checkpoint: () -> Unit = {}): Result =
 		Merge(previous, next, authored, checkpoint).run()
 
 	private class Merge(val g: PuppetModel, val g2: PuppetModel, val m: PuppetModel, val checkpoint: () -> Unit) {

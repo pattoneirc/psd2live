@@ -21,6 +21,8 @@ internal object RigRegenerationCheckpoint {
 		val before = current.config.rigEdits
 		val after = next.rigEdits
 		val boundary = before.authoringJournal.size
+		// The edit checkpointed already (a preset that switched the generation itself).
+		if (after.authoringJournal.subList(boundary, after.authoringJournal.size).any(RigCheckpoint::isRecord)) return null
 		val (base, bindingKey) = pipeline.generatedBaseOf(source, next)
 		if (current.sources.baseKnown && base === current.baseRig) return null
 		checkpoint()

@@ -29,6 +29,23 @@ internal object WorkspaceQualitySchemas {
     ))
     private val check = s.obj(mapOf("id" to s.handle(), "scope" to s.string(), "complete" to s.boolean()))
 
+    /** [io.github.psd2live.core.quality.RegenerationQuality.report]. */
+    val regeneration = s.obj(mapOf(
+        "version" to s.integer(io.github.psd2live.core.quality.RegenerationQuality.VERSION, io.github.psd2live.core.quality.RegenerationQuality.VERSION),
+        "domain" to s.constant(io.github.psd2live.core.quality.RegenerationQuality.DOMAIN), "fence" to s.constant("observation"),
+        "decision" to s.choices("accept", "accept_with_diagnostics"), "can_proceed" to s.constant(true),
+        "complete" to s.boolean(), "scope" to s.string(), "checks" to s.array(check, 1, 1),
+        "findings" to s.array(s.obj(mapOf(
+            "code" to s.choices(*io.github.psd2live.core.quality.RegenerationRule.entries.map { it.name }.toTypedArray()),
+            "severity" to s.choices("info", "warning", "error"), "category" to s.choices("quality", "validity", "coverage"),
+            "domain" to s.constant(io.github.psd2live.core.quality.RegenerationQuality.DOMAIN), "target" to s.string(),
+            "evidence" to s.obj(mapOf(
+                "kind" to s.choices(*io.github.psd2live.core.RigRegeneration.IssueKind.entries.map { it.code }.toTypedArray()),
+                "detail" to s.string(),
+            ), setOf("kind")),
+        ))),
+    ))
+
     /** [GeneratedOverrideQuality.report]. */
     val generatedOverrides = s.obj(mapOf(
         "version" to s.integer(GeneratedOverrideQuality.VERSION, GeneratedOverrideQuality.VERSION),

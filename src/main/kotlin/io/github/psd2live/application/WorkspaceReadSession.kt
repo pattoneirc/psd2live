@@ -145,6 +145,9 @@ internal class WorkspaceReadSession(
     override fun listSwings(): List<RigSwingEdit> = capture().document.rigEdits.swingEdits
     override fun generatedOverrideIssues(): List<GeneratedOverrideIssue> = read.runtime.capture?.model?.rig?.overrideIssues.orEmpty()
     override fun supersededEntryNotes(): List<io.github.psd2live.core.SupersededEntryNote> = read.runtime.capture?.model?.rig?.supersededEntryNotes.orEmpty()
+    override fun regenerationIssues(): List<io.github.psd2live.core.RigRegeneration.Issue> =
+        read.runtime.capture?.document?.rigEdits?.authoringJournal?.lastOrNull(io.github.psd2live.core.RigCheckpoint::isRecord)
+            ?.let(io.github.psd2live.core.RigCheckpoint::issues).orEmpty()
     override fun listSimulations(): List<io.github.psd2live.core.sim.RigSimEdit> = capture().document.rigEdits.simEdits
     override fun physicsFps(): Int = capture().document.rigEdits.physicsFps
     override fun previewSession(): JsonObject = PreviewSessions.encode(pose)
