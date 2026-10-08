@@ -13,9 +13,23 @@ public data class AdvancedIR(
 	val virtualBones: List<Deformer.Rotation> = emptyList(),
 	val simulations: List<SimulationIR> = emptyList(),
 	val colliders: List<ColliderIR> = emptyList(),
+	/** Facial expressions a host switches between, each a few parameters set over the motion. */
+	val expressions: List<ExpressionIR> = emptyList(),
+	/** Named regions a host hit-tests, such as Head and Body. */
+	val hitAreas: List<HitAreaIR> = emptyList(),
 ) {
-	val isEmpty: Boolean get() = virtualBones.isEmpty() && simulations.isEmpty() && colliders.isEmpty()
+	val isEmpty: Boolean get() = virtualBones.isEmpty() && simulations.isEmpty() && colliders.isEmpty() && expressions.isEmpty() && hitAreas.isEmpty()
 }
+
+/** An expression as Cubism's exp3 has one: parameters added to, multiplied into or overwriting the motion's values. */
+public data class ExpressionIR(val id: String, val name: String, val fadeIn: Float, val fadeOut: Float, val parameters: List<ExpressionParameter>)
+
+public enum class ExpressionBlend { ADD, MULTIPLY, OVERWRITE }
+
+public data class ExpressionParameter(val parameter: String, val blend: ExpressionBlend, val value: Float)
+
+/** A hit area: the region the [meshes] cover as they are drawn. */
+public data class HitAreaIR(val id: String, val name: String, val meshes: List<String>)
 
 /**
  * A cloth or hair simulation as the editor's XPBD solver runs it, particle for particle: one particle per

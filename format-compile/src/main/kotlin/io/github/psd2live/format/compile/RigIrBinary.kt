@@ -15,7 +15,7 @@ import java.io.IOException
  * A field added to the IR must be added here in the same change, with [VERSION] raised.
  */
 public object RigIrBinary {
-	public const val VERSION: Int = 2
+	public const val VERSION: Int = 3
 	private const val MAGIC = 0x50524952 // "PRIR"
 
 	public fun encode(ir: RigIR): ByteArray {
@@ -109,6 +109,11 @@ public object RigIrBinary {
 				string(c.id); bool(c.capsule); nullable(c.deformer, ::string); nullable(c.mesh, ::string); int(c.vertexA); int(c.vertexB)
 				float(c.ax); float(c.ay); float(c.bx); float(c.by); float(c.radiusA); float(c.radiusB); float(c.friction)
 			}
+			list(a.expressions) { e ->
+				string(e.id); string(e.name); float(e.fadeIn); float(e.fadeOut)
+				list(e.parameters) { string(it.parameter); enum(it.blend); float(it.value) }
+			}
+			list(a.hitAreas) { string(it.id); string(it.name); list(it.meshes, ::string) }
 		}
 
 		fun parameterNode(node: ParameterNode) {
@@ -334,7 +339,9 @@ public object RigIrBinary {
 			val colliders = list {
 				ColliderIR(string(), bool(), nullable(::string), nullable(::string), int(), int(), float(), float(), float(), float(), float(), float(), float())
 			}
-			return AdvancedIR(bones, simulations, colliders)
+			val expressions = list { ExpressionIR(string(), string(), float(), float(), list { ExpressionParameter(string(), enum(), float()) }) }
+			val hitAreas = list { HitAreaIR(string(), string(), list(::string)) }
+			return AdvancedIR(bones, simulations, colliders, expressions, hitAreas)
 		}
 
 		fun parameterNode(): ParameterNode = when (tag(1)) {

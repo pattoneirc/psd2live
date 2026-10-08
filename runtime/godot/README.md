@@ -19,7 +19,11 @@ a `P2LCharacter` node and set **Rig Path** to an exported `.p2lrt`.
 | `look_at_mouse`, `look_at_point(global)` | Gaze toward the mouse or a point |
 | `lip_sync(level)` | Mouth opening 0..1 |
 | `set_parameter(id, value)`, `get_parameter(id)`, `get_parameter_ids()` | The pose under clips and behaviors |
-| `advance(delta)`, `reset_physics()` | Step manually (the node steps itself every frame) |
+| `advance(delta)`, `reset_physics()` | Step manually (the node steps itself every frame); the reset restarts live cloth too |
+| `get_expression_ids()`, `set_expression(id)` | Expressions faded in over the motion; an empty id fades out |
+| `hit_test(global)` | The hit area under a point (`HitAreaHead`, `HitAreaBody`), or an empty string |
+| `advanced_features`, `get_advanced_available()`, `set_advanced(features)` | Advanced mode where the rig offers it: 1 skinning along true arcs, 2 exact links, 4 live cloth and hair, 8 collision; 0 (default) plays the Cubism-equivalent rig |
+| `get_bone_ids()`, `get_bone_transform(id)` | Skeleton bones' frames in the node's space, to attach things to |
 
 Each mesh draws in its own canvas item in the rig's draw order. Cubism's add and multiply use a
 CanvasItemMaterial; screen colors and the extended blend modes use shaders that read the screen below;

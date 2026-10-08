@@ -3,16 +3,17 @@
 //! come before children; both versions read into the same [Rig].
 
 use crate::container::{self, Chunk};
+use crate::expression::{Blend, Expression};
 use crate::sim::Simulation;
 use std::fmt;
 
 /// The newest major version this reader understands; version 1 is read too.
 pub const VERSION: u32 = 2;
 /// The chunks this reader understands, with the newest version of each.
-pub const CHUNKS: [(&str, u16); 18] = [
+pub const CHUNKS: [(&str, u16); 21] = [
     ("STRS", 1), ("CANV", 1), ("PARM", 1), ("DEFM", 1), ("PART", 1), ("MESH", 1), ("GLUE", 1),
     ("DRAW", 1), ("TEXR", 1), ("PHYS", 1), ("CLIP", 1), ("ROLE", 1), ("PGUI", 1), ("META", 1),
-    ("BONE", 1), ("SKIN", 1), ("COLL", 1), ("SIMS", 1),
+    ("BONE", 1), ("SKIN", 1), ("COLL", 1), ("SIMS", 1), ("EXPR", 1), ("HITA", 1), ("UDAT", 1),
 ];
 
 #[derive(Debug)]
@@ -571,6 +572,11 @@ pub struct Rig {
     pub meta: Vec<(String, String)>,
     /// Advanced data, off until a host enables it.
     pub extensions: Extensions,
+    pub expressions: Vec<Expression>,
+    /// Hit areas: id, name and the meshes they cover.
+    pub hit_areas: Vec<(String, String, Vec<usize>)>,
+    /// User data per mesh.
+    pub user_data: Vec<(usize, String)>,
 }
 
 impl Rig {
@@ -880,7 +886,10 @@ impl<'a> Reader<'a> {
         if self.at != self.bytes.len() {
             return err("Trailing bytes after the rig");
         }
-        Ok(Rig { canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui: None, meta: vec![], extensions: Extensions::default() })
+        Ok(Rig {
+            canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui: None, meta: vec![],
+            extensions: Extensions::default(), expressions: vec![], hit_areas: vec![], user_data: vec![],
+        })
     }
 
     fn canvas(&mut self) -> Result<Canvas> {
@@ -1217,6 +1226,51 @@ impl<'a> Reader<'a> {
             ext.simulation_overrides.push((parameters, groups));
         }
         Ok(())
+    }
+
+    fn expressions(&mut self) -> Result<Vec<Expression>> {
+        let n = self.count(20)?;
+        let mut expressions = Vec::with_capacity(n);
+        for _ in 0..n {
+            let (id, name, fade_in, fade_out) = (self.str()?, self.str()?, self.f32()?, self.f32()?);
+            let count = self.count(9)?;
+            let mut parameters = Vec::with_capacity(count);
+            for _ in 0..count {
+                let p = self.parameter()?;
+                let blend = match self.u8()? {
+                    0 => Blend::Add,
+                    1 => Blend::Multiply,
+                    2 => Blend::Overwrite,
+                    _ => return err("Unknown expression blend"),
+                };
+                parameters.push((p, blend, self.f32()?));
+            }
+            expressions.push(Expression { id, name, fade_in, fade_out, parameters });
+        }
+        Ok(expressions)
+    }
+
+    fn hit_areas(&mut self) -> Result<Vec<(String, String, Vec<usize>)>> {
+        let n = self.count(12)?;
+        (0..n)
+            .map(|_| {
+                let (id, name) = (self.str()?, self.str()?);
+                let count = self.count(4)?;
+                Ok((id, name, (0..count).map(|_| self.index(self.meshes, "mesh")).collect::<Result<Vec<_>>>()?))
+            })
+            .collect()
+    }
+
+    fn user_data(&mut self) -> Result<Vec<(usize, String)>> {
+        let n = self.count(9)?;
+        (0..n)
+            .map(|_| {
+                if self.u8()? != 0 {
+                    return err("Unknown user data target");
+                }
+                Ok((self.index(self.meshes, "mesh")?, self.str()?))
+            })
+            .collect()
     }
 
     fn meta(&mut self) -> Result<Vec<(String, String)>> {
@@ -1641,7 +1695,28 @@ fn read_chunks(bytes: &[u8], verify_crc: bool) -> Result<Rig> {
         r.simulations(&mut extensions, physics.len())?;
         r.end("SIMS")?;
     }
-    let rig = Rig { canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui, meta, extensions };
+    let mut expressions = vec![];
+    if let Some(data) = chunk("EXPR") {
+        let mut r = reader(data);
+        expressions = r.expressions()?;
+        r.end("EXPR")?;
+    }
+    let mut hit_areas = vec![];
+    if let Some(data) = chunk("HITA") {
+        let mut r = reader(data);
+        hit_areas = r.hit_areas()?;
+        r.end("HITA")?;
+    }
+    let mut user_data = vec![];
+    if let Some(data) = chunk("UDAT") {
+        let mut r = reader(data);
+        user_data = r.user_data()?;
+        r.end("UDAT")?;
+    }
+    let rig = Rig {
+        canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui, meta, extensions,
+        expressions, hit_areas, user_data,
+    };
     rig.validate_extensions()?;
     Ok(rig)
 }

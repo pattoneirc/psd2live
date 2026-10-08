@@ -77,6 +77,10 @@ export class P2LPlayer {
 
     this.clips = this.list(runtime.p2l_clip_count, runtime.p2l_clip_id);
     this.parameters = this.list(runtime.p2l_parameter_count, runtime.p2l_parameter_id);
+    this.expressions = this.list(runtime.p2l_expression_count, runtime.p2l_expression_id);
+    this.hitAreas = this.list(runtime.p2l_hit_area_count, runtime.p2l_hit_area_id);
+    /** What advanced mode the file offers: 1 skinning, 2 exact links, 4 live simulation, 8 collision. */
+    this.advancedFeatures = runtime.p2l_advanced_available(this.rig);
     this.meshes = [];
     const count = runtime.p2l_mesh_count(this.rig);
     const scratch = runtime.p2l_alloc(4);
@@ -183,6 +187,30 @@ export class P2LPlayer {
   /** Plays a clip by id, cross-fading; null stops. */
   play(id) {
     this.rt.p2l_play(this.rig, id == null ? -1 : this.clips.indexOf(id));
+  }
+
+  /** Fades an expression in by id, the last one out; null fades it out to none. */
+  expression(id) {
+    this.rt.p2l_expression(this.rig, id == null ? -1 : this.expressions.indexOf(id));
+  }
+
+  /** Turns advanced mode's [features] on (0 is the Cubism-equivalent rig); returns those now on. */
+  setAdvanced(features) {
+    return this.rt.p2l_set_advanced(this.rig, features);
+  }
+
+  /** The rig's canvas point under a point of the page, as the canvas element draws it. */
+  toRig(clientX, clientY) {
+    const r = this.canvas.getBoundingClientRect();
+    const fit = Math.min(r.width / this.width, r.height / this.height);
+    return [(clientX - r.left - r.width / 2) / fit + this.width / 2, (clientY - r.top - r.height / 2) / fit + this.height / 2];
+  }
+
+  /** The hit area (e.g. "HitAreaHead") under a point of the page, or null. */
+  hitTest(clientX, clientY) {
+    const [x, y] = this.toRig(clientX, clientY);
+    const i = this.rt.p2l_hit_test(this.rig, x, y);
+    return i < 0 ? null : this.hitAreas[i];
   }
 
   /** Where to look, each axis -1..1 (x right, y up). */

@@ -62,7 +62,7 @@
 
 ## C ABI
 
-一个句柄对应一个已加载模型，持有参数、动作播放器和物理状态。典型流程：`p2l_rig_load` → 设置参数（`p2l_parameter_values` / `p2l_set_parameter`）→ `p2l_update(dt)`（动作、物理、变形）或 `p2l_evaluate` → 读取 `p2l_mesh_vertices`、`p2l_mesh_opacity`、`p2l_mesh_colors`，按 `p2l_render_order` 由后往前绘制，贴图由 `p2l_texture_png` 提供（`p2l_texture_info` 给出贴图页类型：内嵌 PNG、KTX2 或模型旁的文件）。`p2l_rig_load_ex` 可要求校验块的 CRC，`p2l_format_support` 列出支持的版本与块。所有函数接受空句柄；返回的指针在句柄释放（姿势数据在下次求值）前有效。
+一个句柄对应一个已加载模型，持有参数、动作播放器和物理状态。典型流程：`p2l_rig_load` → 设置参数（`p2l_parameter_values` / `p2l_set_parameter`）→ `p2l_update(dt)`（动作、物理、变形）或 `p2l_evaluate` → 读取 `p2l_mesh_vertices`、`p2l_mesh_opacity`、`p2l_mesh_colors`，按 `p2l_render_order` 由后往前绘制，贴图由 `p2l_texture_png` 提供（`p2l_texture_info` 给出贴图页类型：内嵌 PNG、KTX2 或模型旁的文件）。`p2l_rig_load_ex` 可要求校验块的 CRC，`p2l_format_support` 列出支持的版本与块。表情（`p2l_expression`）在动作片段之后、程序化行为之前叠加；`p2l_hit_test` 返回画布点下的点击区域；`p2l_mesh_user_data` 读取网格的用户数据。所有函数接受空句柄；返回的指针在句柄释放（姿势数据在下次求值）前有效。
 
 ## 验证
 
@@ -76,7 +76,7 @@
 
 ## 网页播放器
 
-导出目标 `web` 写出可直接部署的文件夹：`index.html`、`p2l.js`（ES 模块 `P2LPlayer`）、`p2l_runtime.wasm` 与模型。播放器用 WebGL 绘制：遮罩经模板缓冲（按纹理 alpha 0.5 裁剪，支持反相），叠加与乘算用混合函数，乘算/屏幕色在着色器中计算；页面提供动作选择、口型滑块，视线跟随指针。WebAssembly 构建作为资源随仓库提交，修改运行时后用 `./gradlew :targets:web:updateWasm` 刷新（需要 `rustup target add wasm32-unknown-unknown`）；单元测试核对播放器调用的每个函数都由该构建导出。tml 样例在 Edge（无界面）中显示正确。
+导出目标 `web` 写出可直接部署的文件夹：`index.html`、`p2l.js`（ES 模块 `P2LPlayer`）、`p2l_runtime.wasm` 与模型。播放器用 WebGL 绘制：遮罩经模板缓冲（按纹理 alpha 0.5 裁剪，支持反相），叠加与乘算用混合函数，乘算/屏幕色在着色器中计算；页面提供动作与表情选择、口型滑块，视线跟随指针，点击显示所在的点击区域；文件带有高级模式数据时，页面提供开关。WebAssembly 构建作为资源随仓库提交，修改运行时后用 `./gradlew :targets:web:updateWasm` 刷新（需要 `rustup target add wasm32-unknown-unknown`）；单元测试核对播放器调用的每个函数都由该构建导出。tml 样例在 Edge（无界面）中显示正确。
 
 ## Godot
 

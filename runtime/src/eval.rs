@@ -231,6 +231,24 @@ pub fn render_order(rig: &Rig, pose: &Pose) -> Vec<u32> {
     out
 }
 
+/// The first hit area (in file order) one of whose visible meshes covers canvas point ([x], [y]) in [pose].
+pub fn hit_area_at(rig: &Rig, pose: &Pose, x: f32, y: f32) -> Option<usize> {
+    let covers = |m: usize| -> bool {
+        let (Some(g), Some(v)) = (&rig.meshes[m].geometry, pose.vertices.get(m)) else { return false };
+        if !rig.meshes[m].visible || pose.opacity.get(m).map_or(true, |o| *o <= 0.0) {
+            return false;
+        }
+        g.indices.chunks_exact(3).any(|t| {
+            let p = |i: u32| (v[i as usize * 2], v[i as usize * 2 + 1]);
+            let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
+            let side = |p: (f32, f32), q: (f32, f32)| (q.0 - p.0) * (y - p.1) - (q.1 - p.1) * (x - p.0);
+            let (d1, d2, d3) = (side(a, b), side(b, c), side(c, a));
+            !((d1 < 0.0 || d2 < 0.0 || d3 < 0.0) && (d1 > 0.0 || d2 > 0.0 || d3 > 0.0))
+        })
+    };
+    rig.hit_areas.iter().position(|(_, _, meshes)| meshes.iter().any(|m| covers(*m)))
+}
+
 /// Where a deformer places its children: a lattice of canvas points or a rotation frame.
 #[derive(Clone, Debug)]
 pub enum Transform {

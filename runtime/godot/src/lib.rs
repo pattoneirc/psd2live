@@ -14,6 +14,8 @@ use godot::classes::{CanvasItemMaterial, FileAccess, INode2D, Image, ImageTextur
 use godot::prelude::*;
 use p2l_runtime::behavior::Behaviors;
 use p2l_runtime::clip::Player;
+use p2l_runtime::advanced::{Advanced, Affine};
+use p2l_runtime::expression::ExpressionPlayer;
 use p2l_runtime::rig::TextureKind;
 use p2l_runtime::{render_order, Evaluator, Physics, Rig};
 
@@ -46,12 +48,17 @@ pub struct P2LCharacter {
     /// Turns the gaze toward the mouse every frame.
     #[export]
     look_at_mouse: bool,
+    /// Advanced mode, where the rig offers it: 1 skins along true arcs, 2 exact links, 4 live cloth and hair, 8 collision.
+    #[export(flags = (Skin = 1, ExactLinks = 2, Simulation = 4, Collision = 8))]
+    advanced_features: u32,
 
     rig: Option<Rig>,
     evaluator: Evaluator,
     player: Player,
     behavior: Behaviors,
     physics: Option<Physics>,
+    expressions: ExpressionPlayer,
+    advanced: Advanced,
     /// The pose set through set_parameter, under clips and behaviors.
     pose: Vec<f32>,
     /// The values of the last frame.
@@ -68,8 +75,9 @@ pub struct P2LCharacter {
 impl INode2D for P2LCharacter {
     fn init(base: Base<Node2D>) -> Self {
         P2LCharacter {
-            rig_path: GString::new(), centered: true, autoplay: GString::new(), behaviors: 3, look_at_mouse: false,
+            rig_path: GString::new(), centered: true, autoplay: GString::new(), behaviors: 3, look_at_mouse: false, advanced_features: 0,
             rig: None, evaluator: Evaluator::new(), player: Player::new(), behavior: Behaviors::default(), physics: None,
+            expressions: ExpressionPlayer::new(), advanced: Advanced::new(),
             pose: Vec::new(), values: Vec::new(), textures: Vec::new(), materials: Vec::new(), screens: Vec::new(),
             slots: Vec::new(), base,
         }
@@ -190,6 +198,9 @@ impl P2LCharacter {
         self.player = Player::new();
         self.behavior = Behaviors::default();
         self.physics = Some(Physics::new(&rig));
+        self.expressions = ExpressionPlayer::new();
+        self.advanced = Advanced::new();
+        self.advanced.set(&rig, self.advanced_features);
         let autoplay = rig.clips.iter().position(|c| c.id == self.autoplay.to_string());
         self.rig = Some(rig);
         if let Some(clip) = autoplay {
@@ -277,6 +288,65 @@ impl P2LCharacter {
         if let Some(rig) = &self.rig {
             self.physics = Some(Physics::new(rig));
         }
+        self.advanced.reset_simulations();
+    }
+
+    /// The advanced features the rig offers (see advanced_features).
+    #[func]
+    fn get_advanced_available(&self) -> u32 {
+        self.rig.as_ref().map_or(0, Advanced::available)
+    }
+
+    /// Turns advanced features on (0 is the Cubism-equivalent rig); returns those now on.
+    #[func]
+    fn set_advanced(&mut self, features: u32) -> u32 {
+        self.advanced_features = features;
+        let Some(rig) = &self.rig else { return 0 };
+        self.advanced.set(rig, features)
+    }
+
+    #[func]
+    fn get_expression_ids(&self) -> PackedStringArray {
+        self.rig.iter().flat_map(|r| r.expressions.iter().map(|e| GString::from(e.id.as_str()))).collect()
+    }
+
+    /// Fades an expression in by id over the motion, the last one out; an empty id fades it out to none.
+    #[func]
+    fn set_expression(&mut self, id: GString) -> bool {
+        let Some(rig) = &self.rig else { return false };
+        let index = rig.expressions.iter().position(|e| e.id == id.to_string());
+        self.expressions.play(rig, index);
+        index.is_some() || id.is_empty()
+    }
+
+    /// The hit area (e.g. "HitAreaHead") under a point in global coordinates, or an empty string.
+    #[func]
+    fn hit_test(&self, global: Vector2) -> GString {
+        let Some(rig) = &self.rig else { return GString::new() };
+        let p = self.base().to_local(global) - self.offset(rig);
+        p2l_runtime::eval::hit_area_at(rig, &self.evaluator.pose, p.x, p.y).map_or(GString::new(), |i| GString::from(rig.hit_areas[i].0.as_str()))
+    }
+
+    #[func]
+    fn get_bone_ids(&self) -> PackedStringArray {
+        self.rig.iter().flat_map(|r| r.extensions.bones.iter().map(|(_, id)| GString::from(id.as_str()))).collect()
+    }
+
+    /// A bone's frame in the last frame, in the node's space, to attach things to; the identity when unknown.
+    #[func]
+    fn get_bone_transform(&mut self, id: GString) -> Transform2D {
+        let Some(rig) = &self.rig else { return Transform2D::IDENTITY };
+        let Some(&(d, _)) = rig.extensions.bones.iter().find(|(_, b)| *b == id.to_string()) else { return Transform2D::IDENTITY };
+        let frame = match self.evaluator.pose.deformers.get(d) {
+            Some(t) => Affine::of(t),
+            None => {
+                let values: Vec<f32> = rig.parameters.iter().zip(&self.values).map(|(p, v)| p.normalize(*v)).collect();
+                self.advanced.bone_frame(rig, &values, d)
+            }
+        };
+        let Some(m) = frame else { return Transform2D::IDENTITY };
+        let o = self.offset(rig);
+        Transform2D::from_cols(Vector2::new(m.a, m.c), Vector2::new(m.b, m.d), Vector2::new(m.tx, m.ty) + o)
     }
 }
 
@@ -285,19 +355,31 @@ impl P2LCharacter {
         &self.values
     }
 
+    /// Where the rig's canvas origin sits in the node.
+    fn offset(&self, rig: &Rig) -> Vector2 {
+        if self.centered { Vector2::new(-rig.canvas.width / 2.0, -rig.canvas.height / 2.0) } else { Vector2::ZERO }
+    }
+
     /// Advances clips, behaviors and physics by [dt] seconds, deforms the rig and redraws it.
     fn advance(&mut self, dt: f32) {
         let Some(rig) = &self.rig else { return };
         self.values.clone_from(&self.pose);
         self.behavior.enabled = self.behaviors;
         self.player.update(rig, dt, &mut self.values);
+        self.expressions.update(rig, dt, &mut self.values);
         self.behavior.update(rig, dt, &mut self.values);
         if let Some(physics) = &mut self.physics {
-            physics.step(rig, dt, &mut self.values);
+            let skip = self.advanced.skipped_physics(rig);
+            physics.step_skipping(rig, dt, &mut self.values, &skip);
         }
-        let pose = self.evaluator.evaluate(rig, &self.values);
-        let order = render_order(rig, pose);
-        let offset = if self.centered { Vector2::new(-rig.canvas.width / 2.0, -rig.canvas.height / 2.0) } else { Vector2::ZERO };
+        let on = self.advanced.enabled() != 0;
+        self.evaluator.evaluate_ext(rig, &self.values, if on { Some(&mut self.advanced) } else { None });
+        if on {
+            let values: Vec<f32> = rig.parameters.iter().zip(&self.values).map(|(p, v)| p.normalize(*v)).collect();
+            self.advanced.step_simulations(rig, &values, dt, &mut self.evaluator.pose);
+        }
+        let order = render_order(rig, &self.evaluator.pose);
+        let offset = self.offset(rig);
         let mut rs = RenderingServer::singleton();
         for slot in &self.slots {
             rs.canvas_item_clear(slot.item);

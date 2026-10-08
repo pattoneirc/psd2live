@@ -183,6 +183,25 @@ public object P2lrt {
 			if (ir.clips.isNotEmpty()) chunks += chunk("CLIP") { out.u32(ir.clips.size); ir.clips.forEach(::clip) }
 			if (ir.parameterRoles.isNotEmpty()) chunks += chunk("ROLE") { roles() }
 			if (options.advanced) advanced().forEach { chunks += chunk(it.first, required = false) { it.second() } }
+			// What a host builds interaction on: expressions, hit areas and the meshes' user data.
+			val expressions = ir.advanced.expressions.map { e -> e to e.parameters.filter { it.parameter in parameterIndex } }.filter { it.second.isNotEmpty() }
+			if (expressions.isNotEmpty()) chunks += chunk("EXPR", required = false) {
+				out.u32(expressions.size)
+				for ((e, parameters) in expressions) {
+					out.str(e.id); name(e.name); out.f32(e.fadeIn); out.f32(e.fadeOut)
+					out.u32(parameters.size); parameters.forEach { out.u32(parameter(it.parameter)); out.u8(it.blend.ordinal); out.f32(it.value) }
+				}
+			}
+			val hitAreas = ir.advanced.hitAreas.map { h -> h to h.meshes.filter { it in meshIndex } }.filter { it.second.isNotEmpty() }
+			if (hitAreas.isNotEmpty()) chunks += chunk("HITA", required = false) {
+				out.u32(hitAreas.size)
+				for ((h, meshes) in hitAreas) { out.str(h.id); name(h.name); out.u32(meshes.size); meshes.forEach { out.u32(mesh(it)) } }
+			}
+			val userData = ir.meshes.filter { it.userData.isNotEmpty() }
+			if (userData.isNotEmpty()) chunks += chunk("UDAT", required = false) {
+				out.u32(userData.size)
+				userData.forEach { out.u8(0); out.u32(mesh(it.id)); out.str(it.userData) }
+			}
 			val gui = Gui(ir, parameterIndex)
 			if (!gui.isEmpty) chunks += chunk("PGUI", required = false) { gui.write() }
 			chunks += chunk("META", required = false) {

@@ -329,3 +329,46 @@ fn the_parameter_panel_and_information_read_back() {
     chunks.push(C { flags: 0, ..chunk("PGUI", W(broken)) });
     assert!(error(&chunks).contains("missing children"));
 }
+
+#[test]
+fn expressions_hit_areas_and_user_data_read_back_and_work() {
+    use crate::expression::{apply, Blend, Expression, ExpressionPlayer};
+    let mut chunks = core();
+    chunks[0] = chunk("STRS", strings(&["A", "M", "smile", "Smile", "HitAreaHead", "Head", "{\"tag\":1}"]));
+    chunks.push(C { flags: 0, ..chunk("EXPR", W::default().u32(1).u32(2).u32(3).f32(0.5).f32(1.0).u32(1).u32(0).u8(2).f32(0.75)) });
+    chunks.push(C { flags: 0, ..chunk("HITA", W::default().u32(1).u32(4).u32(5).u32(1).u32(0)) });
+    chunks.push(C { flags: 0, ..chunk("UDAT", W::default().u32(1).u8(0).u32(0).u32(6)) });
+    let mut rig = read(&chunks).unwrap();
+    let e = &rig.expressions[0];
+    assert_eq!((e.id.as_str(), e.fade_in, e.fade_out), ("smile", 0.5, 1.0));
+    assert_eq!(e.parameters, vec![(0, Blend::Overwrite, 0.75)]);
+    assert_eq!(rig.hit_areas, vec![("HitAreaHead".to_string(), "Head".to_string(), vec![0])]);
+    assert_eq!(rig.user_data, vec![(0, "{\"tag\":1}".to_string())]);
+
+    // The triangle (0, 0), (10, 0), (0, 10) is the head: inside it hits, beside it does not.
+    let mut evaluator = crate::eval::Evaluator::new();
+    let pose = evaluator.evaluate(&rig, &[0.0]);
+    assert_eq!(crate::eval::hit_area_at(&rig, pose, 2.0, 2.0), Some(0));
+    assert_eq!(crate::eval::hit_area_at(&rig, pose, 9.0, 9.0), None);
+
+    // Each blend at full weight over 0.8: add 0.5, multiply by 0.5, overwrite with 0.5.
+    let with = |blend, value| Expression { id: "x".into(), name: "x".into(), fade_in: 0.5, fade_out: 0.5, parameters: vec![(0, blend, value)] };
+    for (blend, want) in [(Blend::Add, 1.3), (Blend::Multiply, 0.4), (Blend::Overwrite, 0.5)] {
+        let mut values = [0.8f32];
+        apply(&with(blend, 0.5), 1.0, &mut values);
+        assert!((values[0] - want).abs() < 1e-6, "{:?}", blend);
+    }
+    // Fading in, switching (the first fades out as the second fades in) and stopping.
+    rig.expressions = vec![with(Blend::Add, 1.0), with(Blend::Add, -1.0)];
+    let mut player = ExpressionPlayer::new();
+    let step = |player: &mut ExpressionPlayer, rig: &Rig, dt: f32| { let mut v = [0.0f32]; player.update(rig, dt, &mut v); v[0] };
+    player.play(&rig, Some(0));
+    assert!(step(&mut player, &rig, 0.25) > 0.4);
+    assert!(step(&mut player, &rig, 0.25) > 0.999);
+    player.play(&rig, Some(1));
+    assert!(step(&mut player, &rig, 0.25).abs() < 0.01);
+    assert!((step(&mut player, &rig, 0.5) + 1.0).abs() < 1e-3);
+    player.play(&rig, None);
+    assert!(step(&mut player, &rig, 1.0).abs() < 1e-6);
+    assert_eq!(player.playing(), None);
+}

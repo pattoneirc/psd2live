@@ -53,6 +53,27 @@ class AdvancedDataTest {
 		assertTrue(String(bytes, Charsets.ISO_8859_1).contains("BONE"))
 	}
 
+	@Test fun expressionsHitAreasAndUserDataAreWrittenForWhatTheFileHas() {
+		val extras = rig.copy(
+			meshes = rig.meshes.map { if (it.id == "arm") it.copy(userData = "{\"grab\":true}") else it },
+			advanced = AdvancedIR(
+				expressions = listOf(
+					ExpressionIR("bend", "Bend", 0.5f, 0.5f, listOf(ExpressionParameter("Elbow", ExpressionBlend.ADD, 10f))),
+					// Nothing it sets is in the rig: left out.
+					ExpressionIR("gone", "Gone", 0.5f, 0.5f, listOf(ExpressionParameter("Missing", ExpressionBlend.ADD, 1f))),
+				),
+				hitAreas = listOf(HitAreaIR("HitAreaArm", "Arm", listOf("arm", "missing"))),
+			),
+		)
+		val bytes = P2lrt.write(extras)
+		val b = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+		val tags = (0 until b.getInt(16)).map { String(bytes, 32 + it * 40, 4, Charsets.US_ASCII) }
+		assertTrue(listOf("EXPR", "HITA", "UDAT").all { it in tags })
+		val text = String(bytes, Charsets.UTF_8)
+		assertTrue("bend" in text && "HitAreaArm" in text && "{\"grab\":true}" in text)
+		assertFalse("gone" in text)
+	}
+
 	@Test fun theAdvancedChunksAreOptionalAndCanBeLeftOut() {
 		val chunks = { bytes: ByteArray ->
 			val b = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)

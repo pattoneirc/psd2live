@@ -66,6 +66,8 @@ class RigIrBinaryTest {
 					listOf(SimStatic("ParamA", Floats.values(0f, 1f), mapOf("mesh" to listOf(Floats.values(0f, 0f, 0f, 0f, 0f, 0f), Floats.values(1f, 0f, 0f, 0f, 0f, 0f))))),
 					listOf("head"))),
 				colliders = listOf(ColliderIR("head", true, deformer = "rot", ax = 1f, by = 2f, radiusA = 5f, radiusB = 3f, friction = 0.2f)),
+				expressions = listOf(ExpressionIR("smile", "Smile", 0.5f, 0.75f, listOf(ExpressionParameter("ParamA", ExpressionBlend.MULTIPLY, 0.5f)))),
+				hitAreas = listOf(HitAreaIR("HitAreaHead", "Head", listOf("mesh"))),
 			),
 		)
 	}

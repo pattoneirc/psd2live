@@ -17,7 +17,10 @@
   <canvas id="stage"></canvas>
   <nav>
     <label>Clip <select id="clip"><option value="">(none)</option></select></label>
+    <label>Expression <select id="expression"><option value="">(none)</option></select></label>
     <label>Mouth <input id="mouth" type="range" min="0" max="1" step="0.01" value="0"></label>
+    <label id="advanced-label" hidden><input id="advanced" type="checkbox"> Advanced (live skin and cloth)</label>
+    <span id="hit"></span>
     <span id="error"></span>
   </nav>
 </main>
@@ -30,6 +33,15 @@ try {
   const select = document.getElementById("clip");
   for (const id of player.clips) select.add(new Option(id, id));
   select.onchange = () => player.play(select.value || null);
+  const expression = document.getElementById("expression");
+  for (const id of player.expressions) expression.add(new Option(id, id));
+  expression.onchange = () => player.expression(expression.value || null);
+  if (player.advancedFeatures) {
+    document.getElementById("advanced-label").hidden = false;
+    document.getElementById("advanced").onchange = (e) => player.setAdvanced(e.target.checked ? player.advancedFeatures : 0);
+  }
+  // A tap names the hit area under it.
+  canvas.onpointerdown = (e) => { document.getElementById("hit").textContent = player.hitTest(e.clientX, e.clientY) ?? ""; };
   document.getElementById("mouth").oninput = (e) => player.lipSync(Number(e.target.value));
   // Gaze follows the pointer over the canvas.
   canvas.onpointermove = (e) => {

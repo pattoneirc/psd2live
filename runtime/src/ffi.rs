@@ -6,6 +6,7 @@ use crate::advanced::{Advanced, Affine};
 use crate::behavior::Behaviors;
 use crate::clip::Player;
 use crate::eval::Evaluator;
+use crate::expression::ExpressionPlayer;
 use crate::physics::Physics;
 use crate::rig::{Rig, TextureKind};
 use std::ffi::{c_char, CStr, CString};
@@ -23,6 +24,10 @@ pub struct Handle {
     clip_ids: Vec<CString>,
     texture_uris: Vec<CString>,
     bone_ids: Vec<CString>,
+    expression_ids: Vec<CString>,
+    hit_area_ids: Vec<CString>,
+    user_data: Vec<CString>,
+    expressions: ExpressionPlayer,
     advanced: Advanced,
     render_order: Vec<u32>,
 }
@@ -70,6 +75,16 @@ pub unsafe extern "C" fn p2l_rig_load_ex(bytes: *const u8, len: usize, flags: u3
                 clip_ids: c_strings(rig.clips.iter().map(|c| &c.id)),
                 texture_uris: c_strings(rig.textures.iter().map(|t| &t.uri)),
                 bone_ids: c_strings(rig.extensions.bones.iter().map(|(_, id)| id)),
+                expression_ids: c_strings(rig.expressions.iter().map(|e| &e.id)),
+                hit_area_ids: c_strings(rig.hit_areas.iter().map(|h| &h.0)),
+                user_data: {
+                    let mut texts = vec![String::new(); rig.meshes.len()];
+                    for (m, text) in &rig.user_data {
+                        texts[*m] = text.clone();
+                    }
+                    c_strings(texts.iter())
+                },
+                expressions: ExpressionPlayer::new(),
                 advanced: Advanced::new(),
                 evaluator: Evaluator::new(),
                 player: Player::new(),
@@ -221,6 +236,7 @@ pub unsafe extern "C" fn p2l_evaluate(handle: *mut Handle) {
 pub unsafe extern "C" fn p2l_update(handle: *mut Handle, dt: f32) {
     with_mut!(handle, (), |h| {
         h.player.update(&h.rig, dt, &mut h.values);
+        h.expressions.update(&h.rig, dt, &mut h.values);
         h.behaviors.update(&h.rig, dt, &mut h.values);
         let skip = h.advanced.skipped_physics(&h.rig);
         h.physics.step_skipping(&h.rig, dt, &mut h.values, &skip);
@@ -490,6 +506,47 @@ pub extern "C" fn p2l_format_support() -> *const c_char {
             CString::new(format!("1,{} {}", crate::rig::VERSION, chunks.join(" "))).unwrap()
         })
         .as_ptr()
+}
+
+// --- expressions, hit areas and user data ---
+
+#[no_mangle]
+pub unsafe extern "C" fn p2l_expression_count(handle: *const Handle) -> u32 {
+    with!(handle, 0, |h| h.rig.expressions.len() as u32)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn p2l_expression_id(handle: *const Handle, index: u32) -> *const c_char {
+    with!(handle, ptr::null(), |h| h.expression_ids.get(index as usize).map_or(ptr::null(), |s| s.as_ptr()))
+}
+
+/// Fades expression [index] in over the motion, fading the last one out; -1 fades it out to none.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_expression(handle: *mut Handle, index: i32) {
+    with_mut!(handle, (), |h| h.expressions.play(&h.rig, usize::try_from(index).ok()))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn p2l_hit_area_count(handle: *const Handle) -> u32 {
+    with!(handle, 0, |h| h.rig.hit_areas.len() as u32)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn p2l_hit_area_id(handle: *const Handle, index: u32) -> *const c_char {
+    with!(handle, ptr::null(), |h| h.hit_area_ids.get(index as usize).map_or(ptr::null(), |s| s.as_ptr()))
+}
+
+/// The first hit area (in file order) one of whose visible meshes covers canvas point ([x], [y]) at the last
+/// evaluation, or -1.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_hit_test(handle: *const Handle, x: f32, y: f32) -> i32 {
+    with!(handle, -1, |h| crate::eval::hit_area_at(&h.rig, &h.evaluator.pose, x, y).map_or(-1, |i| i as i32))
+}
+
+/// Mesh [index]'s user data, empty when it has none.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_mesh_user_data(handle: *const Handle, index: u32) -> *const c_char {
+    with!(handle, ptr::null(), |h| h.user_data.get(index as usize).map_or(ptr::null(), |s| s.as_ptr()))
 }
 
 // --- advanced mode ---

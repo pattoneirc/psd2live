@@ -104,6 +104,17 @@ uint32_t p2l_bone_count(const P2lRig *rig);
 const char *p2l_bone_id(const P2lRig *rig, uint32_t index);
 bool p2l_bone_transform(P2lRig *rig, uint32_t index, float *out);
 
+/* Expressions: a few parameters set over the motion, faded as Cubism fades exp3 expressions. -1 fades out. */
+uint32_t p2l_expression_count(const P2lRig *rig);
+const char *p2l_expression_id(const P2lRig *rig, uint32_t index);
+void p2l_expression(P2lRig *rig, int32_t index);
+/* Hit areas (e.g. "HitAreaHead", "HitAreaBody"): the first one whose visible meshes cover a canvas point. */
+uint32_t p2l_hit_area_count(const P2lRig *rig);
+const char *p2l_hit_area_id(const P2lRig *rig, uint32_t index);
+int32_t p2l_hit_test(const P2lRig *rig, float x, float y);
+/* A mesh's user data, empty when it has none. */
+const char *p2l_mesh_user_data(const P2lRig *rig, uint32_t index);
+
 /* Memory for passing a rig in from a WebAssembly host. */
 uint8_t *p2l_alloc(size_t len);
 void p2l_dealloc(uint8_t *pointer, size_t len);
