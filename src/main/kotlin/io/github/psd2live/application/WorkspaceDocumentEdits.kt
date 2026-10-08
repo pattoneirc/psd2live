@@ -62,7 +62,7 @@ internal object WorkspaceDocumentEdits {
                     request["parameter"]?.jsonPrimitive?.content ?: current.parameter,
                     request["switch_id"]?.jsonPrimitive?.int ?: current.switchId))
             }
-            "parameter_create", "parameter_update", "parameter_delete" -> parameter(document, model.rig.puppet.parameters,
+            "parameter_create", "parameter_update", "parameter_delete" -> parameter(document, model,
                 operation.operation.removePrefix("parameter_"), request)
             "rig_deform" -> journal(document, model, JsonArray(request.getValue("changes").jsonArray.map {
                 JsonObject(it.jsonObject + ("op" to JsonPrimitive("deform"))) }))
@@ -145,12 +145,16 @@ internal object WorkspaceDocumentEdits {
         return if (settings == base) document else document.copy(meshOverrides = document.meshOverrides + (id to settings))
     }
 
-    fun parameter(document: WorkspaceDocument, parameters: List<Parameter>, mode: String, request: JsonObject): WorkspaceDocument {
+    fun parameter(document: WorkspaceDocument, model: RigPreviewModel, mode: String, request: JsonObject): WorkspaceDocument {
         val id = request.text("parameter_id").trim()
-        val current = parameters.firstOrNull { it.id.raw == id }
+        val current = model.rig.puppet.parameters.firstOrNull { it.id.raw == id }
         if (mode == "delete") {
             require(current != null) { "Parameter not found: $id" }
-            return appendParameterCommand(document, mode, id)
+            // A generator's own parameter goes with the generator; once the user has taken it in, it is theirs to delete.
+            require(id !in GeneratedParameterAdoption.generated(model.rig.puppet, model.authored.rig.puppet)) {
+                "$id belongs to a swing or simulation; remove that instead"
+            }
+            return appendParameterCommand(document, model, mode, id)
         }
         if (mode == "create") {
             require(Regex("[A-Za-z][A-Za-z0-9_]{0,63}").matches(id)) { "New parameter ID must be 1-64 ASCII letters, digits, or underscores and start with a letter" }
@@ -171,11 +175,15 @@ internal object WorkspaceDocumentEdits {
             created = mode == "create" || document.rigEdits.parameterEdits.any { it.id == id && it.created })
         if (mode == "update" && current != null && current.name == edit.name && current.min == edit.min &&
             current.max == edit.max && current.default == edit.default && current.kind == edit.kind && current.repeat == edit.repeat) return document
-        return appendParameterCommand(document, mode, id, edit)
+        return appendParameterCommand(document, model, mode, id, edit)
     }
 
-    /** Definitions must replay in authoring order: deleting an axis happens after its authored forms. */
-    private fun appendParameterCommand(document: WorkspaceDocument, action: String, id: String, edit: RigParameterEdit? = null): WorkspaceDocument {
+    /**
+     * Definitions must replay in authoring order: deleting an axis happens after its authored forms. A generated
+     * parameter it changes is taken into the document first ([GeneratedParameterAdoption]).
+     */
+    private fun appendParameterCommand(document: WorkspaceDocument, model: RigPreviewModel, action: String, id: String,
+                                       edit: RigParameterEdit? = null): WorkspaceDocument {
         val command = buildJsonObject {
             put("op", "structure")
             putJsonArray("edits") { add(buildJsonObject {
@@ -186,14 +194,13 @@ internal object WorkspaceDocumentEdits {
                 }
             }) }
         }
-        return document.copy(rigEdits = document.rigEdits.copy(authoringJournal = document.rigEdits.authoringJournal + command))
+        val journal = GeneratedParameterAdoption.adopted(model.rig.puppet, model.authored.rig.puppet, listOf(command))
+        return document.copy(rigEdits = document.rigEdits.copy(authoringJournal = document.rigEdits.authoringJournal + journal))
     }
 
     fun journal(document: WorkspaceDocument, model: RigPreviewModel, edits: JsonArray): WorkspaceDocument {
-        val (_, compiled) = RigAuthoringJournal.compile(model.rig.puppet,
-            GeneratedOverrides.capture(model.rig.puppet, document.rigEdits, edits, model.primitiveSkins))
         // Recorded on the shown rig, they replay on the authored one, before the generators.
-        val journal = GeneratedOverrides.journalOnly(model.rig.puppet, model.authored.rig.puppet, compiled)
+        val journal = JournalRecording.record(model.rig.puppet, model.authored.rig.puppet, document.rigEdits, edits, model.primitiveSkins)
         return document.copy(rigEdits = document.rigEdits.copy(authoringJournal = document.rigEdits.authoringJournal + journal))
     }
 

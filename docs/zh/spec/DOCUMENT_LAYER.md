@@ -98,6 +98,8 @@
 - 此前在这些关键形上的画布编辑写成普通 `canvas_geometry`，重放时参数尚不存在，整个重建失败，编辑无法提交；现在提交时改写为覆盖。
 - 生成器被删除、烘焙（摆动）、取消烘焙（模拟）或改变轴后，键不再对应生成的格点，覆盖不生效并报告为孤立，不会落到其下的静止形上。网格重新生成后顶点数变化同样报告为孤立。
 - 生成参数在默认值处的编辑仍是普通编辑，修改的是静止形状。旧工程中的命令不变；只有新的提交会写出覆盖。
+- Bezier 编辑与关键形 `set`（含 MCP `rig_deform`）写入生成格点时同样改写为覆盖；保留子级位置的编辑、复制到或复制自生成格点、在生成器的轴上增删键无法作为覆盖表达，在记录时拒绝（`GeneratedOverrides.ownedWrites`）。
+- 在其他对象上使用生成参数（打键、通道关键形、改名、改范围）时，先在日志中按生成器当前定义创建该参数（`GeneratedParameterAdoption`），之后参数属于文档，生成器沿用它；见[固化 Rig](MATERIALIZED_RIG.md#41-记录层与作用层)。
 - 覆盖不影响基础 Rig 生成：生成几何缓存的键忽略覆盖命令，增删覆盖不会让基础 Rig 重新生成。
 - **问题报告**：每次重放把未按记录生效的覆盖作为结构化记录（`GeneratedOverrideIssue`：类型 `conflict` / `orphaned`、生成器 ID、目标、完整键、冲突点数或孤立覆盖的点数、形状总点数，孤立时附原因 `missing_keyform` / `shape_mismatch` / `superseded`）存入 `BuiltRig.overrideIssues`，按日志顺序排列，不改变合并语义。被拆分取代的网格上的覆盖原因为 `superseded`。
 - `core/quality/GeneratedOverrideQuality` 把这些记录转为观察报告（版本 2，领域 `overrides`，单项检查 `generated_overrides`）：冲突为 `GENERATED_OVERRIDE_CONFLICT`，孤立为 `GENERATED_OVERRIDE_ORPHANED`，等级由规则枚举唯一决定（均为 warning，`can_proceed` 恒为 true），不从文本推断；没有问题时报告完整且 findings 为空。MCP `workspace_inspect`（scope `project`，工程已加载时）返回 `quality.overrides`；严格结构见 `WorkspaceQualitySchemas`。

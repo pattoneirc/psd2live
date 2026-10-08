@@ -110,15 +110,15 @@ internal object GeneratedOverrides {
 
 	/**
 	 * Compiled [journal] entries recorded on the finished rig [shown], as the journal replays them on [authored] - the
-	 * rig before the generators add their parameters and axes. A key leaves out each axis a generator adds at its
-	 * default (a parameter [authored] does not have, or an axis the target has in [shown] and not in [authored]), so it
-	 * lands on the rest cell the generator builds from. The viewing pose already holds only what the target reads, away
+	 * rig before the generators add their axes. A key leaves out each axis a generator adds to its target at that axis's
+	 * default (the target has it in [shown] and not in [authored]), so it lands on the rest cell the generator builds
+	 * from. A generated parameter the target has no axis on yet stays: the edit makes that axis, and
+	 * [GeneratedParameterAdoption] gives the journal the parameter. The viewing pose already holds only what the target reads, away
 	 * from its default ([RigGeometryTools.referencePose]). The points are unchanged: at those defaults [shown] shows the
 	 * geometry [authored] does.
 	 */
 	fun journalOnly(shown: PuppetModel, authored: PuppetModel, journal: List<JsonObject>): List<JsonObject> {
 		val defaults = shown.parameters.associate { it.id.raw to it.default }
-		val present = authored.parameters.mapTo(HashSet()) { it.id.raw }
 		fun axes(model: PuppetModel, kind: String, id: String): Set<String> = when (kind) {
 			"warp" -> (model.deformers.firstOrNull { it.id.raw == id } as? Deformer.Warp)?.geometryGrid
 			else -> model.drawables.firstOrNull { it.id.raw == id }?.geometryGrid
@@ -131,16 +131,98 @@ internal object GeneratedOverrides {
 			val kind = if (bezier) "warp" else kindOf(command) ?: return@map command
 			val id = command.getValue("id").jsonPrimitive.content
 			val added by lazy { axes(shown, kind, id) - axes(authored, kind, id) }
-			fun generated(parameterId: String) = parameterId !in present || parameterId in added
 			fun cleaned(edit: JsonObject): JsonObject {
 				val key = edit["key"]?.jsonObject ?: return edit
-				val keptKey = JsonObject(key.filter { (parameterId, value) -> !(atDefault(parameterId, value) && generated(parameterId)) })
+				val keptKey = JsonObject(key.filter { (parameterId, value) -> !(atDefault(parameterId, value) && parameterId in added) })
 				return if (keptKey.size == key.size) edit else JsonObject(edit + ("key" to keptKey))
 			}
 			val outer = cleaned(command)
 			if (!bezier) return@map outer
 			val geometry = command["geometry"]?.takeIf { it != JsonNull }?.jsonObject ?: return@map outer
 			JsonObject(outer + ("geometry" to cleaned(geometry)))
+		}
+	}
+
+	/**
+	 * Compiled [journal] entries that write keyforms a generator owns ([DocumentGenerators]) made replayable: those cells
+	 * exist only after the generators run, after the journal. A keyform `set` of one, or a Bezier edit of one, becomes an
+	 * override of the form it leaves, as a canvas edit does in [capture]; an entry that cannot be one - a copy to or from
+	 * it, a key deleted or added on the generator's axis, an edit that keeps the children in place - is refused, naming
+	 * the generator to change instead. [shown] is the generated rig the entries were made on.
+	 */
+	fun ownedWrites(shown: PuppetModel, overlay: RigEditOverlay, journal: List<JsonObject>, skins: PrimitiveSkins = PrimitiveSkins.None): List<JsonObject> {
+		val graph by lazy { DocumentGenerators.graph(overlay, primitives = skins) }
+		fun targetKind(target: String): String? = runCatching { RigAuthoringJournal.target(target).kind }.getOrNull()?.let {
+			when (it) { RigTargetKind.WARP_DEFORMER -> "warp"; RigTargetKind.ART_MESH -> "mesh"; else -> null }
+		}
+		fun axisOwner(kind: String, id: String, parameter: String): String? =
+			(if (kind == "mesh") skins.owner(DrawableId(id), ParameterId(parameter)) else null)
+				?: DocumentGenerators.owner(graph, DocumentGenerators.keyform(kind, id, parameter))?.id
+		fun key(command: JsonObject, field: String) = (command[field] as? JsonObject)?.mapValues { it.value.jsonPrimitive.float }.orEmpty()
+		fun override(generator: String, kind: String, id: String, key: Map<String, Float>, base: FloatArray, points: FloatArray) = buildJsonObject {
+			put("op", OP); put("generator", generator); put("target", "$kind:$id")
+			put("key", JsonObject(key.mapValues { JsonPrimitive(it.value) }))
+			put("base", JsonArray(base.map(::JsonPrimitive)))
+			put("points", JsonArray(points.map(::JsonPrimitive)))
+		}
+		fun cell(model: PuppetModel, kind: String, id: String, key: Map<String, Float>) =
+			if (kind == "warp") warpCell(model, id, key)?.form?.controlPoints else meshCell(model, id, key)?.form?.positionDeltas
+		fun keepingChildren(generator: String) = "Keeping the children in place is not available on keyforms $generator generates; edit them without it"
+		return journal.flatMap { command ->
+			when (command["op"]?.jsonPrimitive?.contentOrNull) {
+				// A plain canvas edit of a generated cell is already an override (capture); one keeping the children is not.
+				"canvas_geometry" -> {
+					if (command["preserve_children"]?.jsonPrimitive?.booleanOrNull != true) return@flatMap listOf(command)
+					val kind = kindOf(command) ?: return@flatMap listOf(command)
+					val generator = owner(graph, shown, kind, command.getValue("id").jsonPrimitive.content, key(command, "key"), skins)
+					require(generator == null) { keepingChildren(generator!!) }
+					listOf(command)
+				}
+				RigBezierJournal.OP -> {
+					val id = command.getValue("id").jsonPrimitive.content
+					val key = key(command, "key")
+					val generator = owner(graph, shown, "warp", id, key, skins) ?: return@flatMap listOf(command)
+					val inner = command["geometry"] as? JsonObject
+					require(inner?.get("preserve_children")?.jsonPrimitive?.booleanOrNull != true) { keepingChildren(generator) }
+					val base = requireNotNull(warpCell(shown, id, key)) { "$id has no keyform at $key" }.form.controlPoints
+					val edited = requireNotNull(warpCell(RigBezierJournal.replay(shown, command), id, key)).form.controlPoints
+					listOf(override(generator, "warp", id, key, base, edited))
+				}
+				"set" -> {
+					val target = command.getValue("target").jsonPrimitive.content
+					val kind = targetKind(target) ?: return@flatMap listOf(command)
+					val id = target.substringAfter(':')
+					val key = key(command, "key")
+					val geometry = command["geometry"] as? JsonObject ?: return@flatMap listOf(command)
+					val generator = owner(graph, shown, kind, id, key, skins) ?: return@flatMap listOf(command)
+					val values = geometry[if (kind == "warp") "controlPoints" else "positionDeltas"]?.jsonArray?.map { it.jsonPrimitive.float }
+						?: return@flatMap listOf(command)
+					val base = requireNotNull(cell(shown, kind, id, key)) { "$id has no keyform at $key" }
+					listOf(override(generator, kind, id, key, base, values.toFloatArray())) +
+						(if ("channels" in command) listOf(JsonObject(command - "geometry")) else emptyList())
+				}
+				"copy" -> {
+					val source = command.getValue("target").jsonPrimitive.content
+					val destination = command["destination"]?.jsonPrimitive?.contentOrNull ?: source
+					if (command["channels"] == null) for ((target, field) in listOf(source to "from", destination to "key")) {
+						val kind = targetKind(target) ?: continue
+						val generator = owner(graph, shown, kind, target.substringAfter(':'), key(command, field), skins)
+						require(generator == null) { "Keyforms $generator generates cannot be copied to or from; edit them on the canvas" }
+					}
+					listOf(command)
+				}
+				"delete", "parameter_keys" -> {
+					val target = command["target"]?.jsonPrimitive?.contentOrNull ?: return@flatMap listOf(command)
+					val kind = targetKind(target) ?: return@flatMap listOf(command)
+					val parameter = command["parameter"]?.jsonPrimitive?.contentOrNull ?: return@flatMap listOf(command)
+					val geometry = (command["channel"]?.jsonPrimitive?.contentOrNull?.equals("geometry", ignoreCase = true) ?: true) &&
+						(command["track"]?.jsonPrimitive?.contentOrNull?.let { it == "geometry" } ?: true)
+					val generator = if (geometry) axisOwner(kind, target.substringAfter(':'), parameter) else null
+					require(generator == null) { "$generator makes the keys of $parameter on ${target.substringAfter(':')}; change it there instead" }
+					listOf(command)
+				}
+				else -> listOf(command)
+			}
 		}
 	}
 
