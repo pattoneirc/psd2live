@@ -297,28 +297,47 @@ internal val VERTEX_TOOLS = setOf(
 )
 
 /**
- * Every tool the left (edit) toolbar can show, in the order it shows them.
- *
- * The per-mode palettes below are subsets of this list. The creation tools follow them in a group of their own,
- * [CREATE_GROUP_TOOLS].
+ * A button of the left toolbar: tools of one kind behind one button that shows the last one used, the others in
+ * the flyout it opens (Photoshop's tool groups). A slot of one tool is a plain button.
  */
-internal val TOOLBAR_TOOL_ORDER = listOf(
-    CanvasTool.SELECT, CanvasTool.TRANSFORM, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT,
-    CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE,
-    CanvasTool.SKELETON_POSE, CanvasTool.SKELETON_EDIT,
-    CanvasTool.SUBDIVIDE, CanvasTool.KNIFE, CanvasTool.GLUE,
-    CanvasTool.WEIGHT_PAINT, CanvasTool.WEIGHT_GRADIENT,
-    CanvasTool.PAINT_BRUSH, CanvasTool.PAINT_PENCIL, CanvasTool.PAINT_ERASER,
-    CanvasTool.PAINT_BUCKET, CanvasTool.PAINT_EYEDROPPER,
-    CanvasTool.PAINT_SHAPE,
+internal data class ToolSlot(val id: String, val tools: List<CanvasTool>)
+
+/** Every slot the toolbar can show, in the order it shows them; each mode shows those its palette fills. */
+internal val TOOL_SLOTS = listOf(
+    ToolSlot("select", listOf(CanvasTool.SELECT, CanvasTool.LASSO_SELECT, CanvasTool.BRUSH_SELECT)),
+    ToolSlot("transform", listOf(CanvasTool.TRANSFORM)),
+    ToolSlot("deformBrush", listOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE)),
+    ToolSlot("meshCut", listOf(CanvasTool.SUBDIVIDE, CanvasTool.KNIFE)),
+    ToolSlot("glue", listOf(CanvasTool.GLUE)),
+    ToolSlot("weightBrush", listOf(CanvasTool.WEIGHT_PAINT)),
+    ToolSlot("weightGradient", listOf(CanvasTool.WEIGHT_GRADIENT)),
+    ToolSlot("skeletonPose", listOf(CanvasTool.SKELETON_POSE)),
+    ToolSlot("skeletonEdit", listOf(CanvasTool.SKELETON_EDIT)),
+    ToolSlot("paintBrush", listOf(CanvasTool.PAINT_BRUSH, CanvasTool.PAINT_PENCIL)),
+    ToolSlot("paintEraser", listOf(CanvasTool.PAINT_ERASER)),
+    ToolSlot("paintColor", listOf(CanvasTool.PAINT_BUCKET, CanvasTool.PAINT_EYEDROPPER)),
+    ToolSlot("paintShape", listOf(CanvasTool.PAINT_SHAPE)),
+    ToolSlot(CREATE_SLOT, listOf(CanvasTool.CREATE_WARP, CanvasTool.CREATE_ROTATION, CanvasTool.CREATE_DEFORM_PATH)),
 )
 
-/** A divider is drawn after these, when there are visible tools on both sides of them. */
-internal val TOOLBAR_DIVIDERS = listOf(CanvasTool.BRUSH_SELECT, CanvasTool.SKELETON_EDIT)
+internal const val CREATE_SLOT = "create"
 
 /**
- * The left toolbar's palette for [mode]. The creation tools are not part of it: they arm a placement rather than
- * a mode's tool, and sit in their own group below it ([createGroupOffered]).
+ * The slots [mode]'s toolbar shows, each narrowed to the tools of the mode's palette; the Create slot where
+ * [createGroupOffered] allows it.
+ */
+internal fun toolbarSlots(mode: EditHierarchyMode): List<ToolSlot> {
+    val palette = toolbarGroups(mode).flatten()
+    return TOOL_SLOTS.mapNotNull { slot ->
+        if (slot.id == CREATE_SLOT) slot.takeIf { createGroupOffered(mode) }
+        else slot.copy(tools = slot.tools.filter { it in palette }).takeIf { it.tools.isNotEmpty() }
+    }
+}
+
+/**
+ * The left toolbar's palette for [mode], in groups the toolbar separates with rules; [TOOL_SLOTS] folds it into
+ * buttons. The creation tools are not part of it: they arm a placement rather than a mode's tool, and have a slot
+ * of their own ([createGroupOffered]).
  *
  * Object mode is the one without the vertex tools. Deform mode edits points without changing topology.
  * Edit mode handles mesh topology (subdivide / knife). Simulate paints the simulation's vertex groups,
@@ -350,12 +369,11 @@ internal fun toolbarGroups(mode: EditHierarchyMode): List<List<CanvasTool>> = wh
     )
 }
 
-/** The toolbar's Create group: each arms place-then-confirm on the part in hand, as the tree's Add menu does. */
-internal val CREATE_GROUP_TOOLS = listOf(CanvasTool.CREATE_WARP, CanvasTool.CREATE_ROTATION, CanvasTool.CREATE_DEFORM_PATH)
+/** The toolbar's Create slot: each arms place-then-confirm on the part in hand, as the tree's Add menu does. */
+internal val CREATE_GROUP_TOOLS = TOOL_SLOTS.first { it.id == CREATE_SLOT }.tools
 
-/** The modes whose toolbar offers the Create group: the ones that work on meshes and deformers. */
-internal fun createGroupOffered(mode: EditHierarchyMode): Boolean =
-    mode == EditHierarchyMode.SELECT || mode == EditHierarchyMode.DEFORM || mode == EditHierarchyMode.EDIT
+/** The modes whose toolbar offers the Create group: object mode, where parts are picked whole. */
+internal fun createGroupOffered(mode: EditHierarchyMode): Boolean = mode == EditHierarchyMode.SELECT
 
 /** The simulation weight tools: both write the mesh's vertex group of the kind picked in the toolbar. */
 internal val WEIGHT_TOOLS = setOf(CanvasTool.WEIGHT_PAINT, CanvasTool.WEIGHT_GRADIENT)

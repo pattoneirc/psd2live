@@ -1,13 +1,24 @@
 package io.github.psd2live.ui.views.tooloptions
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.Text
@@ -18,7 +29,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.layout.onSizeChanged
@@ -27,8 +42,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.i18n.tr
+import io.github.psd2live.ui.BrushFalloff
+import io.github.psd2live.ui.BrushShape
 import io.github.psd2live.ui.CanvasEditor
 import io.github.psd2live.ui.EditHierarchyMode
+import io.github.psd2live.ui.GlueSubTool
+import io.github.psd2live.ui.PaintShape
+import io.github.psd2live.ui.SkeletonEditSubTool
+import io.github.psd2live.ui.SkeletonPoseSubTool
 import io.github.psd2live.ui.components.GridIcon
 import io.github.psd2live.ui.components.ICON_FINE
 import io.github.psd2live.ui.components.IconCheck
@@ -44,6 +65,7 @@ import io.github.psd2live.ui.components.PaintFgBgSwatch
 import io.github.psd2live.ui.components.copySheets
 import io.github.psd2live.ui.components.subdivide
 import io.github.psd2live.ui.components.toHex
+import io.github.psd2live.ui.state.ShortcutAction
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.tooloptions.ActionOption
 import io.github.psd2live.ui.tooloptions.ChoiceOption
@@ -57,6 +79,12 @@ import io.github.psd2live.ui.tooloptions.barOptions
 import io.github.psd2live.ui.tooloptions.menuOptions
 import io.github.psd2live.ui.tutorial.TutorialTargetId
 import io.github.psd2live.ui.tutorial.tutorialTarget
+import io.github.psd2live.ui.views.BrushShapeIcon
+import io.github.psd2live.ui.views.GlueSubToolIcon
+import io.github.psd2live.ui.views.PaintShapeIcon
+import io.github.psd2live.ui.views.SkeletonEditSubToolIcon
+import io.github.psd2live.ui.views.SkeletonPoseSubToolIcon
+import io.github.psd2live.ui.views.VertexGroupKindIcon
 import io.github.psd2live.ui.views.texture.AccentButton
 import io.github.psd2live.ui.views.texture.BarChip
 import io.github.psd2live.ui.views.texture.BarDivider
@@ -67,7 +95,10 @@ import io.github.psd2live.ui.views.texture.FloatingMenuRadio
 import io.github.psd2live.ui.views.texture.FloatingMenuRow
 import io.github.psd2live.ui.views.texture.FloatingMenuSection
 import io.github.psd2live.ui.views.texture.FloatingMenuSlider
+import io.github.psd2live.ui.views.texture.FloatingMenuSubmenuRow
 import io.github.psd2live.ui.views.texture.FloatingMenuSwitch
+import io.github.psd2live.ui.views.vertexGroupKindColor
+import org.umamo.runtime.model.VertexGroupKind
 
 /** Whether [editor] has a tool options bar to show: options of its own, or paint mode's colours. */
 internal fun toolOptionsBarShown(editor: CanvasEditor): Boolean =
@@ -75,7 +106,8 @@ internal fun toolOptionsBarShown(editor: CanvasEditor): Boolean =
 
 /**
  * The tool options bar: under the mode bar, the settings and actions of the tool in hand, as [barOptions] lists
- * them - Photoshop's options bar in the canvas's frosted style. Paint mode leads with its colours.
+ * them - Photoshop's options bar in the canvas's frosted style. It leads with the tool's variant (its tip, its
+ * sub-tool, the group it paints), and paint mode with its colours.
  * [onHeight] reports the bar's height so the tool palette can make room under it.
  */
 @Composable
@@ -114,7 +146,11 @@ internal fun BoxScope.ToolOptionsBar(editor: CanvasEditor, focus: () -> Unit, on
                     modifier = Modifier.padding(end = 2.dp))
                 if (options.isNotEmpty()) BarDivider()
             }
-            options.forEach { option -> BarOption(editor, option, focus) }
+            options.forEachIndexed { i, option ->
+                BarOption(editor, option, focus)
+                // The variant is the tool's own face, kept apart from the values that tune it.
+                if (option is ChoiceOption<*> && option.variant && i < options.lastIndex) BarDivider()
+            }
         }
     }
 }
@@ -141,10 +177,9 @@ private fun BarOption(editor: CanvasEditor, option: ToolOption, focus: () -> Uni
         is ActionOption -> {
             val label = tr(option.labelKey, *option.labelArgs(editor).toTypedArray())
             val run = { option.run(editor); focus() }
-            if (option.primary) AccentButton(label, onClick = run, enabled = option.enabled(editor),
-                icon = option.icon?.let { icon -> { tint -> OptionIconView(icon, tint) } })
-            else BarChip(label, selected = false, onClick = run, enabled = option.enabled(editor),
-                icon = option.icon?.let { icon -> { tint -> OptionIconView(icon, tint) } })
+            val icon: (@Composable (Color) -> Unit)? = option.icon?.let { icon -> { tint -> OptionIconView(icon, tint) } }
+            if (option.primary) AccentButton(label, onClick = run, enabled = option.enabled(editor), icon = icon)
+            else BarChip(label, selected = false, onClick = run, enabled = option.enabled(editor), icon = icon)
         }
         is NoteOption -> option.text(editor)?.let { text ->
             Text(text, fontSize = 10.5.sp, color = if (option.warning(editor)) colors.warning else colors.textMuted, maxLines = 1,
@@ -153,10 +188,25 @@ private fun BarOption(editor: CanvasEditor, option: ToolOption, focus: () -> Uni
     }
 }
 
+/** The chord of the number key that picks choice [index] (0-based) of a variant, for its tooltip. */
+private fun variantKey(editor: CanvasEditor, index: Int): String =
+    ShortcutAction.pickActions.getOrNull(index)?.let(editor.state.keymap::labelFor)?.let { "  ($it)" }.orEmpty()
+
 @Composable
 private fun <T> BarChoice(editor: CanvasEditor, option: ChoiceOption<T>, focus: () -> Unit) {
     val current = option.get(editor)
     val choices = option.choices(editor)
+    if (option.variant) {
+        // Icons side by side; the one in hand also names itself, so the bar says what the tool is set to.
+        choices.forEachIndexed { i, choice ->
+            val selected = choice == current
+            BarChip(if (selected) option.label(editor, choice) else null, selected = selected,
+                tooltip = option.label(editor, choice) + variantKey(editor, i),
+                icon = { tint -> ChoiceIcon(choice, tint) },
+                onClick = { option.set(editor, choice); focus() })
+        }
+        return
+    }
     if (option.inline) {
         choices.forEach { choice ->
             BarChip(option.label(editor, choice), selected = choice == current, tooltip = tr(option.labelKey),
@@ -167,64 +217,196 @@ private fun <T> BarChoice(editor: CanvasEditor, option: ChoiceOption<T>, focus: 
     var open by remember { mutableStateOf(false) }
     Box {
         BarChip("${tr(option.labelKey)}  ${option.label(editor, current)}", selected = false, onClick = { open = !open },
-            chevron = true, open = open)
+            chevron = true, open = open, icon = if (choiceHasIcon(current)) { tint -> ChoiceIcon(current, tint) } else null)
         FloatingMenu(open, { open = false }) {
             choices.forEach { choice ->
                 FloatingMenuRadio(option.label(editor, choice), selected = choice == current,
-                    onSelect = { option.set(editor, choice); open = false; focus() })
+                    onSelect = { option.set(editor, choice); open = false; focus() },
+                    icon = if (choiceHasIcon(choice)) { tint -> ChoiceIcon(choice, tint) } else null)
             }
         }
     }
 }
+
+/** One entry of the context menu: an option on its own line, or a group folded into a second level. */
+private sealed interface MenuEntry {
+    data class Single(val option: ToolOption) : MenuEntry
+    data class Level(val id: String, val label: String, val icon: OptionIcon?, val trailing: String?, val options: List<ToolOption>,
+                     val choice: ChoiceOption<*>? = null) : MenuEntry
+}
+
+/** Folds [options] into menu entries: a submenu section takes the options up to the next section. */
+private fun menuEntries(editor: CanvasEditor, options: List<ToolOption>): List<MenuEntry> = buildList {
+    var i = 0
+    while (i < options.size) {
+        val option = options[i]
+        if (option is SectionOption && option.submenu) {
+            val members = options.drop(i + 1).takeWhile { it !is SectionOption }
+            add(MenuEntry.Level(option.id, tr(option.labelKey), option.icon, null, members))
+            i += 1 + members.size
+            continue
+        }
+        if (option is ChoiceOption<*> && !option.inline && !option.variant) {
+            // A long list of choices opens beside the menu, the one in force named on its row.
+            add(MenuEntry.Level(option.id, tr(option.labelKey), null, choiceLabel(editor, option), emptyList(), option))
+        } else add(MenuEntry.Single(option))
+        i++
+    }
+}
+
+private fun <T> choiceLabel(editor: CanvasEditor, option: ChoiceOption<T>): String = option.label(editor, option.get(editor))
 
 /**
- * The context menu's share of the tool's options ([menuOptions]): the values as sliders and switches, the choices
- * as radio groups and the actions as rows. [onAction] returns focus to the canvas; an action closes the menu
- * through [onDismiss] unless it is one taken several times in a row.
+ * The context menu's share of the tool's options ([menuOptions]), dense enough to need no scrolling: values on one
+ * line each, a choice as one row of chips, actions as rows with their icons, and the longer groups - the selection,
+ * topology, creating, a vertex group's commands - folded into rows that open a second level beside the menu.
+ * [onAction] returns focus to the canvas; an action closes the menu through [onDismiss] unless it is one taken
+ * several times in a row.
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
-internal fun ColumnScope.ToolOptionMenuSection(editor: CanvasEditor, onDismiss: () -> Unit, onAction: () -> Unit = {}) {
+internal fun ToolOptionMenu(editor: CanvasEditor, onDismiss: () -> Unit, onAction: () -> Unit = {}) {
     val colors = LocalToolColors.current
-    menuOptions(editor).forEach { option ->
-        when (option) {
-            is SectionOption -> FloatingMenuSection(tr(option.labelKey))
-            is SliderOption -> FloatingMenuSlider(
-                label = tr(option.labelKey),
-                value = option.get(editor),
-                onValueChange = { option.apply(editor, it) },
-                valueRange = option.range(editor),
-                display = option.display(option.get(editor)),
-                logarithmic = option.logarithmic,
-            )
-            is ChoiceOption<*> -> MenuChoice(editor, option)
-            is ToggleOption -> FloatingMenuSwitch(tr(option.labelKey), option.get(editor), { option.set(editor, it) })
-            is ActionOption -> FloatingMenuRow(
-                label = tr(option.labelKey, *option.labelArgs(editor).toTypedArray()),
-                onClick = {
-                    option.run(editor)
-                    onAction()
-                    if (!option.keepsMenu) onDismiss()
-                },
-                enabled = option.enabled(editor),
-                icon = option.icon?.let { icon ->
-                    { tint -> OptionIconView(icon, if (option.danger && option.enabled(editor)) colors.error else tint) }
-                },
-            )
-            is NoteOption -> option.text(editor)?.let { text ->
-                Text(text, fontSize = 10.5.sp, color = if (option.warning(editor)) colors.warning else colors.textMuted, maxLines = 3,
-                    overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+    val entries = menuEntries(editor, menuOptions(editor))
+    var openId by remember { mutableStateOf<String?>(null) }
+    val open = entries.filterIsInstance<MenuEntry.Level>().firstOrNull { it.id == openId }
+    Row(verticalAlignment = Alignment.Top) {
+        Column(Modifier.width(236.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            entries.forEach { entry ->
+                when (entry) {
+                    // A plain row closes the second level the pointer has left, the way a cascading menu does.
+                    is MenuEntry.Single -> Box(Modifier.onPointerEvent(PointerEventType.Enter) { openId = null }) {
+                        MenuOption(editor, entry.option, onDismiss, onAction)
+                    }
+                    is MenuEntry.Level -> FloatingMenuSubmenuRow(
+                        label = entry.label,
+                        open = openId == entry.id,
+                        onOpen = { openId = entry.id },
+                        trailing = entry.trailing ?: entry.options.count { it is ActionOption }.takeIf { it > 0 }?.toString(),
+                        icon = entry.icon?.let { icon -> { tint -> OptionIconView(icon, tint) } },
+                    )
+                }
+            }
+        }
+        AnimatedVisibility(open != null, enter = expandHorizontally() + fadeIn(), exit = shrinkHorizontally() + fadeOut()) {
+            val rule = colors.border.copy(alpha = 0.5f)
+            Column(
+                Modifier
+                    .padding(start = 4.dp)
+                    .drawBehind { drawLine(rule, androidx.compose.ui.geometry.Offset(0f, 4f), androidx.compose.ui.geometry.Offset(0f, size.height - 4f), 1f) }
+                    .padding(start = 4.dp)
+                    .width(196.dp),
+                verticalArrangement = Arrangement.spacedBy(1.dp),
+            ) {
+                    val level = open ?: return@Column
+                    FloatingMenuSection(level.label)
+                    val choice = level.choice
+                    if (choice != null) MenuChoiceRadios(editor, choice)
+                    else level.options.forEach { MenuOption(editor, it, onDismiss, onAction) }
             }
         }
     }
 }
 
 @Composable
-private fun <T> ColumnScope.MenuChoice(editor: CanvasEditor, option: ChoiceOption<T>) {
-    val current = option.get(editor)
-    FloatingMenuSection(tr(option.labelKey))
-    option.choices(editor).forEach { choice ->
-        FloatingMenuRadio(option.label(editor, choice), selected = choice == current, onSelect = { option.set(editor, choice) })
+private fun MenuOption(editor: CanvasEditor, option: ToolOption, onDismiss: () -> Unit, onAction: () -> Unit) {
+    val colors = LocalToolColors.current
+    when (option) {
+        is SectionOption -> FloatingMenuSection(tr(option.labelKey))
+        is SliderOption -> FloatingMenuSlider(
+            label = tr(option.labelKey),
+            value = option.get(editor),
+            onValueChange = { option.apply(editor, it) },
+            valueRange = option.range(editor),
+            display = option.display(option.get(editor)),
+            logarithmic = option.logarithmic,
+        )
+        is ChoiceOption<*> -> MenuChoiceRow(editor, option)
+        is ToggleOption -> FloatingMenuSwitch(tr(option.labelKey), option.get(editor), { option.set(editor, it) })
+        is ActionOption -> FloatingMenuRow(
+            label = tr(option.labelKey, *option.labelArgs(editor).toTypedArray()),
+            onClick = {
+                option.run(editor)
+                onAction()
+                if (!option.keepsMenu) onDismiss()
+            },
+            enabled = option.enabled(editor),
+            icon = option.icon?.let { icon ->
+                { tint -> OptionIconView(icon, if (option.danger && option.enabled(editor)) colors.error else tint) }
+            },
+        )
+        is NoteOption -> option.text(editor)?.let { text ->
+            Text(text, fontSize = 10.5.sp, color = if (option.warning(editor)) colors.warning else colors.textMuted, maxLines = 2,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp))
+        }
     }
+}
+
+/** A choice on one line: its name, then its choices as chips - icons for a tool's variants. */
+@Composable
+private fun <T> MenuChoiceRow(editor: CanvasEditor, option: ChoiceOption<T>) {
+    val colors = LocalToolColors.current
+    val current = option.get(editor)
+    Row(Modifier.fillMaxWidth().height(28.dp).padding(start = 9.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(tr(option.labelKey), color = colors.textMuted, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.width(54.dp))
+        Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            option.choices(editor).forEachIndexed { i, choice ->
+                val icon = option.variant && choiceHasIcon(choice)
+                BarChip(
+                    if (icon) null else option.label(editor, choice),
+                    selected = choice == current,
+                    tooltip = if (icon) option.label(editor, choice) + variantKey(editor, i) else null,
+                    icon = if (icon) { tint -> ChoiceIcon(choice, tint) } else null,
+                    onClick = { option.set(editor, choice) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun <T> MenuChoiceRadios(editor: CanvasEditor, option: ChoiceOption<T>) {
+    val current = option.get(editor)
+    option.choices(editor).forEach { choice ->
+        FloatingMenuRadio(option.label(editor, choice), selected = choice == current, onSelect = { option.set(editor, choice) },
+            icon = if (choiceHasIcon(choice)) { tint -> ChoiceIcon(choice, tint) } else null)
+    }
+}
+
+/** Whether [choice] has a drawing of its own: the variants of the tools, and the falloff curves. */
+private fun choiceHasIcon(choice: Any?): Boolean = choice is BrushShape || choice is PaintShape || choice is GlueSubTool ||
+    choice is SkeletonEditSubTool || choice is SkeletonPoseSubTool || choice is VertexGroupKind || choice is BrushFalloff
+
+@Composable
+private fun ChoiceIcon(choice: Any?, tint: Color) {
+    when (choice) {
+        is BrushShape -> BrushShapeIcon(choice, tint)
+        is PaintShape -> PaintShapeIcon(choice, tint)
+        is GlueSubTool -> GlueSubToolIcon(choice, tint)
+        is SkeletonEditSubTool -> SkeletonEditSubToolIcon(choice, tint)
+        is SkeletonPoseSubTool -> SkeletonPoseSubToolIcon(choice, tint)
+        // A group kind keeps the colour the canvas paints it in.
+        is VertexGroupKind -> VertexGroupKindIcon(choice, vertexGroupKindColor(choice))
+        is BrushFalloff -> FalloffCurveIcon(choice, tint)
+        else -> Unit
+    }
+}
+
+/** The profile itself drawn as a bump, the way Blender's falloff menu pictures each entry. */
+@Composable
+private fun FalloffCurveIcon(falloff: BrushFalloff, tint: Color) = GridIcon(Modifier.size(13.dp), tint) {
+    val samples = 24
+    outline(path {
+        for (i in 0..samples) {
+            val x = i / samples.toFloat()
+            val y = falloff.weight(1f - kotlin.math.abs(x * 2f - 1f), i)
+            val gx = 1.6f + 14.8f * x
+            val gy = 15.6f - 12.6f * y
+            if (i == 0) m(gx, gy) else l(gx, gy)
+        }
+    })
 }
 
 /** The drawing of [icon], in [tint]. */
@@ -239,7 +421,7 @@ internal fun OptionIconView(icon: OptionIcon, tint: Color) {
         OptionIcon.SPLIT -> IconMenuSplit(tint, modifier)
         OptionIcon.SUBDIVIDE -> GridIcon(modifier, tint) { subdivide() }
         OptionIcon.CONNECT -> IconMenuConnect(tint, modifier)
-        OptionIcon.MERGE -> IconMenuMerge(tint, modifier)
+        OptionIcon.MERGE, OptionIcon.REMERGE -> IconMenuMerge(tint, modifier)
         OptionIcon.DELETE -> IconTrash(modifier = modifier, tint = tint)
         OptionIcon.DUPLICATE -> GridIcon(modifier, tint) { copySheets() }
         OptionIcon.WARP -> IconWarpDeformer(tint, modifier)
@@ -252,6 +434,17 @@ internal fun OptionIconView(icon: OptionIcon, tint: Color) {
         OptionIcon.CANCEL -> IconClose(modifier = Modifier.size(9.dp), tint = tint)
         OptionIcon.UNDO -> IconUndo(Modifier.size(12.dp), tint)
         OptionIcon.CLEAR -> IconTrash(modifier = Modifier.size(11.dp), tint = tint)
+        OptionIcon.FILL -> GridIcon(modifier, tint) { fillBox(3f, 3f, 12f, 12f, 1.6f) }
+        OptionIcon.ERASE -> GridIcon(modifier, tint) { box(3f, 3f, 12f, 12f, 1.6f, ICON_FINE); line(4.4f, 13.6f, 13.6f, 4.4f) }
+        OptionIcon.SWAP -> GridIcon(modifier, tint) {
+            line(3f, 6f, 14f, 6f); chevron(14f, 6f, 1f, 0f, 2.6f)
+            line(15f, 12f, 4f, 12f); chevron(4f, 12f, -1f, 0f, 2.6f)
+        }
+        OptionIcon.RESET -> GridIcon(modifier, tint) { arcArrow(9f, 9f, 5.8f, -60f, 230f); dot(9f, 9f, 1.4f) }
+        OptionIcon.SELECTION -> GridIcon(modifier, tint) { box(2.4f, 2.4f, 13.2f, 13.2f, 1.6f, ICON_FINE, dash = floatArrayOf(1.6f, 2.2f)) }
+        OptionIcon.TOPOLOGY -> GridIcon(modifier, tint) { subdivide() }
+        OptionIcon.CREATE -> GridIcon(modifier, tint) { line(9f, 3f, 9f, 15f); line(3f, 9f, 15f, 9f) }
+        OptionIcon.GROUP -> GridIcon(modifier, tint) { dot(4.6f, 12.6f, 2f); dot(9f, 7.6f, 2f); dot(13.4f, 12.6f, 2f); ring(9f, 10f, 7.2f, ICON_FINE) }
     }
 }
 
@@ -317,5 +510,5 @@ private fun IconSwing(tint: Color, modifier: Modifier) = GridIcon(modifier, tint
     dot(9f, 2.6f, 1.2f)
     line(9f, 2.6f, 12.2f, 11.6f)
     dot(12.6f, 12.6f, 2.2f)
-    arcArrow(9f, 2.6f, 12.8f, 55f, 70f)
+    arcArrow(9f, 2.6f, 12.8f, 55f, 125f)
 }

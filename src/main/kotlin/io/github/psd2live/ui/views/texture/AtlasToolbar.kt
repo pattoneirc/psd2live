@@ -43,6 +43,7 @@ import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -317,6 +318,8 @@ internal fun AccentButton(label: String?, onClick: () -> Unit, enabled: Boolean 
 /**
  * A menu dropping from a bar control, in the mode menu's style: frosted, scaling in from its anchor's corner.
  * Put it in the anchor's Box; [alignment] TopStart drops it under the anchor's left edge, TopEnd under its right.
+ * [beside] opens it to the right of the anchor instead, top edges aligned - a tool palette's flyout - moving up
+ * as far as the window needs.
  */
 @Composable
 internal fun FloatingMenu(
@@ -324,6 +327,7 @@ internal fun FloatingMenu(
 	onDismiss: () -> Unit,
 	width: Dp = 220.dp,
 	alignment: Alignment = Alignment.TopStart,
+	beside: Boolean = false,
 	content: @Composable ColumnScope.() -> Unit,
 ) {
 	val visibility = remember { MutableTransitionState(false) }
@@ -332,12 +336,7 @@ internal fun FloatingMenu(
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
 	val density = LocalDensity.current
-	Popup(
-		alignment = alignment,
-		offset = with(density) { IntOffset(0, 28.dp.roundToPx()) },
-		onDismissRequest = onDismiss,
-		properties = PopupProperties(focusable = true),
-	) {
+	val body: @Composable () -> Unit = {
 		CompositionLocalProvider(LocalDensity provides density, LocalToolColors provides colors, LocalToolTypography provides typography) {
 			val transition = rememberTransition(visibility, "FloatingMenu")
 			val alpha by transition.animateFloat({
@@ -353,8 +352,9 @@ internal fun FloatingMenu(
 				Modifier
 					.graphicsLayer {
 						this.alpha = alpha; scaleX = scale; scaleY = scale
-						translationY = lift * density.density
-						transformOrigin = TransformOrigin(if (alignment == Alignment.TopEnd) 0.88f else 0.12f, 0f)
+						if (beside) translationX = lift * density.density else translationY = lift * density.density
+						transformOrigin = if (beside) TransformOrigin(0f, 0.1f)
+							else TransformOrigin(if (alignment == Alignment.TopEnd) 0.88f else 0.12f, 0f)
 					}
 					.width(width)
 					.frostedGlass(RoundedCornerShape(7.dp), isHovered = true, elevation = 12.dp, baseColor = colors.panelElevated, alpha = 0.9f)
@@ -364,6 +364,31 @@ internal fun FloatingMenu(
 				content = content,
 			)
 		}
+	}
+	if (beside) {
+		val provider = remember(density) { BesidePositionProvider(with(density) { 6.dp.roundToPx() }) }
+		Popup(popupPositionProvider = provider, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true), content = body)
+	} else {
+		Popup(
+			alignment = alignment,
+			offset = with(density) { IntOffset(0, 28.dp.roundToPx()) },
+			onDismissRequest = onDismiss,
+			properties = PopupProperties(focusable = true),
+			content = body,
+		)
+	}
+}
+
+/** Places a popup to the right of its anchor, top edges aligned, kept inside the window. */
+private class BesidePositionProvider(private val gap: Int) : androidx.compose.ui.window.PopupPositionProvider {
+	override fun calculatePosition(
+		anchorBounds: androidx.compose.ui.unit.IntRect,
+		windowSize: androidx.compose.ui.unit.IntSize,
+		layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+		popupContentSize: androidx.compose.ui.unit.IntSize,
+	): IntOffset {
+		val y = anchorBounds.top.coerceAtMost(windowSize.height - popupContentSize.height - gap).coerceAtLeast(gap)
+		return IntOffset(anchorBounds.right + gap, y)
 	}
 }
 
@@ -455,8 +480,8 @@ internal fun FloatingMenuSwitch(label: String, checked: Boolean, onCheckedChange
 }
 
 /**
- * A value row of a [FloatingMenu]: the label and the value as [display] shows it over a slider. [logarithmic]
- * spreads a size range that runs to the document's long side so the small sizes keep their room.
+ * A value row of a [FloatingMenu], on one line: the label, a slider and the value as [display] shows it.
+ * [logarithmic] spreads a size range that runs to the document's long side so the small sizes keep their room.
  */
 @Composable
 internal fun FloatingMenuSlider(
@@ -470,21 +495,58 @@ internal fun FloatingMenuSlider(
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
-	Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-		Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-			Text(label, color = if (enabled) colors.textMuted else colors.textMuted.copy(alpha = 0.5f), fontSize = 10.5.sp, maxLines = 1,
-				overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-			Text(display, color = if (enabled) colors.textPrimary else colors.textMuted, style = typography.monoSmall.copy(fontSize = 9.5.sp))
-		}
+	Row(Modifier.fillMaxWidth().height(24.dp).padding(start = 9.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+		Text(label, color = if (enabled) colors.textMuted else colors.textMuted.copy(alpha = 0.5f), fontSize = 10.5.sp, maxLines = 1,
+			overflow = TextOverflow.Ellipsis, modifier = Modifier.width(54.dp))
 		val clamped = value.coerceIn(valueRange.start, valueRange.endInclusive)
+		val slider = Modifier.weight(1f).padding(horizontal = 4.dp)
 		if (logarithmic && valueRange.start > 0f) {
 			val start = ln(valueRange.start)
 			val end = ln(valueRange.endInclusive)
 			CompactSlider(ln(clamped), { onValueChange(exp(it).coerceIn(valueRange.start, valueRange.endInclusive)) },
-				valueRange = start..end, modifier = Modifier.fillMaxWidth(), height = 12.dp, enabled = enabled)
+				valueRange = start..end, modifier = slider, height = 12.dp, enabled = enabled)
 		} else {
-			CompactSlider(clamped, onValueChange, valueRange = valueRange, modifier = Modifier.fillMaxWidth(), height = 12.dp, enabled = enabled)
+			CompactSlider(clamped, onValueChange, valueRange = valueRange, modifier = slider, height = 12.dp, enabled = enabled)
 		}
+		Text(display, color = if (enabled) colors.textPrimary else colors.textMuted, style = typography.monoSmall.copy(fontSize = 9.5.sp),
+			maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = Modifier.width(40.dp))
+	}
+}
+
+/**
+ * A row of a [FloatingMenu] that opens a second level: its icon, label and current value, and a chevron pointing to
+ * where the level opens. [open] marks the level showing; [onOpen] runs on a hover or a click.
+ */
+@Composable
+internal fun FloatingMenuSubmenuRow(label: String, open: Boolean, onOpen: () -> Unit, trailing: String? = null,
+                                    icon: (@Composable (Color) -> Unit)? = null) {
+	val colors = LocalToolColors.current
+	val interactionSource = remember { MutableInteractionSource() }
+	val hovered by interactionSource.collectIsHoveredAsState()
+	LaunchedEffect(hovered) { if (hovered) onOpen() }
+	val tint = if (open || hovered) colors.textPrimary else colors.textMuted
+	val background by animateColorAsState(if (open || hovered) colors.controlHover.copy(alpha = 0.75f) else Color.Transparent, tween(80))
+	Row(
+		Modifier
+			.fillMaxWidth()
+			.height(26.dp)
+			.clip(RoundedCornerShape(5.dp))
+			.background(background)
+			.hoverable(interactionSource)
+			.clickable(interactionSource = interactionSource, indication = null, onClick = onOpen)
+			.semantics { contentDescription = label }
+			.padding(horizontal = 6.dp),
+		verticalAlignment = Alignment.CenterVertically,
+	) {
+		Spacer(Modifier.width(7.dp))
+		if (icon != null) {
+			Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { icon(tint) }
+			Spacer(Modifier.width(7.dp))
+		}
+		Text(label, color = tint, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+		if (trailing != null) Text(trailing, color = colors.textMuted.copy(alpha = 0.8f), fontSize = 10.sp, maxLines = 1,
+			modifier = Modifier.padding(horizontal = 4.dp))
+		GridIcon(Modifier.size(10.dp).rotate(-90f), tint) { outline(path { m(3.6f, 6.8f); l(9f, 11.8f); l(14.4f, 6.8f) }, 1.6f) }
 	}
 }
 

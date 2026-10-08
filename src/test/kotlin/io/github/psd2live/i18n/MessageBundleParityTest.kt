@@ -22,7 +22,12 @@ import io.github.psd2live.ui.tooloptions.PAINT_HARDNESS
 import io.github.psd2live.ui.tooloptions.PAINT_OPACITY
 import io.github.psd2live.ui.tooloptions.PAINT_SHAPE_SIZE
 import io.github.psd2live.ui.tooloptions.PAINT_TOLERANCE
-import io.github.psd2live.ui.tooloptions.SKELETON_SHOW_WEIGHTS
+import io.github.psd2live.ui.tooloptions.BRUSH_TIP
+import io.github.psd2live.ui.tooloptions.GLUE_SUB
+import io.github.psd2live.ui.tooloptions.PAINT_SHAPE_KIND
+import io.github.psd2live.ui.tooloptions.SKELETON_EDIT_SUB
+import io.github.psd2live.ui.tooloptions.SKELETON_POSE_SUB
+import io.github.psd2live.ui.tooloptions.WEIGHT_KIND
 import io.github.psd2live.ui.tooloptions.SKELETON_WEIGHT_MODE
 import io.github.psd2live.ui.tooloptions.SKELETON_WEIGHT_RADIUS
 import io.github.psd2live.ui.tooloptions.SKELETON_WEIGHT_STRENGTH
@@ -58,7 +63,7 @@ class MessageBundleParityTest {
         keys += ShortcutAction.entries.map { it.labelKey }
         for (option in listOf(BRUSH_RADIUS, BRUSH_HARDNESS, BRUSH_STRENGTH, BRUSH_ANGLE, BRUSH_FALLOFF, BRUSH_CONNECTED, INFLATE_DIRECTION,
             KNIFE_SNAP, GLUE_DISTANCE, WEIGHT_MODE, ELEMENT_MODE, SKELETON_WEIGHT_MODE, SKELETON_WEIGHT_RADIUS, SKELETON_WEIGHT_STRENGTH,
-            SKELETON_WEIGHT_VALUE, SKELETON_SHOW_WEIGHTS, PAINT_BRUSH_SIZE, PAINT_SHAPE_SIZE, PAINT_HARDNESS, PAINT_OPACITY, PAINT_TOLERANCE,
+            SKELETON_WEIGHT_VALUE, BRUSH_TIP, PAINT_SHAPE_KIND, GLUE_SUB, SKELETON_EDIT_SUB, SKELETON_POSE_SUB, WEIGHT_KIND, PAINT_BRUSH_SIZE, PAINT_SHAPE_SIZE, PAINT_HARDNESS, PAINT_OPACITY, PAINT_TOLERANCE,
             PAINT_FILL)) {
             keys += when (option) {
                 is SliderOption -> option.labelKey

@@ -21,6 +21,7 @@ internal enum class OptionIcon {
     SPLIT, SUBDIVIDE, CONNECT, MERGE, DELETE, DUPLICATE,
     WARP, ROTATION, PATH, SKELETON, SWING, DEPTH_SPLIT,
     CONFIRM, CANCEL, UNDO, CLEAR,
+    FILL, ERASE, SWAP, REMERGE, RESET, SELECTION, TOPOLOGY, CREATE, GROUP,
 }
 
 /** Where an option shows: the options bar, the context menu, or both. */
@@ -34,8 +35,17 @@ internal sealed interface ToolOption {
     val place: OptionPlace
 }
 
-/** A caption opening a group: a section title in the menu, a rule in the bar. */
-internal class SectionOption(override val id: String, val labelKey: String, override val place: OptionPlace = OptionPlace.BOTH) : ToolOption
+/**
+ * A caption opening a group: a section title in the menu, a rule in the bar. A [submenu] group is folded into one
+ * row of the context menu that opens it as a second level, so a long list of actions does not make the menu scroll.
+ */
+internal class SectionOption(
+    override val id: String,
+    val labelKey: String,
+    override val place: OptionPlace = OptionPlace.BOTH,
+    val submenu: Boolean = false,
+    val icon: OptionIcon? = null,
+) : ToolOption
 
 /**
  * A number. [get] and [set] are in the value's own units (a fraction for [OptionUnit.PERCENT]); every write goes
@@ -92,8 +102,9 @@ internal class SliderOption(
 }
 
 /**
- * One of a few values. [inline] lays the choices out side by side in the bar (a handful of short ones);
- * otherwise the bar shows the current one behind a menu. [label] names a choice, already translated.
+ * One of a few values. [inline] lays the choices out side by side (a handful of short ones); otherwise the bar shows
+ * the current one behind a menu and the context menu behind a second level. [label] names a choice, already
+ * translated. A [variant] is the flavour of the tool itself - a brush tip, a sub-tool - drawn as its icon.
  */
 internal class ChoiceOption<T>(
     override val id: String,
@@ -104,6 +115,7 @@ internal class ChoiceOption<T>(
     val set: (CanvasEditor, T) -> Unit,
     val inline: Boolean = true,
     override val place: OptionPlace = OptionPlace.BOTH,
+    val variant: Boolean = false,
 ) : ToolOption
 
 /** On or off. */

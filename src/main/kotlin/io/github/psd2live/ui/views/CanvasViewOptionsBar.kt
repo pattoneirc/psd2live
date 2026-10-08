@@ -161,8 +161,9 @@ internal fun CanvasRailScope.RailToggle(label: String, isChecked: Boolean, icon:
 	RailItem(label, isChecked, icon = icon, onClick = onClick)
 
 /**
- * One row of a [CanvasOptionsRail]: a tool, a tool's variant or a display toggle. [keyLabel] is the chord that
- * reaches it, boxed as a key cap when [keyCap] (a tool) or plain (a variant). [tooltip] says why a row is disabled.
+ * One row of a [CanvasOptionsRail]: a tool slot or a display toggle. [keyLabel] is the chord that reaches it, boxed
+ * as a key cap when [keyCap] (a tool) or plain. [tooltip] says why a row is disabled; [flyout] marks the icon's corner
+ * of a slot that holds more tools than the one it shows.
  */
 @Composable
 internal fun CanvasRailScope.RailItem(
@@ -172,6 +173,8 @@ internal fun CanvasRailScope.RailItem(
 	keyLabel: String = "",
 	keyCap: Boolean = false,
 	tooltip: String? = null,
+	flyout: Boolean = false,
+	modifier: Modifier = Modifier,
 	icon: @Composable (Color) -> Unit,
 	onClick: () -> Unit,
 ) {
@@ -192,7 +195,7 @@ internal fun CanvasRailScope.RailItem(
 	}
 	BarTooltip(tooltip) {
 		Row(
-			modifier = Modifier
+			modifier = modifier
 				.fillMaxWidth()
 				.height(28.dp)
 				.clip(RoundedCornerShape(3.dp))
@@ -208,7 +211,7 @@ internal fun CanvasRailScope.RailItem(
 			verticalAlignment = Alignment.CenterVertically,
 			horizontalArrangement = if (leading) Arrangement.Start else Arrangement.End,
 		) {
-			if (leading) Box(modifier = Modifier.size(28.dp), contentAlignment = Alignment.Center) { icon(tint) }
+			if (leading) RailIcon(tint, flyout, icon)
 			if (expanded) {
 				Row(
 					modifier = Modifier
@@ -234,7 +237,20 @@ internal fun CanvasRailScope.RailItem(
 					if (keyLabel.isNotEmpty()) RailKeyLabel(keyLabel, keyCap, selected)
 				}
 			}
-			if (!leading) Box(modifier = Modifier.size(28.dp), contentAlignment = Alignment.Center) { icon(tint) }
+			if (!leading) RailIcon(tint, flyout, icon)
+		}
+	}
+}
+
+/** A rail row's icon, with the small corner triangle of a slot that opens a flyout. */
+@Composable
+private fun RailIcon(tint: Color, flyout: Boolean, icon: @Composable (Color) -> Unit) {
+	Box(modifier = Modifier.size(28.dp), contentAlignment = Alignment.Center) {
+		icon(tint)
+		if (flyout) androidx.compose.foundation.Canvas(Modifier.align(Alignment.BottomEnd).padding(end = 3.dp, bottom = 3.dp).size(4.dp)) {
+			drawPath(androidx.compose.ui.graphics.Path().apply {
+				moveTo(size.width, 0f); lineTo(size.width, size.height); lineTo(0f, size.height); close()
+			}, tint.copy(alpha = 0.75f))
 		}
 	}
 }
@@ -275,6 +291,9 @@ internal fun CanvasViewOptionsBar(
 	showSelectionFocus: Boolean = true,
 	/** Edit canvases can sample layer rasters (source pixels) instead of the atlas. */
 	showSourcePixels: Boolean = false,
+	/** The skin weight wash over the skeleton's meshes: shown, hidden, or null with no skeleton to show it for. */
+	skinWeights: Boolean? = null,
+	onSkinWeightsChange: (Boolean) -> Unit = {},
 	modifier: Modifier = Modifier,
 ) {
 	fun apply(updated: TabViewOptions) {
@@ -340,6 +359,12 @@ internal fun CanvasViewOptionsBar(
 				icon = { IconSkeleton(tint = it, modifier = Modifier.size(14.dp)) },
 				onClick = { apply(options.copy(showSkeleton = !options.showSkeleton)) },
 			)
+			if (skinWeights != null) RailToggle(
+				label = tr("skeleton.pose.weights"),
+				isChecked = skinWeights,
+				icon = { IconSkinWeights(tint = it) },
+				onClick = { onSkinWeightsChange(!skinWeights) },
+			)
 		}
 
 		if (showSelectionFocus) {
@@ -364,4 +389,14 @@ private fun IconPixelSource(source: Boolean, tint: Color, modifier: Modifier) = 
 		if ((x + y) % 2 == 0) fillBox(2.4f + x * side, 2.4f + y * side, side, side, 0f)
 	}
 	box(2.4f, 2.4f, 13.2f, 13.2f, 0.6f, ICON_FINE)
+}
+
+/** Skin weights: a bone over a wash that fades from it. */
+@Composable
+private fun IconSkinWeights(tint: Color) = GridIcon(Modifier.size(14.dp), tint) {
+	fillBox(2.4f, 9.6f, 4.4f, 6f, 0.8f, tint.copy(alpha = 0.9f))
+	fillBox(6.8f, 9.6f, 4.4f, 6f, 0f, tint.copy(alpha = 0.55f))
+	fillBox(11.2f, 9.6f, 4.4f, 6f, 0.8f, tint.copy(alpha = 0.25f))
+	line(3.4f, 6f, 14.6f, 3f)
+	dot(3.4f, 6f, 1.8f)
 }

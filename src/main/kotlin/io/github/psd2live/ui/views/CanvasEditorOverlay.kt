@@ -95,6 +95,9 @@ import io.github.psd2live.ui.views.texture.AccentButton
 import io.github.psd2live.ui.views.texture.BarChip
 import io.github.psd2live.ui.views.texture.BarDivider
 import io.github.psd2live.ui.views.texture.FloatingBar
+import io.github.psd2live.ui.views.texture.FloatingMenu
+import io.github.psd2live.ui.views.texture.FloatingMenuRow
+import io.github.psd2live.ui.views.texture.FloatingMenuSection
 import io.github.psd2live.ui.views.tooloptions.ToolOptionsBar
 import kotlin.math.PI
 import kotlin.math.abs
@@ -2195,6 +2198,15 @@ private fun BoxScope.CanvasToolBar(
     focus: () -> Unit,
     top: Dp,
 ) {
+    // The tool each slot shows when another slot's tool is in hand: the last one picked from it.
+    val lastInSlot = remember { mutableStateMapOf<String, CanvasTool>() }
+    var flyoutSlot by remember { mutableStateOf<String?>(null) }
+    val slots = toolbarSlots(editor.hierarchyMode).associateBy { it.id }
+    // A rule goes where the mode's palette starts a new group, and before Create.
+    val groupStarts = toolbarGroups(editor.hierarchyMode).map { it.first() }.drop(1).toSet()
+    SideEffect {
+        slots.values.firstOrNull { editor.tool in it.tools }?.let { lastInSlot[it.id] = editor.tool }
+    }
     CanvasOptionsRail(
         modifier = Modifier
             .align(Alignment.TopStart)
@@ -2202,212 +2214,95 @@ private fun BoxScope.CanvasToolBar(
             .tutorialTarget(TutorialTargetId.CANVAS_TOOLBAR),
         leading = true,
         expandedWidth = 156.dp,
+        pinned = flyoutSlot != null,
         scrollable = true,
     ) {
-        // The palette is every tool walked in one fixed order, with each row's visibility following the
-        // mode. Walking the mode's own list instead would be shorter, but a row that left the
-        // composition has nothing left to animate out of — so the rows that a mode change adds or
-        // removes would pop while the rest slid. Composing them all and hiding the ones the mode has no
-        // use for makes the arriving and departing rows slide with everything else.
-        // Glue joins exactly two meshes: with any other count it stays in place, disabled, and says why.
-        val glueReady = editor.glueMeshCount() == 2
-        val availableTools = editor.palette().toSet()
-        val lastVisibleIndex = TOOLBAR_TOOL_ORDER.indexOfLast { it in availableTools }
-
-        TOOLBAR_TOOL_ORDER.forEachIndexed { index, tool ->
-            // A divider earns its place only when both sides of it have something to separate; in
-            // object mode the whole list is two select tools and every line would be a stray rule.
-            if (tool in TOOLBAR_DIVIDERS) {
-                val splitsGroups = index < lastVisibleIndex && TOOLBAR_TOOL_ORDER.take(index + 1).any { it in availableTools }
-                RailRows(splitsGroups) { RailDivider() }
+        // Every slot is walked in one fixed order, each row's visibility following the mode. Walking the mode's own
+        // list instead would be shorter, but a row that left the composition has nothing left to animate out of -
+        // the rows a mode change adds or removes would pop while the rest slid.
+        var first = true
+        TOOL_SLOTS.forEach { all ->
+            val slot = slots[all.id]
+            val visible = slot != null
+            RailRows(visible && !first && (slot!!.id == CREATE_SLOT || slot.tools.first() in groupStarts)) { RailDivider() }
+            if (visible) first = false
+            RailRows(visible) {
+                if (slot != null) ToolSlotRow(editor, keymap, slot, lastInSlot[slot.id], open = flyoutSlot == slot.id,
+                    onOpen = { flyoutSlot = if (it) slot.id else null }, focus = focus)
             }
-            RailRows(tool in availableTools) {
-                val glueWaiting = tool == CanvasTool.GLUE && !glueReady && editor.tool != CanvasTool.GLUE
-                RailItem(
+        }
+    }
+}
+
+/**
+ * One slot of the tool palette: the tool it shows - the one in hand, or the last one picked from it - and, for a
+ * slot of several, a flyout beside it with all of them. A click arms the shown tool; a click on the armed one, a
+ * right click or the corner mark's promise opens the flyout.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun CanvasRailScope.ToolSlotRow(
+    editor: CanvasEditor,
+    keymap: Keymap,
+    slot: ToolSlot,
+    last: CanvasTool?,
+    open: Boolean,
+    onOpen: (Boolean) -> Unit,
+    focus: () -> Unit,
+) {
+    val creating = slot.id == CREATE_SLOT
+    val placingKind = editor.placement?.kind?.takeIf { it != CreatePlacementKind.LAYER }
+    val placingTool = when (placingKind) {
+        CreatePlacementKind.WARP -> CanvasTool.CREATE_WARP
+        CreatePlacementKind.ROTATION -> CanvasTool.CREATE_ROTATION
+        CreatePlacementKind.PATH -> CanvasTool.CREATE_DEFORM_PATH
+        else -> null
+    }
+    val inHand = (if (creating) placingTool ?: editor.tool else editor.tool).takeIf { it in slot.tools }
+    val shown = inHand ?: last?.takeIf { it in slot.tools } ?: slot.tools.first()
+    val several = slot.tools.size > 1
+    // Glue joins exactly two meshes: with any other count it stays in place, disabled, and says why.
+    val glueWaiting = shown == CanvasTool.GLUE && editor.glueMeshCount() != 2 && editor.tool != CanvasTool.GLUE
+    fun arm(tool: CanvasTool) {
+        onOpen(false)
+        editor.activateTool(tool)
+        focus()
+    }
+    Box {
+        RailItem(
+            label = tr("editor.tool.${shown.name.lowercase()}"),
+            selected = inHand != null,
+            enabled = (if (creating) editor.editable else !editor.busy) && !glueWaiting,
+            tooltip = if (glueWaiting) tr("editor.glueNeedTwo", editor.glueMeshCount()) else null,
+            // The shape slot answers to its shapes' chords, so its row shows the one that is in hand.
+            keyLabel = keymap.labelFor(if (shown == CanvasTool.PAINT_SHAPE) editor.paintShape.action else shown.action).orEmpty(),
+            keyCap = true,
+            flyout = several,
+            modifier = Modifier.onPointerEvent(PointerEventType.Press) { event ->
+                if (several && event.button == androidx.compose.ui.input.pointer.PointerButton.Secondary) onOpen(true)
+            },
+            icon = { color ->
+                ToolIcon(
+                    tool = shown,
+                    color = color,
+                    brushShape = if (shown == CanvasTool.BRUSH) editor.brushShape else null,
+                    paintShape = if (shown == CanvasTool.PAINT_SHAPE) editor.paintShape else null,
+                    skeletonEditSubTool = if (shown == CanvasTool.SKELETON_EDIT) editor.skeletonEditSubTool else null,
+                )
+            },
+            onClick = { if (several && inHand == shown) onOpen(!open) else arm(shown) },
+        )
+        FloatingMenu(open, { onOpen(false) }, width = 196.dp, beside = true) {
+            if (creating) FloatingMenuSection(tr("editor.toolbar.create"))
+            slot.tools.forEach { tool ->
+                FloatingMenuRow(
                     label = tr("editor.tool.${tool.name.lowercase()}"),
-                    selected = editor.tool == tool,
-                    enabled = !editor.busy && !glueWaiting,
-                    tooltip = if (glueWaiting) tr("editor.glueNeedTwo", editor.glueMeshCount()) else null,
-                    // The shape group answers to its shapes' chords, so its row shows the one that is in
-                    // hand: pressing it is how the row is reached.
-                    keyLabel = keymap.labelFor(
-                        if (tool == CanvasTool.PAINT_SHAPE) editor.paintShape.action else tool.action
-                    ).orEmpty(),
-                    keyCap = true,
-                    icon = { color ->
-                        ToolIcon(
-                            tool = tool,
-                            color = color,
-                            brushShape = if (tool == CanvasTool.BRUSH) editor.brushShape else null,
-                            paintShape = if (tool == CanvasTool.PAINT_SHAPE) editor.paintShape else null,
-                            skeletonEditSubTool = if (tool == CanvasTool.SKELETON_EDIT) editor.skeletonEditSubTool else null,
-                        )
-                    },
-                    onClick = {
-                        editor.activateTool(tool)
-                        focus()
-                    },
+                    onClick = { arm(tool) },
+                    selected = tool == inHand,
+                    enabled = if (creating) editor.editable else !editor.busy,
+                    trailing = keymap.labelFor(tool.action),
+                    icon = { color -> Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { ToolIcon(tool = tool, color = color) } },
                 )
-            }
-        }
-
-        // Create: one row that unfolds into the three place-then-confirm creates, like a brush into its tips. It
-        // opens on a click and stays open while one of them is placing.
-        val createOffered = createGroupOffered(editor.hierarchyMode)
-        val placingKind = editor.placement?.kind?.takeIf { it != CreatePlacementKind.LAYER }
-        val creating = placingKind != null || editor.tool in CREATE_GROUP_TOOLS
-        var createOpen by remember { mutableStateOf(false) }
-        RailRows(createOffered) {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                RailDivider()
-                RailItem(
-                    label = tr("editor.toolbar.create"),
-                    selected = creating && !createOpen,
-                    enabled = !editor.busy,
-                    icon = { color -> CreateGroupIcon(color) },
-                    onClick = { createOpen = !createOpen },
-                )
-            }
-        }
-        RailRows(createOffered && (createOpen || creating)) {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                RailDivider(strong = true)
-                CREATE_GROUP_TOOLS.forEach { tool ->
-                    val kind = when (tool) {
-                        CanvasTool.CREATE_WARP -> CreatePlacementKind.WARP
-                        CanvasTool.CREATE_ROTATION -> CreatePlacementKind.ROTATION
-                        else -> CreatePlacementKind.PATH
-                    }
-                    RailItem(
-                        label = tr("editor.tool.${tool.name.lowercase()}"),
-                        selected = editor.tool == tool || placingKind == kind,
-                        enabled = editor.editable,
-                        keyLabel = keymap.labelFor(tool.action).orEmpty(),
-                        icon = { color -> ToolIcon(tool = tool, color = color) },
-                        onClick = {
-                            editor.activateTool(tool)
-                            focus()
-                        },
-                    )
-                }
-            }
-        }
-
-        // A tool's variants unfold under it only while it is in hand: Glue's sub-tools, the skeleton tools'
-        // sub-tools, the deform brush's tips, the paint shape's faces and the vertex groups the weight tools write.
-        RailRows(editor.tool == CanvasTool.GLUE) {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                RailDivider(strong = true)
-                GLUE_SUB_TOOL_LABELS.forEachIndexed { i, (sub, key) ->
-                    RailItem(
-                        label = tr(key),
-                        selected = editor.glueSubTool == sub,
-                        enabled = !editor.busy,
-                        keyLabel = pickKey(keymap, i),
-                        icon = { color -> GlueSubToolIcon(subTool = sub, color = color) },
-                        onClick = {
-                            editor.glueSubTool = sub
-                            editor.activateTool(CanvasTool.GLUE)
-                            focus()
-                        },
-                    )
-                }
-            }
-        }
-
-        RailRows(CanvasTool.SKELETON_EDIT in availableTools && editor.tool == CanvasTool.SKELETON_EDIT) {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                RailDivider(strong = true)
-                SkeletonEditSubTool.entries.forEach { sub ->
-                    RailItem(
-                        label = tr(sub.labelKey),
-                        selected = editor.skeletonEditSubTool == sub,
-                        enabled = !editor.busy,
-                        keyLabel = pickKey(keymap, sub.ordinal),
-                        icon = { color -> SkeletonEditSubToolIcon(subTool = sub, color = color) },
-                        onClick = { editor.skeletonEditSubTool = sub; focus() },
-                    )
-                }
-            }
-        }
-
-        RailRows(CanvasTool.SKELETON_POSE in availableTools && editor.tool == CanvasTool.SKELETON_POSE) {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                RailDivider(strong = true)
-                SkeletonPoseSubTool.entries.forEach { sub ->
-                    RailItem(
-                        label = tr(sub.labelKey),
-                        selected = editor.skeletonPoseSubTool == sub,
-                        enabled = !editor.busy,
-                        keyLabel = pickKey(keymap, sub.ordinal),
-                        icon = { color -> SkeletonPoseSubToolIcon(sub, color) },
-                        onClick = { editor.skeletonPoseSubTool = sub; focus() },
-                    )
-                }
-            }
-        }
-
-        RailRows(editor.tool in DEFORM_BRUSH_TOOLS) {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                RailDivider(strong = true)
-                BrushShape.entries.forEach { shape ->
-                    RailItem(
-                        label = tr(shape.labelKey),
-                        selected = editor.brushShape == shape,
-                        enabled = !editor.busy,
-                        // Deform's number keys pick its levels, so there they do not reach the tips.
-                        keyLabel = if (editor.hierarchyMode == EditHierarchyMode.DEFORM) "" else pickKey(keymap, shape.ordinal),
-                        icon = { color -> BrushShapeIcon(shape = shape, color = color) },
-                        onClick = {
-                            editor.brushShape = shape
-                            if (editor.tool !in DEFORM_BRUSH_TOOLS) editor.activateTool(CanvasTool.BRUSH)
-                            focus()
-                        },
-                    )
-                }
-            }
-        }
-
-        // The shape tool's three faces live under it, exactly the way the deform brush carries its own:
-        // one row in the palette for the tool, and the shapes it draws are what changes.
-        RailRows(editor.hierarchyMode == EditHierarchyMode.PAINT && editor.tool == CanvasTool.PAINT_SHAPE) {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                RailDivider(strong = true)
-                PaintShape.entries.forEach { shape ->
-                    RailItem(
-                        label = tr(shape.labelKey),
-                        selected = editor.paintShape == shape,
-                        enabled = !editor.busy,
-                        keyLabel = keymap.labelFor(shape.action).orEmpty(),
-                        icon = { color -> PaintShapeIcon(shape = shape, color = color) },
-                        onClick = {
-                            editor.selectPaintShape(shape)
-                            focus()
-                        },
-                    )
-                }
-            }
-        }
-
-        // The kinds of vertex group the weight tools paint sit under them the way the brush shapes do:
-        // picking one is picking which group of the mesh the strokes write.
-        RailRows(editor.hierarchyMode == EditHierarchyMode.SIMULATE) {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                RailDivider(strong = true)
-                io.github.psd2live.ui.PAINTED_GROUP_KINDS.forEachIndexed { i, kind ->
-                    RailItem(
-                        label = tr("sim.group.${kind.jsonName}"),
-                        selected = editor.weightGroupKind == kind,
-                        enabled = !editor.busy,
-                        keyLabel = pickKey(keymap, i),
-                        icon = { _ -> VertexGroupKindIcon(kind = kind, color = vertexGroupKindColor(kind)) },
-                        onClick = {
-                            editor.weightGroupKind = kind
-                            if (editor.tool !in io.github.psd2live.ui.WEIGHT_TOOLS) editor.activateTool(CanvasTool.WEIGHT_PAINT)
-                            focus()
-                        },
-                    )
-                }
             }
         }
     }
@@ -3125,10 +3020,3 @@ private val uniqueEdgeCache = java.util.WeakHashMap<IntArray, List<org.umamo.edi
 private fun cachedUniqueEdges(indices: IntArray): List<org.umamo.edit.MeshElement.Edge> =
     uniqueEdgeCache.getOrPut(indices) { MeshTopology.uniqueEdges(indices) }
 
-/** The toolbar's Create group: a plus over a lattice corner. */
-@Composable
-private fun CreateGroupIcon(color: Color) = GridIcon(Modifier.size(15.dp), color) {
-    box(2.4f, 5.6f, 10f, 10f, 1.6f, ICON_FINE, dash = floatArrayOf(1.6f, 2.2f))
-    line(13f, 1.8f, 13f, 8.6f)
-    line(9.6f, 5.2f, 16.4f, 5.2f)
-}

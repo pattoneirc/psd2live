@@ -1,6 +1,5 @@
 package io.github.psd2live.ui.views
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
@@ -12,7 +11,7 @@ import androidx.compose.ui.unit.dp
 import io.github.psd2live.ui.CanvasEditor
 import io.github.psd2live.ui.components.TreeContextMenu
 import io.github.psd2live.ui.tooloptions.menuOptions
-import io.github.psd2live.ui.views.tooloptions.ToolOptionMenuSection
+import io.github.psd2live.ui.views.tooloptions.ToolOptionMenu
 
 /** Whether a right press on [editor]'s canvas has a menu to open: the tool in hand has options or actions for it. */
 internal fun canvasContextMenuHasContent(editor: CanvasEditor): Boolean = menuOptions(editor).isNotEmpty()
@@ -35,17 +34,14 @@ internal fun CanvasContextMenu(
         expanded = expanded,
         onDismissRequest = onDismissRequest,
         clickOffset = clickOffset,
-        minWidth = 220.dp,
-        maxWidth = 248.dp,
+        minWidth = 236.dp,
+        maxWidth = 480.dp,
         frosted = true,
     ) {
-        Column(
-            modifier = Modifier
-                .heightIn(max = 420.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(1.dp),
-        ) {
-            ToolOptionMenuSection(editor, onDismiss = onDismissRequest, onAction = onAction)
+        // Long groups open as a second level beside the menu, so the menu keeps to a screenful; the scroll is a
+        // fallback for a very short canvas.
+        Column(modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
+            ToolOptionMenu(editor, onDismiss = onDismissRequest, onAction = onAction)
         }
     }
 }

@@ -556,7 +556,7 @@ private fun buildTutorialCatalog(): Map<TutorialId, TutorialDefinition> = mapOf(
 			step("clothing", TutorialTargetId.MODEL_SETTINGS, selectDock = "settings", expandModelSettings = true, expandSimulationPresets = true),
 			step("bodies", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation", showAction = true),
 			step("weights", TutorialTargetId.CANVAS_TOOLBAR, ensureEditTab = true, setHierarchyMode = EditHierarchyMode.SIMULATE, requireLayerSelection = true, ensureHierarchyVisible = true, selectDock = "hierarchy", showAction = true),
-			step("weightKinds", TutorialTargetId.CANVAS_TOOLBAR, ensureEditTab = true, setHierarchyMode = EditHierarchyMode.SIMULATE, requireLayerSelection = true),
+			step("weightKinds", TutorialTargetId.TOOL_OPTIONS_BAR, ensureEditTab = true, setHierarchyMode = EditHierarchyMode.SIMULATE, requireLayerSelection = true),
 			step("glue", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation"),
 			step("material", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation", showAction = true),
 			step("materialValues", TutorialTargetId.SIMULATION_DOCK, selectDock = "simulation"),

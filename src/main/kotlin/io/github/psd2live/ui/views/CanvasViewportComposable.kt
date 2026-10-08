@@ -1738,6 +1738,9 @@ fun CanvasViewportComposable(
 				showPathGuides = mode == CanvasMode.EDIT,
 				showSelectionFocus = mode == CanvasMode.EDIT,
 				showSourcePixels = mode == CanvasMode.EDIT,
+				// The skin weights belong to the skeleton's meshes, so the toggle comes with an armature.
+				skinWeights = editor.showSkeletonWeights.takeIf { mode == CanvasMode.EDIT && editor.committedSkeleton != null },
+				onSkinWeightsChange = { editor.showSkeletonWeights = it },
 				modifier = Modifier
 					.align(Alignment.BottomEnd)
 					.padding(end = 8.dp, bottom = 8.dp),

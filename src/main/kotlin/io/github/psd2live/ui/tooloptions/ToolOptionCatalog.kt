@@ -72,8 +72,26 @@ internal val SKELETON_WEIGHT_STRENGTH = SliderOption("skeleton.weightStrength", 
 internal val SKELETON_WEIGHT_VALUE = SliderOption("skeleton.weightValue", "skeleton.weights.value", OptionUnit.PERCENT, wholeRange,
     { it.skeletonWeightReplaceValue }, { e, v -> e.skeletonWeightReplaceValue = v })
 
-internal val SKELETON_SHOW_WEIGHTS = ToggleOption("skeleton.showWeights", "skeleton.pose.weights",
-    { it.showSkeletonWeights }, { e, on -> e.showSkeletonWeights = on })
+// ─── Variants: the flavour of the tool in hand, first in the bar ───────────
+
+internal val BRUSH_TIP = ChoiceOption("variant.brushTip", "editor.brushShape", { BrushShape.entries }, { _, s -> tr(s.labelKey) },
+    { it.brushShape }, { e, s -> e.brushShape = s }, variant = true)
+
+internal val PAINT_SHAPE_KIND = ChoiceOption("variant.paintShape", "editor.tool.paint_shape", { io.github.psd2live.ui.PaintShape.entries },
+    { _, s -> tr(s.labelKey) }, { it.paintShape }, { e, s -> e.selectPaintShape(s) }, variant = true)
+
+internal val GLUE_SUB = ChoiceOption("variant.glue", "editor.tool.glue", { GlueSubTool.entries },
+    { _, s -> tr(io.github.psd2live.ui.GLUE_SUB_TOOL_LABELS.first { it.first == s }.second) }, { it.glueSubTool }, { e, s -> e.glueSubTool = s },
+    variant = true)
+
+internal val SKELETON_EDIT_SUB = ChoiceOption("variant.skeletonEdit", "editor.tool.skeleton_edit", { SkeletonEditSubTool.entries },
+    { _, s -> tr(s.labelKey) }, { it.skeletonEditSubTool }, { e, s -> e.skeletonEditSubTool = s }, variant = true)
+
+internal val SKELETON_POSE_SUB = ChoiceOption("variant.skeletonPose", "editor.tool.skeleton_pose", { SkeletonPoseSubTool.entries },
+    { _, s -> tr(s.labelKey) }, { it.skeletonPoseSubTool }, { e, s -> e.skeletonPoseSubTool = s }, variant = true)
+
+internal val WEIGHT_KIND = ChoiceOption("variant.weightKind", "editor.weightKind", { io.github.psd2live.ui.PAINTED_GROUP_KINDS },
+    { _, k -> tr("sim.group.${k.jsonName}") }, { it.weightGroupKind }, { e, k -> e.weightGroupKind = k }, variant = true)
 
 // ─── Paint ──────────────────────────────────────────────────────────────────
 
@@ -187,6 +205,7 @@ private fun MutableList<ToolOption>.addPlacement(editor: CanvasEditor, kind: Cre
 
 private fun MutableList<ToolOption>.addGlue(editor: CanvasEditor) {
     val pair = editor.glueMeshPair()
+    add(GLUE_SUB)
     if (editor.glueSubTool == GlueSubTool.WEIGHT) {
         add(ChoiceOption("glue.weightSide", "editor.glueWeight", { GLUE_WEIGHT_MODE_LABELS.map { it.first } },
             { _, mode -> GLUE_WEIGHT_MODE_LABELS.first { it.first == mode }.second }, { it.glueWeightMode },
@@ -198,11 +217,11 @@ private fun MutableList<ToolOption>.addGlue(editor: CanvasEditor) {
         if (p == null) tr("editor.glueNeedTwo", e.glueMeshCount())
         else "${e.meshLabel(p.first)} ↔ ${e.meshLabel(p.second)}"
     }, warning = { it.glueMeshPair() == null }))
-    add(ActionOption("glue.swap", "editor.glueSwap", { it.glueMeshPair() != null && it.editable }, { it.swapGlueEnds() }, keepsMenu = true))
+    add(ActionOption("glue.swap", "editor.glueSwap", { it.glueMeshPair() != null && it.editable }, { it.swapGlueEnds() }, OptionIcon.SWAP, keepsMenu = true))
     add(ActionOption("glue.apply", if (pair != null && editor.glueAlreadyBound()) "editor.glueReplace" else "editor.glueCreate",
         { it.glueMeshPair() != null && it.editable && it.gluePreviewPoints().isNotEmpty() }, { it.applyGlue() }, OptionIcon.CONFIRM, primary = true))
     add(ActionOption("glue.remergeAll", "editor.glueRemergeAll", { it.glueMeshPair() != null && it.editable }, { it.remergeGlue() },
-        place = OptionPlace.MENU))
+        OptionIcon.REMERGE, place = OptionPlace.MENU))
 }
 
 /** Object mode: the selection, and what can be built on the part in hand. */
@@ -217,7 +236,7 @@ private fun MutableList<ToolOption>.addObjectMode(editor: CanvasEditor) {
             OptionIcon.DEPTH_SPLIT, labelArgs = { listOf(split.name) }, place = OptionPlace.MENU))
     }
     if (target?.kind == "mesh") {
-        add(SectionOption("object.create", "editor.deformers", OptionPlace.MENU))
+        add(SectionOption("object.create", "editor.toolbar.create", OptionPlace.MENU, submenu = true, icon = OptionIcon.CREATE))
         add(createAction("object.createWarp", "editor.createWarp", OptionIcon.WARP, CreatePlacementKind.WARP, CreateRelation.AS_PARENT))
         add(createAction("object.createRotation", "editor.createRotation", OptionIcon.ROTATION, CreatePlacementKind.ROTATION, CreateRelation.AS_PARENT))
         add(createAction("object.createPath", "editor.treeAddPath", OptionIcon.PATH, CreatePlacementKind.PATH, CreateRelation.AS_CHILD))
@@ -238,7 +257,7 @@ private fun createAction(id: String, labelKey: String, icon: OptionIcon, kind: C
     }, icon, place = OptionPlace.MENU)
 
 private fun MutableList<ToolOption>.addSelectionActions(objectMode: Boolean) {
-    add(SectionOption("selection", "editor.selectionMode", OptionPlace.MENU))
+    add(SectionOption("selection", "editor.selectionMode", OptionPlace.MENU, submenu = true, icon = OptionIcon.SELECTION))
     add(ActionOption("selection.all", "shortcut.selectAll", { it.editable }, { it.selectAll(invert = false) }, OptionIcon.SELECT_ALL,
         place = OptionPlace.MENU))
     add(ActionOption("selection.invert", "help.shortcuts.invertSelection", { it.editable }, { it.selectAll(invert = true) }, OptionIcon.INVERT,
@@ -260,11 +279,11 @@ private fun MutableList<ToolOption>.addPointModes(editor: CanvasEditor) {
     val editing = editor.hierarchyMode == EditHierarchyMode.EDIT
     val target = editor.target()
     val mesh = target?.kind == "mesh"
-    if (!editing && target != null) add(targetPose(target.geometry.axes.isEmpty()))
-    if (editing && mesh && editor.tool in SELECTION_TOOLS + DEFORM_BRUSH_TOOLS + CanvasTool.TRANSFORM) add(ELEMENT_MODE)
+    if (editing && mesh && (editor.tool in SELECTION_TOOLS || editor.tool == CanvasTool.TRANSFORM)) add(ELEMENT_MODE)
     when (editor.tool) {
         CanvasTool.BRUSH_SELECT -> add(BRUSH_RADIUS)
         CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE -> {
+            add(BRUSH_TIP)
             add(BRUSH_RADIUS)
             add(BRUSH_STRENGTH)
             add(BRUSH_HARDNESS)
@@ -289,7 +308,7 @@ private fun MutableList<ToolOption>.addPointModes(editor: CanvasEditor) {
         else -> Unit
     }
     if (editing && mesh && editor.tool != CanvasTool.KNIFE) {
-        add(SectionOption("topology", "editor.topology", OptionPlace.MENU))
+        add(SectionOption("topology", "editor.topology", OptionPlace.MENU, submenu = true, icon = OptionIcon.TOPOLOGY))
         for (action in TOPOLOGY_ACTIONS) {
             if (editor.tool == CanvasTool.SUBDIVIDE && action.first == "subdivide") continue
             add(ActionOption("topology.${action.first}", "editor.${action.first}", { it.editable && it.vertices.isNotEmpty() },
@@ -307,13 +326,8 @@ private val TOPOLOGY_ACTIONS = listOf(
 internal val ELEMENT_MODE = ChoiceOption("edit.element", "editor.elementMode", { listOf(0, 1, 2) },
     { _, i -> tr("editor.${listOf("vertex", "edge", "face")[i]}") }, { it.elementMode }, { e, i -> e.elementMode = i })
 
-/** The parameter a deformation keys: none (the base, or the pose in hand), or one of the model's. */
-private fun targetPose(base: Boolean) = ChoiceOption<String?>("deform.pose", "editor.targetPose",
-    { e -> listOf<String?>(null) + e.model.parameters.map { it.id.raw } },
-    { e, id -> if (id == null) tr(if (base) "editor.base" else "editor.pose") else e.model.parameters.firstOrNull { it.id.raw == id }?.name ?: id },
-    { it.parameter }, { e, id -> e.parameter = id }, inline = false)
-
 private fun MutableList<ToolOption>.addSimulate(editor: CanvasEditor) {
+    add(WEIGHT_KIND)
     when (editor.tool) {
         CanvasTool.WEIGHT_PAINT -> {
             add(WEIGHT_MODE)
@@ -327,10 +341,10 @@ private fun MutableList<ToolOption>.addSimulate(editor: CanvasEditor) {
         }
         else -> Unit
     }
-    add(SectionOption("weight.group", "editor.weightGroup", OptionPlace.MENU))
-    add(ActionOption("weight.fill", "editor.weightFill", { it.editable }, { it.fillVertexGroup(1f) }, place = OptionPlace.MENU))
-    add(ActionOption("weight.clear", "editor.weightClear", { it.editable }, { it.fillVertexGroup(0f) }, place = OptionPlace.MENU))
-    add(ActionOption("weight.invert", "editor.weightInvert", { it.editable }, { it.invertVertexGroup() }, place = OptionPlace.MENU))
+    add(SectionOption("weight.group", "editor.weightGroup", OptionPlace.MENU, submenu = true, icon = OptionIcon.GROUP))
+    add(ActionOption("weight.fill", "editor.weightFill", { it.editable }, { it.fillVertexGroup(1f) }, OptionIcon.FILL, place = OptionPlace.MENU))
+    add(ActionOption("weight.clear", "editor.weightClear", { it.editable }, { it.fillVertexGroup(0f) }, OptionIcon.ERASE, place = OptionPlace.MENU))
+    add(ActionOption("weight.invert", "editor.weightInvert", { it.editable }, { it.invertVertexGroup() }, OptionIcon.INVERT, place = OptionPlace.MENU))
     add(ActionOption("weight.delete", "editor.weightDelete", { it.editable }, { it.deleteVertexGroup() }, OptionIcon.DELETE,
         danger = true, place = OptionPlace.MENU))
 }
@@ -338,13 +352,12 @@ private fun MutableList<ToolOption>.addSimulate(editor: CanvasEditor) {
 private fun MutableList<ToolOption>.addSkeleton(editor: CanvasEditor) {
     when (editor.tool) {
         CanvasTool.SKELETON_POSE -> {
-            add(SKELETON_SHOW_WEIGHTS)
-            add(ChoiceOption("skeleton.poseTool", "editor.tool.skeleton_pose", { SkeletonPoseSubTool.entries }, { _, s -> tr(s.labelKey) },
-                { it.skeletonPoseSubTool }, { e, s -> e.skeletonPoseSubTool = s }, place = OptionPlace.MENU))
+            add(SKELETON_POSE_SUB)
             add(ActionOption("skeleton.resetPose", "animation.resetPose", { it.bakedSkeleton != null }, { it.resetSkeletonPose() },
-                OptionIcon.UNDO, place = OptionPlace.MENU))
+                OptionIcon.RESET, place = OptionPlace.MENU))
         }
         CanvasTool.SKELETON_EDIT -> {
+            add(SKELETON_EDIT_SUB)
             if (editor.skeletonEditSubTool == SkeletonEditSubTool.WEIGHTS) {
                 add(SKELETON_WEIGHT_MODE)
                 add(SKELETON_WEIGHT_RADIUS)
@@ -352,8 +365,6 @@ private fun MutableList<ToolOption>.addSkeleton(editor: CanvasEditor) {
                 if (editor.skeletonWeightBrushMode == SkeletonWeightBrushMode.REPLACE) add(SKELETON_WEIGHT_VALUE)
             }
             add(NoteOption("skeleton.hint", { tr(it.skeletonEditSubTool.hintKey) }, place = OptionPlace.BAR))
-            add(ChoiceOption("skeleton.editTool", "editor.tool.skeleton_edit", { SkeletonEditSubTool.entries }, { _, s -> tr(s.labelKey) },
-                { it.skeletonEditSubTool }, { e, s -> e.skeletonEditSubTool = s }, place = OptionPlace.MENU))
             add(ActionOption("skeleton.cancel", "skeleton.panel.cancel", { it.skeletonDraft != null }, { it.cancelSkeletonEdit() },
                 OptionIcon.CANCEL, place = OptionPlace.MENU))
             add(ActionOption("skeleton.done", "skeleton.panel.done", { it.skeletonDraft != null }, { it.finishSkeletonEdit() },
@@ -378,6 +389,7 @@ private fun MutableList<ToolOption>.addPaint(editor: CanvasEditor) {
         }
         CanvasTool.PAINT_BUCKET -> add(PAINT_TOLERANCE)
         CanvasTool.PAINT_SHAPE -> {
+            add(PAINT_SHAPE_KIND)
             add(PAINT_SHAPE_SIZE)
             add(PAINT_OPACITY)
             if (editor.paintShape.canFill) add(PAINT_FILL)
