@@ -209,13 +209,17 @@ internal object ProjectArchive {
         try {
             ZipFile(file.toFile()).use { zip ->
                 val names = mutableSetOf<String>()
+                val folded = HashSet<String>()
                 val digests = HashMap<String, Digest>()
                 var total = 0L
                 zip.entries().asSequence().forEach { entry ->
                     val name = entry.name
                     require(name.isNotBlank() && !name.contains('\\') && !name.contains(':') &&
                         !name.startsWith('/') && name.split('/').none { it == ".." || it == "." }) { "Invalid project entry: $name" }
-                    require(names.add(name)) { "Duplicate project entry: $name" }
+                    // Windows drops a trailing dot or space and ignores case, so such names would land on one file
+                    // and the last write would replace a digest already checked.
+                    require(name.trimEnd('/').split('/').none { it.endsWith('.') || it.endsWith(' ') }) { "Invalid project entry: $name" }
+                    require(names.add(name) && folded.add(name.trimEnd('/').lowercase(java.util.Locale.ROOT))) { "Duplicate project entry: $name" }
                     require(names.size <= 1_000_000) { "Too many project entries" }
                     val path = root.resolve(name).normalize()
                     require(path.startsWith(root)) { "Project entry escapes archive" }

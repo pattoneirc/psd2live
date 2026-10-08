@@ -11,7 +11,7 @@ import java.util.UUID
  */
 internal class WorkspacePhysicsAuditionSessions(private val runtime: WorkspaceRuntime<RigPreviewModel>) {
     private class Session(val id: String, val workspace: String, val groupId: String, val audition: PhysicsAudition,
-                          var capture: WorkspaceCapture<RigPreviewModel>, var values: Map<String, Float>, var status: String = "running")
+                          var capture: WorkspaceCapture<RigPreviewModel>, var values: Map<String, Float>, @Volatile var status: String = "running")
     private val lock = Any()
     private val sessions = linkedMapOf<String, Session>()
 
@@ -32,33 +32,41 @@ internal class WorkspacePhysicsAuditionSessions(private val runtime: WorkspaceRu
             }
             else -> {
                 val session = owned(projectId, workspace, request.text("session_id"))
-                if (mode == "stop") { session.status = "stopped"; return@synchronized output(session) }
+                if (mode == "stop") { session.status = "stopped"; return@synchronized synchronized(session) { output(session) } }
                 running(session, capture, workspace)
-                when (mode) {
+                synchronized(session) { when (mode) {
                     "target" -> session.audition.target(request.number("x"), request.number("y"))
                     "release" -> session.audition.release()
                     "reset" -> session.audition.reset()
                     "reset_peaks" -> session.audition.resetPeaks()
                     else -> throw IllegalArgumentException("Unknown physics audition control: $mode")
-                }
-                output(session)
+                } }
+                synchronized(session) { output(session) }
             }
         }
     }
 
-    /** Steps run on copied engine state, so a rejected request or a failed check leaves the session as it was. */
-    fun step(projectId: String, state: String, workspace: String, request: JsonObject, check: () -> Unit = {}): JsonObject = synchronized(lock) {
-        val capture = checked(projectId, state)
-        val session = owned(projectId, workspace, request.text("session_id"))
-        running(session, capture, workspace)
-        val values = values(capture, workspace, request)
-        session.audition.step(values, request.number("dt"), request["steps"]?.jsonPrimitive?.int ?: 1, check)
-        session.values = values
-        output(session)
+    /**
+     * Steps run on copied engine state, so a rejected request or a failed check leaves the session as it was. They
+     * hold only their own session: a long request or a slow [check] does not stall other auditions.
+     */
+    fun step(projectId: String, state: String, workspace: String, request: JsonObject, check: () -> Unit = {}): JsonObject {
+        val (session, values) = synchronized(lock) {
+            val capture = checked(projectId, state)
+            val session = owned(projectId, workspace, request.text("session_id"))
+            running(session, capture, workspace)
+            session to values(capture, workspace, request)
+        }
+        return synchronized(session) {
+            session.audition.step(values, request.number("dt"), request["steps"]?.jsonPrimitive?.int ?: 1, check)
+            session.values = values
+            output(session)
+        }
     }
 
-    fun get(projectId: String, workspace: String, id: String): JsonObject = synchronized(lock) {
-        output(owned(projectId, workspace, id))
+    fun get(projectId: String, workspace: String, id: String): JsonObject {
+        val session = synchronized(lock) { owned(projectId, workspace, id) }
+        return synchronized(session) { output(session) }
     }
 
     private fun checked(projectId: String, state: String): WorkspaceCapture<RigPreviewModel> = runtime.capture().also {
@@ -76,7 +84,7 @@ internal class WorkspacePhysicsAuditionSessions(private val runtime: WorkspaceRu
         require(session.status == "running") { "Physics audition is stopped" }
         if (!runtime.sameLoadGeneration(session.capture, current)) throw WorkspaceConflict(session.capture.state, current.state)
         if (session.capture.revision != current.revision) {
-            configure(session.audition, current, session.groupId, workspace, JsonObject(emptyMap()))
+            synchronized(session) { configure(session.audition, current, session.groupId, workspace, JsonObject(emptyMap())) }
             session.capture = current
         } else session.capture = current
     }

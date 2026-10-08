@@ -77,6 +77,17 @@ class ProjectArchiveTest {
 		} finally { ProjectArchive.deleteTemporaryDirectory(extracted) }
 	}
 
+	@Test fun entriesThatShareOneFileOnWindowsAreRejected() {
+		for (pair in listOf("assets/a.png" to "assets/A.png", "assets/a.png" to "assets/a.png.")) {
+			val target = temporary.resolve("colliding.psd2live")
+			ZipOutputStream(Files.newOutputStream(target)).use { zip ->
+				zip.putNextEntry(ZipEntry(ProjectArchive.MANIFEST)); zip.write("{}".encodeToByteArray()); zip.closeEntry()
+				pair.toList().forEach { name -> zip.putNextEntry(ZipEntry(name)); zip.write(byteArrayOf(1)); zip.closeEntry() }
+			}
+			assertFailsWith<IllegalArgumentException> { ProjectArchive.extract(target) }
+		}
+	}
+
 	@Test fun aStaleDigestFailsTheWriteAndKeepsTheExistingProject() {
 		val directory = staging()
 		try {

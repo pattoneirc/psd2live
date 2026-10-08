@@ -47,6 +47,18 @@ class WorkspaceDraftQueueTest {
         }
     }
 
+    @Test fun aDraftOnTheStateBeforeAFinishedDraftStillFollowsIt() = runBlocking {
+        Host { doc -> doc.settings.toString() }.use { host ->
+            val start = host.open()
+            host.submit(start.state, 1).await()
+            // The editor still holds the state it showed when it started the second edit.
+            val final = host.submit(start.state, 2).await()
+            assertEquals(final.capture, host.runtime.capture())
+            assertEquals(listOf(0, 1, 2), host.runtime.history().selections.map {
+                it.snapshot.settings.getValue("value").jsonPrimitive.int })
+        }
+    }
+
     @Test fun foreignCommitRejectsTheQueuedChainWithoutOverwritingIt() = runBlocking {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()

@@ -16,7 +16,7 @@ internal class WorkspaceDraftQueue<M>(
         val projectId: String,
         val inputState: String,
         val document: WorkspaceDocument,
-        val previous: Entry?,
+        var previous: Entry?,
     ) {
         lateinit var result: Deferred<WorkspaceCommit<M>>
         var lineage: Set<String> = emptySet()
@@ -29,7 +29,11 @@ internal class WorkspaceDraftQueue<M>(
                committed: (WorkspaceCommit<M>) -> Unit = {},
                prepare: suspend (WorkspaceDraft, M, WorkspaceDocument) -> WorkspaceDraft = { before, _, draft -> before.copy(document = draft) },
                auxiliary: (WorkspaceCapture<M>, WorkspaceDraft, M) -> Unit = { _, _, _ -> }): Deferred<WorkspaceCommit<M>> = synchronized(lock) {
-        val previous = tail?.takeUnless { it.result.isCompleted }
+        // A draft submitted on a state the previous draft has already moved follows it whether or not that draft has
+        // finished; only a rejected one ends the chain.
+        val previous = tail?.takeUnless { it.result.isCompleted && it.result.isCancelled }
+        // A finished draft's own predecessors are settled; dropping them keeps the chain from growing per edit.
+        if (previous?.result?.isCompleted == true) previous.previous = null
         val entry = Entry(projectId, state, document, previous)
         entry.result = scope.async(start = CoroutineStart.LAZY) {
             val preceding = previous?.result?.await()

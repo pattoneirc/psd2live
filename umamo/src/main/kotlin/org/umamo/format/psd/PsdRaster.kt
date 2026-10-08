@@ -60,6 +60,8 @@ internal object PsdRaster {
 			return LayerRaster(width = width.coerceAtLeast(0), height = height.coerceAtLeast(0), rgba = ByteArray(0))
 		}
 
+		// The bounds come from the file: a corrupt rectangle must not overflow the raster's size or allocate past it.
+		require(width.toLong() * height * 4 <= Int.MAX_VALUE - 8) { "PSD layer ${width}x$height is too large" }
 		val rowBytes = bytesPerRow(width, header.depth)
 		val planes = decodePlanes(bytes, record, width, height, header.depth, rowBytes)
 
@@ -92,6 +94,7 @@ internal object PsdRaster {
 		var cursor = record.channelDataOffset
 		for (channel in record.channels) {
 			val blockStart = cursor
+			require(channel.length >= 0 && blockStart.toLong() + channel.length <= bytes.size) { "PSD channel data is truncated" }
 			val blockEnd = blockStart + channel.length.toInt()
 			cursor = blockEnd
 			// PSD: channel id < -1 is a user/vector layer mask (-2/-3) - not displayable color, skip it.
@@ -133,7 +136,7 @@ internal object PsdRaster {
 				out
 			}
 
-			COMPRESSION_RLE -> decodeRle(bytes, dataStart, height, rowBytes)
+			COMPRESSION_RLE -> decodeRle(bytes, dataStart, blockEnd, height, rowBytes)
 			COMPRESSION_ZIP -> inflate(bytes, dataStart, blockEnd - dataStart, total)
 			COMPRESSION_ZIP_PREDICTION -> {
 				val inflated = inflate(bytes, dataStart, blockEnd - dataStart, total)
@@ -158,7 +161,8 @@ internal object PsdRaster {
 	 * @param Int rowBytes      Decoded bytes per row.
 	 * @return ByteArray The decoded, row-major sample bytes (height*rowBytes).
 	 */
-	private fun decodeRle(bytes: ByteArray, dataStart: Int, height: Int, rowBytes: Int): ByteArray {
+	private fun decodeRle(bytes: ByteArray, dataStart: Int, blockEnd: Int, height: Int, rowBytes: Int): ByteArray {
+		require(dataStart.toLong() + 2L * height <= blockEnd) { "PSD RLE row table is truncated" }
 		var countCursor = dataStart
 		val rowCounts = IntArray(height)
 		for (rowIndex in 0 until height) {
@@ -169,7 +173,8 @@ internal object PsdRaster {
 		val out = ByteArray(height * rowBytes)
 		var rowCursor = countCursor
 		for (rowIndex in 0 until height) {
-			unpackBits(bytes, rowCursor, rowCounts[rowIndex], out, rowIndex * rowBytes, rowBytes)
+			// A row count past the block reads only what the block holds; the rest of the row stays empty.
+			unpackBits(bytes, rowCursor, rowCounts[rowIndex].coerceAtMost((blockEnd - rowCursor).coerceAtLeast(0)), out, rowIndex * rowBytes, rowBytes)
 			rowCursor += rowCounts[rowIndex]
 		}
 		return out

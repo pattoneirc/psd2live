@@ -133,13 +133,17 @@ class WorkspacePaintSession internal constructor(
     }
     /** UI projection may be retired during a successful pre-CAS projection without cancelling its commit. */
     fun dismiss() = synchronized(lock) { if (!committing) cancel() }
-    internal fun freeze(expected: String, rebuildMesh: Boolean, preserve: Boolean, checkpoint: () -> Unit): WorkspacePaintRaster = synchronized(lock) {
-        writable(expected); committing = true
-        // Only the layer's own area and what the session wrote can hold its pixels.
-        val area = space.layerArea()
-        val region = buffer.touched?.let { if (area.isEmpty) it else area.union(it) } ?: area
-        try { WorkspacePaintRaster.capture(layerId, buffer.workingImage, space, region, rebuildMesh, preserve, checkpoint) }
-        catch (failure: Throwable) { committing = false; throw failure }
+    internal fun freeze(expected: String, rebuildMesh: Boolean, preserve: Boolean, checkpoint: () -> Unit): WorkspacePaintRaster {
+        val region = synchronized(lock) {
+            writable(expected); committing = true
+            // Only the layer's own area and what the session wrote can hold its pixels.
+            val area = space.layerArea()
+            buffer.touched?.let { if (area.isEmpty) it else area.union(it) } ?: area
+        }
+        // While committing every write is refused, so the capture and its mesh rebuild read the raster without the
+        // lock; the editor's reads of the session do not wait for them.
+        return try { WorkspacePaintRaster.capture(layerId, buffer.workingImage, space, region, rebuildMesh, preserve, checkpoint) }
+        catch (failure: Throwable) { synchronized(lock) { committing = false }; throw failure }
     }
     internal fun finish(result: WorkspaceMutationResult) = synchronized(lock) {
         completion = result; committing = false; closed = true; changed()

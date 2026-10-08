@@ -121,12 +121,16 @@ internal object PsdLayerRecords {
 
 		// PSD: Color Mode Data section (u32 length + data) - holds the indexed palette; empty otherwise.
 		val colorModeLength = buffer.readU32AsInt()
+		require(colorModeLength in 0..bytes.size - buffer.position) { "PSD color mode data is truncated" }
 		val colorModeData = buffer.readBytes(colorModeLength)
 
 		skipLengthPrefixed(buffer) // PSD: Image Resources section (u32 length + data) - not needed here
 
-		buffer.readU32AsInt() // PSD: Layer and Mask Information section length (unused here)
-		buffer.readU32AsInt() // PSD: Layer Info length (unused here)
+		// PSD: a flattened file without layers stores an empty Layer and Mask Information section (or an empty
+		// Layer Info inside it); what follows is the merged image, not a layer count.
+		val layerAndMaskLength = buffer.readU32AsInt()
+		if (layerAndMaskLength == 0) return PsdParse(header = header, colorModeData = colorModeData, records = emptyList())
+		if (buffer.readU32AsInt() == 0) return PsdParse(header = header, colorModeData = colorModeData, records = emptyList())
 
 		// PSD: layer count, signed i16; a negative value means the first alpha channel holds the
 		// merged transparency - irrelevant to record parsing, so take the magnitude.
