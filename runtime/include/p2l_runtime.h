@@ -98,6 +98,9 @@ uint32_t p2l_set_advanced(P2lRig *rig, uint32_t features);
 void p2l_sim_reset(P2lRig *rig);
 /* Wind every simulation feels besides its own, canvas pixels per second squared (x right, y down). */
 void p2l_sim_wind(P2lRig *rig, float x, float y);
+/* The colliders as the last update placed them: ax, ay, bx, by, radius a, radius b in canvas pixels, six floats
+ * each, written into out up to capacity colliders; returns how many there are. */
+uint32_t p2l_sim_colliders(const P2lRig *rig, float *out, uint32_t capacity);
 /* Bones a host can attach things to, and each one's canvas frame at the last evaluation as an affine map
  * [a, b, c, d, tx, ty]: x' = a x + b y + tx, y' = c x + d y + ty. */
 uint32_t p2l_bone_count(const P2lRig *rig);
@@ -112,6 +115,8 @@ void p2l_expression(P2lRig *rig, int32_t index);
 uint32_t p2l_hit_area_count(const P2lRig *rig);
 const char *p2l_hit_area_id(const P2lRig *rig, uint32_t index);
 int32_t p2l_hit_test(const P2lRig *rig, float x, float y);
+/* The meshes a hit area covers, written into out up to capacity; returns how many there are. */
+uint32_t p2l_hit_area_meshes(const P2lRig *rig, uint32_t index, uint32_t *out, uint32_t capacity);
 /* A mesh's user data, empty when it has none. */
 const char *p2l_mesh_user_data(const P2lRig *rig, uint32_t index);
 

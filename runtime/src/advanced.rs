@@ -110,6 +110,8 @@ const MAX_SIM_STEPS: f32 = 4.0;
 #[derive(Default)]
 pub struct Advanced {
     runs: Vec<SimRun>,
+    /// Every simulation's colliders as the last step placed them, world space.
+    placed: Vec<PlacedCollider>,
     /// Wind the host adds to every simulation, world space (y up).
     wind: [f32; 2],
     enabled: u32,
@@ -241,6 +243,7 @@ impl Advanced {
             return;
         }
         let collide = self.enabled & COLLISION != 0;
+        self.placed.clear();
         for k in 0..self.runs.len() {
             let sim = &rig.extensions.simulations[k];
             let colliders = if collide { self.place_colliders(rig, sim, values, pose) } else { Vec::new() };
@@ -248,6 +251,8 @@ impl Advanced {
             if !run.place(sim, pose) {
                 continue;
             }
+            self.placed.extend_from_slice(&colliders);
+            let run = &mut self.runs[k];
             run.state.colliders = colliders;
             if !run.started {
                 run.start(sim);
@@ -277,6 +282,11 @@ impl Advanced {
                 run.draw(sim, pose, sim.fps);
             }
         }
+    }
+
+    /// The colliders as the last update placed them, in canvas pixels (y down): a, b, radius a, radius b.
+    pub fn placed_colliders(&self) -> impl Iterator<Item = [f32; 6]> + '_ {
+        self.placed.iter().map(|c| [c.a[0], -c.a[1], c.b[0], -c.b[1], c.radius_a, c.radius_b])
     }
 
     /// The particle positions of simulation [k] after its last step, world space; for tests and tools.

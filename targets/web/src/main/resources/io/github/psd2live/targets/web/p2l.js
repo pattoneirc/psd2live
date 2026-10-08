@@ -54,6 +54,13 @@ export class P2LPlayer {
     return player;
   }
 
+  /** A player on an instantiated [runtime] (whose exports several players may share) for [bytes] of a rig; not started. */
+  static async fromBytes(canvas, runtime, bytes) {
+    const player = new P2LPlayer(canvas, runtime, bytes);
+    await player.loadTextures();
+    return player;
+  }
+
   constructor(canvas, runtime, bytes) {
     this.canvas = canvas;
     this.rt = runtime;
@@ -110,7 +117,101 @@ export class P2LPlayer {
     this.order = new Uint32Array(count);
     this.orderPointer = runtime.p2l_alloc(count * 4 + 4);
     this.colors = runtime.p2l_alloc(24);
+    this.meshIds = this.list(runtime.p2l_mesh_count, runtime.p2l_mesh_id);
+    this.bones = this.list(runtime.p2l_bone_count, runtime.p2l_bone_id);
+    /** Zoom over the fitted view and a pan in element pixels. */
+    this.view = { zoom: 1, x: 0, y: 0 };
     this.setupGl();
+  }
+
+  /** Each parameter's id with its range and default. */
+  parameterRanges() {
+    const rt = this.rt;
+    const out = rt.p2l_alloc(12);
+    const ranges = this.parameters.map((id, i) => {
+      rt.p2l_parameter_range(this.rig, i, out, out + 4, out + 8);
+      const [min, max, value] = new Float32Array(rt.memory.buffer, out, 3);
+      return { id, min, max, default: value };
+    });
+    rt.p2l_dealloc(out, 12);
+    return ranges;
+  }
+
+  /** The current value of every parameter, after the last update. */
+  parameterValues() {
+    return Array.from(new Float32Array(this.rt.memory.buffer, this.rt.p2l_parameter_values(this.rig), this.parameters.length));
+  }
+
+  /** Mesh [m]'s vertices in canvas pixels at the last evaluation. */
+  meshVertices(m) {
+    return new Float32Array(this.rt.memory.buffer, this.rt.p2l_mesh_vertices(this.rig, m), this.meshes[m].vertices * 2);
+  }
+
+  /** The mesh indices hit area [i] covers. */
+  hitAreaMeshes(i) {
+    const n = this.rt.p2l_hit_area_meshes(this.rig, i, 0, 0);
+    const out = this.rt.p2l_alloc(n * 4 + 4);
+    this.rt.p2l_hit_area_meshes(this.rig, i, out, n);
+    const meshes = Array.from(new Uint32Array(this.rt.memory.buffer, out, n));
+    this.rt.p2l_dealloc(out, n * 4 + 4);
+    return meshes;
+  }
+
+  /** Every bone's canvas frame [a, b, c, d, tx, ty] at the last evaluation, by id. */
+  boneFrames() {
+    const out = this.rt.p2l_alloc(24);
+    const frames = [];
+    this.bones.forEach((id, i) => {
+      if (this.rt.p2l_bone_transform(this.rig, i, out)) frames.push({ id, m: Array.from(new Float32Array(this.rt.memory.buffer, out, 6)) });
+    });
+    this.rt.p2l_dealloc(out, 24);
+    return frames;
+  }
+
+  /** The simulations' colliders as the last update placed them: [ax, ay, bx, by, radiusA, radiusB] in canvas pixels. */
+  colliders() {
+    const n = this.rt.p2l_sim_colliders(this.rig, 0, 0);
+    if (n === 0) return [];
+    const out = this.rt.p2l_alloc(n * 24);
+    this.rt.p2l_sim_colliders(this.rig, out, n);
+    const flat = Array.from(new Float32Array(this.rt.memory.buffer, out, n * 6));
+    this.rt.p2l_dealloc(out, n * 24);
+    return Array.from({ length: n }, (_, i) => flat.slice(i * 6, i * 6 + 6));
+  }
+
+  /** Starts the simulations again at rest. */
+  resetSimulation() {
+    this.rt.p2l_sim_reset(this.rig);
+  }
+
+  /** Wind besides the scenes' own, canvas pixels per second² (x right, y down). */
+  wind(x, y) {
+    this.rt.p2l_sim_wind(this.rig, x, y);
+  }
+
+  /** Behaviors: 1 blink, 2 breathing, 4 gaze, 8 lip sync. */
+  behaviors(flags) {
+    this.rt.p2l_behaviors(this.rig, flags);
+  }
+
+  /** The scale and offset that place the rig's canvas in the element (CSS pixels): x' = x * scale + left. */
+  layout() {
+    const r = this.canvas.getBoundingClientRect();
+    const scale = Math.min(r.width / this.width, r.height / this.height) * this.view.zoom;
+    return { scale, left: r.width / 2 + this.view.x - (this.width / 2) * scale, top: r.height / 2 + this.view.y - (this.height / 2) * scale, rect: r };
+  }
+
+  /** Frees the rig and its GPU objects; the player is unusable afterwards. */
+  dispose() {
+    this.stop();
+    const gl = this.gl;
+    for (const t of this.textures || []) gl.deleteTexture(t);
+    for (const m of this.meshes) { gl.deleteBuffer(m.uvBuffer); gl.deleteBuffer(m.indexBuffer); }
+    gl.deleteBuffer(this.positionBuffer);
+    this.rt.p2l_dealloc(this.orderPointer, this.meshes.length * 4 + 4);
+    this.rt.p2l_dealloc(this.colors, 24);
+    this.rt.p2l_rig_free(this.rig);
+    this.rig = 0;
   }
 
   string(pointer) {
@@ -201,9 +302,8 @@ export class P2LPlayer {
 
   /** The rig's canvas point under a point of the page, as the canvas element draws it. */
   toRig(clientX, clientY) {
-    const r = this.canvas.getBoundingClientRect();
-    const fit = Math.min(r.width / this.width, r.height / this.height);
-    return [(clientX - r.left - r.width / 2) / fit + this.width / 2, (clientY - r.top - r.height / 2) / fit + this.height / 2];
+    const { scale, left, top, rect } = this.layout();
+    return [(clientX - rect.left - left) / scale, (clientY - rect.top - top) / scale];
   }
 
   /** The hit area (e.g. "HitAreaHead") under a point of the page, or null. */
@@ -242,7 +342,8 @@ export class P2LPlayer {
   }
 
   stop() {
-    cancelAnimationFrame(this.animation);
+    if (this.animation) cancelAnimationFrame(this.animation);
+    this.animation = 0;
   }
 
   update(dt) {
@@ -263,10 +364,11 @@ export class P2LPlayer {
     gl.clearColor(0, 0, 0, 0);
     gl.clearStencil(0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
-    // Fit the rig's canvas into the element, y down.
-    const fit = Math.min(w / this.width, h / this.height);
+    // Fit the rig's canvas into the element, y down, then zoom and pan it.
+    const fit = Math.min(w / this.width, h / this.height) * this.view.zoom;
     const sx = (2 * fit) / w, sy = (-2 * fit) / h;
-    gl.uniform4f(this.loc.view, sx, sy, -this.width * sx / 2, -this.height * sy / 2);
+    const px = (2 * this.view.x * ratio) / w, py = (-2 * this.view.y * ratio) / h;
+    gl.uniform4f(this.loc.view, sx, sy, -this.width * sx / 2 + px, -this.height * sy / 2 + py);
     gl.uniform1i(this.loc.tex, 0);
     gl.activeTexture(gl.TEXTURE0);
     gl.enable(gl.BLEND);

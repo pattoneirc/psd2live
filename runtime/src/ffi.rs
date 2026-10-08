@@ -543,6 +543,20 @@ pub unsafe extern "C" fn p2l_hit_test(handle: *const Handle, x: f32, y: f32) -> 
     with!(handle, -1, |h| crate::eval::hit_area_at(&h.rig, &h.evaluator.pose, x, y).map_or(-1, |i| i as i32))
 }
 
+/// The meshes hit area [index] covers, written into [out] up to [capacity]; returns how many there are.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_hit_area_meshes(handle: *const Handle, index: u32, out: *mut u32, capacity: u32) -> u32 {
+    with!(handle, 0, |h| {
+        let Some((_, _, meshes)) = h.rig.hit_areas.get(index as usize) else { return 0 };
+        if !out.is_null() {
+            for (i, m) in meshes.iter().take(capacity as usize).enumerate() {
+                *out.add(i) = *m as u32;
+            }
+        }
+        meshes.len() as u32
+    })
+}
+
 /// Mesh [index]'s user data, empty when it has none.
 #[no_mangle]
 pub unsafe extern "C" fn p2l_mesh_user_data(handle: *const Handle, index: u32) -> *const c_char {
@@ -572,6 +586,24 @@ pub unsafe extern "C" fn p2l_set_advanced(handle: *mut Handle, features: u32) ->
 #[no_mangle]
 pub unsafe extern "C" fn p2l_sim_reset(handle: *mut Handle) {
     with_mut!(handle, (), |h| h.advanced.reset_simulations())
+}
+
+/// The colliders as the last update placed them, six floats each (ax, ay, bx, by, radius a, radius b, canvas
+/// pixels), written into [out] up to [capacity] colliders; returns how many there are.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_sim_colliders(handle: *const Handle, out: *mut f32, capacity: u32) -> u32 {
+    with!(handle, 0, |h| {
+        let mut n = 0u32;
+        for c in h.advanced.placed_colliders() {
+            if !out.is_null() && n < capacity {
+                for (k, v) in c.iter().enumerate() {
+                    *out.add(n as usize * 6 + k) = *v;
+                }
+            }
+            n += 1;
+        }
+        n
+    })
 }
 
 /// Wind every simulation feels besides its own, canvas pixels per second² (x right, y down).
