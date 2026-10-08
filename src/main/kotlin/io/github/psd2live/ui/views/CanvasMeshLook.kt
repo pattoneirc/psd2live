@@ -15,10 +15,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
  *
  * - structure: the light neutral [MeshLook.Structure] - or, while several meshes are held at once, each mesh's own
  *   colour, so they never read as one;
- * - selected: the accent, larger, ringed in white;
+ * - selected: the accent, larger, cased in white over a dark rim, so it holds on art of the accent's own hue;
  * - hovered: a white ring round the point (a white fill when it is not selected), the thing a click would take;
- * - reach: a ring in the tool's colour, as large and as strong as the brush would move the point - the brush's
- *   hover preview, and its falloff while a stroke is in hand;
+ * - reach: a ring in the tool's colour round the point, from a hairline close in to a wide firm ring at a full
+ *   dab - the brush's hover preview, and its falloff while a stroke is in hand;
  * - data (weights, glue sides) washes the artwork under the wires, it does not recolour the structure.
  *
  * What a point is shows in its shape, not its colour: a mesh vertex is round, a warp control point square, a
@@ -36,15 +36,17 @@ internal object MeshLook {
 	const val WIRE_ALPHA = 0.62f
 	const val HALO_EXTRA = 1.6f
 
-	const val POINT = 2.1f
-	const val POINT_SELECTED = 3.4f
-	const val POINT_HOVERED = 3f
-	const val HOVER_RING = 6.6f
-	const val HALO_RIM = 1.1f
+	const val POINT = 2.4f
+	const val POINT_SELECTED = 3.6f
+	const val POINT_HOVERED = 3.2f
+	const val HOVER_RING = 7.4f
+	const val HALO_RIM = 1.3f
+	/** The white casing of a selected point, between its dark rim and its accent core. */
+	const val CASING = 1.4f
 
-	/** The reach ring's radius at nothing reached and its growth to a full reach. */
-	const val REACH_MIN = 3.4f
-	const val REACH_GROWTH = 3.4f
+	/** The reach ring's radius just inside the brush's edge and at a full dab. */
+	const val REACH_MIN = 3.2f
+	const val REACH_MAX = 11f
 
 	/** The tone brushes that move points ring their reach in. */
 	val Reach = Color(0xFFFF5A4E)
@@ -59,9 +61,13 @@ internal fun DrawScope.drawMeshWires(segments: List<Offset>, tone: Color, width:
 	drawPoints(segments, PointMode.Lines, tone.copy(alpha = tone.alpha * alpha), width)
 }
 
-/** The selected wires in [accent], over the same halo. */
-internal fun DrawScope.drawSelectedWires(segments: List<Offset>, accent: Color) =
-	drawMeshWires(segments, accent, MeshLook.WIRE_SELECTED, 1f)
+/** The selected wires: the accent cased in white over the halo, so they hold on art of the accent's hue. */
+internal fun DrawScope.drawSelectedWires(segments: List<Offset>, accent: Color) {
+	if (segments.isEmpty()) return
+	drawPoints(segments, PointMode.Lines, MeshLook.Halo, MeshLook.WIRE_SELECTED + 2.6f)
+	drawPoints(segments, PointMode.Lines, Color.White, MeshLook.WIRE_SELECTED + 1.2f)
+	drawPoints(segments, PointMode.Lines, accent, MeshLook.WIRE_SELECTED)
+}
 
 /** One editable point in the state it is in. [tone] is the structure's; [accent] the selection's. */
 internal fun DrawScope.drawMeshHandle(
@@ -78,34 +84,34 @@ internal fun DrawScope.drawMeshHandle(
 		else -> MeshLook.POINT
 	}
 	if (hovered) {
-		drawCircle(MeshLook.Halo, MeshLook.HOVER_RING, center, style = Stroke(3f))
-		drawCircle(Color.White, MeshLook.HOVER_RING, center, style = Stroke(1.4f))
+		drawCircle(MeshLook.Halo, MeshLook.HOVER_RING, center, style = Stroke(3.4f))
+		drawCircle(Color.White, MeshLook.HOVER_RING, center, style = Stroke(1.6f))
 	}
-	val rim = if (selected) Color.White else MeshLook.Halo
 	val fill = when {
 		selected -> accent
 		hovered -> Color.White
 		else -> tone
 	}
-	when (shape) {
-		HandleShape.ROUND -> {
-			drawCircle(rim, r + MeshLook.HALO_RIM, center)
-			drawCircle(fill, r, center)
-		}
-		HandleShape.SQUARE -> {
-			val outer = r + MeshLook.HALO_RIM
-			drawRect(rim, Offset(center.x - outer, center.y - outer), Size(outer * 2f, outer * 2f))
-			drawRect(fill, Offset(center.x - r, center.y - r), Size(r * 2f, r * 2f))
-		}
+	// Dark rim, then (selected) a white casing, then the core: three bands no art can swallow all of.
+	val layers = buildList {
+		add(MeshLook.Halo.copy(alpha = 0.8f) to r + MeshLook.HALO_RIM + if (selected) MeshLook.CASING else 0f)
+		if (selected) add(Color.White to r + MeshLook.CASING)
+		add(fill to r)
+	}
+	for ((color, radius) in layers) when (shape) {
+		HandleShape.ROUND -> drawCircle(color, radius, center)
+		HandleShape.SQUARE -> drawRect(color, Offset(center.x - radius, center.y - radius), Size(radius * 2f, radius * 2f))
 	}
 }
 
 /** How far a brush would move the point at [center], [reach] 0..1: a ring in [tint] that grows and firms with it. */
 internal fun DrawScope.drawReachRing(center: Offset, reach: Float, tint: Color) {
 	if (reach <= 0.001f) return
-	val r = MeshLook.REACH_MIN + reach * MeshLook.REACH_GROWTH
-	drawCircle(Color.Black.copy(alpha = 0.45f * reach), r, center, style = Stroke(2.4f))
-	drawCircle(tint.copy(alpha = 0.35f + 0.65f * reach), r, center, style = Stroke(1.2f))
+	// Size carries the reach, so a falloff reads as rings swelling towards the centre; weight and opacity follow.
+	val r = MeshLook.REACH_MIN + reach * (MeshLook.REACH_MAX - MeshLook.REACH_MIN)
+	val width = 1f + reach * 1.2f
+	drawCircle(Color.Black.copy(alpha = 0.25f + 0.35f * reach), r, center, style = Stroke(width + 1.6f))
+	drawCircle(tint.copy(alpha = 0.45f + 0.55f * reach), r, center, style = Stroke(width))
 }
 
 /** A filled triangle of the face selection, in the accent. */

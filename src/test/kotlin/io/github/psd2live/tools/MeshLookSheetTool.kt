@@ -25,9 +25,9 @@ class MeshLookSheetTool {
 	@Test fun renderSheet() {
 		requireTools()
 		val accent = ToolColors.Dark.accent
-		val scene = ImageComposeScene(900, 300, density = Density(1f)) {
+		val scene = ImageComposeScene(1200, 300, density = Density(1f)) {
 			Canvas(Modifier.fillMaxSize()) {
-				listOf(Color(0xFF26282E), Color(0xFF8A7F78), Color(0xFFF1E6DA)).forEachIndexed { panel, art ->
+				listOf(Color(0xFF26282E), Color(0xFF8A7F78), Color(0xFFF1E6DA), Color(0xFF4A78D8)).forEachIndexed { panel, art ->
 					val ox = panel * 300f
 					drawRect(art, Offset(ox, 0f), Size(300f, 300f))
 					val step = 40f
@@ -46,10 +46,10 @@ class MeshLookSheetTool {
 						drawMeshHandle(p, MeshLook.Structure, accent, selected = (r == 1 && c in 1..3) || (r == 0 && c == 5),
 							hovered = (r == 0 && c == 4) || (r == 0 && c == 5), shape = if (c == 0 && r < 3) HandleShape.SQUARE else HandleShape.ROUND)
 						val d = hypot(p.x - cursor.x, p.y - cursor.y)
-						drawReachRing(p, (1f - d / 70f).coerceIn(0f, 1f), MeshLook.Reach)
+						drawReachRing(p, (1f - d / 90f).coerceIn(0f, 1f), MeshLook.Reach)
 					}
-					drawCircle(Color.Black.copy(alpha = 0.7f), 70f, cursor, style = androidx.compose.ui.graphics.drawscope.Stroke(3f))
-					drawCircle(Color.White, 70f, cursor, style = androidx.compose.ui.graphics.drawscope.Stroke(1.2f))
+					drawCircle(Color.Black.copy(alpha = 0.7f), 90f, cursor, style = androidx.compose.ui.graphics.drawscope.Stroke(3f))
+					drawCircle(Color.White, 90f, cursor, style = androidx.compose.ui.graphics.drawscope.Stroke(1.2f))
 				}
 			}
 		}
