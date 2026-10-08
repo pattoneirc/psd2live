@@ -90,7 +90,7 @@
 | `skeleton_get / skeleton_propose / skeleton_auto / skeleton_put / skeleton_enable / skeleton_bone / skeleton_move / skeleton_bind / skeleton_remove / skeleton_delete / skeleton_pose` | `request` | `get/propose/auto/put/enable/bone/move/bind/remove/delete/pose`：读取或推断骨架、提交完整骨架、编辑骨骼与绑定，`delete` 删除整副骨架（之后可再 `auto`/`put`）；`pose` 求 FK/IK 参数值，不写历史 |
 | `motion_list / motion_get / motion_sample / motion_put / motion_delete / motion_seed_builtin / motion_set_key / motion_delete_key / motion_remove_curve` | `request` | `list/get/sample/put/delete/seed_builtin/set_key/delete_key/remove_curve`：读取插值姿态并持久化编辑动作片段、参数轨道和时间线关键帧 |
 | `path_get / path_list / path_preview / path_put / path_delete / path_deform` | `request` | `get/list/preview/put/delete/deform` |
-| `project_save / history_checkpoint / history_list / history_checkout` | `request` | 保存工程、创建检查点、读取历史或切换节点 |
+| `history_checkpoint / history_list / history_checkout` | `request` | 创建检查点、读取历史或切换节点 |
 
 表中列出业务字段；所有修改还须携带 `request_id`，工作区修改须携带 `project_id` 和 `state`（精简工具集可省略前两者，见[工具集](#工具集)）。只读后台采样 `physics_simulate/simulation_simulate/view_sample_motion` 同样要求这三个字段，用于去重并固定采样版本。各项操作字段不同，调用前读取当前服务提供的 JSON Schema。所有公开工具统一使用 `{"request": {...}}` 包装。发布与校验保留同一份 `oneOf`、`const`、字段约束及说明，外层和业务对象都拒绝未知字段。结果统一为 `{"ok":true,"operation":"...","data":{...}}`；错误包含 `ok:false` 和 `error.code/message`，字段校验错误还带 `field`。PNG 以 MCP 图片内容返回。
 
@@ -213,7 +213,7 @@ CMO3 导入共用独立应用层导入器，GUI 入口确认后携带可信用�
 
 零面积判定包含浮点误差：三角形有向面积绝对值不足 `1e-12`，或其面积比例不超过参考形的 `1e-6`，视为数值退化；不会因顶点重合留下极小负面积而只报告翻面警告。
 
-GUI 参数定义、文件夹位置和参数关键点可组合为一次共享提交；画布 journal、内部 typed 编辑和字段完成队列也进入同一候选/重建/CAS 边界。GUI 摆动会话、字段编辑、模拟修改和离线烘焙保留开始时的状态，避免把旧结果提交到重开或已变更的工程；GUI 作者由可信适配器指定为 `user`。其余业务准备和状态所有权还在迁移。
+GUI 参数定义、文件夹位置和参数关键点可组合为一次共享提交；画布 journal、内部 typed 编辑和字段完成队列也进入同一候选/重建/CAS 边界。GUI 摆动会话、字段编辑、模拟修改和离线烘焙保留开始时的状态，避免把旧结果提交到重开或已变更的工程；GUI 作者由可信适配器指定为 `user`。
 
 参数定义现在按实际编辑顺序写入 journal，删除会读取此前关键形及最后一次默认值；旧工程静态参数覆盖保持兼容读取，不改写历史。透明度和颜色等纯通道修改也会持久化，重复捕获已存在且相同的关键点不追加历史。
 
@@ -247,7 +247,7 @@ GUI 参数定义、文件夹位置和参数关键点可组合为一次共享提�
 
 `snapshot_apply` 保留已锁定参数的值，忽略快照中已删除的参数，并按当前参数范围钳制旧值。GUI 应用快照与 MCP 相同，不受时间线自动打关键帧开关影响；要记录时间线请另行调用动作编辑工具。无变化保留原 `state`；实际修改返回自己的 `state`、`project_id`、`history_node_id`。历史注释只改变节点的显示标题、说明与隐藏标记，节点内容和分支关系保持不变。
 
-`preview_set` 的省略参数和锁保留运行时已提交姿态中的值；`snapshot_apply` 同样依据已提交锁，未命中的参数保持原值。动画求值帧和未提交 GUI 显示值不作为合并基线。`preview_reset` 恢复全部默认值并解除锁定。这三项共用独立应用命令及辅助 CAS，不追加 Rig 历史或自动关键帧；逻辑无变化不推进状态，但仍可恢复正确的界面姿态并停止播放。保存也逐工作区使用捕获的持久姿态和锁，复制工作区的姿态会立即登记；归档仍为 v1。
+`preview_set` 的省略参数和锁保留运行时已提交姿态中的值；`snapshot_apply` 同样依据已提交锁，未命中的参数保持原值。动画求值帧和未提交 GUI 显示值不作为合并基线。`preview_reset` 恢复全部默认值并解除锁定。这三项共用独立应用命令及辅助 CAS，不追加 Rig 历史或自动关键帧；逻辑无变化不推进状态，但仍可恢复正确的界面姿态并停止播放。保存也逐工作区使用捕获的持久姿态和锁，复制工作区的姿态会立即登记；归档中投影为 `workspace.json` 的工作区字段。
 
 ## 最小调用
 
@@ -301,7 +301,7 @@ GUI 参数定义、文件夹位置和参数关键点可组合为一次共享提�
 }
 ```
 
-`view_render_model / view_render_layer / view_render_context / view_render_poses / view_check_coverage / view_compare_history / view_sample_motion` 的固定镜头姿态比较：
+`view_render_poses` 的固定镜头姿态比较：
 
 ```json
 {
@@ -396,7 +396,7 @@ GUI 参数定义、文件夹位置和参数关键点可组合为一次共享提�
 }
 ```
 
-`skeleton_pose` 用画布像素坐标求骨骼朝向；`ik: true` 求末端及最多两级父骨骼的角度。返回的 `values` 是计算结果，可交给 `view_render_poses` 渲染检查（不移动用户的参数滑块），或写入 `motion_list / motion_get / motion_sample / motion_put / motion_delete / motion_seed_builtin / motion_set_key / motion_delete_key / motion_remove_curve` 的参数轨道；它不改骨架、关键形或历史。骨骼形状已烘焙为参数、变形器和网格关键形，形状修正仍用 `keyform_apply` / `rig_deform`，物理用 `physics_put / physics_delete / physics_simulate / physics_fit / physics_config / physics_import`。
+`skeleton_pose` 用画布像素坐标求骨骼朝向；`ik: true` 求末端及最多两级父骨骼的角度。返回的 `values` 是计算结果，可交给 `view_render_poses` 渲染检查（不移动用户的参数滑块），或经 `motion_set_key`、`motion_pose` 写入动作的参数轨道；它不改骨架、关键形或历史。骨骼形状已烘焙为参数、变形器和网格关键形，形状修正仍用 `keyform_apply` / `rig_deform`，物理用 `physics_put` 等物理操作。
 
 ```json
 {
@@ -476,7 +476,7 @@ View 从模型数据渲染 PNG，不依赖桌面截图。`canvas_rect` 给出画
 - 对比姿态在后台从捕获的已提交版本渲染，不读取、也不修改作者姿态与 GUI 参数滑块；不要用 `preview_set` 切换姿态来出对比图，它会改变用户的作者姿态并推进 `state`。
 - 请求中未给出的参数按**参数默认值**渲染，而不是用户当前的作者姿态。要以当前姿态为基准，先用 `workspace_inspect scope=preview` 读取已提交的姿态，放入共享的 `parameters`，再在 `poses` 中只写差异。
 - 省略 `include_layer_ids` 时使用当前活动画布的局部显隐：用户隐藏的图层、被隐藏变形器下的图层以及 solo 之外的图层都不会出现在图中。需要与用户画布无关的稳定结果时，显式传入图层 ID（可从 `workspace_inspect scope=layers` 取得）。
-- `compare` 比较历史版本；`motion_list / motion_get / motion_sample / motion_put / motion_delete / motion_seed_builtin / motion_set_key / motion_delete_key / motion_remove_curve` 按时间采样；`coverage` 只测指定矩形和指定图层的 Alpha 覆盖。
+- `view_compare_history` 比较历史版本；`view_sample_motion` 按时间采样；`view_check_coverage` 只测指定矩形和指定图层的 Alpha 覆盖。
 - 使用返回的像素↔画布映射定位；多姿态整张拼图不能直接作为单张素材的空间参考。
 - Alpha 覆盖、网格诊断和文件成功写出都不是美术质量分数，也不能证明未采样姿态正常。
 
@@ -488,7 +488,7 @@ View 从模型数据渲染 PNG，不依赖桌面截图。`canvas_rect` 给出画
 
 `asset_prepare_reference / asset_import_png / asset_register / asset_reprocess` 返回进程任务句柄，均要求 `request_id/project_id/state`。从 `job_wait/job_get` 的 `data.result` 读取业务结果及提交后的 `state/project_id/history_node_id`；参考图、配准预览及重处理图片可重复获取。断线或取消等待不停止任务，原请求重试取得同一任务。准备失败、提交前取消或状态冲突不发布素材；CAS 后的迟到取消保留 completed 和实际结果。
 
-四项写入共用独立应用层素材会话：先准备私有候选，再在辅助 CAS 内发布不可变文件及素材清单。实际新增素材使旧 state 失效，但不改变 Rig revision 或追加历史；重复导入同一内容及映射属于无变化。检查和试拼使用捕获的文档与素材清单，不读取 GUI 草稿或后来配准。保存只复制捕获时属于工程的素材，归档仍为 v1；PNG 导入在分配像素内存前检查 16 兆像素上限。
+四项写入共用独立应用层素材会话：先准备私有候选，再在辅助 CAS 内发布不可变文件及素材清单。实际新增素材使旧 state 失效，但不改变 Rig revision 或追加历史；重复导入同一内容及映射属于无变化。检查和试拼使用捕获的文档与素材清单，不读取 GUI 草稿或后来配准。保存只复制捕获时属于工程的素材（`workspace.json` 的 `assetCatalog`）；PNG 导入在分配像素内存前检查 16 兆像素上限。
 
 对新增素材，通常使用 `reference → import → register → preview → add`，必要时 `place → finalize`。`project_create_artwork` 可从放置素材后台创建新工程，切换时默认拒绝未保存修改；`source_split_polygon` 按画布多边形拆成内部和余部，`source_split_components` 按当前网格的连通块分配现有像素；两者不会补画被遮挡内容。
 
@@ -496,21 +496,21 @@ View 从模型数据渲染 PNG，不依赖桌面截图。`canvas_rect` 给出画
 
 `source_split_polygon/source_split_components` 要求 `request_id/project_id/state`，返回后台任务句柄；`job_get/job_wait` 的 `result` 保留新状态、历史节点与新源图 `layers` ID。多边形要求 3–32 个画布顶点和两个 `names`（内部、余部），两侧都须有可见像素；可选两个唯一 `piece_ids`。指定新 ID 后可在同一原子批量的后续成员中引用它们，批量 `changed` 同时包含新源图的 `layer:<id>` 句柄和生成对象句柄。准备/重建可取消，提交前冲突或失败保留原文档；提交后的迟到取消或刷新异常保留完整成功终态，原请求取回同一任务。
 
-部件取代原源图层：原图层离开源图（不进入 `deletedLayerIds`），部件成为普通源图层并继承分类、父级、可见性、逐层网格及绘制顺序覆盖。拆分时原图层当前的关键形、通道、混合形、路径、顶点权重写入每个部件的 `art_primitive` 记录（摆动与模拟生成的轴除外）；连通块还保留 Glue 的顺序、强度和连接，模拟的目标、烘焙偏移与连接角色迁移到部件。纹理集与导出不再包含原图层；`layer_restore`（包括省略 `layer_ids` 的恢复全部）不能带回它，只有撤销/历史切换回到拆分前。之后引用原图层或原网格 ID 的请求失败，错误信息列出取代它的部件 ID；`source_get_components` 同样。部件可以再拆分。导入 CMO3 模型仍按旧规则软删除原图层。记录格式见[文档层](../spec/DOCUMENT_LAYER.md#拆分物化画元记录-art_primitive)。新拆分默认优先写版本 2 记录（部件参与基础生成，见[版本 2 记录](../spec/DOCUMENT_LAYER.md#版本-2-记录)），单项拆分任务（`source_split_components/source_split_polygon/source_split_depth`）的 `result` 另带 `record_version`（`1` 或 `2`）；为 `1` 时带 `record_version_reason`：`base_unavailable`、`original_not_generated`、`parts_not_generated`、`reference_missing`、`replay_failed` 或 `capture_failed`。JVM 系统属性 `psd2live.artPrimitiveV2=false` 关闭版本 2 时不带这两项，原子批量的结果也不带。普通、分区、新建及导入 CMO3 网格在单层/全局网格更新及重置时通过有序替换保留绑定和已有模拟偏移，包含已删除网格的恢复；多边形实时 Glue 插值和导入模型拆分尚未完成，相关修改明确拒绝；已删除、遮罩或非普通混合源图也不能拆分。组件查询使用实际纹理地址，支持源图补边、旋转和缩放，已编辑的普通目标可以返回 `can_split:true`。GUI 网格连通块拆分对话框调用同一应用命令，保留检测时状态，多层决策一次用户历史提交；多边形操作目前是 MCP 入口，不能据此声称 GUI 有套索拆分菜单。
+部件取代原源图层：原图层离开源图（不进入 `deletedLayerIds`），部件成为普通源图层并继承分类、父级、可见性、逐层网格及绘制顺序覆盖。拆分时原图层当前的关键形、通道、混合形、路径、顶点权重写入每个部件的 `art_primitive` 记录（摆动与模拟生成的轴除外）；连通块还保留 Glue 的顺序、强度和连接，模拟的目标、烘焙偏移与连接角色迁移到部件。纹理集与导出不再包含原图层；`layer_restore`（包括省略 `layer_ids` 的恢复全部）不能带回它，只有撤销/历史切换回到拆分前。之后引用原图层或原网格 ID 的请求失败，错误信息列出取代它的部件 ID；`source_get_components` 同样。部件可以再拆分。导入 CMO3 模型仍按旧规则软删除原图层。记录格式见[文档层](../spec/DOCUMENT_LAYER.md#拆分物化画元记录-art_primitive)。新拆分默认优先写版本 2 记录（部件参与基础生成，见[版本 2 记录](../spec/DOCUMENT_LAYER.md#版本-2-记录)），单项拆分任务（`source_split_components/source_split_polygon/source_split_depth`）的 `result` 另带 `record_version`（`1` 或 `2`）；为 `1` 时带 `record_version_reason`：`base_unavailable`、`original_not_generated`、`parts_not_generated`、`reference_missing`、`replay_failed` 或 `capture_failed`。JVM 系统属性 `psd2live.artPrimitiveV2=false` 关闭版本 2 时不带这两项，原子批量的结果也不带。普通、拆分、新建及导入 CMO3 网格在单层/全局网格更新及重置时通过有序替换保留绑定和已有模拟偏移，包含已删除网格的恢复；多边形拆分产生的新切点与边界顶点副本以方向 Glue 跟随拥有该原顶点的部件，切口两侧保持贴合。已删除、遮罩（剪切）、带通道遮罩或非普通混合的源图不能拆分。组件查询使用实际纹理地址，支持源图补边、旋转和缩放，已编辑的普通目标可以返回 `can_split:true`。GUI 网格连通块拆分对话框调用同一应用命令，保留检测时状态，多层决策一次用户历史提交；多边形操作目前是 MCP 入口，不能据此声称 GUI 有套索拆分菜单。
 
 `source_upgrade_split_records` 把已有的版本 1 拆分记录显式升级为版本 2（读取与历史切换从不自动升级）。请求要求 `request_id/project_id/state`，可选 `record_indexes`（`art_primitive` 记录按日志顺序的序号，版本 1 与 2 一并计数，1–4096 个不重复；省略时选全部版本 1 记录），返回后台任务句柄，也是原子批量成员。任务 `result` 为 `state/project_id/history_node_id/revision/applied` 与 `records`：每个所选记录一项 `{index, layers, upgraded, reason?, detail?}`，`layers` 为该记录取代的图层；未升级时 `reason` 为 `disabled`（开关关闭）、`already_version_2`、`imported_model`，或与拆分相同的 `base_unavailable/original_not_generated/parts_not_generated/reference_missing/replay_failed/capture_failed`，`detail` 为说明文字。记录按日志顺序原位改写，部件 ID 不变，后续引用照常重放；通过守卫的记录合为一个可撤销历史节点，没有记录升级时 `applied:false` 且不追加节点。序号越界为参数错误。GUI“工具 > 升级拆分记录”调用同一命令（全部版本 1 记录、用户作者），结果显示在状态栏。语义见[文档层](../spec/DOCUMENT_LAYER.md#版本-2-记录)。
 
 `rig_update_generation` 用本程序的生成器重新生成 Rig（对应 GUI 的 **工具 → 更新生成结果**）。日志带固化点的工程保留写下固化点时生成器的输出，升级程序后不会自动改变；此操作取固化点保存的生成快照、本程序现在为同样输入生成的结果与当前作者态 Rig 三方合并：用户没改过的对象跟随新输出，用户的修改保留，未能干净迁移的内容列在 `issues`（同样进入 `workspace_inspect` 的 `quality.regeneration`），结果作为新的固化点追加到日志末尾。请求只需 `request_id/project_id/state`，返回后台任务句柄，也是原子批量成员。任务 `result` 为 `state/project_id/history_node_id/revision/applied`、`updated` 与 `issues`（每项 `{kind, target, detail?}`）；生成结果相同时 `updated:false`，不追加历史节点。没有固化点的工程每次构建本就由本程序生成，导入 CMO3 的模型没有生成结果，均无需更新（后者拒绝）。
 
-`source_split_depth` 对应 GUI 的深度拆分菜单、多选和对话框。传当前网格的原始 `source_id` 和非空、唯一的 `middle_ids`（不带 `mesh:` 前缀，且不包含 source）；可选 `names` 为后层、前层的两个非空唯一名称，可选 `front_layer_id/front_mesh_id/back_layer_id/back_mesh_id/glue_id` 指定新 ID。它用后层、前层两个新图层和网格取代源网格及其图层，两层都带原像素、可独立绘画，中间网格位于两层之间；结果的 `layers` 依次为前层、后层。两层取得源网格当前的父级、几何、通道关键形、混合形、路径和顶点权重；后层接替源网格的 Glue、遮罩和模拟目标，方向 Glue 让前层跟随后层。两层采用固定绘制顺序，替换原绘制顺序动画。嘴部及派生嘴唇只复制所选网格，不生成额外嘴唇；前层擦空也保留拓扑。导入 CMO3 暂不支持。
+`source_split_depth` 对应 GUI 的深度拆分菜单、多选和对话框。传当前网格的原始 `source_id` 和非空、唯一的 `middle_ids`（不带 `mesh:` 前缀，且不包含 source）；可选 `names` 为后层、前层的两个非空唯一名称，可选 `front_layer_id/front_mesh_id/back_layer_id/back_mesh_id/glue_id` 指定新 ID。它用后层、前层两个新图层和网格取代源网格及其图层，两层都带原像素、可独立绘画，中间网格位于两层之间；结果的 `layers` 依次为前层、后层。两层取得源网格当前的父级、几何、通道关键形、混合形、路径和顶点权重；后层接替源网格的 Glue、遮罩和模拟目标，方向 Glue 让前层跟随后层。两层采用固定绘制顺序，替换原绘制顺序动画。嘴部及派生嘴唇只复制所选网格，不生成额外嘴唇；前层擦空也保留拓扑。导入 CMO3 模型沿用旧记录：保留源网格及其图层，在其上复制出前层与方向 Glue（不新建后层）。
 
-单项同样要求 `request_id/project_id/state`，任务终态的 `layers` 只包含新前层 ID。可指定唯一的 `front_layer_id/front_mesh_id/glue_id`，供同一原子批量后续成员绘画或编辑新对象；批量 `changed` 返回 `layer:<id>/mesh:<id>/glue:<id>`。GUI 保留菜单或对话框打开时的状态，辅助数据修改也会使旧确认失效。准备可取消，提交后保留精确终态；历史重放、保存重开和 CMO3 读回保留运动及 Glue 连接权重。它复制现有内容，隐藏部分仍需绘画补充。
+单项同样要求 `request_id/project_id/state`，任务终态的 `layers` 为新图层 ID（导入 CMO3 模型只有新前层）。可指定唯一的 `front_layer_id/front_mesh_id/back_layer_id/back_mesh_id/glue_id`，供同一原子批量后续成员绘画或编辑新对象；批量 `changed` 返回 `layer:<id>/mesh:<id>/glue:<id>`。GUI 保留菜单或对话框打开时的状态，辅助数据修改也会使旧确认失效。准备可取消，提交后保留精确终态；历史重放、保存重开和 CMO3 读回保留运动及 Glue 连接权重。它复制现有内容，隐藏部分仍需绘画补充。
 
 已有 PSD 使用 `project_import_psd` 从本地绝对路径打开。`source_paint_brush / source_paint_pencil / source_paint_eraser / source_paint_bucket / source_paint_shape / source_paint_clear` 六种绘画返回进程任务句柄，通过 `job_wait/job_get` 获取 `data.result` 中的提交状态、历史节点及生成句柄。能力详情标注 `job_backed:true`、`batchable:true` 并提供 `job_result_schema`。画笔、橡皮、油漆桶和形状使用 UI 的栅格算法；点、半径与线宽都是画布单位，落在图层自身的栅格上：栅格密度（栅格像素 / 画布单位，见[逐层尺寸](../spec/DOCUMENT_LAYER.md#逐层尺寸)）为 1 的图层与此前相同，在 32 单位矩形上保存 1024² 栅格的图层，半径 2 的笔刷在栅格上画出半径 64 像素的笔触，提交后栅格保持原分辨率，不缩回画布分辨率。画到矩形之外时矩形按同一密度扩展，裁剪到不透明像素时密度不变；完全擦空的图层按画布分辨率留一个透明像素。私有草稿同样以图层栅格为底：`paint_session_begin` 等结果的 `width/height` 是草稿栅格像素，`canvas_rect` 为它覆盖的画布矩形 `[left, top, width, height]`，取色按画布像素中心读取栅格；草稿超过 16MP 时缩小矩形周围可绘画的边距。默认 `rebuild_mesh:false` 保留已有网格及全部绑定，超出网格的新增像素只写入源图；需要网格覆盖新区域时传 `rebuild_mesh:true`，迁移关键形、混合形、路径、顶点组及 Glue，一次提交一个历史节点。已有关键形、Warp 或 Glue 不再阻止绘画。`clear` 或擦除全部像素保留图层与绑定，最后一层也可清空再重画；删除图层使用 `layer_soft_delete`。深度拆分前层始终保留拓扑。普通已编辑图层、深度前后层及导入 CMO3 的删除/恢复先重放编辑再过滤活动对象，保留恢复所需的 ID、关键形和绑定；删除期间修改网格设置仍保存隐藏网格的重绑结果。旧工程首次实际删除或恢复会在新候选固定身份和生成基线，避免现有编辑因图层恢复而改指其他网格；旧历史节点不被改写。`layer_mesh_update` 修改单层网格参数，重置后继承全局值。
 
 普通透明图层首次绘制可见像素时自动创建网格，无须先传 `rebuild_mesh:true`。嘴部首次绘画也创建派生嘴唇及其生成关键形。单项和批量任务完成结果的 `changed` 包含新对象的 `mesh:<id>` 等句柄，可继续编辑；相同请求重试取回同一任务，不重复创建或追加历史。完全擦空即使传入重建标志也保留网格及绑定。
 
-生成嘴唇跟随显式重建或首次创建时保存的轮廓和颜色，后续保留网格绘画不重新生成派生贴图。GUI 冻结像素与 MCP 手势通过独立 `WorkspaceRasterCommands` 共用文档候选、重建及状态检查；创建数据进入有序日志，保存重开和导出重新解析当前贴图。准备过程中报告进度并检查取消，提交前取消保留原像素和历史；成功提交后的迟到取消或刷新失败仍保留完整完成结果。断线或取消等待不会停止任务。新网格的单层设置更新同样写入文档，保留 ID、重绑路径及权重。复杂父级/完整分类迁移及导入无网格对象仍待完成。
+生成嘴唇跟随显式重建或首次创建时保存的轮廓和颜色，后续保留网格绘画不重新生成派生贴图。GUI 冻结像素与 MCP 手势通过独立 `WorkspaceRasterCommands` 共用文档候选、重建及状态检查；创建数据进入有序日志，保存重开和导出重新解析当前贴图。准备过程中报告进度并检查取消，提交前取消保留原像素和历史；成功提交后的迟到取消或刷新失败仍保留完整完成结果。断线或取消等待不会停止任务。新网格的单层设置更新同样写入文档，保留 ID、重绑路径及权重。
 
 `layer_soft_delete` 与 `layer_restore` 都返回进程任务，支持原子批量；通过 `job_wait/job_get` 的 `result` 读取实际状态、历史节点和受影响图层。`layer_restore` 可传 1–256 个唯一 `layer_ids`，省略时恢复全部（被拆分取代的原图层不在其中，指定它会报错并列出部件）；恢复活动图层、重复删除及无删除内容时恢复属于无变化，不追加历史。GUI 删除和“恢复全部”使用同一应用命令。删除保留像素和编辑日志；含新建网格记录的工程先完整重放，再过滤已删除图层及派生嘴唇，当前模型清理其遮罩引用、Glue、路径和权重，恢复重新取得保存的绑定。删除期间的全局网格设置变更也持久化隐藏网格的新几何及重绑数据。提交前取消或冲突保留原状态，CAS 后的迟到取消或刷新失败保留成功；旧历史节点不改写。
 

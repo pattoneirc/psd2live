@@ -2,7 +2,7 @@
 
 [文档目录](../../README.md) · [操作速查](USER_GUIDE.md) · [开发与命令行](DEVELOPMENT.md)
 
-对应程序内零基础路线的第 17 课。高清化在贴图打包前逐层放大纹理，默认关闭；不改变原始 PSD、画布尺寸或绑定。预览与导出使用处理后的纹理。
+对应程序内零基础路线的第 18 课。高清化在贴图打包前逐层放大纹理，默认关闭；不改变原始 PSD、画布尺寸或绑定。预览与导出使用处理后的纹理。
 
 ## 配置与使用
 
@@ -35,14 +35,5 @@
 RGB 和 Alpha 分开处理，透明区的颜色扩展用于减轻采样边缘污染；神经 Alpha 仍可能改变半透明轮廓。请在深浅背景下检查发丝、睫毛、唇线及运动中的遮罩边缘。
 
 推理按图层串行执行，输出与贴图打包还会占用系统内存。缓存位于用户目录 `.psd2live/cache/upscale`，包含素材、配置、代码和权重相关标识；应用退出后可清理。模型错误、尺寸超限或超时应检查日志，不要仅扩大贴图集重试。
-
-## 开发验证
-
-```powershell
-python -m unittest discover -s tests -p test_nunif_worker.py -v
-.\gradlew.bat test --tests '*TextureUpscaleTest'
-```
-
-真实推理测试需配置 `PSD2LIVE_TEST_NUNIF`、`PSD2LIVE_TEST_PYTHON`、`PSD2LIVE_TEST_MODEL`，未配置时不代表验证过真实模型效果。
 
 实现依据：[配置与进程管理](../../../src/main/kotlin/io/github/psd2live/core/TextureUpscale.kt)、[nunif worker](../../../src/main/resources/upscale/nunif_worker.py)。

@@ -11,7 +11,7 @@ This page summarizes the current implementation and its main tradeoffs by pipeli
 | Mesh | Adaptive triangulation from alpha contours; balance density, fidelity and cost. |
 | Textures | Atlas pages, edge padding and optional upscale; resolution changes do not redefine canvas coordinates. |
 | Rig | Generate head/body/features/hair, then apply parameter, structure, shape and path edits. |
-| Interaction | Select / Deform / Edit / Paint share the canvas; painting has a separate session. |
+| Interaction | The main canvas's mode menu covers Select / Deform / Edit / Simulate / Skeleton / Paint / Preview; painting keeps a separate session. |
 | History | Append-only branches and content-addressed assets in a portable archive. |
 | Export | Convert CMO3 / MOC3 and assemble sidecars; readback and geometry checks produce diagnostics. |
 

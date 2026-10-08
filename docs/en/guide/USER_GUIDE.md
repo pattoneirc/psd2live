@@ -8,6 +8,8 @@ Open **Help → Tutorials…** (`F1`) first. Interactive lessons highlight the c
 
 Import PSD (`Ctrl+Shift+O`) → inspect classifications and preview → edit → save (`Ctrl+S`) → export (`Ctrl+G`). Open an existing `.psd2live` project with `Ctrl+O`.
 
+An existing Cubism model opens from **File → Import**: **Replace the model with a CMO3…** replaces the objects in the file by ID and adds the new ones, keeping what the file does not contain; **New project from CMO3…** clears the current model first, so the model comes from that CMO3 alone. Neither generates presets; the imported parameters, keyforms, deformers, textures and physics are saved with the project.
+
 ## Workspaces
 
 The UI is organized into workspace tabs, each with its own canvases and panel layout. Click **+** at the end of the tab bar to add one from eight presets or a blank layout; the right side previews the layout and its purpose. The screenshot shows the Chinese UI.
@@ -51,11 +53,11 @@ The catalog has 19 topics. The beginner path contains the 18 lessons below; the 
 | 5 | Parameters and keyforms | Drag sliders or XY controls; right-click a key mark to snap. Move to the target key before editing its keyform. |
 | 6 | Select mode | Select objects with the canvas tools or hierarchy; selection alone changes no geometry. |
 | 7 | Create deformers | Select a target, use the toolbar's Create group or the tree context menu, adjust the placement preview and confirm. |
-| 8 | Deform mode | Edit points or use brushes at the current parameter pose; check the L1 / L2 editing level. |
+| 8 | Deform mode | Edit points or use brushes at the current parameter pose; on a warp deformer, check whether the Vertices or the Bezier level is active. |
 | 9 | Edit mode | Subdivide, connect, cut or remove mesh elements; inspect existing poses afterward. |
 | 10 | Paint mode | Select a layer, paint pixels and use session-local undo. Apply or discard the session. |
 | 11 | Inspector | Edit properties for the selected object: name, ownership, masks, drawing order, opacity and colors. |
-| 12 | Tool options | The options bar at the canvas's bottom left sets the current tool's radius, hardness, strength and so on; the context menu shows the same values plus the tool's actions; the Tools dock keeps advanced settings. |
+| 12 | Tool options | The options bar at the canvas's bottom left sets the current tool's radius, hardness, strength and so on; the context menu shows the same values plus the tool's actions; the Tool Details panel keeps advanced settings. |
 | 13 | Skeleton rigging and editing | Create, extrude, duplicate and mirror bones in Skeleton mode, batch-bind ArtMeshes, pose with FK/IK, paint and clean skin weights and save poses; configure parameter sampling limits in the panel. Export bakes this into Cubism parameters, deformers and keyforms. |
 | 14 | Animation editor | Tune generated motions with each preset's knobs; edit parameter tracks and keyframes on the timeline with auto-keying, default Bezier easing, track key marks, and shared poses across canvases. |
 | 15 | Physics canvas | Configure inputs, pendulums and outputs, then calibrate output scale against the observed range. |
@@ -65,19 +67,23 @@ The catalog has 19 topics. The beginner path contains the 18 lessons below; the 
 
 ## Important distinctions
 
-- Saving preserves artwork, edits and history. Exporting delivers model files. `.psd2live.json` is only a report.
-- When an export finishes (Live2D model, PSD or any Export as format), its dialog closes and **Export complete** shows where the files went, with the warnings or what the format could not keep, and offers **Open folder**. After **Close and don't show again**, exports report only in the log and status bar; **Settings › Prompts** lists every window with "Don't show again" (the start screen after an import too), to turn each back on or **Show all prompts again**.
-- Parameter keyforms belong to modeling and interpolate model shapes. Animation keyframes record parameter values at points in time.
-- Deform changes shapes; Edit changes mesh structure; Paint changes pixels in an isolated apply/discard session.
-- Temporary solo visibility and static visibility are not parameter-driven variants. Use variants or opacity keyforms for animated switches.
+For hair and clothing simulation, pin weights, baking and checking the export, see the [illustrated simulation tutorial (Chinese)](../../zh/guide/SIMULATION_TUTORIAL.md).
 
-For collar and hair occlusion workflows, see the [illustrated front/back layering tutorial (Chinese)](../../zh/guide/DEPTH_SPLIT.md).
+- **Save and export**: saving preserves the workspace and history; exporting delivers the model files the target software uses. `.psd2live.json` is a report, not a project.
+- **Export complete**: when an export finishes (Live2D model, PSD or any Export as format), its dialog closes and **Export complete** shows where the files went, with the warnings or what the format could not keep, and offers **Open folder**. After **Close and don't show again**, exports report only in the log and status bar; **Settings › Prompts** lists every window with "Don't show again" (the start screen after an import too), to turn each back on or **Show all prompts again**.
+- **Keyforms and keyframes**: keyforms on parameter keys belong to modeling and interpolate model shapes between keys; keyframes sit on the animation timeline and record parameter values at points in time.
+- **Deform and Edit**: Deform changes shapes; Edit changes the structure of the control mesh. Paint changes pixels in an isolated apply/discard session.
+- **Visibility and variants**: temporary solo visibility and static layer visibility in the tree are for checking edits; for switches driven by a parameter, set up variants or opacity keyforms.
 
-For hair and clothing simulation, pin weights and baking, see the [illustrated simulation tutorial (Chinese)](../../zh/guide/SIMULATION_TUTORIAL.md).
+### Front/back layers: passing one layer through another part
 
-Splits made by earlier versions (mesh islands, polygon, front/back layering) froze the original layer's state into their parts, so later face settings, stance, skeleton or part classification changes never reach those parts. **Tools → Upgrade Split Records** rewrites such records in the current format: the parts then take part in generation like any mesh, and the shape keys, paths, weights and Glues you made on the original and the parts are kept. The item is enabled only while old records exist; the whole upgrade is one undoable history step. A record that cannot be upgraded safely stays as it is, with the reason in the status bar. Opening a project never upgrades it.
+Say a collar is one layer but has to read "back collar → neck → front collar": right-click the collar in the hierarchy and choose **Front/back layers…**, or select the collar and the neck and right-click the collar for **Split "collar" into front/back layers**. Two new layers take the original's place, the front one glued to follow the back one; then erase the back collar from the front layer and apply. Step-by-step screenshots and details are in the [illustrated front/back layering tutorial (Chinese)](../../zh/guide/DEPTH_SPLIT.md).
 
-**Update Generated Rig**: switching on hair simulation, adding or changing the skeleton, splitting layers and other operations that change what generation produces merge your existing edits onto the new output and keep the result as fixed data, so a newer version of the app does not change it on its own. To take a newer generator's improvements, use **Tools → Update Generated Rig**: what you left takes the new output, your changes stay, and anything that does not carry over cleanly is counted in the status bar and listed in the Inspector. Nothing is recorded when generation gives the same rig; an update is one undoable history step.
+## Generated results and old records
+
+**Upgrade old split records**: splits made by earlier versions (mesh islands, polygon, front/back layering) froze the original layer's state into their parts, so later face settings, stance, skeleton or part classification changes never reach those parts. **Tools → Upgrade Split Records** rewrites such records in the current format: the parts then take part in generation like any mesh, and the shape keys, paths, weights and Glues you made on the original and the parts are kept. The item is enabled only while old records exist; the whole upgrade is one undoable history step. A record that cannot be upgraded safely stays as it is, with the reason in the status bar. Opening a project never upgrades it.
+
+**Update generated results**: switching on hair simulation, adding or changing the skeleton, splitting layers and other operations that change what generation produces merge your existing edits onto the new output and keep the result as fixed data, so a newer version of the app does not change it on its own. To take a newer generator's improvements, use **Tools → Update Generated Rig**: what you left takes the new output, your changes stay, and anything that does not carry over cleanly is counted in the status bar and listed in the Inspector. Nothing is recorded when generation gives the same rig; an update is one undoable history step.
 
 ## Default shortcuts
 
@@ -98,7 +104,7 @@ These are the default (Photoshop-style) bindings. **Settings** can switch to Ble
 | Turn the brush | `Alt+WheelUp` / `Alt+WheelDown`, 45° steps with Shift |
 | Frame selection / reset camera | `F` / `Home` or `0` |
 | Brush size / hardness / opacity | `[` `]` / `Shift+[` `Shift+]` / `Alt+Shift+[` `Alt+Shift+]`, on the current tool's value in the options bar |
-| Choice 1–5 of the mode or tool | `1`–`5`: Deform picks levels 1–2 on a warp; Edit's selection tools pick vertex / edge / face; otherwise the variants the toolbar lists under the tool (brush tips, glue and skeleton sub-tools, weight group kinds, paint shapes) |
+| Choice 1–5 of the mode or tool | `1`–`5`: Deform picks Vertices / Bezier when the target is a warp deformer; Edit's selection tools pick vertex / edge / face; otherwise the variants the toolbar lists under the tool (brush tips, glue and skeleton sub-tools, weight group kinds, paint shapes) |
 | Temporary selection / toggle quick preview | Hold `Z`, release to restore / grave accent key (below Esc) |
 | Confirm / cancel | `Enter` / `Esc`; the current tool shows its own gestures |
 | Motion timeline: play / key the pose / step a frame | `Space` / `K` / `Left` `Right` (while the timeline has focus) |
@@ -113,6 +119,10 @@ These are the default (Photoshop-style) bindings. **Settings** can switch to Ble
 | The model is not visible | Fit the canvas (`F` / `Home`), then check layer visibility |
 | Export fails or reports downgrades | The Log panel, the `.psd2live.json` report and the export target version |
 
-Further reading: [SDK setup](CUBISM_SDK_SETUP.md), [development and CLI](DEVELOPMENT.md), [project format](../spec/PROJECT_FORMAT.md), and the Chinese references for [canvas editing](../../zh/guide/CANVAS_EDITOR.md), [paths](../../zh/guide/DEFORM_PATHS.md), [upscaling](../../zh/guide/TEXTURE_UPSCALE.md) and [MCP](../../zh/agent/MCP_AUTHORING.md).
+When reporting a problem, include the version, operating system, steps to reproduce and the relevant files.
 
-Maintained against the [tutorial catalog](../../../src/main/kotlin/io/github/psd2live/ui/tutorial/InteractiveTutorial.kt) and [shortcut registry](../../../src/main/kotlin/io/github/psd2live/ui/state/ShortcutRegistry.kt).
+Further reading: [SDK setup](CUBISM_SDK_SETUP.md), [development and CLI](DEVELOPMENT.md), [project format](../spec/PROJECT_FORMAT.md), and the Chinese references for [canvas editing](../../zh/guide/CANVAS_EDITOR.md), [paths](../../zh/guide/DEFORM_PATHS.md), [skeleton and poses](../../zh/guide/SKELETON.md), [physics](../../zh/guide/PHYSICS.md), [upscaling](../../zh/guide/TEXTURE_UPSCALE.md) and [MCP](../../zh/agent/MCP_AUTHORING.md).
+
+For Cubism terms and workflows, see Live2D's official [Cubism tutorials](https://docs.live2d.com/en/cubism-editor-tutorials/top/), [parameters](https://docs.live2d.com/en/cubism-editor-manual/parameter/), [blend shapes](https://docs.live2d.com/en/cubism-editor-manual/blend-shape/) and [embedded-data export](https://docs.live2d.com/en/cubism-editor-manual/export-moc3-motion3-files/). PSD2Live's interface and modeling aids are not Cubism Editor; the in-app tutorials remain the reference for its operation.
+
+Maintained against the [tutorial catalog](../../../src/main/kotlin/io/github/psd2live/ui/tutorial/InteractiveTutorial.kt), the [English tutorial strings](../../../src/main/resources/i18n/Messages.properties) and the [shortcut registry](../../../src/main/kotlin/io/github/psd2live/ui/state/ShortcutRegistry.kt).
