@@ -49,6 +49,18 @@ class CanvasGeometryJournalTest {
 		for (i in expected.indices) assertTrue(abs(expected[i] - actual[i]) <= tolerance, "index $i: ${expected[i]} vs ${actual[i]}")
 	}
 
+	@Test fun aBezierEditUnderAGeneratedParameterReplaysWithoutIt() {
+		// The shown pose holds a parameter a generator adds after the journal replays; the record must not need it.
+		val model = model()
+		val shown = model.copy(parameters = model.parameters + Parameter(ParameterId("ParamSimHair_1"), "Sim", -1f, 1f, 0f))
+		val pose = mapOf("P" to 1f, "ParamSimHair_1" to 0f)
+		val controls = RigBezierJournal.read(shown, RigEditOverlay(), "w", mapOf("P" to 1f), pose)
+		controls.state.moveAnchor(0, 0, 4f, 2f)
+		val record = RigBezierJournal.materialize(shown, "w", mapOf("P" to 1f), pose, controls)
+		assertEquals(setOf("P"), record.getValue("pose").jsonObject.keys)
+		RigBezierJournal.replay(model, record)
+	}
+
 	@Test fun aSparseMeshMoveCompilesToTheMovedVerticesOnly() {
 		val model = model()
 		val shown = RigGeometryTools.geometry(model, "mesh", "m", emptyMap()).points

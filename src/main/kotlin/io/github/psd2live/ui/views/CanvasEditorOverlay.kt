@@ -477,7 +477,7 @@ internal fun BoxScope.CanvasEditorOverlay(
                 if (bState != null) {
                     // The lattice the curves bend, faint and neutral: it is there for reference and takes no edits.
                     val columns = target.geometry.columns!! + 1
-                    val lattice = colors.textPrimary.copy(alpha = 0.12f)
+                    val lattice = colors.textMuted.copy(alpha = 0.28f)
                     pts.indices.flatMap { i ->
                         listOfNotNull(
                             if (i % columns < columns - 1) i to i + 1 else null,

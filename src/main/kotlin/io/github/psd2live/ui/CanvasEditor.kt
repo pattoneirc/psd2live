@@ -3417,7 +3417,10 @@ internal class CanvasEditor(
     fun activeWarpIds(): Set<String> {
         if (skeletonSelected) return emptySet()
         val preview = drawnPreview ?: return emptySet()
-        return visibleCanvasGuideIds(preview, state, warp = true)
+        val ids = visibleCanvasGuideIds(preview, state, warp = true)
+        // At the Bezier level the overlay draws the target's lattice faint; its guide would draw it bright over that.
+        val bezier = editLevel == 2 && deformLevelsShown()
+        return if (bezier) ids - target()!!.id else ids
     }
 
     /**

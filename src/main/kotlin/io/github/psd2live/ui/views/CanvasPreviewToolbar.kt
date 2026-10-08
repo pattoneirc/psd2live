@@ -64,24 +64,6 @@ internal fun BoxScope.CanvasPreviewToolbar(
 		expandedWidth = 156.dp,
 		pinned = fpsMenu,
 	) {
-		// The three runtimes as rows of their own, the one drawing the preview lit: a choice of three is seen at a
-		// glance rather than behind a menu. Without the PSD2Live runtime library only Cubism can be picked.
-		val p2lrtShown = runtime == PreviewBackend.P2LRT
-		for ((backend, mode) in listOf(PreviewBackend.CUBISM to false, PreviewBackend.P2LRT to false, PreviewBackend.P2LRT to true)) {
-			val p2lrt = backend == PreviewBackend.P2LRT
-			RailItem(
-				label = runtimeLabel(backend, mode),
-				selected = if (p2lrt) p2lrtShown && advanced == mode else !p2lrtShown,
-				enabled = enabled && (!p2lrt || p2lrtAvailable),
-				onClick = { onSelectRuntime(backend, if (p2lrt) mode else advanced) },
-				icon = { tint ->
-					// C for Cubism, P for p2lrt, P+ in its advanced mode.
-					Text(if (!p2lrt) "C" else if (mode) "P+" else "P", color = tint,
-						fontSize = if (p2lrt && mode) 9.5.sp else 10.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-				},
-			)
-		}
-		RailDivider()
 		RailItem(
 			label = tr(if (animationEnabled) "preview.idle.on" else "preview.idle.off"),
 			selected = animationEnabled,
@@ -131,6 +113,24 @@ internal fun BoxScope.CanvasPreviewToolbar(
 				}
 			}
 		}
+		RailDivider()
+		// The three runtimes as rows of their own at the foot, the one drawing the preview lit: a choice of three is seen at a
+		// glance rather than behind a menu. Without the PSD2Live runtime library only Cubism can be picked.
+		val p2lrtShown = runtime == PreviewBackend.P2LRT
+		for ((backend, mode) in listOf(PreviewBackend.CUBISM to false, PreviewBackend.P2LRT to false, PreviewBackend.P2LRT to true)) {
+			val p2lrt = backend == PreviewBackend.P2LRT
+			RailItem(
+				label = runtimeLabel(backend, mode),
+				selected = if (p2lrt) p2lrtShown && advanced == mode else !p2lrtShown,
+				enabled = enabled && (!p2lrt || p2lrtAvailable),
+				onClick = { onSelectRuntime(backend, if (p2lrt) mode else advanced) },
+				icon = { tint ->
+					// C for Cubism, P for p2lrt, P+ in its advanced mode.
+					Text(if (!p2lrt) "C" else if (mode) "P+" else "P", color = tint,
+						fontSize = if (p2lrt && mode) 9.5.sp else 10.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+				},
+			)
+		}
 	}
 }
 
@@ -170,15 +170,26 @@ private fun runtimeLabel(runtime: PreviewBackend, advanced: Boolean): String = t
 })
 
 /**
- * Smooth tracking with Body Y: the gaze easing along a soft curve to the pointer, and the body rising and sinking
+ * Smooth tracking with Body Y: the pointer with the trail the gaze eases along after it, and the body's rise and sink
  * beside it.
  */
 @Composable
-private fun IconSmoothTracking(tint: androidx.compose.ui.graphics.Color) =
+internal fun IconSmoothTracking(tint: androidx.compose.ui.graphics.Color) =
 	io.github.psd2live.ui.components.GridIcon(Modifier.size(14.dp), tint) {
-		outline(path { m(1.8f, 14.6f); c(4.8f, 14.6f, 5.4f, 5f, 10.2f, 5f) })
-		dot(10.6f, 5f, 2f)
-		line(15.4f, 4.2f, 15.4f, 13.8f)
-		chevron(15.4f, 3.8f, 0f, -1f, 2.4f)
-		chevron(15.4f, 14.2f, 0f, 1f, 2.4f)
+		fun cursor(x: Float, y: Float) = path {
+			val k = 0.72f
+			fun at(px: Float, py: Float) = (x + (px - 4.5f) * k) to (y + (py - 2.5f) * k)
+			at(4.5f, 2.5f).let { (u, v) -> m(u, v) }
+			listOf(4.5f to 14.5f, 7.6f to 11.8f, 9.5f to 16f, 11.6f to 15.1f, 9.7f to 10.9f, 13.8f to 10.8f)
+				.forEach { (px, py) -> at(px, py).let { (u, v) -> l(u, v) } }
+			z()
+		}
+		shape(cursor(9.6f, 2.2f))
+		// The trail it is followed along, thinning back to where the gaze was.
+		dot(9.2f, 13.6f, 1.2f, color.copy(alpha = color.alpha * 0.75f))
+		dot(7.6f, 15.4f, 0.95f, color.copy(alpha = color.alpha * 0.5f))
+		dot(5.6f, 16.2f, 0.75f, color.copy(alpha = color.alpha * 0.3f))
+		line(2.8f, 6.6f, 2.8f, 13.4f)
+		chevron(2.8f, 5.6f, 0f, -1f, 2.2f)
+		chevron(2.8f, 14.4f, 0f, 1f, 2.2f)
 	}
