@@ -151,6 +151,8 @@
 
 规范化网格编辑（`normalizeMeshEdits`）在有顶点组时先构建一次不含顶点组条目的预览以迁移权重，随后的提交构建命中进程级烘焙缓存，只多出非骨架部分（约 60–120 ms）。顶点组条目可经 `SkeletonCanvasSkin.lockedTopology` 影响基础 Rig，故不把前一次构建直接用于后一次。
 
+只改日志的提交走快速路径（`PSD2LivePipeline.canFastUpdateRig`，在缓存的基础 Rig 上重放），但骨架烘焙也读取日志：手工拓扑（`canvas_topology`）的网格、骨骼绑定的拆分部件记录、日志放置的画布蒙皮网格及其顶点寻址记录的顶点数（`RigBuilder.skeletonJournalInputs`）。这些内容变化时（例如对骨骼绑定网格的拓扑编辑及其撤销）不走快速路径，改为重建，结果与冷重建一致（`SkeletonFastUpdateTest`）。
+
 效果（`SkeletonCommitTool.profile`，tml 每边放大 2 倍，4096² 画布，自动骨架 + 24 条几何日志 + 一个顶点组；同机前后对比，经 `WorkspaceDocumentCommands` 的提交墙钟时间）：
 
 | 提交 | 此前 | 现在 | 说明 |

@@ -444,6 +444,7 @@ class PSD2LivePipeline {
 		if (current.config.rigEdits.importedCmo3 != config.rigEdits.importedCmo3) return false
 		if (current.analysis.source !== source && current.analysis.source != source) return false
 		if (current.config.rigEdits.skeleton != config.rigEdits.skeleton) return false
+		if (RigBuilder.skeletonJournalInputs(current.config) != RigBuilder.skeletonJournalInputs(config)) return false
 		return current.config.copy(rigEdits = config.rigEdits) == config
 	}
 

@@ -1347,8 +1347,7 @@ object RigBuilder {
 		val key = BoundKey(assembled, config.hairSimulationFront, config.hairSimulationBack, atlas.placementByLayerId,
 			atlas.pages.map { it.image.width to it.image.height }, inputAnalysis.layers.map(::bindingMeta),
 			classifiedByDrawable.entries.associate { it.key.raw to it.value.source.id.raw },
-			skeleton?.let { listOf(it, handEditedTopology(config), context.bodyFrame, context.stance.contentKey, SkeletonRig.clears,
-				skinnedRecords(it, config), canvasSkinned, SkeletonCanvasSkin.addressedCounts(config.rigEdits.authoringJournal).filterKeys { id -> id in canvasSkinned }) },
+			skeleton?.let { listOf(it, context.bodyFrame, context.stance.contentKey, SkeletonRig.clears, skeletonJournalInputs(config)) },
 			listOf(pageByDrawable, sourceBoundsByDrawable, layerIdByDrawable, warnings.toList(), faceCenterCanvas,
 				faceRig.radiusX, faceRig.radiusY, faceRig.initialAngleZ),
 			io.github.psd2live.i18n.I18n.currentLanguage.tag,
@@ -1510,6 +1509,18 @@ object RigBuilder {
 		return model.copy(drawables = model.drawables.filterNot { it.id in parts }, glues = glues,
 			deformPaths = model.deformPaths.filterNot { it.drawableId in parts },
 			vertexGroups = model.vertexGroups.filterNot { it.drawableId in parts }).withDerivedRenderRoot() to skins
+	}
+
+	/**
+	 * What the skeleton bake reads from [config]'s journal, which replays only after it: hand-edited topology, skinned
+	 * split parts, the meshes the journal places and the vertex counts its records address. A journal-only update that
+	 * changes these cannot replay onto the cached base rig. Null without an enabled skeleton.
+	 */
+	internal fun skeletonJournalInputs(config: PipelineConfig): List<Any>? {
+		val skeleton = config.rigEdits.skeleton?.takeIf { it.enabled } ?: return null
+		val canvasSkinned = SkeletonCanvasSkin.placed(config.rigEdits)
+		return listOf(handEditedTopology(config), skinnedRecords(skeleton, config), canvasSkinned,
+			SkeletonCanvasSkin.addressedCounts(config.rigEdits.authoringJournal).filterKeys { it in canvasSkinned })
 	}
 
 	private fun handEditedTopology(config: PipelineConfig): Set<String> =
