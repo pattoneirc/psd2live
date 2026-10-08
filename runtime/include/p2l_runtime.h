@@ -20,8 +20,13 @@ extern "C" {
 
 typedef struct P2lRig P2lRig;
 
-/* Loads [len] bytes of a .p2lrt file; on failure returns NULL and writes a message into [error]. */
+/* Loads [len] bytes of a .p2lrt file (version 1 or 2); on failure returns NULL and writes a message into [error]. */
 P2lRig *p2l_rig_load(const uint8_t *bytes, size_t len, char *error, size_t error_capacity);
+/* p2l_rig_load with flags: P2L_LOAD_VERIFY_CRC checks every chunk that carries a CRC. */
+#define P2L_LOAD_VERIFY_CRC 1u
+P2lRig *p2l_rig_load_ex(const uint8_t *bytes, size_t len, uint32_t flags, char *error, size_t error_capacity);
+/* The versions and chunks this runtime reads, e.g. "1,2 STRS/1 CANV/1 ...": major versions, then tag/newest version. */
+const char *p2l_format_support(void);
 void p2l_rig_free(P2lRig *rig);
 const char *p2l_version(void);
 void p2l_canvas(const P2lRig *rig, float *width, float *height);
@@ -83,9 +88,13 @@ uint32_t p2l_render_order(const P2lRig *rig, uint32_t *out, uint32_t capacity);
 uint8_t *p2l_alloc(size_t len);
 void p2l_dealloc(uint8_t *pointer, size_t len);
 
-/* Textures: PNG bytes per page. */
+/* Textures: PNG bytes per page; NULL for a page that is not an embedded PNG. */
 uint32_t p2l_texture_count(const P2lRig *rig);
 const uint8_t *p2l_texture_png(const P2lRig *rig, uint32_t index, size_t *len, uint32_t *width, uint32_t *height);
+/* A page's kind (0 PNG, 1 KTX2, 2 a file next to the rig, -1 none), size and embedded bytes; returns the file
+ * name, empty for an embedded page. */
+const char *p2l_texture_info(const P2lRig *rig, uint32_t index, int32_t *kind, uint32_t *width, uint32_t *height,
+                             const uint8_t **data, size_t *len);
 
 #ifdef __cplusplus
 }

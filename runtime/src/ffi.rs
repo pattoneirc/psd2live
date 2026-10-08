@@ -6,7 +6,7 @@ use crate::behavior::Behaviors;
 use crate::clip::Player;
 use crate::eval::Evaluator;
 use crate::physics::Physics;
-use crate::rig::Rig;
+use crate::rig::{Rig, TextureKind};
 use std::ffi::{c_char, CStr, CString};
 use std::ptr;
 
@@ -20,6 +20,7 @@ pub struct Handle {
     parameter_ids: Vec<CString>,
     mesh_ids: Vec<CString>,
     clip_ids: Vec<CString>,
+    texture_uris: Vec<CString>,
     render_order: Vec<u32>,
 }
 
@@ -42,12 +43,21 @@ fn write_error(message: &str, error: *mut c_char, capacity: usize) {
 /// Loads a rig from [len] bytes; on failure returns null and writes a message into [error].
 #[no_mangle]
 pub unsafe extern "C" fn p2l_rig_load(bytes: *const u8, len: usize, error: *mut c_char, error_capacity: usize) -> *mut Handle {
+    p2l_rig_load_ex(bytes, len, 0, error, error_capacity)
+}
+
+/// Load flag: check the CRC of every chunk that carries one.
+pub const LOAD_VERIFY_CRC: u32 = 1;
+
+/// [p2l_rig_load] with [flags], `LOAD_VERIFY_CRC` or 0.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_rig_load_ex(bytes: *const u8, len: usize, flags: u32, error: *mut c_char, error_capacity: usize) -> *mut Handle {
     if bytes.is_null() {
         write_error("No rig bytes", error, error_capacity);
         return ptr::null_mut();
     }
     let data = std::slice::from_raw_parts(bytes, len);
-    match std::panic::catch_unwind(|| Rig::read(data)) {
+    match std::panic::catch_unwind(|| Rig::read_with(data, flags & LOAD_VERIFY_CRC != 0)) {
         Ok(Ok(rig)) => {
             let values = rig.defaults();
             let physics = Physics::new(&rig);
@@ -55,6 +65,7 @@ pub unsafe extern "C" fn p2l_rig_load(bytes: *const u8, len: usize, error: *mut 
                 parameter_ids: c_strings(rig.parameters.iter().map(|p| &p.id)),
                 mesh_ids: c_strings(rig.meshes.iter().map(|m| &m.id)),
                 clip_ids: c_strings(rig.clips.iter().map(|c| &c.id)),
+                texture_uris: c_strings(rig.textures.iter().map(|t| &t.uri)),
                 evaluator: Evaluator::new(),
                 player: Player::new(),
                 behaviors: Behaviors::default(),
@@ -388,7 +399,8 @@ pub unsafe extern "C" fn p2l_texture_count(handle: *const Handle) -> u32 {
     with!(handle, 0, |h| h.rig.textures.len() as u32)
 }
 
-/// The page's PNG bytes; [len] receives their length, [width] and [height] the page size.
+/// The page's PNG bytes; [len] receives their length, [width] and [height] the page size. Null for a page
+/// that is not an embedded PNG (see p2l_texture_info).
 #[no_mangle]
 pub unsafe extern "C" fn p2l_texture_png(handle: *const Handle, index: u32, len: *mut usize, width: *mut u32, height: *mut u32) -> *const u8 {
     with!(handle, ptr::null(), |h| match h.rig.textures.get(index as usize) {
@@ -398,12 +410,42 @@ pub unsafe extern "C" fn p2l_texture_png(handle: *const Handle, index: u32, len:
                     *out = v;
                 }
             }
-            if !len.is_null() {
-                *len = t.png.len();
+            if t.kind != TextureKind::Png {
+                return ptr::null();
             }
-            t.png.as_ptr()
+            if !len.is_null() {
+                *len = t.data.len();
+            }
+            t.data.as_ptr()
         }
         None => ptr::null(),
+    })
+}
+
+/// The page's kind (0 PNG, 1 KTX2, 2 a file next to the rig, -1 no such page) and size. [data] and [len]
+/// receive embedded bytes (null for a file); the return value is the file name, empty for an embedded page.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_texture_info(
+    handle: *const Handle, index: u32, kind: *mut i32, width: *mut u32, height: *mut u32, data: *mut *const u8, len: *mut usize,
+) -> *const c_char {
+    with!(handle, ptr::null(), |h| {
+        let t = h.rig.textures.get(index as usize);
+        if !kind.is_null() {
+            *kind = t.map_or(-1, |t| t.kind as i32);
+        }
+        let Some(t) = t else { return ptr::null() };
+        for (out, v) in [(width, t.width), (height, t.height)] {
+            if !out.is_null() {
+                *out = v;
+            }
+        }
+        if !data.is_null() {
+            *data = if t.kind == TextureKind::External { ptr::null() } else { t.data.as_ptr() };
+        }
+        if !len.is_null() {
+            *len = t.data.len();
+        }
+        h.texture_uris[index as usize].as_ptr()
     })
 }
 
@@ -421,6 +463,19 @@ pub unsafe extern "C" fn p2l_dealloc(pointer: *mut u8, len: usize) {
     if !pointer.is_null() {
         drop(Vec::from_raw_parts(pointer, 0, len));
     }
+}
+
+/// The `.p2lrt` versions and chunks this runtime reads: `"1,2 STRS/1 CANV/1 ..."`, the major versions, then
+/// each chunk tag with the newest version understood.
+#[no_mangle]
+pub extern "C" fn p2l_format_support() -> *const c_char {
+    static SUPPORT: std::sync::OnceLock<CString> = std::sync::OnceLock::new();
+    SUPPORT
+        .get_or_init(|| {
+            let chunks: Vec<String> = crate::rig::CHUNKS.iter().map(|(tag, v)| format!("{}/{}", tag, v)).collect();
+            CString::new(format!("1,{} {}", crate::rig::VERSION, chunks.join(" "))).unwrap()
+        })
+        .as_ptr()
 }
 
 /// The runtime's version, `major.minor.patch`.

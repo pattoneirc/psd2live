@@ -20,7 +20,7 @@ import kotlin.test.Test
  * samples (and the project PSD2LIVE_RUNTIME_PROJECT names), evaluated by the editor at random poses within each range.
  *
  * PSD2LIVE_TOOLS=1 ./gradlew test --tests '*RuntimeConformanceTool'
- * Writes build/tools/runtime-conformance/<case>/{rig.p2lrt, poses.bin, expected.bin}; compare with
+ * Writes build/tools/runtime-conformance/<case>/{rig.p2lrt, rig.v1.p2lrt, rig.packed.p2lrt, poses.bin, expected.bin}; compare with
  * `cargo run --release --bin p2lrt-conformance -- build/tools/runtime-conformance` in runtime/.
  */
 class RuntimeConformanceTool {
@@ -62,7 +62,7 @@ class RuntimeConformanceTool {
 			val dir = File(root, name).apply { mkdirs() }
 			val bare = ir.copy(deformers = emptyList(), meshes = emptyList(), parts = emptyList(), glues = emptyList(), rootChildren = emptyList(),
 				renderRoot = RenderGroup(null, RigIR.DEFAULT_DRAW_ORDER, emptyList()), textures = Textures(), clips = emptyList())
-			File(dir, "rig.p2lrt").writeBytes(P2lrt.write(bare))
+			variants(dir, bare)
 			trace(dir, bare, Random(name.hashCode()))
 		}
 		println("Wrote ${cases.size} physics cases to $root")
@@ -117,8 +117,15 @@ class RuntimeConformanceTool {
 		File(dir, "trace.bin").writeBytes(buffer.array())
 	}
 
-	private fun write(dir: File, ir: RigIR, random: Random) {
+	/** The rig as version 2 (rig.p2lrt), version 1 and compressed version 2; the runtime must read all three alike. */
+	private fun variants(dir: File, ir: RigIR) {
 		File(dir, "rig.p2lrt").writeBytes(P2lrt.write(ir))
+		File(dir, "rig.v1.p2lrt").writeBytes(P2lrt.write(ir, P2lrt.Options(version = 1)))
+		File(dir, "rig.packed.p2lrt").writeBytes(P2lrt.write(ir, P2lrt.Options(compress = true)))
+	}
+
+	private fun write(dir: File, ir: RigIR, random: Random) {
+		variants(dir, ir)
 		val poses = ArrayList<FloatArray>()
 		poses += FloatArray(ir.parameters.size) { ir.parameters[it].default }
 		repeat(40) {

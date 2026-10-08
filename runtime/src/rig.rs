@@ -1,9 +1,17 @@
-//! The `.p2lrt` rig and its reader. The layout is documented with the writer,
-//! `targets/runtime/.../P2lrt.kt`; every reference is an index and parents come before children.
+//! The `.p2lrt` rig and its reader. Version 1 is documented with the writer, `targets/runtime/.../P2lrt.kt`;
+//! version 2 (chunks, the same records) in `docs/zh/spec/P2LRT_V2.md`. Every reference is an index and parents
+//! come before children; both versions read into the same [Rig].
 
+use crate::container::{self, Chunk};
 use std::fmt;
 
-pub const VERSION: u32 = 1;
+/// The newest major version this reader understands; version 1 is read too.
+pub const VERSION: u32 = 2;
+/// The chunks this reader understands, with the newest version of each.
+pub const CHUNKS: [(&str, u16); 14] = [
+    ("STRS", 1), ("CANV", 1), ("PARM", 1), ("DEFM", 1), ("PART", 1), ("MESH", 1), ("GLUE", 1),
+    ("DRAW", 1), ("TEXR", 1), ("PHYS", 1), ("CLIP", 1), ("ROLE", 1), ("PGUI", 1), ("META", 1),
+];
 
 #[derive(Debug)]
 pub struct Error(pub String);
@@ -26,7 +34,7 @@ pub type Rgb = [f32; 3];
 pub const WHITE: Rgb = [1.0, 1.0, 1.0];
 pub const BLACK: Rgb = [0.0, 0.0, 0.0];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Canvas {
     pub width: f32,
     pub height: f32,
@@ -35,7 +43,7 @@ pub struct Canvas {
     pub pixels_per_unit: Option<f32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
     pub id: String,
     pub name: String,
@@ -60,14 +68,14 @@ impl Parameter {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Axis {
     pub parameter: usize,
     pub keys: Vec<f32>,
 }
 
 /// Forms keyed over the cartesian product of parameter axes; cells may be sparse.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Grid<F> {
     pub axes: Vec<Axis>,
     pub cells: Vec<(Vec<u16>, F)>,
@@ -120,7 +128,7 @@ const CHANNELS: [Channel; 7] = [
     Channel::DrawOrder, Channel::Opacity, Channel::MultiplyColor, Channel::ScreenColor, Channel::FlipX, Channel::FlipY, Channel::GlueIntensity,
 ];
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ChannelValue {
     Scalar(f32),
     Color(Rgb),
@@ -129,14 +137,14 @@ pub enum ChannelValue {
 
 pub type Channels = Vec<(Channel, Grid<ChannelValue>)>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Limit {
     pub parameter: usize,
     pub points: Vec<(f32, f32)>,
 }
 
 /// An additive shape keyed on one parameter; `shapes` has one entry per key.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Binding<S> {
     pub parameter: usize,
     pub keys: Vec<f32>,
@@ -145,7 +153,7 @@ pub struct Binding<S> {
     pub limits: Vec<Limit>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LatticeShape {
     pub points: Vec<f32>,
     pub opacity: f32,
@@ -153,7 +161,7 @@ pub struct LatticeShape {
     pub screen: Rgb,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pivot {
     pub x: f32,
     pub y: f32,
@@ -161,7 +169,7 @@ pub struct Pivot {
     pub scale: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PivotShape {
     pub pivot: Pivot,
     pub flip_x: bool,
@@ -171,7 +179,7 @@ pub struct PivotShape {
     pub screen: Rgb,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MeshShape {
     pub deltas: Vec<f32>,
     pub draw_order: f32,
@@ -180,7 +188,7 @@ pub struct MeshShape {
     pub screen: Rgb,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PartShape {
     pub draw_order: f32,
     pub opacity: f32,
@@ -188,13 +196,13 @@ pub struct PartShape {
     pub screen: Rgb,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DeformerKind {
     Warp { columns: usize, rows: usize, bilinear: bool, lattice: Option<Grid<Vec<f32>>>, shapes: Vec<Binding<LatticeShape>> },
     Rotation { base_angle: f32, pivot: Option<Grid<Pivot>>, flip_x: bool, flip_y: bool, shapes: Vec<Binding<PivotShape>> },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Deformer {
     pub id: String,
     pub parent: Option<usize>,
@@ -214,7 +222,7 @@ pub enum Child {
     Mesh(usize),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Composite {
     pub blend: u8,
     pub alpha_blend: u8,
@@ -226,7 +234,7 @@ pub struct Composite {
     pub screen: Rgb,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Part {
     pub id: String,
     pub name: String,
@@ -240,14 +248,14 @@ pub struct Part {
     pub shapes: Vec<Binding<PartShape>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Geometry {
     pub positions: Vec<f32>,
     pub uvs: Vec<f32>,
     pub indices: Vec<u32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Mesh {
     pub id: String,
     pub name: String,
@@ -275,7 +283,7 @@ impl Mesh {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GluePair {
     pub a: usize,
     pub b: usize,
@@ -283,7 +291,7 @@ pub struct GluePair {
     pub weight_b: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Glue {
     pub id: String,
     pub mesh_a: usize,
@@ -293,13 +301,13 @@ pub struct Glue {
     pub channels: Channels,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RenderNode {
     Mesh(usize),
     Group(RenderGroup),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RenderGroup {
     pub part: Option<usize>,
     pub draw_order: i32,
@@ -308,11 +316,51 @@ pub struct RenderGroup {
     pub children: Vec<RenderNode>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextureKind {
+    Png,
+    Ktx2,
+    /// A file next to the rig, named by [Texture::uri]; the host loads it.
+    External,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Texture {
     pub width: u32,
     pub height: u32,
-    pub png: Vec<u8>,
+    pub kind: TextureKind,
+    /// The PNG or KTX2 bytes; empty for an external page.
+    pub data: Vec<u8>,
+    pub uri: String,
+}
+
+/// How a parameter panel groups and shows the parameters; it does not affect evaluation.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Gui {
+    /// Values a parameter snaps to, ascending.
+    pub snaps: Vec<(usize, Vec<f32>)>,
+    /// Pairs of parameters shown as one two-dimensional control: horizontal, vertical.
+    pub joysticks: Vec<(usize, usize)>,
+    /// The group tree in pre-order; each node is followed by its children.
+    pub nodes: Vec<GuiNode>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GuiLabel {
+    None,
+    Preset(String),
+    Custom(u32),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuiNode {
+    /// The parameter a leaf shows; `None` for a group.
+    pub parameter: Option<usize>,
+    pub id: String,
+    pub name: String,
+    pub open: bool,
+    pub label: GuiLabel,
+    pub children: usize,
 }
 
 /// What a physics input drives or an output reads: sideways travel, or tilt and segment angle.
@@ -322,7 +370,7 @@ pub enum PhysicsSource {
     Angle,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PhysicsInput {
     pub parameter: usize,
     pub weight: f32,
@@ -330,7 +378,7 @@ pub struct PhysicsInput {
     pub reflect: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PhysicsOutput {
     pub parameter: usize,
     pub vertex: usize,
@@ -340,7 +388,7 @@ pub struct PhysicsOutput {
     pub reflect: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PhysicsSegment {
     pub length: f32,
     pub mobility: f32,
@@ -348,7 +396,7 @@ pub struct PhysicsSegment {
     pub acceleration: f32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Normalization {
     pub position_min: f32,
     pub position_default: f32,
@@ -358,7 +406,7 @@ pub struct Normalization {
     pub angle_max: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PhysicsGroup {
     pub id: String,
     pub name: String,
@@ -387,7 +435,7 @@ impl Segment {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Curve {
     pub parameter: usize,
     pub start_time: f32,
@@ -395,7 +443,7 @@ pub struct Curve {
     pub segments: Vec<Segment>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Clip {
     pub id: String,
     pub name: String,
@@ -408,13 +456,13 @@ pub struct Clip {
     pub curves: Vec<Curve>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Role {
     pub role: String,
     pub parameters: Vec<usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Rig {
     pub canvas: Canvas,
     pub parameters: Vec<Parameter>,
@@ -429,12 +477,51 @@ pub struct Rig {
     pub physics: Vec<PhysicsGroup>,
     pub clips: Vec<Clip>,
     pub roles: Vec<Role>,
+    /// Parameter panel layout, when the file carries one.
+    pub gui: Option<Gui>,
+    /// Generator and other information as key-value pairs.
+    pub meta: Vec<(String, String)>,
 }
 
 impl Rig {
     pub fn read(bytes: &[u8]) -> Result<Rig> {
-        let mut reader = Reader { bytes, at: 0, parameters: 0, deformers: 0, parts: 0, meshes: 0 };
-        reader.rig()
+        Rig::read_with(bytes, false)
+    }
+
+    /// Reads version 1 or 2; with [verify_crc], chunks that carry a CRC are checked against it.
+    pub fn read_with(bytes: &[u8], verify_crc: bool) -> Result<Rig> {
+        if bytes.len() < 12 || &bytes[..8] != b"P2LRT   " {
+            return err("Not a .p2lrt rig");
+        }
+        let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        let rig = if version == 1 {
+            Reader::new(bytes, None).rig()?
+        } else if version & 0xFFFF == 2 {
+            read_chunks(bytes, verify_crc)?
+        } else {
+            return err(format!("Unsupported .p2lrt version {}", version & 0xFFFF));
+        };
+        rig.validate()?;
+        Ok(rig)
+    }
+
+    /// Checks that hold across sections: glue pairs and keyform offsets against their meshes' vertices.
+    fn validate(&self) -> Result<()> {
+        for g in &self.glues {
+            for p in &g.pairs {
+                if p.a >= self.meshes[g.mesh_a].vertex_count() || p.b >= self.meshes[g.mesh_b].vertex_count() {
+                    return err(format!("Glue {} pairs a vertex its meshes do not have", g.id));
+                }
+            }
+        }
+        for mesh in &self.meshes {
+            if let (Some(g), Some(offsets)) = (&mesh.geometry, &mesh.offsets) {
+                if offsets.cells.iter().any(|(_, d)| !d.is_empty() && d.len() != g.positions.len()) {
+                    return err(format!("Offsets of mesh {} do not match its vertices", mesh.id));
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn parameter(&self, id: &str) -> Option<usize> {
@@ -459,9 +546,22 @@ struct Reader<'a> {
     deformers: usize,
     parts: usize,
     meshes: usize,
+    /// Version 2's string table: strings are indices into it and arrays carry a codec. `None` reads version 1.
+    strings: Option<&'a [String]>,
 }
 
+/// Array codecs of version 2.
+const F32: u8 = 0;
+const F16: u8 = 1;
+const UNORM16: u8 = 2;
+const U16: u8 = 16;
+const U32: u8 = 17;
+const U8: u8 = 32;
+
 impl<'a> Reader<'a> {
+    fn new(bytes: &'a [u8], strings: Option<&'a [String]>) -> Self {
+        Reader { bytes, at: 0, parameters: 0, deformers: 0, parts: 0, meshes: 0, strings }
+    }
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         if self.bytes.len() - self.at < n {
             return err(format!("Truncated rig at byte {}", self.at));
@@ -504,16 +604,67 @@ impl<'a> Reader<'a> {
         Ok(n)
     }
     fn str(&mut self) -> Result<String> {
+        if let Some(strings) = self.strings {
+            let i = self.u32()?;
+            if i == u32::MAX {
+                return Ok(String::new());
+            }
+            return strings.get(i as usize).cloned().ok_or(Error(format!("Invalid string reference {}", i)));
+        }
         let n = self.count(1)?;
         String::from_utf8(self.take(n)?.to_vec()).map_err(|_| Error("Invalid UTF-8 in the rig".into()))
     }
+    /// A version 2 array header, after zero padding to a four-byte boundary: its codec and length.
+    fn array(&mut self, codecs: &[u8]) -> Result<(u8, usize)> {
+        while self.at % 4 != 0 {
+            if self.u8()? != 0 {
+                return err("Non-zero padding before an array");
+            }
+        }
+        let codec = self.u8()?;
+        self.take(3)?;
+        if !codecs.contains(&codec) {
+            return err(format!("Array codec {} is not allowed here", codec));
+        }
+        let size = match codec {
+            F32 | U32 => 4,
+            F16 | UNORM16 | U16 => 2,
+            _ => 1,
+        };
+        Ok((codec, self.count(size)?))
+    }
     fn floats(&mut self) -> Result<Vec<f32>> {
-        let n = self.count(4)?;
-        (0..n).map(|_| self.f32()).collect()
+        if self.strings.is_none() {
+            let n = self.count(4)?;
+            return (0..n).map(|_| self.f32()).collect();
+        }
+        let (codec, n) = self.array(&[F32, F16, UNORM16])?;
+        (0..n)
+            .map(|_| match codec {
+                F32 => self.f32(),
+                F16 => Some(container::f16_to_f32(self.u16()?)).filter(|v| v.is_finite()).ok_or(Error("Non-finite value in the rig".into())),
+                _ => Ok(self.u16()? as f32 / 65535.0),
+            })
+            .collect()
+    }
+    fn indices(&mut self) -> Result<Vec<u32>> {
+        if self.strings.is_none() {
+            let n = self.count(4)?;
+            return (0..n).map(|_| self.u32()).collect();
+        }
+        let (codec, n) = self.array(&[U16, U32])?;
+        (0..n).map(|_| if codec == U16 { self.u16().map(u32::from) } else { self.u32() }).collect()
     }
     fn bytes_field(&mut self) -> Result<Vec<u8>> {
-        let n = self.count(1)?;
+        let n = if self.strings.is_none() { self.count(1)? } else { self.array(&[U8])?.1 };
         Ok(self.take(n)?.to_vec())
+    }
+    /// The end of a version 2 chunk, which its records must fill exactly.
+    fn end(&self, tag: &str) -> Result<()> {
+        if self.at != self.bytes.len() {
+            return err(format!("Chunk {} has {} bytes its records do not cover", tag, self.bytes.len() - self.at));
+        }
+        Ok(())
     }
     fn index(&mut self, limit: usize, what: &str) -> Result<usize> {
         let i = self.u32()? as usize;
@@ -541,25 +692,11 @@ impl<'a> Reader<'a> {
             return err("Not a .p2lrt rig");
         }
         let version = self.u32()?;
-        if version != VERSION {
+        if version != 1 {
             return err(format!("Unsupported .p2lrt version {}", version));
         }
-        let canvas = Canvas {
-            width: self.f32()?,
-            height: self.f32()?,
-            origin_x: self.f32()?,
-            origin_y: self.f32()?,
-            pixels_per_unit: Some(self.f32()?).filter(|v| *v >= 0.0),
-        };
-        let n = self.count(25)?;
-        let mut parameters = Vec::with_capacity(n);
-        for _ in 0..n {
-            let id = self.str()?;
-            let name = self.str()?;
-            let (min, max, default) = (self.f32()?, self.f32()?, self.f32()?);
-            let flags = self.u8()?;
-            parameters.push(Parameter { id, name, min, max, default, blend: flags & 1 != 0, repeat: flags & 2 != 0 });
-        }
+        let canvas = self.canvas()?;
+        let parameters = self.parameters()?;
         self.parameters = parameters.len();
 
         // Sections refer forward (deformers to parts, parts to meshes), so their counts come from a first
@@ -582,8 +719,54 @@ impl<'a> Reader<'a> {
         self.meshes = mesh_count;
 
         self.count(1)?;
-        let mut deformers: Vec<Deformer> = Vec::with_capacity(deformer_count);
-        for i in 0..deformer_count {
+        let deformers = self.deformers(deformer_count)?;
+        self.count(1)?;
+        let parts = (0..part_count).map(|_| self.part()).collect::<Result<Vec<_>>>()?;
+        self.count(1)?;
+        let meshes = (0..mesh_count).map(|_| self.mesh()).collect::<Result<Vec<_>>>()?;
+        let glues = self.glues()?;
+        let render = self.group(0)?;
+        let n = self.count(12)?;
+        let mut textures = Vec::with_capacity(n);
+        for _ in 0..n {
+            textures.push(Texture { width: self.u32()?, height: self.u32()?, kind: TextureKind::Png, data: self.bytes_field()?, uri: String::new() });
+        }
+        let (physics_fps, physics) = self.physics()?;
+        let clips = self.clips()?;
+        let roles = self.roles()?;
+        if self.at != self.bytes.len() {
+            return err("Trailing bytes after the rig");
+        }
+        Ok(Rig { canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui: None, meta: vec![] })
+    }
+
+    fn canvas(&mut self) -> Result<Canvas> {
+        Ok(Canvas {
+            width: self.f32()?,
+            height: self.f32()?,
+            origin_x: self.f32()?,
+            origin_y: self.f32()?,
+            pixels_per_unit: Some(self.f32()?).filter(|v| *v >= 0.0),
+        })
+    }
+
+    fn parameters(&mut self) -> Result<Vec<Parameter>> {
+        let n = self.count(if self.strings.is_some() { 21 } else { 25 })?;
+        let mut parameters = Vec::with_capacity(n);
+        for _ in 0..n {
+            let id = self.str()?;
+            let name = self.str()?;
+            let (min, max, default) = (self.f32()?, self.f32()?, self.f32()?);
+            let flags = self.u8()?;
+            parameters.push(Parameter { id, name, min, max, default, blend: flags & 1 != 0, repeat: flags & 2 != 0 });
+        }
+        Ok(parameters)
+    }
+
+    /// Deformers, each parent before its children.
+    fn deformers(&mut self, count: usize) -> Result<Vec<Deformer>> {
+        let mut deformers: Vec<Deformer> = Vec::with_capacity(count);
+        for i in 0..count {
             let d = self.deformer()?;
             if let Some(parent) = d.parent {
                 if parent >= i {
@@ -592,32 +775,26 @@ impl<'a> Reader<'a> {
             }
             deformers.push(d);
         }
-        self.count(1)?;
-        let parts = (0..part_count).map(|_| self.part()).collect::<Result<Vec<_>>>()?;
-        self.count(1)?;
-        let meshes = (0..mesh_count).map(|_| self.mesh()).collect::<Result<Vec<_>>>()?;
+        Ok(deformers)
+    }
+
+    fn glues(&mut self) -> Result<Vec<Glue>> {
         let n = self.count(1)?;
-        let mut glues = Vec::with_capacity(n);
-        for _ in 0..n {
-            let g = self.glue()?;
-            for p in &g.pairs {
-                if p.a >= meshes[g.mesh_a].vertex_count() || p.b >= meshes[g.mesh_b].vertex_count() {
-                    return err(format!("Glue {} pairs a vertex its meshes do not have", g.id));
-                }
-            }
-            glues.push(g);
-        }
-        let render = self.group(0)?;
-        let n = self.count(12)?;
-        let mut textures = Vec::with_capacity(n);
-        for _ in 0..n {
-            textures.push(Texture { width: self.u32()?, height: self.u32()?, png: self.bytes_field()? });
-        }
-        let physics_fps = self.f32()?;
+        (0..n).map(|_| self.glue()).collect()
+    }
+
+    fn physics(&mut self) -> Result<(f32, Vec<PhysicsGroup>)> {
+        let fps = self.f32()?;
         let n = self.count(1)?;
-        let physics = (0..n).map(|_| self.physics_group()).collect::<Result<Vec<_>>>()?;
+        Ok((fps, (0..n).map(|_| self.physics_group()).collect::<Result<Vec<_>>>()?))
+    }
+
+    fn clips(&mut self) -> Result<Vec<Clip>> {
         let n = self.count(1)?;
-        let clips = (0..n).map(|_| self.clip()).collect::<Result<Vec<_>>>()?;
+        (0..n).map(|_| self.clip()).collect()
+    }
+
+    fn roles(&mut self) -> Result<Vec<Role>> {
         let n = self.count(8)?;
         let mut roles = Vec::with_capacity(n);
         for _ in 0..n {
@@ -626,17 +803,83 @@ impl<'a> Reader<'a> {
             let parameters = (0..count).map(|_| self.parameter()).collect::<Result<Vec<_>>>()?;
             roles.push(Role { role, parameters });
         }
-        if self.at != self.bytes.len() {
-            return err("Trailing bytes after the rig");
+        Ok(roles)
+    }
+
+    /// Version 2 texture pages: a kind, the size, then the bytes or a file name.
+    fn textures(&mut self) -> Result<Vec<Texture>> {
+        let n = self.count(13)?;
+        let mut textures = Vec::with_capacity(n);
+        for _ in 0..n {
+            let kind = match self.u8()? {
+                0 => TextureKind::Png,
+                1 => TextureKind::Ktx2,
+                2 => TextureKind::External,
+                k => return err(format!("Unknown texture kind {}", k)),
+            };
+            let (width, height) = (self.u32()?, self.u32()?);
+            let (data, uri) = if kind == TextureKind::External { (vec![], self.str()?) } else { (self.bytes_field()?, String::new()) };
+            textures.push(Texture { width, height, kind, data, uri });
         }
-        for mesh in &meshes {
-            if let (Some(g), Some(offsets)) = (&mesh.geometry, &mesh.offsets) {
-                if offsets.cells.iter().any(|(_, d)| !d.is_empty() && d.len() != g.positions.len()) {
-                    return err(format!("Offsets of mesh {} do not match its vertices", mesh.id));
-                }
+        Ok(textures)
+    }
+
+    fn gui(&mut self) -> Result<Gui> {
+        let n = self.count(12)?;
+        let mut snaps = Vec::with_capacity(n);
+        for _ in 0..n {
+            let parameter = self.parameter()?;
+            let keys = self.floats()?;
+            if keys.windows(2).any(|w| w[1] < w[0]) {
+                return err("Snap values must ascend");
             }
+            snaps.push((parameter, keys));
         }
-        Ok(Rig { canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles })
+        let n = self.count(8)?;
+        let joysticks = (0..n).map(|_| Ok((self.parameter()?, self.parameter()?))).collect::<Result<Vec<_>>>()?;
+        let n = self.count(28)?;
+        let mut nodes = Vec::with_capacity(n);
+        for _ in 0..n {
+            let (kind, open, label, _) = (self.u8()?, self.u8()?, self.u8()?, self.u8()?);
+            let parameter = self.optional(self.parameters, "parameter")?;
+            let (id, name, preset, argb, children) = (self.str()?, self.str()?, self.str()?, self.u32()?, self.u32()? as usize);
+            let label = match label {
+                0 => GuiLabel::None,
+                1 => GuiLabel::Preset(preset),
+                2 => GuiLabel::Custom(argb),
+                _ => return err("Unknown parameter group label"),
+            };
+            match kind {
+                0 if parameter.is_some() && children == 0 => {}
+                1 if parameter.is_none() => {}
+                _ => return err("Invalid parameter tree node"),
+            }
+            nodes.push(GuiNode { parameter, id, name, open: open != 0, label, children });
+        }
+        // Each node's children follow it; together they must cover the list exactly.
+        fn subtree(nodes: &[GuiNode], at: usize, depth: usize) -> Result<usize> {
+            if depth > 256 {
+                return err("Parameter tree too deep");
+            }
+            let mut next = at + 1;
+            for _ in 0..nodes[at].children {
+                if next >= nodes.len() {
+                    return err("A parameter group has missing children");
+                }
+                next = subtree(nodes, next, depth + 1)?;
+            }
+            Ok(next)
+        }
+        let mut at = 0;
+        while at < nodes.len() {
+            at = subtree(&nodes, at, 0)?;
+        }
+        Ok(Gui { snaps, joysticks, nodes })
+    }
+
+    fn meta(&mut self) -> Result<Vec<(String, String)>> {
+        let n = self.count(8)?;
+        (0..n).map(|_| Ok((self.str()?, self.str()?))).collect()
     }
 
     fn grid<F>(&mut self, mut form: impl FnMut(&mut Self) -> Result<F>) -> Result<Option<Grid<F>>> {
@@ -803,8 +1046,7 @@ impl<'a> Reader<'a> {
         let geometry = if flags & 8 != 0 {
             let positions = self.floats()?;
             let uvs = self.floats()?;
-            let n = self.count(4)?;
-            let indices = (0..n).map(|_| self.u32()).collect::<Result<Vec<_>>>()?;
+            let indices = self.indices()?;
             let vertices = positions.len() / 2;
             if positions.len() % 2 != 0 || uvs.len() != positions.len() || indices.len() % 3 != 0 || indices.iter().any(|i| *i as usize >= vertices) {
                 return err(format!("Mesh {} has invalid geometry", id));
@@ -937,4 +1179,117 @@ impl<'a> Reader<'a> {
         }
         Ok(Clip { id, name, group, duration, fps, looping, fade_in, fade_out, curves })
     }
+}
+
+/// Reads a version 2 file: the core chunks into a [Rig], unknown optional chunks skipped.
+fn read_chunks(bytes: &[u8], verify_crc: bool) -> Result<Rig> {
+    let file = container::read(bytes, verify_crc)?;
+    let mut known: Vec<Option<&Chunk>> = vec![None; CHUNKS.len()];
+    for chunk in &file.chunks {
+        let name = chunk.name();
+        let slot = CHUNKS.iter().position(|(tag, _)| *tag == name);
+        match slot {
+            Some(i) if chunk.version <= CHUNKS[i].1 => {
+                if known[i].is_some() {
+                    return err(format!("Chunk {} appears twice", name));
+                }
+                known[i] = Some(chunk);
+            }
+            _ if chunk.required => return err(format!("This rig requires feature {} version {}", name, chunk.version)),
+            _ => {}
+        }
+    }
+    let chunk = |tag: &str| known[CHUNKS.iter().position(|(t, _)| *t == tag).unwrap()].map(|c| &c.data[..]);
+    let need = |tag: &str| chunk(tag).ok_or(Error(format!("Missing chunk {}", tag)));
+
+    let strings = read_strings(need("STRS")?)?;
+    let strings = Some(&strings[..]);
+    // Records refer forward (deformers to parts, parts to meshes); each table starts with its count.
+    let count = |data: &[u8]| if data.len() < 4 { err("Truncated chunk") } else { Ok(u32::from_le_bytes(data[..4].try_into().unwrap()) as usize) };
+    let (parm, defm, part, mesh) = (need("PARM")?, need("DEFM")?, need("PART")?, need("MESH")?);
+    let counts = (count(parm)?, count(defm)?, count(part)?, count(mesh)?);
+    let reader = |data| {
+        let mut r = Reader::new(data, strings);
+        (r.parameters, r.deformers, r.parts, r.meshes) = counts;
+        r
+    };
+    let empty: &[u8] = &[];
+
+    let mut r = reader(need("CANV")?);
+    let canvas = r.canvas()?;
+    r.end("CANV")?;
+    let mut r = reader(parm);
+    let parameters = r.parameters()?;
+    r.end("PARM")?;
+    let mut r = reader(defm);
+    r.count(1)?;
+    let deformers = r.deformers(counts.1)?;
+    r.end("DEFM")?;
+    let mut r = reader(part);
+    r.count(1)?;
+    let parts = (0..counts.2).map(|_| r.part()).collect::<Result<Vec<_>>>()?;
+    r.end("PART")?;
+    let mut r = reader(mesh);
+    r.count(1)?;
+    let meshes = (0..counts.3).map(|_| r.mesh()).collect::<Result<Vec<_>>>()?;
+    r.end("MESH")?;
+    let mut r = reader(need("DRAW")?);
+    let render = r.group(0)?;
+    r.end("DRAW")?;
+    // Optional core tables are empty when absent.
+    let mut glues = vec![];
+    if let Some(data) = chunk("GLUE") {
+        let mut r = reader(data);
+        glues = r.glues()?;
+        r.end("GLUE")?;
+    }
+    let mut textures = vec![];
+    if let Some(data) = chunk("TEXR") {
+        let mut r = reader(data);
+        textures = r.textures()?;
+        r.end("TEXR")?;
+    }
+    let (mut physics_fps, mut physics) = (0.0, vec![]);
+    if let Some(data) = chunk("PHYS") {
+        let mut r = reader(data);
+        (physics_fps, physics) = r.physics()?;
+        r.end("PHYS")?;
+    }
+    let mut clips = vec![];
+    if let Some(data) = chunk("CLIP") {
+        let mut r = reader(data);
+        clips = r.clips()?;
+        r.end("CLIP")?;
+    }
+    let mut roles = vec![];
+    if let Some(data) = chunk("ROLE") {
+        let mut r = reader(data);
+        roles = r.roles()?;
+        r.end("ROLE")?;
+    }
+    let mut gui = None;
+    if let Some(data) = chunk("PGUI") {
+        let mut r = reader(data);
+        gui = Some(r.gui()?);
+        r.end("PGUI")?;
+    }
+    let mut r = reader(chunk("META").unwrap_or(empty));
+    let meta = if r.bytes.is_empty() { vec![] } else { r.meta()? };
+    r.end("META")?;
+    Ok(Rig { canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui, meta })
+}
+
+/// The string table: a count, `count + 1` ascending offsets into the UTF-8 that follows, then that UTF-8.
+fn read_strings(data: &[u8]) -> Result<Vec<String>> {
+    let mut r = Reader::new(data, None);
+    let n = r.count(4)?;
+    let offsets = (0..=n).map(|_| r.u32().map(|v| v as usize)).collect::<Result<Vec<_>>>()?;
+    let blob = &data[r.at..];
+    if offsets[0] != 0 || offsets[n] != blob.len() || offsets.windows(2).any(|w| w[1] < w[0]) {
+        return err("Invalid string table");
+    }
+    offsets
+        .windows(2)
+        .map(|w| String::from_utf8(blob[w[0]..w[1]].to_vec()).map_err(|_| Error("Invalid UTF-8 in the string table".into())))
+        .collect()
 }

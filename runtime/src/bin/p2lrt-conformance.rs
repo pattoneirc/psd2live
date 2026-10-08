@@ -40,7 +40,43 @@ fn compare_physics(dir: &Path) -> Result<Report, String> {
     Ok(report)
 }
 
+/// The same rig written as version 1 and as compressed version 2 must read as rig.p2lrt does and pose
+/// bit for bit the same.
+fn compare_variants(dir: &Path) -> Result<(), String> {
+    let read = |name: &str| Rig::read_with(&fs::read(dir.join(name)).map_err(|e| e.to_string())?, true).map_err(|e| format!("{}: {}", name, e));
+    let mut main = read("rig.p2lrt")?;
+    main.meta.clear();
+    let poses = fs::read(dir.join("poses.bin")).ok();
+    for name in ["rig.v1.p2lrt", "rig.packed.p2lrt"] {
+        if !dir.join(name).exists() {
+            continue;
+        }
+        let mut other = read(name)?;
+        other.meta.clear();
+        // Version 1 has no parameter panel.
+        if name == "rig.v1.p2lrt" {
+            other.gui = main.gui.clone();
+        }
+        if other != main {
+            return Err(format!("{} reads differently from rig.p2lrt", name));
+        }
+        let Some(poses) = &poses else { continue };
+        let params = u32::from_le_bytes(poses[4..8].try_into().unwrap()) as usize;
+        let values: Vec<f32> = f32s(&poses[8..]).collect();
+        let (mut a, mut b) = (Evaluator::new(), Evaluator::new());
+        for pose in values.chunks(params.max(1)) {
+            let (x, y) = (a.evaluate(&main, pose), b.evaluate(&other, pose));
+            let bits = |v: &[f32]| v.iter().map(|f| f.to_bits()).collect::<Vec<_>>();
+            if x.vertices.iter().zip(&y.vertices).any(|(p, q)| bits(p) != bits(q)) || bits(&x.opacity) != bits(&y.opacity) || bits(&x.draw_order) != bits(&y.draw_order) {
+                return Err(format!("{} poses differently from rig.p2lrt", name));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn compare(dir: &Path) -> Result<Report, String> {
+    compare_variants(dir)?;
     if dir.join("trace.bin").exists() {
         return compare_physics(dir);
     }

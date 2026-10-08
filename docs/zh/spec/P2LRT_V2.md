@@ -1,8 +1,8 @@
-# `.p2lrt` 2.0 格式（草案）
+# `.p2lrt` 2.0 格式
 
 [运行时](RUNTIME.md) · [工程、运行时与导出边界](RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)
 
-状态：草案，尚未实现。当前写出和读取的仍是版本 1（布局见 `P2lrt.kt` 文档注释）。
+状态：容器、核心块、`PGUI` 与 `META` 已实现，导出默认写版本 2；扩展块（`BONE`、`SKIN`、`SIMS`、`COLL`）与附带块（`EXPR`、`POSE`、`HITA`、`UDAT`）只登记了标签，尚未实现。读取器支持全部压缩方式、数组编码与贴图页类型；写出器目前只写 deflate 压缩、f32 浮点数组和内嵌 PNG。
 
 ## 目标
 
@@ -26,7 +26,7 @@ Header  (32 字节)
   u32    flags        bit0 名称已剥离；其余保留，写 0
   u32    chunk_count
   u32    toc_offset   = 32
-  u32    reserved[3]  写 0
+  u32    reserved[2]  写 0
 TOC     chunk_count × 40 字节
   u8[4]  tag          四字符 ASCII，大写为规范块，小写为厂商/私有块
   u16    version      块版本（布局与求值语义）
@@ -54,7 +54,7 @@ Chunks  各块数据，块间用 0 填充到 16 字节对齐
 | 3 | 保留 | 读取器拒绝 |
 
 - 读取器必须支持 deflate 和 zstd。解压后长度必须等于 `raw_length`，否则拒绝；解压结果放入 16 字节对齐的缓冲区，之后按未压缩块解析。
-- 压缩只改变存储，不改变块内容；块内的偏移、对齐与 `pad4` 都相对解压后的数据。
+- 压缩只改变存储，不改变块内容；块内的偏移与数组对齐都相对解压后的数据。
 - 压缩块无法零拷贝；需要内存映射或流式加载的宿主应选择不压缩的文件。
 - 写出器默认不压缩。导出选项开启压缩时，只压缩能变小的块；已压缩的贴图负载（PNG、KTX2）所在的 `TEXR` 不压缩。若压缩后不小于原数据，该块按未压缩写出。
 - 字节稳定只要求同一写出器版本、同一压缩设置下成立；一致性比较以解压后的块内容为准。
@@ -91,9 +91,9 @@ Chunks  各块数据，块间用 0 填充到 16 字节对齐
 | `ref` | u32 下标；可空引用用 i32，-1 为空 |
 | `sref` | u32 字符串表下标（`STRS`），`0xFFFFFFFF` 为空 |
 | `rgb` | 3 × f32 |
-| `pad4` | 0 填充到块内 4 字节对齐 |
-| `array<T>` | `u8 codec, u8 reserved[3], u32 count`，随后 `count` 个元素，再 `pad4` |
-| `grid<F>` | 同 v1：`u16 axes`（`0xFFFF` 表示无网格）× `{ ref parameter, array<f32> keys }`，`u32 cells` × `{ u16 coordinate[axes], F }`，`pad4` |
+| `str` | 只在 `STRS` 内部使用；其他位置的字符串一律是 `sref` |
+| `array<T>` | 先用 0 填充到块内 4 字节对齐，再写 `u8 codec, u8 reserved[3], u32 count`，随后 `count` 个元素 |
+| `grid<F>` | 同 v1：`u16 axes`（`0xFFFF` 表示无网格）× `{ ref parameter, array<f32> keys }`，`u32 cells` × `{ u16 coordinate[axes], F }` |
 | `channels` | 同 v1：`u8 n` × `{ u8 channel, u8 kind, grid<value> }`；channel 依次为 DrawOrder、Opacity、MultiplyColor、ScreenColor、FlipX、FlipY、GlueIntensity；kind 0 标量、1 颜色、2 标志 |
 | `bindings<S>` | 同 v1：`u16 n` × `{ ref parameter, array<f32> keys, u32 neutral, u8 present + S 每个关键点, u16 n × { ref limit_parameter, u16 n × { f32 value, f32 weight } } }` |
 
@@ -106,12 +106,13 @@ Chunks  各块数据，块间用 0 填充到 16 字节对齐
 | 2 | unorm16 | 可选的体积优化（UV，范围 [0,1]） |
 | 16 | u16 | 索引，顶点数 ≤ 65535 时 |
 | 17 | u32 | 索引 |
+| 32 | u8 | 字节串（贴图负载） |
 
-浮点数组的 codec 1、2 只在宿主显式选择“发布体积优化”时写出；读取器必须支持全部编码，解码后与 f32 同等对待。块内数组从 4 字节对齐处开始，且块本身 16 字节对齐，因此 codec 0/16/17 的数组可直接按切片读取。
+浮点数组的 codec 1、2 只在宿主显式选择“发布体积优化”时写出；读取器必须支持全部编码，解码后与 f32 同等对待。数组自行对齐：头部从块内 4 字节对齐处开始、长 8 字节，元素因此也 4 字节对齐；块本身 16 字节对齐，所以 codec 0/16/17 的数组可直接按切片读取。除数组前的填充外，记录内不再有其他填充，标量可以不对齐。
 
 ## 核心块
 
-全部为必需块（标记 bit0），块版本均为 1，求值语义即 [运行时](RUNTIME.md) “求值规则”“物理”“动作片段”各节。字段与 v1 相同，差别只有：字符串改为 `sref`，数组改为 `array<T>` 并对齐，计数统一为 u32。
+全部为必需块（标记 bit0），块版本均为 1，求值语义即 [运行时](RUNTIME.md) “求值规则”“物理”“动作片段”各节。字段顺序和计数宽度与 v1 相同，差别只有：字符串改为 `sref`，浮点数组、索引和字节串改为 `array<T>`，贴图页增加类型。
 
 | 标签 | 内容 | 必须存在 |
 | --- | --- | --- |
@@ -142,7 +143,7 @@ u8  blob[...]            UTF-8，不以 0 结尾
 
 ### `PARM`
 
-`u32 n` × `{ sref id, sref name, f32 min, max, default, u8 flags (1 blend, 2 repeat), pad4 }`
+`u32 n` × `{ sref id, sref name, f32 min, max, default, u8 flags (1 blend, 2 repeat) }`
 
 ### `DEFM`
 
@@ -150,37 +151,37 @@ u8  blob[...]            UTF-8，不以 0 结尾
 
 ```
 u8 kind (0 Warp, 1 Rotation), sref id, i32 parent, i32 part,
-u8 flags (1 visible, 2 enabled, 4 flipX, 8 flipY, 16 bilinear), pad4,
+u8 flags (1 visible, 2 enabled, 4 flipX, 8 flipY, 16 bilinear),
 f32 opacity, rgb multiply, rgb screen
 Warp:     u32 columns, rows, grid<array<f32> points>, channels,
           bindings<{ array<f32> points, f32 opacity, rgb multiply, rgb screen }>
 Rotation: f32 baseAngle, grid<{ f32 x, y, angle, scale }>, channels,
-          bindings<{ f32 x, y, angle, scale, u8 flipX, u8 flipY, pad4, f32 opacity, rgb multiply, rgb screen }>
+          bindings<{ f32 x, y, angle, scale, u8 flipX, u8 flipY, f32 opacity, rgb multiply, rgb screen }>
 ```
 
 ### `PART`
 
 ```
-u32 n × { sref id, sref name, u8 flags (1 visible, 2 sketch), u8 groupMode, pad4, i32 drawOrder,
-          u32 n × { u8 kind (0 part, 1 mesh), pad4, ref target },
+u32 n × { sref id, sref name, u8 flags (1 visible, 2 sketch), u8 groupMode, i32 drawOrder,
+          u32 n × { u8 kind (0 part, 1 mesh), ref target },
           channels, composite,
           bindings<{ f32 drawOrder, f32 opacity, rgb multiply, rgb screen }> }
-composite = { u8 blend, u8 alphaBlend, pad4, u32 n × ref maskMesh, u32 n × ref maskPart,
-              u8 invertMask, pad4, f32 opacity, rgb multiply, rgb screen }
+composite = { u8 blend, u8 alphaBlend, u32 n × ref maskMesh, u32 n × ref maskPart,
+              u8 invertMask, f32 opacity, rgb multiply, rgb screen }
 ```
 
 ### `MESH`
 
 ```
-u32 n × { sref id, sref name, i32 parent, u8 blend, u8 alphaBlend, pad4, u32 n × ref maskMesh,
-          u8 flags (1 invertMask, 2 culling, 4 visible, 8 geometry), pad4, i32 texturePage,
+u32 n × { sref id, sref name, i32 parent, u8 blend, u8 alphaBlend, u32 n × ref maskMesh,
+          u8 flags (1 invertMask, 2 culling, 4 visible, 8 geometry), i32 texturePage,
           [geometry] array<f32> positions, array<f32> uvs, array<u16|u32> indices,
           grid<array<f32> deltas>, channels,
           f32 drawOrder, f32 opacity, rgb multiply, rgb screen,
           bindings<{ array<f32> deltas, f32 drawOrder, f32 opacity, rgb multiply, rgb screen }> }
 ```
 
-`[geometry]` 仅在 flags bit3 为 1 时出现。这是 v1 遗留的条件字段，为保持与 v1 一一对应而保留，是规则 3 的唯一例外。
+`[geometry]` 仅在 flags bit3 为 1 时出现；`CLIP` 中 Bezier 段的控制点同样只在段类型为 1 时出现。这两处是 v1 遗留的条件字段，为与 v1 一一对应而保留，是规则 3 仅有的例外。
 
 ### `GLUE`
 
@@ -188,12 +189,12 @@ u32 n × { sref id, sref name, i32 parent, u8 blend, u8 alphaBlend, pad4, u32 n 
 
 ### `DRAW`
 
-绘制树根组，递归：`{ i32 part, i32 drawOrder, channels, u8 hasComposite, pad4, [composite], u32 n × { u8 kind (0 group, 1 mesh), pad4, group | ref mesh } }`
+绘制树根组，递归：`{ i32 part, i32 drawOrder, channels, u8 hasComposite, [composite], u32 n × { u8 kind (0 group, 1 mesh), group | ref mesh } }`
 
 ### `TEXR`
 
 ```
-u32 n × { u8 kind, pad4, u32 width, height, payload }
+u32 n × { u8 kind, u32 width, height, payload }
 kind 0  PNG       payload = array<u8> png      所有运行时必须支持
 kind 1  KTX2      payload = array<u8> ktx2     可选；不支持的运行时报告该页不可用
 kind 2  外部文件  payload = sref uri           相对模型文件的路径，由宿主加载
@@ -264,7 +265,7 @@ u16 hooks                 位集：H1=1, H2=2, H3=4, H4=8, H6=32
 u32 n × ref parameter     H1 被覆盖为默认值的参数
 u32 n × ref physicsGroup  H1 被跳过的摆锤组
 u32 n × ref deformer      H2 被替换框架的变形器
-u32 n × { ref mesh, u8 offsets (1 = 替换关键形偏移中的指定轴), pad4,
+u32 n × { ref mesh, u8 offsets (1 = 替换关键形偏移中的指定轴),
           u32 n × ref axisParameter, u32 n × u32 binding }   H4 被替换的贡献
 u32 n × u32 depends_on    依赖的其他扩展块标签（四字符按 u32 存）
 ```
@@ -308,9 +309,9 @@ u32 n × u32 depends_on    依赖的其他扩展块标签（四字符按 u32 存
 ## 运行时与写出器
 
 - **读取**：同时支持 v1 与 v2，两者解析为同一个内存结构 `Rig`，求值代码只有一份。
-- **写出**：`P2lrtTarget` 默认写 v2；导出选项“兼容 v1”只写核心内容的 v1 布局，此时若有扩展数据，`CapabilityScan` 报告其以烘焙形式保留。
+- **写出**：`P2lrtTarget` 默认写 v2；导出选项 `v1` 只写核心内容的 v1 布局，此时若有扩展数据，`CapabilityScan` 报告其以烘焙形式保留。`compress` 用 deflate 压缩能变小的块，`strip_names` 剥离名称。
 - **能力查询**：新增 `p2l_format_support()`，返回支持的主版本和块标签及版本列表；`p2l_rig_load_ex(bytes, len, flags)` 的 flags bit0 要求校验 CRC。
-- **压缩依赖**：Rust 读取端用纯 Rust 的 `miniz_oxide`（deflate）与 `ruzstd`（zstd 解码），可编译到 WASM，运行时只需解码；Kotlin 写出端 deflate 用 JDK `Deflater`，zstd 选纯 Java 实现，避免引入本地库。
+- **压缩依赖**：Rust 读取端用纯 Rust 的 `miniz_oxide`（deflate）与 `ruzstd`（zstd 解码），可编译到 WASM，运行时只需解码。WASM 构建因此从 208 KB 增至 400 KB，其中版本 2 读取与 deflate 约 79 KB，zstd 约 113 KB。Kotlin 写出端 deflate 用 JDK `Deflater`；zstd 写出需要纯 Java 实现，尚未接入。
 - **字节稳定**：同一 IR 两次写出字节相同；名称剥离和数组编码由导出选项决定，不受环境影响。
 
 ## 验证

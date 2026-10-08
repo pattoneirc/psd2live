@@ -5,9 +5,14 @@ import io.github.psd2live.format.model.*
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.zip.CRC32
+import java.util.zip.Deflater
 
 /**
- * `.p2lrt`, the compiled rig the PSD2Live runtime plays. Version 1, little-endian:
+ * `.p2lrt`, the compiled rig the PSD2Live runtime plays. Version 2 (the default) holds the records below in
+ * chunks - a string table, one chunk per table, arrays tagged with a codec and four-byte aligned - each
+ * 16-byte aligned, CRC-checked and optionally deflated; its layout is `docs/zh/spec/P2LRT_V2.md`. Version 1,
+ * still written on request for older players, is one little-endian stream:
  *
  * ```
  * "P2LRT\0\0\0" u32 version
@@ -31,29 +36,75 @@ import java.nio.ByteOrder
  * The reader rejects any other version.
  */
 public object P2lrt {
-	public const val VERSION: Int = 1
+	/** The version [write] produces by default. */
+	public const val VERSION: Int = 2
 
-	public fun write(ir: RigIR): ByteArray = Writer(ir).bytes()
+	/**
+	 * How to write: [version] 1 or 2; in version 2, [compress] deflates the chunks that shrink (never the PNG
+	 * pages) and [stripNames] leaves every display name empty, keeping the ids.
+	 */
+	public data class Options(val version: Int = VERSION, val compress: Boolean = false, val stripNames: Boolean = false) {
+		init { require(version == 1 || version == 2) { "Unsupported .p2lrt version $version" } }
+	}
 
-	private class Out {
+	public fun write(ir: RigIR, options: Options = Options()): ByteArray =
+		if (options.version == 1) Writer(ir, Out(null), false).v1() else Writer(ir, Out(Strings()), options.stripNames).v2(options)
+
+	/** Version 2's string table: each distinct string once, in first-use order; empty strings are not stored. */
+	private class Strings {
+		val index = LinkedHashMap<String, Int>()
+		fun ref(v: String): Int = if (v.isEmpty()) -1 else index.getOrPut(v) { index.size }
+	}
+
+	/** Bytes being written: one version 1 stream, or one version 2 chunk when [strings] is set. */
+	private class Out(val strings: Strings?) {
 		private val buffer = ByteArrayOutputStream()
 		private val scratch = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
 		fun u8(v: Int) { buffer.write(v) }
 		fun u16(v: Int) { require(v in 0..0xFFFF) { "Value $v exceeds u16" }; scratch.clear(); scratch.putShort(v.toShort()); buffer.write(scratch.array(), 0, 2) }
 		fun u32(v: Int) { scratch.clear(); scratch.putInt(v); buffer.write(scratch.array(), 0, 4) }
+		fun u64(v: Long) { scratch.clear(); scratch.putLong(v); buffer.write(scratch.array(), 0, 8) }
 		fun i32(v: Int) = u32(v)
 		fun f32(v: Float) { require(v.isFinite()) { "Non-finite value in the rig" }; scratch.clear(); scratch.putFloat(v); buffer.write(scratch.array(), 0, 4) }
 		fun bool(v: Boolean) = u8(if (v) 1 else 0)
-		fun str(v: String) { val b = v.encodeToByteArray(); u32(b.size); buffer.write(b) }
-		fun floats(v: Floats) { u32(v.size); for (i in 0 until v.size) f32(v[i]) }
-		fun floats(v: FloatArray) { u32(v.size); v.forEach(::f32) }
-		fun bytes(v: ByteArray) { u32(v.size); buffer.write(v) }
+		fun str(v: String) {
+			if (strings != null) { u32(strings.ref(v)); return }
+			val b = v.encodeToByteArray(); u32(b.size); buffer.write(b)
+		}
+		/** A version 2 array header: zero padding to four bytes, the codec, three reserved bytes, the count. */
+		private fun array(codec: Int, count: Int) {
+			while (buffer.size() % 4 != 0) buffer.write(0)
+			u8(codec); u8(0); u8(0); u8(0); u32(count)
+		}
+		fun floats(v: Floats) { if (strings != null) array(F32, v.size) else u32(v.size); for (i in 0 until v.size) f32(v[i]) }
+		fun floats(v: FloatArray) { if (strings != null) array(F32, v.size) else u32(v.size); v.forEach(::f32) }
+		fun indices(v: Ints) {
+			val short = strings != null && (0 until v.size).all { v[it] in 0..0xFFFF }
+			if (strings != null) array(if (short) U16 else U32, v.size) else u32(v.size)
+			for (i in 0 until v.size) if (short) u16(v[i]) else u32(v[i])
+		}
+		fun bytes(v: ByteArray) { if (strings != null) array(U8, v.size) else u32(v.size); buffer.write(v) }
+		fun raw(v: ByteArray) { buffer.write(v) }
+		fun pad(alignment: Int) { while (buffer.size() % alignment != 0) buffer.write(0) }
+		fun size(): Int = buffer.size()
 		fun rgb(c: Rgb) { f32(c.red); f32(c.green); f32(c.blue) }
 		fun result(): ByteArray = buffer.toByteArray()
 	}
 
-	private class Writer(private val ir: RigIR) {
-		private val out = Out()
+	private const val F32 = 0
+	private const val U16 = 16
+	private const val U32 = 17
+	private const val U8 = 32
+	private const val REQUIRED = 1
+	private const val HAS_CRC = 2
+	private const val DEFLATE = 1 shl 2
+	private const val NAMES_STRIPPED = 1
+
+	private class Chunk(val tag: String, val required: Boolean, val data: ByteArray, val compressible: Boolean = true)
+
+	private class Writer(private val ir: RigIR, private var out: Out, private val stripNames: Boolean) {
+		/** A display name: empty when names are stripped. */
+		private fun name(v: String) = out.str(if (stripNames) "" else v)
 		private val parameterIndex = ir.parameters.withIndex().associate { it.value.id to it.index }
 		private val deformers = parentsFirst(ir.deformers)
 		private val deformerIndex = deformers.withIndex().associate { it.value.id to it.index }
@@ -65,12 +116,24 @@ public object P2lrt {
 		private fun part(id: String?) = id?.let { partIndex[it] ?: throw IllegalArgumentException("Unknown part: $it") } ?: -1
 		private fun mesh(id: String) = meshIndex[id] ?: throw IllegalArgumentException("Unknown mesh: $id")
 
-		fun bytes(): ByteArray {
-			out.u8('P'.code); out.u8('2'.code); out.u8('L'.code); out.u8('R'.code); out.u8('T'.code); out.u8(0); out.u8(0); out.u8(0)
-			out.u32(VERSION)
-			with(ir.canvas) { out.f32(width); out.f32(height); out.f32(originX); out.f32(originY); out.f32(pixelsPerUnit ?: -1f) }
+		private fun magic() { "P2LRT".forEach { out.u8(it.code) }; out.u8(0); out.u8(0); out.u8(0) }
+		private fun canvas() = with(ir.canvas) { out.f32(width); out.f32(height); out.f32(originX); out.f32(originY); out.f32(pixelsPerUnit ?: -1f) }
+		private fun parameters() {
 			out.u32(ir.parameters.size)
-			for (p in ir.parameters) { out.str(p.id); out.str(p.name); out.f32(p.min); out.f32(p.max); out.f32(p.default); out.u8((if (p.blend) 1 else 0) or (if (p.repeat) 2 else 0)) }
+			for (p in ir.parameters) { out.str(p.id); name(p.name); out.f32(p.min); out.f32(p.max); out.f32(p.default); out.u8((if (p.blend) 1 else 0) or (if (p.repeat) 2 else 0)) }
+		}
+		private fun physics() { out.f32(ir.physics.fps ?: 0f); out.u32(ir.physics.groups.size); ir.physics.groups.forEach(::physics) }
+		private fun roles() {
+			out.u32(ir.parameterRoles.size)
+			for (role in ir.parameterRoles) {
+				val present = role.parameters.filter { it in parameterIndex }
+				out.str(role.role); out.u32(present.size); present.forEach { out.u32(parameter(it)) }
+			}
+		}
+
+		fun v1(): ByteArray {
+			magic(); out.u32(1)
+			canvas(); parameters()
 			out.u32(deformers.size); deformers.forEach(::deformer)
 			out.u32(ir.parts.size); ir.parts.forEach(::part)
 			out.u32(ir.meshes.size); ir.meshes.forEach(::mesh)
@@ -78,14 +141,129 @@ public object P2lrt {
 			group(ir.renderRoot)
 			out.u32(ir.textures.pages.size)
 			for (page in ir.textures.pages) { out.u32(page.width); out.u32(page.height); out.bytes(page.png.shared()) }
-			out.f32(ir.physics.fps ?: 0f); out.u32(ir.physics.groups.size); ir.physics.groups.forEach(::physics)
+			physics()
 			out.u32(ir.clips.size); ir.clips.forEach(::clip)
-			out.u32(ir.parameterRoles.size)
-			for (role in ir.parameterRoles) {
-				val present = role.parameters.filter { it in parameterIndex }
-				out.str(role.role); out.u32(present.size); present.forEach { out.u32(parameter(it)) }
-			}
+			roles()
 			return out.result()
+		}
+
+		fun v2(options: Options): ByteArray {
+			val strings = out.strings!!
+			fun chunk(tag: String, required: Boolean = true, compressible: Boolean = true, body: () -> Unit): Chunk {
+				out = Out(strings); body(); return Chunk(tag, required, out.result(), compressible)
+			}
+			val chunks = ArrayList<Chunk>()
+			chunks += chunk("CANV") { canvas() }
+			chunks += chunk("PARM") { parameters() }
+			chunks += chunk("DEFM") { out.u32(deformers.size); deformers.forEach(::deformer) }
+			chunks += chunk("PART") { out.u32(ir.parts.size); ir.parts.forEach(::part) }
+			chunks += chunk("MESH") { out.u32(ir.meshes.size); ir.meshes.forEach(::mesh) }
+			if (ir.glues.isNotEmpty()) chunks += chunk("GLUE") { out.u32(ir.glues.size); ir.glues.forEach(::glue) }
+			chunks += chunk("DRAW") { group(ir.renderRoot) }
+			if (ir.textures.pages.isNotEmpty()) chunks += chunk("TEXR", compressible = false) {
+				out.u32(ir.textures.pages.size)
+				for (page in ir.textures.pages) { out.u8(0); out.u32(page.width); out.u32(page.height); out.bytes(page.png.shared()) }
+			}
+			if (ir.physics.groups.isNotEmpty() || ir.physics.fps != null) chunks += chunk("PHYS") { physics() }
+			if (ir.clips.isNotEmpty()) chunks += chunk("CLIP") { out.u32(ir.clips.size); ir.clips.forEach(::clip) }
+			if (ir.parameterRoles.isNotEmpty()) chunks += chunk("ROLE") { roles() }
+			val gui = Gui(ir, parameterIndex)
+			if (!gui.isEmpty) chunks += chunk("PGUI", required = false) { gui.write() }
+			chunks += chunk("META", required = false) {
+				val meta = listOf("generator" to "psd2live", "generator_version" to Compiler.version)
+				out.u32(meta.size); meta.forEach { (k, v) -> out.str(k); out.str(v) }
+			}
+			// The string table goes first; every other chunk has added its strings by now.
+			out = Out(null)
+			out.u32(strings.index.size)
+			val utf8 = strings.index.keys.map { it.encodeToByteArray() }
+			var at = 0
+			out.u32(0); utf8.forEach { at += it.size; out.u32(at) }
+			utf8.forEach(out::raw)
+			chunks.add(0, Chunk("STRS", true, out.result()))
+			return container(chunks, options)
+		}
+
+		/** The parameter panel: snap values, two-dimensional pads and the group tree, for parameters the file has. */
+		private inner class Gui(ir: RigIR, known: Map<String, Int>) {
+			val snaps = ir.parameters.filter { it.keys != null && it.keys!!.size > 0 }
+			val joysticks = ir.parameterLinks.filter { it.horizontal in known && it.vertical in known }
+			val tree: List<ParameterNode> = prune(ir.parameterTree, known)
+			val isEmpty get() = snaps.isEmpty() && joysticks.isEmpty() && tree.isEmpty()
+
+			private fun prune(nodes: List<ParameterNode>, known: Map<String, Int>): List<ParameterNode> = nodes.mapNotNull { node ->
+				when (node) {
+					is ParameterNode.Param -> node.takeIf { it.id in known }
+					is ParameterNode.Group -> node.copy(children = prune(node.children, known))
+				}
+			}
+
+			fun write() {
+				out.u32(snaps.size)
+				for (p in snaps) { out.u32(parameter(p.id)); out.floats(p.keys!!) }
+				out.u32(joysticks.size)
+				for (link in joysticks) { out.u32(parameter(link.horizontal)); out.u32(parameter(link.vertical)) }
+				out.u32(count(tree))
+				tree.forEach(::node)
+			}
+
+			private fun count(nodes: List<ParameterNode>): Int = nodes.sumOf { 1 + if (it is ParameterNode.Group) count(it.children) else 0 }
+
+			private fun node(n: ParameterNode) {
+				when (n) {
+					is ParameterNode.Param -> {
+						out.u8(0); out.u8(0); out.u8(0); out.u8(0); out.i32(parameter(n.id))
+						out.str(""); out.str(""); out.str(""); out.u32(0); out.u32(0)
+					}
+					is ParameterNode.Group -> {
+						val label = n.label
+						out.u8(1); out.bool(n.open); out.u8(when (label) { GroupLabel.None -> 0; is GroupLabel.Preset -> 1; is GroupLabel.Custom -> 2 }); out.u8(0)
+						out.i32(-1); out.str(n.id); name(n.name)
+						out.str((label as? GroupLabel.Preset)?.name ?: ""); out.u32((label as? GroupLabel.Custom)?.argb ?: 0)
+						out.u32(n.children.size)
+						n.children.forEach(::node)
+					}
+				}
+			}
+		}
+
+		/** The header, the chunk table and the chunks, each 16-byte aligned. */
+		private fun container(chunks: List<Chunk>, options: Options): ByteArray {
+			val stored = chunks.map { c ->
+				if (!options.compress || !c.compressible) return@map c.data to 0
+				val packed = deflate(c.data)
+				if (packed.size < c.data.size) packed to DEFLATE else c.data to 0
+			}
+			val file = Out(null)
+			"P2LRT".forEach { file.u8(it.code) }; file.u8(0); file.u8(0); file.u8(0)
+			file.u16(2); file.u16(0); file.u32(if (options.stripNames) NAMES_STRIPPED else 0)
+			file.u32(chunks.size); file.u32(32); file.u32(0); file.u32(0)
+			var offset = 32 + chunks.size * 40
+			chunks.forEachIndexed { i, c ->
+				val (bytes, compression) = stored[i]
+				offset = (offset + 15) / 16 * 16
+				val crc = CRC32().apply { update(bytes) }.value.toInt()
+				c.tag.forEach { file.u8(it.code) }
+				file.u16(1); file.u16((if (c.required) REQUIRED else 0) or HAS_CRC or compression)
+				file.u64(offset.toLong()); file.u64(bytes.size.toLong()); file.u64(c.data.size.toLong())
+				file.u32(crc); file.u32(0)
+				offset += bytes.size
+			}
+			for ((bytes, _) in stored) { file.pad(16); file.raw(bytes) }
+			return file.result()
+		}
+
+		private fun deflate(data: ByteArray): ByteArray {
+			val deflater = Deflater(Deflater.BEST_COMPRESSION)
+			try {
+				deflater.setInput(data); deflater.finish()
+				val packed = ByteArrayOutputStream()
+				val buffer = ByteArray(65536)
+				while (!deflater.finished()) packed.write(buffer, 0, deflater.deflate(buffer))
+				return packed.toByteArray()
+			} finally {
+				deflater.end()
+			}
 		}
 
 		private fun <F> grid(grid: KeyGrid<F>?, form: (F) -> Unit) {
@@ -166,7 +344,7 @@ public object P2lrt {
 		}
 
 		private fun part(p: Part) {
-			out.str(p.id); out.str(p.name)
+			out.str(p.id); name(p.name)
 			out.u8((if (p.visible) 1 else 0) or (if (p.sketch) 2 else 0)); out.u8(p.groupMode.ordinal); out.i32(p.drawOrder)
 			out.u32(p.children.size); p.children.forEach(::child)
 			channels(p.channels); composite(p.composite)
@@ -174,12 +352,12 @@ public object P2lrt {
 		}
 
 		private fun mesh(m: Mesh) {
-			out.str(m.id); out.str(m.name); out.i32(deformer(m.parent)); out.u8(m.blend.ordinal); out.u8(m.alphaBlend.ordinal)
+			out.str(m.id); name(m.name); out.i32(deformer(m.parent)); out.u8(m.blend.ordinal); out.u8(m.alphaBlend.ordinal)
 			out.u32(m.maskedBy.size); m.maskedBy.forEach { out.u32(mesh(it)) }
 			out.u8((if (m.invertMask) 1 else 0) or (if (m.culling) 2 else 0) or (if (m.visible) 4 else 0) or (if (m.geometry != null) 8 else 0))
 			out.i32(ir.textures.bindings[m.id] ?: m.page)
 			m.geometry?.let { g ->
-				out.floats(g.positions); out.floats(g.uvs); out.u32(g.indices.size); for (i in 0 until g.indices.size) out.u32(g.indices[i])
+				out.floats(g.positions); out.floats(g.uvs); out.indices(g.indices)
 			}
 			grid(m.offsets) { out.floats(it.deltas) }
 			channels(m.channels)
@@ -204,7 +382,7 @@ public object P2lrt {
 		}
 
 		private fun physics(g: PhysicsGroup) {
-			out.str(g.id); out.str(g.name)
+			out.str(g.id); name(g.name)
 			val inputs = g.inputs.filter { it.parameter in parameterIndex }; val outputs = g.outputs.filter { it.parameter in parameterIndex }
 			out.u32(inputs.size); for (i in inputs) { out.u32(parameter(i.parameter)); out.f32(i.weight); out.u8(i.source.ordinal); out.bool(i.reflect) }
 			out.u32(outputs.size); for (o in outputs) { out.u32(parameter(o.parameter)); out.u32(o.vertex); out.f32(o.scale); out.f32(o.weight); out.u8(o.source.ordinal); out.bool(o.reflect) }
@@ -213,7 +391,7 @@ public object P2lrt {
 		}
 
 		private fun clip(c: Clip) {
-			out.str(c.id); out.str(c.name); out.str(c.group); out.f32(c.duration); out.f32(c.fps); out.bool(c.loop)
+			out.str(c.id); name(c.name); out.str(c.group); out.f32(c.duration); out.f32(c.fps); out.bool(c.loop)
 			out.f32(c.fadeIn ?: -1f); out.f32(c.fadeOut ?: -1f)
 			val curves = c.curves.filter { it.parameter in parameterIndex }
 			out.u32(curves.size)
@@ -258,8 +436,16 @@ public object P2lrtTarget : ExportTarget {
 		blendModes = ColorBlend.entries.toSet(), masks = MaskSupport.TEXTURE_ALPHA, keyedDrawOrder = true, glue = true,
 	)
 
+	/** `v1` writes version 1 for players that predate version 2; `compress` and `strip_names` apply to version 2. */
+	override val settings: List<TargetSetting> = listOf(
+		TargetSetting.Flag("v1", false), TargetSetting.Flag("compress", false), TargetSetting.Flag("strip_names", false),
+	)
+
 	override fun plan(ir: RigIR, options: ExportOptions): LoweredExport {
-		val bytes = P2lrt.write(ir)
+		val bytes = P2lrt.write(ir, P2lrt.Options(
+			version = if (options.flag("v1", false)) 1 else 2,
+			compress = options.flag("compress", false), stripNames = options.flag("strip_names", false),
+		))
 		return object : LoweredExport {
 			override val losses: List<LossEntry> = CapabilityScan.scan(ir, capabilities, options)
 			override fun write(sink: OutputSink) = sink.write("${options.baseName}.p2lrt", bytes)

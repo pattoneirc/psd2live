@@ -5,6 +5,7 @@
 
 pub mod behavior;
 pub mod clip;
+pub mod container;
 pub mod eval;
 pub mod ffi;
 pub mod physics;
@@ -17,3 +18,5 @@ pub use rig::{Error, Rig};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod format_tests;

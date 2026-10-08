@@ -14,6 +14,7 @@ use godot::classes::{CanvasItemMaterial, FileAccess, INode2D, Image, ImageTextur
 use godot::prelude::*;
 use p2l_runtime::behavior::Behaviors;
 use p2l_runtime::clip::Player;
+use p2l_runtime::rig::TextureKind;
 use p2l_runtime::{render_order, Evaluator, Physics, Rig};
 
 struct P2lExtension;
@@ -112,10 +113,15 @@ impl P2LCharacter {
             }
         };
         self.free_slots();
+        let folder = path.get_base_dir();
         self.textures = rig.textures.iter().map(|t| {
             let mut image = Image::new_gd();
-            let png = PackedByteArray::from(t.png.as_slice());
-            if image.load_png_from_buffer(&png) != godot::global::Error::OK {
+            let loaded = match t.kind {
+                TextureKind::Png => image.load_png_from_buffer(&PackedByteArray::from(t.data.as_slice())),
+                TextureKind::Ktx2 => godot::global::Error::ERR_UNAVAILABLE,
+                TextureKind::External => image.load(&folder.path_join(t.uri.as_str())),
+            };
+            if loaded != godot::global::Error::OK {
                 godot_warn!("P2LCharacter: a texture page could not be decoded");
             }
             ImageTexture::create_from_image(&image).unwrap_or_else(ImageTexture::new_gd)

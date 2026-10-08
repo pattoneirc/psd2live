@@ -19,7 +19,11 @@
 
 ## `.p2lrt` 格式
 
-版本 1，小端二进制，是编译后 IR 的紧凑表示：画布、参数、变形器（父级在前）、部件、网格、Glue、绘制树、贴图页 PNG、物理组、动作片段和参数角色（如 EyeBlink、LipSync）。引用一律为索引。逐字段布局见 `P2lrt.kt` 的文档注释，读取器（`runtime/src/rig.rs`）与之逐字段对应，并校验引用、网格索引、关键形尺寸和版本号，拒绝其他版本。2.0 格式（分块容器、核心层与扩展层）的草案见 [P2LRT_V2.md](P2LRT_V2.md)，尚未实现。
+小端二进制，是编译后 IR 的紧凑表示：画布、参数、变形器（父级在前）、部件、网格、Glue、绘制树、贴图页、物理组、动作片段和参数角色（如 EyeBlink、LipSync）。引用一律为索引。
+
+导出默认写版本 2：文件头、块目录和 16 字节对齐、带 CRC 的块，字符串集中在字符串表，数组带编码并 4 字节对齐，另有参数面板（`PGUI`）与生成器信息（`META`）。布局与演进规则见 [P2LRT_V2.md](P2LRT_V2.md)。导出选项 `v1` 写版本 1（单一顺序流，逐字段布局见 `P2lrt.kt` 的文档注释），供尚未更新的播放器使用；`compress` 用 deflate 压缩能变小的块（贴图页除外），`strip_names` 去掉显示名称、保留 id。
+
+读取器（`runtime/src/rig.rs`、`container.rs`）同时读两个版本，解析为同一个 `Rig`，求值代码只有一份；校验引用、网格索引、关键形尺寸、块的位置与对齐、块内记录是否正好读完，跳过不认识的可选块，遇到不认识的必需块报出其标签。块可用 deflate 或 zstd 压缩；写出器目前只写 deflate。
 
 ## 求值规则
 
@@ -48,12 +52,12 @@
 
 ## C ABI
 
-一个句柄对应一个已加载模型，持有参数、动作播放器和物理状态。典型流程：`p2l_rig_load` → 设置参数（`p2l_parameter_values` / `p2l_set_parameter`）→ `p2l_update(dt)`（动作、物理、变形）或 `p2l_evaluate` → 读取 `p2l_mesh_vertices`、`p2l_mesh_opacity`、`p2l_mesh_colors`，按 `p2l_render_order` 由后往前绘制，贴图由 `p2l_texture_png` 提供。所有函数接受空句柄；返回的指针在句柄释放（姿势数据在下次求值）前有效。
+一个句柄对应一个已加载模型，持有参数、动作播放器和物理状态。典型流程：`p2l_rig_load` → 设置参数（`p2l_parameter_values` / `p2l_set_parameter`）→ `p2l_update(dt)`（动作、物理、变形）或 `p2l_evaluate` → 读取 `p2l_mesh_vertices`、`p2l_mesh_opacity`、`p2l_mesh_colors`，按 `p2l_render_order` 由后往前绘制，贴图由 `p2l_texture_png` 提供（`p2l_texture_info` 给出贴图页类型：内嵌 PNG、KTX2 或模型旁的文件）。`p2l_rig_load_ex` 可要求校验块的 CRC，`p2l_format_support` 列出支持的版本与块。所有函数接受空句柄；返回的指针在句柄释放（姿势数据在下次求值）前有效。
 
 ## 验证
 
-- `cargo test`：每条求值规则一个小模型单元测试（数值来自探测结果），以及 Warp、动作片段测试。
-- `RuntimeConformanceTool`（`PSD2LIVE_TOOLS=1`）：生成 80 个随机模型（Warp、旋转、嵌套、稀疏网格、混合形、Glue、通道、部件、混合）、样例和本地工程的参考姿势，以及物理轨迹；`cargo run --release --bin p2lrt-conformance -- ../build/tools/runtime-conformance`（物理为 `runtime-physics`）逐例比较。当前除两个在放大极端的镜像格子中出现 0.02–0.1 像素单精度误差的随机模型外全部一致。
+- `cargo test`：每条求值规则一个小模型单元测试（数值来自探测结果），以及 Warp、动作片段测试；`format_tests` 逐块拼出版本 2 文件，覆盖压缩、CRC、块目录与各种拒绝情形、全部数组编码、贴图页类型和参数面板。
+- `RuntimeConformanceTool`（`PSD2LIVE_TOOLS=1`）：生成 80 个随机模型（Warp、旋转、嵌套、稀疏网格、混合形、Glue、通道、部件、混合）、样例和本地工程的参考姿势，以及物理轨迹；`cargo run --release --bin p2lrt-conformance -- ../build/tools/runtime-conformance`（物理为 `runtime-physics`）逐例比较。每例同时写出版本 2、版本 1 和压缩的版本 2，三者必须读成相同的 `Rig`，并逐位得到相同姿势。当前除两个在放大极端的镜像格子中出现 0.02–0.1 像素单精度误差的随机模型外全部一致。
 
 ## 尚未完成
 
