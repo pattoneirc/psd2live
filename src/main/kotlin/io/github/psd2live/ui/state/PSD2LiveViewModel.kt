@@ -916,7 +916,7 @@ class PSD2LiveViewModel : AutoCloseable {
         synchronized(stateLock) {
             val before = _state.value
             _state.update { current ->
-                var next = reconcileCanvasPresentation(current, transform(current))
+                var next = reconcileCanvasPresentation(current, transform(current)).withStateChangeLog(current)
                 val parameters = next.previewModel?.rig?.puppet?.parameters
                 if (parameters != null && (parameters != current.previewModel?.rig?.puppet?.parameters ||
                     next.rigEdits.motionClips != current.rigEdits.motionClips)) {
@@ -981,10 +981,17 @@ class PSD2LiveViewModel : AutoCloseable {
                 meshSplitQueue.clear()
                 manualMeshSplitRequests.clear()
             }
-            _state.value = next
-            pruneParameterSnapshotPreview(next)
-            _uiState.value = next
+            val logged = next.withStateChangeLog(_state.value)
+            _state.value = logged
+            pruneParameterSnapshotPreview(logged)
+            _uiState.value = logged
         }
+    }
+
+    /** [this] with the log lines its change from [before] implies; see [stateChangeLogEntries]. */
+    private fun PSD2LiveState.withStateChangeLog(before: PSD2LiveState): PSD2LiveState {
+        val entries = stateChangeLogEntries(before, this)
+        return if (entries.isEmpty()) this else copy(logEntries = logEntries.appendingLog(entries))
     }
 
     internal fun updateCanvasPresentation(
@@ -2155,7 +2162,9 @@ class PSD2LiveViewModel : AutoCloseable {
         updateState { current ->
             if (current.projectId != captured.projectId || current.projectOpenGeneration != captured.projectOpenGeneration) {
                 current.copy(projectSaving = saving)
-            } else current.copy(projectSaving = saving, projectDirty = true, projectSaveError = failure.message ?: "Save failed")
+            } else current.copy(projectSaving = saving, projectDirty = true, projectSaveError = failure.message ?: "Save failed",
+                logEntries = current.logEntries.appendingLog(listOf(AppLogEntry(source = LogSource.EDITOR, level = LogLevel.ERROR,
+                    tag = "Project", message = tr("log.project.saveFailed", failure.message ?: failure.javaClass.simpleName)))))
         }
     }
     internal fun projectSaveFinished(path: Path, headId: String, captured: PSD2LiveState) {
@@ -2168,7 +2177,9 @@ class PSD2LiveViewModel : AutoCloseable {
             }
             current.copy(projectFile = saved, projectSaving = saving,
             projectDirty = current.historySnapshot?.headNodeId != headId || current.projectAuxiliaryVersion != captured.projectAuxiliaryVersion || io.github.psd2live.ui.state.WorkspaceStateCodec.editableIdentity(current) != io.github.psd2live.ui.state.WorkspaceStateCodec.editableIdentity(captured),
-            projectSaveError = null, recentFiles = AppSettings.recentFiles())
+            projectSaveError = null, recentFiles = AppSettings.recentFiles(),
+            logEntries = current.logEntries.appendingLog(listOf(AppLogEntry(source = LogSource.EDITOR, level = LogLevel.SUCCESS,
+                tag = "Project", message = tr("log.project.saved", path.fileName), detail = saved))))
         }
     }
     internal fun markProjectAuxiliaryChanged() { updateState { it.copy(projectDirty = true, projectEditVersion = it.projectEditVersion + 1, projectAuxiliaryVersion = it.projectAuxiliaryVersion + 1) } }
@@ -5308,8 +5319,41 @@ class PSD2LiveViewModel : AutoCloseable {
 			imageBytes = imageBytes,
 			imageLabel = imageLabel,
 		)
+		addLog(listOf(entry))
+	}
+
+	/** Logs every MCP tool call with the renders it returned, and clients connecting and leaving. */
+	val agentCallObserver = object : io.github.psd2live.agent.AgentCallObserver {
+		override fun onCall(record: io.github.psd2live.agent.AgentCallRecord) = addLog(agentCallLogEntries(record))
+		override fun onClientConnected(client: String) =
+			addLog(tr("log.ai.connected", client), level = LogLevel.SUCCESS, source = LogSource.MCP_SERVER, tag = "Server")
+		override fun onClientDisconnected(client: String) =
+			addLog(tr("log.ai.disconnected", client), source = LogSource.MCP_SERVER, tag = "Server")
+	}
+
+	/** Logs the MCP endpoint starting, stopping and failing, from the state it is in now on. */
+	fun watchAgentMcp(status: kotlinx.coroutines.flow.StateFlow<io.github.psd2live.agent.AgentMcpStatus>) {
+		scope.launch {
+			var last: io.github.psd2live.agent.AgentMcpStatus? = null
+			status.collect { next ->
+				val previous = last
+				last = next
+				when (next) {
+					is io.github.psd2live.agent.AgentMcpStatus.Running -> addLog(tr("log.ai.running", next.connection.endpoint, next.connection.profile.key),
+						level = LogLevel.SUCCESS, source = LogSource.MCP_SERVER, tag = "Server")
+					is io.github.psd2live.agent.AgentMcpStatus.Failed -> addLog(tr("log.ai.failed", next.message),
+						level = LogLevel.ERROR, source = LogSource.MCP_SERVER, tag = "Server")
+					io.github.psd2live.agent.AgentMcpStatus.Stopped -> if (previous != null) addLog(tr("log.ai.stopped"),
+						level = LogLevel.WARNING, source = LogSource.MCP_SERVER, tag = "Server")
+				}
+			}
+		}
+	}
+
+	fun addLog(entries: List<AppLogEntry>) {
+		if (entries.isEmpty()) return
 		updateState { current ->
-			current.copy(logEntries = current.logEntries.appendingLog(listOf(entry)))
+			current.copy(logEntries = current.logEntries.appendingLog(entries))
 		}
 	}
 
@@ -5384,7 +5428,7 @@ class PSD2LiveViewModel : AutoCloseable {
 				val result = withContext(Dispatchers.Default) {
 					ws.checkoutHistory(nodeId, io.github.psd2live.project.MutationAuthor.USER)
 				}
-				// The workspace already logged the checkout; this only reflects it in the status bar.
+				// The history snapshot logs the checkout; this only reflects it in the status bar.
 				updateState { current ->
 					current.copy(
 						statusText = result.summary,
@@ -5394,12 +5438,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			} catch (failure: Throwable) {
                 if (failure is kotlinx.coroutines.CancellationException) throw failure
 				val err = failure.message ?: failure.javaClass.simpleName
-				addLog(
-					message = "History checkout failed: $err",
-					level = LogLevel.ERROR,
-					source = LogSource.EDITOR,
-					tag = "History",
-				)
+				// The error the window reports is logged with it.
 				updateState { it.copy(errorMessage = err) }
 			}
 		}

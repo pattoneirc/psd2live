@@ -344,11 +344,14 @@ enum class LogSource {
 	EDITOR,
 }
 
-enum class LogLevel {
-	INFO,
-	SUCCESS,
-	WARNING,
-	ERROR,
+/** How much a log line matters; the dock shows lines at or above a chosen [severity]. SUCCESS ranks with INFO. */
+enum class LogLevel(val severity: Int) {
+	/** Routine reads, such as an Agent inspecting the workspace: hidden unless the dock asks for them. */
+	DEBUG(0),
+	INFO(1),
+	SUCCESS(1),
+	WARNING(2),
+	ERROR(3),
 }
 
 /** The log keeps the newest this many entries: a long session, or an agent's, would otherwise grow it for good. */

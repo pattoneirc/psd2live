@@ -104,8 +104,9 @@ private fun runGui() {
 	val viewModel = PSD2LiveViewModel()
 	val agentWorkspace = DesktopWorkspace(viewModel)
 	viewModel.attachWorkspace(agentWorkspace)
-	val agentMcp = AgentMcpController(agentWorkspace)
+	val agentMcp = AgentMcpController(agentWorkspace, observer = viewModel.agentCallObserver)
 	agentMcp.start()
+	viewModel.watchAgentMcp(agentMcp.status)
 
 	// Both close() calls are idempotent, so the hook (Ctrl+C, SIGTERM, logoff) and the normal exit can race.
 	val shutdown = {
