@@ -1,5 +1,6 @@
 package io.github.psd2live.core
 
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.float
@@ -182,6 +183,9 @@ data class RigKeyformCopyEdit(
  * Authoritative rig customization applied after every deterministic base-rig build. This value is
  * included in Agent history snapshots and export configuration.
  */
+/** The rig after the legacy edits and the journal ([RigEditOverlay.replayAuthored]), with the entries that replay skipped. */
+internal class AuthoredReplay(val model: PuppetModel, val notes: List<SupersededEntryNote>)
+
 data class RigEditOverlay(
 	/** Embedded CMO3 baseline; imported rigs rebuild from this instead of generating a PSD rig. */
 	val importedCmo3: String? = null,
@@ -266,20 +270,27 @@ data class RigEditOverlay(
 	fun authored(rig: BuiltRig): PuppetModel = authored(rig.puppet, rig.primitiveSkins)
 
 	private fun replay(base: PuppetModel, authoredOnly: Boolean, skins: PrimitiveSkins): GeneratedOverrides.Outcome {
-		// Generated axes do not exist until swing/simulation materialization. Replay their panel
-		// placement and links afterwards, including moves of another parameter relative to them.
-		val generatedIds = swingEdits.flatMap { it.parameterIds }.toSet() +
-			simEdits.flatMap { it.outputParameters }
-		fun generatedPanelEdit(edit: kotlinx.serialization.json.JsonObject): Boolean =
-			edit["kind"]?.jsonPrimitive?.contentOrNull == "parameter" &&
-				edit["action"]?.jsonPrimitive?.contentOrNull in setOf("move", "link") &&
-				listOf("id", "partner_id", "before_id").any { field ->
-					edit[field]?.jsonPrimitive?.contentOrNull in generatedIds
-				}
-		val (generatedPanelEdits, earlyStructureEdits) = structureEdits.partition(::generatedPanelEdit)
-		val deferredJournalEdits = mutableListOf<kotlinx.serialization.json.JsonObject>()
-		for (command in authoringJournal) if (command["op"]?.jsonPrimitive?.contentOrNull == "structure")
-			deferredJournalEdits += command.getValue("edits").jsonArray.map { it.jsonObject }.filter(::generatedPanelEdit)
+		val authored = replayAuthored(base, skins)
+		if (authoredOnly) return GeneratedOverrides.Outcome(authored.model, emptyList(), authored.notes)
+		return finish(authored.model, authored.notes)
+	}
+
+	/** Generated axes do not exist until swing/simulation materialization: panel moves and links that name them. */
+	private val generatedIds: Set<String> by lazy { swingEdits.flatMap { it.parameterIds }.toSet() + simEdits.flatMap { it.outputParameters } }
+
+	private fun generatedPanelEdit(edit: kotlinx.serialization.json.JsonObject): Boolean =
+		edit["kind"]?.jsonPrimitive?.contentOrNull == "parameter" &&
+			edit["action"]?.jsonPrimitive?.contentOrNull in setOf("move", "link") &&
+			listOf("id", "partner_id", "before_id").any { field ->
+				edit[field]?.jsonPrimitive?.contentOrNull in generatedIds
+			}
+
+	/**
+	 * The authored rig: the legacy edits and the journal replayed on [base], before any swing, simulation or override
+	 * writes its keyforms - the state [finish] completes. [skins] are the split parts the skeleton skinned with [base].
+	 */
+	internal fun replayAuthored(base: PuppetModel, skins: PrimitiveSkins = PrimitiveSkins.None): AuthoredReplay {
+		val earlyStructureEdits = structureEdits.filterNot(::generatedPanelEdit)
 		// Everything the legacy stage reads, and what decides how the journal's structure edits split.
 		val legacy = ReplayCheckpoints.Legacy(listOf(deletedParameterIds, parameterEdits, warpEdits, structureEdits,
 			keyformSetEdits, keyformCopyEdits, keyformDeleteEdits, generatedIds, io.github.psd2live.i18n.I18n.currentLanguage.tag, skins))
@@ -332,9 +343,21 @@ data class RigEditOverlay(
 					failure.message ?: failure.javaClass.simpleName))
 			}
 		}
-		var model = replayed.model
-		val notes = replayed.notes
-		if (authoredOnly) return GeneratedOverrides.Outcome(model, emptyList(), notes)
+		return AuthoredReplay(replayed.model, replayed.notes)
+	}
+
+	/**
+	 * [authored] - this overlay's [replayAuthored] output - completed: swings and simulations write their keyforms, edits
+	 * of generated keyforms merge, and panel edits of generated parameters apply. [notes] pass through to the outcome.
+	 */
+	internal fun finish(authored: PuppetModel, notes: List<SupersededEntryNote> = emptyList()): GeneratedOverrides.Outcome {
+		// Generated axes exist only now: their panel placement and links replay afterwards, including moves of
+		// another parameter relative to them.
+		val generatedPanelEdits = structureEdits.filter(::generatedPanelEdit)
+		val deferredJournalEdits = mutableListOf<kotlinx.serialization.json.JsonObject>()
+		for (command in authoringJournal) if (command["op"]?.jsonPrimitive?.contentOrNull == "structure")
+			deferredJournalEdits += command.getValue("edits").jsonArray.map { it.jsonObject }.filter(::generatedPanelEdit)
+		var model = authored
 		// Swings and simulations write their keyforms onto the replayed rig, in the document graph's order.
 		model = DocumentGenerators.generate(model, this)
 		// Edits of generated keyforms merge with what the generators produce now.
@@ -401,21 +424,39 @@ data class RigEditOverlay(
 internal fun BuiltRig.withRigEdits(overlay: RigEditOverlay, layerVisibility: Map<String, Boolean> = emptyMap(),
                                  drawOrderOverrides: Map<String, Float> = emptyMap()): BuiltRig {
 	if (overlay == RigEditOverlay.Empty) return withDrawOrderOverrides(drawOrderOverrides)
-	val replayed = overlay.applyToReporting(puppet, primitiveSkins)
-	var model = replayed.model
-	val bounds = sourceBoundsByDrawableId.toMutableMap()
-	val layers = layerIdByDrawableId.toMutableMap()
-	val pages = pageByDrawableId.toMutableMap()
-	for (command in overlay.authoringJournal) {
+	return authoredRig(overlay).finished(overlay, layerVisibility, drawOrderOverrides)
+}
+
+/**
+ * A rig with [RigEditOverlay.replayAuthored] applied: [rig]'s puppet is the authored state, its maps already name the
+ * meshes the journal creates, and [visibilityTargets] are those meshes, in journal order, with the source layer whose
+ * visibility the finished rig applies to them. The materialized state a revision stores (see the materialized rig design).
+ */
+internal data class AuthoredRig(val rig: BuiltRig, val visibilityTargets: List<Pair<String, String>>)
+
+/** This base rig with [overlay]'s legacy edits and journal replayed, before any generator writes its keyforms. */
+internal fun BuiltRig.authoredRig(overlay: RigEditOverlay): AuthoredRig {
+	if (overlay == RigEditOverlay.Empty) return AuthoredRig(this, emptyList())
+	val replayed = overlay.replayAuthored(puppet, primitiveSkins)
+	return AuthoredRig(copy(puppet = replayed.model, supersededEntryNotes = replayed.notes), emptyList())
+		.withJournalMeshes(overlay.authoringJournal)
+}
+
+/** [commands] - journal entries [rig]'s puppet already holds - recorded in the maps: the meshes they create, split or rebuild. */
+internal fun AuthoredRig.withJournalMeshes(commands: List<JsonObject>): AuthoredRig {
+	val model = rig.puppet
+	val bounds = rig.sourceBoundsByDrawableId.toMutableMap()
+	val layers = rig.layerIdByDrawableId.toMutableMap()
+	val pages = rig.pageByDrawableId.toMutableMap()
+	val visible = visibilityTargets.toMutableList()
+	for (command in commands) {
 		val op = command["op"]?.jsonPrimitive?.contentOrNull
 		if (op == SourcePartitionJournal.OP) {
 			for (piece in SourcePartitionJournal.pieces(command)) {
 				val id = piece.getValue("id").jsonPrimitive.content
 				val drawable = model.drawables.singleOrNull { it.id.raw == id } ?: continue
 				layers[id] = piece.getValue("layer_id").jsonPrimitive.content
-				layerVisibility[layers.getValue(id)]?.let { visible ->
-					model = model.copy(drawables = model.drawables.map { if (it.id.raw == id) it.copy(isVisible = visible) else it })
-				}
+				visible += id to layers.getValue(id)
 				pages[id] = drawable.texturePage
 				val canvas = piece.getValue("texture_canvas").jsonArray.map { it.jsonPrimitive.float }
 				val xs = canvas.indices.step(2).map { canvas[it] }; val ys = canvas.indices.step(2).map { canvas[it + 1] }
@@ -431,9 +472,7 @@ internal fun BuiltRig.withRigEdits(overlay: RigEditOverlay, layerVisibility: Map
 				val id = primitive.getValue("id").jsonPrimitive.content
 				val drawable = model.drawables.singleOrNull { it.id.raw == id } ?: continue
 				layers[id] = primitive.getValue("layer_id").jsonPrimitive.content
-				layerVisibility[layers.getValue(id)]?.let { visible ->
-					model = model.copy(drawables = model.drawables.map { if (it.id.raw == id) it.copy(isVisible = visible) else it })
-				}
+				visible += id to layers.getValue(id)
 				pages[id] = drawable.texturePage
 				val edges = primitive.getValue("neutral_bounds").jsonArray.map { it.jsonPrimitive.float }
 				require(edges.size == 4 && edges.all(Float::isFinite) && edges[2] >= edges[0] && edges[3] >= edges[1]) {
@@ -456,10 +495,23 @@ internal fun BuiltRig.withRigEdits(overlay: RigEditOverlay, layerVisibility: Map
 		}
 		if (model.drawables.any { it.id.raw == id }) bounds[id] = Bounds(numbers[0], numbers[1], numbers[2], numbers[3])
 	}
+	return AuthoredRig(rig.copy(sourceBoundsByDrawableId = bounds, layerIdByDrawableId = layers, pageByDrawableId = pages), visible)
+}
+
+/** The finished rig: [overlay]'s generators, overrides and deferred panel edits on the authored state, then layer visibility and draw orders. */
+internal fun AuthoredRig.finished(overlay: RigEditOverlay, layerVisibility: Map<String, Boolean> = emptyMap(),
+                                  drawOrderOverrides: Map<String, Float> = emptyMap()): BuiltRig {
+	// Without edits the base is the rig: no generator runs (as [withRigEdits] has it).
+	if (overlay == RigEditOverlay.Empty) return rig.withDrawOrderOverrides(drawOrderOverrides)
+	val outcome = overlay.finish(rig.puppet, rig.supersededEntryNotes)
+	var model = outcome.model
+	for ((id, layer) in visibilityTargets) {
+		val visible = layerVisibility[layer] ?: continue
+		model = model.copy(drawables = model.drawables.map { if (it.id.raw == id) it.copy(isVisible = visible) else it })
+	}
 	model = ArtPrimitiveJournal.pruneAtlas(model, overlay)
-	return copy(puppet = model, sourceBoundsByDrawableId = bounds, layerIdByDrawableId = layers, pageByDrawableId = pages,
-		overrideIssues = replayed.issues, supersededEntryNotes = replayed.notes)
-        .withDrawOrderOverrides(drawOrderOverrides)
+	return rig.copy(puppet = model, overrideIssues = outcome.issues, supersededEntryNotes = outcome.notes)
+		.withDrawOrderOverrides(drawOrderOverrides)
 }
 
 internal fun applyKeyformDelete(model: PuppetModel, delete: RigKeyformDeleteEdit): PuppetModel {

@@ -28,9 +28,26 @@ ZIP 条目的压缩方式：PNG（`assets/`、`images/`、观察图）与 CMO3 �
 | `auxiliary/tasks.json` | Agent 任务和事件记录 |
 | `workspace.json` | 布局、镜头、选择、参数预览、历史注释和日志等持久 UI 状态 |
 | `images/<hash>.png` | 日志图片 |
+| `rig/` | 可选，各修订的作者态 Rig（见下文“作者态 Rig”） |
 | `cache/head/` | 可选，头部修订重建用的可删除缓存（见下文“头部缓存”） |
 
-文档节点和覆盖、片段文件的文件名是其字节的 SHA-256，打开时逐个核对。拆分是无损的：打开时按索引拼回每个修订的完整文档，revision ID、节点 ID 与分支不变。Rig 模型（`PuppetModel`）从不保存，打开后仍由源图、设置和编辑重建。辅助目录按是否使用相关功能出现；`cache/` 只放可删除的重建缓存，不参与任何身份。
+文档节点和覆盖、片段文件的文件名是其字节的 SHA-256，打开时逐个核对。拆分是无损的：打开时按索引拼回每个修订的完整文档，revision ID、节点 ID 与分支不变。完整的 Rig 模型不保存；修订有作者态 Rig 时打开直接由它构建，否则由源图、设置和编辑重建。辅助目录按是否使用相关功能出现；`cache/` 只放可删除的重建缓存，不参与任何身份。
+
+### 作者态 Rig
+
+`rig/` 保存各修订的作者态 Rig：基础生成（含骨架烘焙）加上旧格式静态编辑与整条日志之后、摆动、模拟写回与覆盖合并之前的 Rig（设计见[固化 Rig](MATERIALIZED_RIG.md)）。
+
+| 路径 | 内容 |
+| --- | --- |
+| `rig/objects/<sha256>.bin` | 一个 Rig 对象（`RigIrObjects`）：框架（变形器与网格以外的全部内容）、单个变形器或单个网格，按字节 SHA-256 命名，在修订之间共享 |
+| `rig/revisions/<revision>.json` | `{header, frame, deformers:[...], meshes:[...]}`：头部与按 Rig 顺序列出的对象哈希 |
+
+- 对象编码为中立 IR 的二进制形式（`RigIrBinary`，浮点按原始位保存），自带魔数、编码版本与对象类型；读取接受 `RigIrObjects.MIN_VERSION` 起的每个版本，IR 新增字段只在其加入的版本起读取。
+- 头部 `{format:"psd2live-authored-rig", version:1, build, binding_key, pages, layers, bounds, face, warnings, skipped, visibility}`：网格到纹理页、源图层与中性边界的映射，面部中心、半径与初始倾角，生成警告，重放跳过的条目，需应用图层显隐的网格，以及纹理集绑定键。浮点按原始位写成整数。
+- 文件名中的修订键为文档的修订 ID（`WorkspaceRevisions.of`），即构建按其查找的键。
+- 绑定键是生成基础 Rig 时纹理集的放置、页尺寸与纹理图层矩形的摘要。打开时按当前程序为该修订打包纹理集，键相同才使用保存的作者态 Rig（纹理坐标指向同样的位置），不同或条目无法读取、校验失败时照常生成并重放。
+- 保存写出当前进程为各修订构建过的作者态 Rig，以及打开归档时读到的条目；没有的修订不写。`-Dpsd2live.materializedRigs=false` 关闭读写。
+- 目录位于 `history/`、`document/` 之外，不进入修订 ID 或文档节点；没有该目录的归档照常打开。此前的 v2 程序解包后不读取它，仍可打开这样的归档，再次保存时不保留该目录。导入 CMO3 的模型不写作者态 Rig。
 
 ### 头部缓存
 

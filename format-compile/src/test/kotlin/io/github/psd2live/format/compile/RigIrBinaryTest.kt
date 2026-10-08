@@ -95,4 +95,27 @@ class RigIrBinaryTest {
 		// A corrupted length is caught before allocating for it.
 		assertFailsWith<IOException> { RigIrBinary.decode(bytes.copyOf().also { for (i in 25 until 29) it[i] = 0x7f }) }
 	}
+
+	@Test fun storedObjectsJoinBackIntoTheRigAndShareWhatDidNotChange() {
+		val ir = sample()
+		val objects = RigIrObjects.split(ir)
+		assertEquals(ir.deformers.size, objects.deformers.size)
+		assertEquals(ir.meshes.size, objects.meshes.size)
+		assertEquals(ir.toString(), RigIrObjects.join(objects).toString())
+		// Renaming one deformer rewrites that object alone.
+		val renamed = RigIrObjects.split(ir.copy(deformers = ir.deformers.mapIndexed { i, d -> if (i == 1) (d as Deformer.Rotation).copy(name = "Other") else d }))
+		assertContentEquals(objects.frame, renamed.frame)
+		assertContentEquals(objects.deformers[0], renamed.deformers[0])
+		assertFalse(objects.deformers[1].contentEquals(renamed.deformers[1]))
+		assertEquals(objects.meshes.map { it.toList() }, renamed.meshes.map { it.toList() })
+	}
+
+	@Test fun storedObjectsRejectAnotherKindOrVersion() {
+		val objects = RigIrObjects.split(sample())
+		assertFailsWith<IOException> { RigIrObjects.join(RigIrObjects.Objects(objects.meshes[0], objects.deformers, objects.meshes)) }
+		val newer = objects.frame.copyOf().also { it[7] = (RigIrBinary.VERSION + 1).toByte() }
+		assertFailsWith<IOException> { RigIrObjects.join(RigIrObjects.Objects(newer, objects.deformers, objects.meshes)) }
+		val truncated = objects.meshes[0].let { it.copyOf(it.size - 3) }
+		assertFailsWith<IOException> { RigIrObjects.join(RigIrObjects.Objects(objects.frame, objects.deformers, listOf(truncated) + objects.meshes.drop(1))) }
+	}
 }

@@ -8,7 +8,9 @@ import io.github.psd2live.core.VertexGroupJournal
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import org.umamo.render.restMeshesToCanvasSpace
+import io.github.psd2live.project.MaterializedRigStore
 import io.github.psd2live.project.WorkspaceDocument
+import io.github.psd2live.project.WorkspaceRevisions
 import io.github.psd2live.project.config
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
@@ -85,7 +87,14 @@ internal class WorkspacePreviewBuilder {
             // documents and node IDs immutable; new documents carry this generation input explicitly.
             val config = if ("drawOrderOverrides" in document.settings) decoded
                 else decoded.copy(drawOrderOverrides = legacyDrawOrders)
-            when {
+            val materializable = pipeline.materializable(config)
+            val revision = if (materializable) WorkspaceRevisions.of(document) else null
+            // A revision built before - in this process or by whoever saved the archive - builds from its authored rig.
+            if (revision != null && current == null) MaterializedRigStore.lookup(revision)?.let { stored ->
+                pipeline.materializedPreview(document.source, config, stored.authored, stored.bindingKey, progress)
+                    ?.let { return@runInterruptible it }
+            }
+            val model = when {
                 current != null && pipeline.canFastUpdateRig(current, document.source, config) -> pipeline.updateRigEdits(current, config)
                 current != null && (current.analysis.source === document.source || current.analysis.source == document.source) &&
                     current.config.copy(parentOverrides = config.parentOverrides, rigEdits = config.rigEdits,
@@ -95,6 +104,10 @@ internal class WorkspacePreviewBuilder {
                 // the pages and preview PNG strips its pixels did not change.
                 else -> pipeline.buildPreview(document.source, config, progress, current?.atlas)
             }
+            if (revision != null) MaterializedRigStore.remember(revision, config.rigEdits, model.sources) {
+                pipeline.bindingKey(document.source, config)
+            }
+            model
         }
     }
 }

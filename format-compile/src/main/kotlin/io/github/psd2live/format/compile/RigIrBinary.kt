@@ -12,7 +12,9 @@ import java.io.IOException
  * interchange format - a reader accepts only its own [VERSION] and rejects anything else (and any truncated or
  * trailing bytes) with [IOException], so a stale or damaged cache is detected rather than misread.
  *
- * A field added to the IR must be added here in the same change, with [VERSION] raised.
+ * A field added to the IR must be added here in the same change, with [VERSION] raised. [RigIrObjects] stores rigs
+ * in this encoding for good, so the reader must keep reading every version from [RigIrObjects.MIN_VERSION] on: a
+ * new field is read only when [Reader.version] is at least the version that added it, and takes its default before.
  */
 public object RigIrBinary {
 	public const val VERSION: Int = 4
@@ -42,7 +44,7 @@ public object RigIrBinary {
 		}
 	}
 
-	private class Writer(private val out: DataOutputStream) {
+	internal class Writer(private val out: DataOutputStream) {
 		fun int(value: Int) = out.writeInt(value)
 		fun float(value: Float) = out.writeInt(java.lang.Float.floatToRawIntBits(value))
 		fun bool(value: Boolean) = out.writeBoolean(value)
@@ -271,7 +273,8 @@ public object RigIrBinary {
 		}
 	}
 
-	private class Reader(private val input: DataInputStream) {
+	/** [version] is the version the bytes were written with: a field added later is read only from its version on. */
+	internal class Reader(private val input: DataInputStream, val version: Int = VERSION) {
 		fun int() = input.readInt()
 		fun float() = java.lang.Float.intBitsToFloat(input.readInt())
 		fun bool() = input.readBoolean()

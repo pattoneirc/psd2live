@@ -59,10 +59,11 @@ internal class ProjectRepository(
                     })
                     ProjectArchive.writeJson(root.resolve("workspace.json"), JsonObject(ui))
                     ProjectFormatV2.pack(root, capture.projectId)
+                    MaterializedRigStore.write(root, capture.history)
                     if (writeHeadCache) capture.history.selections.firstOrNull { it.node.id == capture.history.headNodeId }?.let { head ->
                         ProjectHeadCache.write(root, head.snapshot, ProjectHeadCache.Key(head.node.revisionId))
                     }
-                    Files.writeString(root.resolve("README.txt"), "PSD2Live project v2. Unencrypted ZIP. manifest.json inventories SHA-256 checksums. source/ holds the original source; history/ the history nodes and the document nodes each revision is made of; document/ the content-addressed document nodes, generator overrides and motion clips; assets/ the PNG rasters; auxiliary/ staged assets, views, workflow records and tasks; cache/ optional rebuild caches that may be deleted; workspace.json restores the UI. See docs/en/spec/PROJECT_FORMAT.md.\n")
+                    Files.writeString(root.resolve("README.txt"), "PSD2Live project v2. Unencrypted ZIP. manifest.json inventories SHA-256 checksums. source/ holds the original source; history/ the history nodes and the document nodes each revision is made of; document/ the content-addressed document nodes, generator overrides and motion clips; assets/ the PNG rasters; rig/ each revision's authored rig as shared objects; auxiliary/ staged assets, views, workflow records and tasks; cache/ optional rebuild caches that may be deleted; workspace.json restores the UI. See docs/en/spec/PROJECT_FORMAT.md.\n")
                     caller.ensureActive()
                     if (writeArchive != null) writeArchive.invoke(root, path, capture.projectId)
                     else ProjectArchive.write(root, path, capture.projectId) {
@@ -94,6 +95,8 @@ internal class ProjectRepository(
                 val tree = withContext(Dispatchers.IO) { store.loadHistory(id) ?: error("Project has no history") }
                 // Non-authoritative: seeds generator caches the head's rebuild then hits; never fails the open.
                 ProjectHeadCache.seed(root, ProjectHeadCache.Key(tree.head().node.revisionId))
+                // Each revision's authored rig, so its preview builds without generation or replay.
+                MaterializedRigStore.adopt(root)
                 val ui = ProjectArchive.readJson(root.resolve("workspace.json")).toMutableMap()
                 ui["logEntries"] = JsonArray(ui["logEntries"]?.jsonArray.orEmpty().map { entry ->
                     val log = entry.jsonObject.toMutableMap()

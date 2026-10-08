@@ -242,7 +242,7 @@ internal object Cmo3ModelImport {
         val (atlas, base) = baseRig(source, config, normalizeAllTextures = true)
         val rig = base.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides)
         val bundle = pipeline.buildRuntimeBundle("psd2live-preview", analysis, atlas, rig, config).first
-        return RigPreviewModel(analysis, atlas, rig, config, bundle, base)
+        return RigPreviewModel(analysis, atlas, rig, config, bundle, PreviewRigSources.of(base))
     }
 
     fun baseRig(source: SourceArt, config: PipelineConfig, normalizeAllTextures: Boolean = false): Pair<PackedAtlas, BuiltRig> {

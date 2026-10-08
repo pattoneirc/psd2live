@@ -2,7 +2,7 @@
 
 [文档目录](../../README.md) · [文档层](DOCUMENT_LAYER.md) · [工程格式](PROJECT_FORMAT.md)
 
-> 状态：**设计中**，尚未实现。本页给出目标模型、存储、操作分类、再生成合并规则与分阶段计划；实现后各部分的事实写回 [文档层](DOCUMENT_LAYER.md) 与 [工程格式](PROJECT_FORMAT.md)。
+> 状态：**部分实现**。阶段 0 与阶段 1–2 的核心已实现（见[实现进度](#10-实现进度)），其余为设计。本页给出目标模型、存储、操作分类、再生成合并规则与分阶段计划；实现后各部分的事实写回 [文档层](DOCUMENT_LAYER.md) 与 [工程格式](PROJECT_FORMAT.md)。
 
 ## 1. 背景
 
@@ -164,7 +164,7 @@
 
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
-| 0 止血（独立） | 头发模拟只删参数、保留静止的 `DeformHair*Physics`；骨架拓扑锁计入带 `vertex_group_put`、`set` 位移、`path_put` 的网格 | 已有工程在两种开关下可重建；对应回归测试 |
+| 0 止血（独立） | 头发模拟删除旧摆动 Warp 时拆分部件随基础网格改挂；骨架拓扑锁计入按细分前顶点数写下逐顶点记录的绑定网格 | 已有工程在两种开关下可重建；对应回归测试 |
 | 1 影子固化 | 保存时在可删除的缓存目录写出 M、G 对象；打开仍重放。开发工具对比重放结果与保存的 M，收集不一致语料；测量体积与耗时 | 旧程序照常打开；`ExportGoldenTool` 逐字节一致 |
 | 2 以固化结果打开 | M 成为打开与切换历史的权威数据，修订索引升级 schema；编辑仍经现有重建管线得到候选，再写出 M | 打开路径不经过 `RigBuilder`；生成代码改动不影响已固化修订；v2 工程迁移测试 |
 | 3 直接编辑 | A 类命令直接作用于 M；提交只在 M 上执行命令，与基础重建和重放检查点无关 | A 类提交耗时与日志长度无关；GUI 与 MCP 行为一致 |
@@ -186,3 +186,27 @@
 - **内存**：每个历史节点的 M 用软引用缓存，未命中时从存储解码（骨架 Rig 约 26 ms）。
 - **MCP**：公开命令不变；新增再生成试运行与 `workspace_inspect` 中的合并问题，需声明严格的 `resultSchema` / `jobResultSchema`。
 - **待定**：`generationSource` 冻结在固化后是否保留（再生成默认用冻结像素还是当前像素）；绘制顺序覆盖与父级覆盖归 A 类还是 B 类。
+
+## 10. 实现进度
+
+**阶段 0（已实现）**
+
+- 骨骼绑定的网格，若日志中按顶点下标的记录全部按细分前的顶点数写下，骨架不再为它插入关节行（`SkeletonCanvasSkin.lockedTopology`），见[文档层 · 日志安放的网格](DOCUMENT_LAYER.md#日志安放的网格)。
+- 头发模拟删除旧摆动 Warp 时，v2 拆分部件与基础网格一起改挂到跟随 Warp（`RigBuilder`）。没有采用“保留静止 Warp”：那会改变已烘焙头发模拟所在的父级空间。
+
+**阶段 1–2（核心已实现）**
+
+- 重放拆成两段（`RigEditOverlay.replayAuthored` / `finish`）：`BuiltRig.authoredRig` 给出作者态 Rig（`AuthoredRig`：作者态 puppet、日志创建网格的映射、需应用图层显隐的网格），`AuthoredRig.finished` 运行修改器、覆盖合并、延后面板编辑、显隐与绘制顺序。`withRigEdits` 即两段相接，导出与此前逐字节一致（`ExportGoldenTool`）。
+- `RigPreviewModel` 的基础 Rig 与作者态 Rig 由 `PreviewRigSources` 提供：生成构建已知基础 Rig，作者态在首次使用时由重放检查点给出；由作者态构建的模型只在有人读取 `baseRig` 时才生成基础 Rig。
+- `PSD2LivePipeline.materializedPreview`：由作者态 Rig 构建预览，只做源图分析与纹理集打包，不运行 `RigBuilder`、骨架烘焙与日志重放；纹理集绑定键不同时返回空，由调用方照常构建。延迟删除（软删除图层）的文档同样支持；导入 CMO3 的模型不支持。
+- 按修订的存储（`project/MaterializedRigStore`）：本进程构建过的修订（软引用）与打开归档读到的修订。`WorkspacePreviewBuilder.build` 在没有当前模型（打开、切换历史、批量候选）时先查存储；保存把可得的修订写入归档 `rig/`（格式见[工程格式 · 作者态 Rig](PROJECT_FORMAT.md#作者态-rig)）。
+- 持久编码：`RigIrObjects`（MIT）把中立 IR 拆为框架、变形器与网格对象，按版本可读；`MaterializedRigCodec` 写头部。
+
+**与设计的差异**
+
+- 作者态 Rig 放在独立的 `rig/` 目录，没有写进修订索引、也没有提升修订 schema：旧的 v2 程序仍能打开新归档（丢弃该目录）。条目缺失或无法使用时退回生成与重放，因此它目前是“有则优先”的数据，而非唯一权威。
+- 生成快照 G 尚未保存（阶段 4 使用）。
+
+**未实现**：阶段 3（直接编辑作用于作者态 Rig，有当前模型的提交仍经基础 Rig 重放）、阶段 4（再生成合并）、阶段 5（清理）。
+
+**测试**：`MaterializedPreviewTest`（作者态 Rig 构建与完整构建的 IR 哈希一致、不生成基础 Rig、纹理集不同则拒绝）、`MaterializedRigProjectTest`（保存后冷打开各修订均由作者态 Rig 构建且一致；日志已无法重放的修订仍可由作者态 Rig 打开）、`RigIrBinaryTest`（对象拆分、拼回、共享与拒绝）、`SkeletonCanvasSkinTest`、`HairSimulationSplitTest`。

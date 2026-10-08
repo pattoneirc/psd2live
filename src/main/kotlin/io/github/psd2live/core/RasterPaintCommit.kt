@@ -522,7 +522,7 @@ internal object RasterPaintCommit {
             atlas = newAtlas,
             rig = updatedRig,
             config = committedConfig,
-            baseRig = currentPreview.baseRig.copy(puppet = updatedPuppet, pageByDrawableId = updatedPageByDrawableId, sourceBoundsByDrawableId = updatedSourceBounds),
+            sources = PreviewRigSources.of(currentPreview.baseRig.copy(puppet = updatedPuppet, pageByDrawableId = updatedPageByDrawableId, sourceBoundsByDrawableId = updatedSourceBounds)),
             runtimeBundle = runtimeBundle,
             // The transient base is bound to the repacked atlas.
             generationAtlas = null,

@@ -71,16 +71,49 @@ class PSD2LivePipeline {
             val (atlas, baseRig) = Cmo3ModelImport.baseRig(analysis.source, config)
             val rig = baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides)
             val bundle = buildRuntimeBundle("psd2live-preview", importedAnalysis, atlas, rig, config).first
-            return RigPreviewModel(importedAnalysis, atlas, rig, config, bundle, baseRig)
+            return RigPreviewModel(importedAnalysis, atlas, rig, config, bundle, PreviewRigSources.of(baseRig))
         }
-        val (effectiveAnalysis, fullAtlas, baseRig) = generatedBase(analysis, config, progress, previousAtlas)
+        val inputs = generationInputs(analysis, config, progress, previousAtlas)
+        val (effectiveAnalysis, fullAtlas, baseRig) = generatedBase(inputs, config, progress)
 		// The base packs superseded layers (the originals of a split) too; once no mesh samples them the model
 		// packs only the layers it shows, as exports do.
 		val (atlas, rig) = RigLayerDeletion.compact(fullAtlas, effectiveAnalysis, effectiveAnalysis,
 			baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides), config, previousAtlas)
 		val runtimeBundle = buildRuntimeBundle("psd2live-preview", effectiveAnalysis, atlas, rig, config).first
-		return RigPreviewModel(effectiveAnalysis, atlas, rig, config, runtimeBundle, baseRig = baseRig,
+		return RigPreviewModel(effectiveAnalysis, atlas, rig, config, runtimeBundle, PreviewRigSources.of(baseRig, inputs.bindingKey),
 			generationAtlas = fullAtlas.takeIf { it !== atlas })
+	}
+
+	/** The binding key of the atlas [source] under [config] binds its generated base to ([materializedPreview]). */
+	internal fun bindingKey(source: SourceArt, config: PipelineConfig): String {
+		val generation = RigLayerDeletion.generationConfig(config)
+		return generationInputs(RigGenerationSource.analyze(source, generation), generation, ProgressListener { _, _ -> }).bindingKey
+	}
+
+	/** Whether a preview of [config] can come from a stored authored rig: a generated model, not an imported one. */
+	fun materializable(config: PipelineConfig): Boolean = config.rigEdits.importedCmo3 == null
+
+	/**
+	 * The preview of [source] under [config] from [authored] - the authored state of [config]'s edits, bound to an atlas
+	 * under [bindingKey] - without generating the base rig or replaying the journal. Null when the document now packs to
+	 * an atlas with another binding key. The returned model generates its base rig only when something asks for it.
+	 */
+	internal fun materializedPreview(source: SourceArt, config: PipelineConfig, authored: AuthoredRig, bindingKey: String,
+	                                 progress: ProgressListener = ProgressListener { _, _ -> },
+	                                 previousAtlas: PackedAtlas? = null): RigPreviewModel? {
+		require(materializable(config)) { "This document's preview is not built from an authored rig" }
+		// Deletions after a journal that creates or splits meshes filter the full model, as [buildPreview] does.
+		if (RigLayerDeletion.deferred(config)) return materializedPreview(source, RigLayerDeletion.generationConfig(config), authored, bindingKey,
+			progress, previousAtlas)?.let { RigLayerDeletion.preview(it, config, previousAtlas) }
+		val analysis = RigBuildProfile.stage("pipeline: analyze") { RigGenerationSource.analyze(source, config) }
+		val inputs = generationInputs(analysis, config, progress, previousAtlas)
+		if (inputs.bindingKey != bindingKey) return null
+		val (atlas, rig) = RigLayerDeletion.compact(inputs.atlas, inputs.visible, inputs.visible,
+			authored.finished(config.rigEdits, config.layerVisibility, config.drawOrderOverrides), config, previousAtlas)
+		val runtimeBundle = buildRuntimeBundle("psd2live-preview", inputs.visible, atlas, rig, config).first
+		return RigPreviewModel(inputs.visible, atlas, rig, config, runtimeBundle,
+			PreviewRigSources.materialized(config.rigEdits, authored, bindingKey) { generatedBase(inputs, config, ProgressListener { _, _ -> }).rig },
+			generationAtlas = inputs.atlas.takeIf { it !== atlas })
 	}
 
 	private fun PipelineConfig.withoutTextureLayout() =
@@ -88,9 +121,27 @@ class PSD2LivePipeline {
 
 	private data class GeneratedBase(val analysis: PipelineAnalysis, val atlas: PackedAtlas, val rig: BuiltRig)
 
-	/** Preview, path normalization and export must use the same saved generation input. */
-	private fun generatedBase(input: PipelineAnalysis, config: PipelineConfig, progress: ProgressListener,
-	                          previousAtlas: PackedAtlas? = null): GeneratedBase {
+	/** What [generatedBase] computes before the rig builder runs: the analyses and the atlas the base is bound to. */
+	private class GenerationInputs(val baselineConfig: PipelineConfig, val analyses: RigGenerationSource.Analyses,
+	                               val generationConfig: PipelineConfig, val atlas: PackedAtlas, val visible: PipelineAnalysis) {
+		/**
+		 * What binding a rig to [atlas] reads: every placement, the page sizes and the texture layers' rectangles. A rig
+		 * bound under an equal key has the texture coordinates a rig bound now would have.
+		 */
+		val bindingKey: String by lazy {
+			val text = buildString {
+				atlas.placementByLayerId.toSortedMap().forEach { (layer, placement) -> append("|p:").append(layer).append('=').append(placement) }
+				atlas.pages.forEach { append("|page:").append(it.image.width).append('x').append(it.image.height) }
+				analyses.textures.layers.forEach { layer -> val s = layer.source
+					append("|l:").append(s.id.raw).append(':').append(s.bounds).append(':').append(s.raster.width).append('x').append(s.raster.height)
+				}
+			}
+			java.security.MessageDigest.getInstance("SHA-256").digest(text.encodeToByteArray()).joinToString("") { "%02x".format(it) }
+		}
+	}
+
+	private fun generationInputs(input: PipelineAnalysis, config: PipelineConfig, progress: ProgressListener,
+	                             previousAtlas: PackedAtlas? = null): GenerationInputs {
 		val baselineConfig = RigGenerationBaseline.restore(MeshGenerationBaseline.restore(config))
 		val analyses = RigBuildProfile.stage("pipeline: analysis prepare") { RigGenerationSource.prepare(input, baselineConfig, config) }
 		val createdLayers = config.rigEdits.authoringJournal.filter { it["op"]?.jsonPrimitive?.contentOrNull == RasterMeshCreation.OP }
@@ -100,6 +151,20 @@ class PSD2LivePipeline {
 		val generationConfig = baselineConfig.copy(parentOverrides = config.parentOverrides - createdLayers)
 		val atlas = RigBuildProfile.stage("pipeline: atlas layout") { AtlasLayout.pack(analyses.textures.layers, config, progress, previousAtlas) }
 		val visible = ArtPrimitiveJournal.visibleAnalysis(analyses.textures, config.rigEdits)
+		return GenerationInputs(baselineConfig, analyses, generationConfig, atlas, visible)
+	}
+
+	/** Preview, path normalization and export must use the same saved generation input. */
+	private fun generatedBase(input: PipelineAnalysis, config: PipelineConfig, progress: ProgressListener,
+	                          previousAtlas: PackedAtlas? = null): GeneratedBase =
+		generatedBase(generationInputs(input, config, progress, previousAtlas), config, progress)
+
+	private fun generatedBase(inputs: GenerationInputs, config: PipelineConfig, progress: ProgressListener): GeneratedBase {
+		val baselineConfig = inputs.baselineConfig
+		val analyses = inputs.analyses
+		val generationConfig = inputs.generationConfig
+		val atlas = inputs.atlas
+		val visible = inputs.visible
 		if (config.generationSource == null) return GeneratedBase(visible, atlas,
 			withoutCreatedMeshes(RigBuilder.build(analyses.geometry, atlas, generationConfig, meshCache), config))
 		// The geometry rig's UVs are moved onto the texture atlas below, so its own layout ignores the texture
@@ -185,7 +250,7 @@ class PSD2LivePipeline {
 			parameters = (replayed.puppet.parameters + current.rig.puppet.parameters).distinctBy { it.id },
 		))
 		val bundle = buildRuntimeBundle("psd2live-preview", analysis, atlas, rig, committedConfig).first
-		return RigPreviewModel(analysis, atlas, rig, committedConfig, bundle, baseRig)
+		return RigPreviewModel(analysis, atlas, rig, committedConfig, bundle, PreviewRigSources.of(baseRig))
 	}
 
 	/** Hierarchy-only edits retain textures but rebuild all parent-space geometry and keyforms. */
@@ -234,7 +299,7 @@ class PSD2LivePipeline {
 				else generatedBase(current.analysis, config, progress, current.atlas).rig
 			val rig = baseRig.withRigEdits(config.rigEdits, config.layerVisibility, config.drawOrderOverrides)
 			val bundle = buildRuntimeBundle("psd2live-preview", current.analysis, current.atlas, rig, config).first
-			return current.copy(rig = rig, config = config, runtimeBundle = bundle, baseRig = baseRig)
+			return current.copy(rig = rig, config = config, runtimeBundle = bundle, sources = PreviewRigSources.of(baseRig))
 		}
 		val base = current.analysis.copy(layers = current.analysis.layers.filter { it.source !is MouthLipLayer })
 		return buildPreviewPreservingPaths(current, base, config, progress)
@@ -362,7 +427,7 @@ class PSD2LivePipeline {
 			rig,
 			rebasedConfig,
 		).first
-		return RigPreviewModel(effectiveAnalysis, atlas, rig, rebasedConfig, runtimeBundle, baseRig)
+		return RigPreviewModel(effectiveAnalysis, atlas, rig, rebasedConfig, runtimeBundle, PreviewRigSources.of(baseRig))
 	}
 
 	private fun globalMeshControlsChanged(before: PipelineConfig, config: PipelineConfig) =
@@ -409,7 +474,7 @@ class PSD2LivePipeline {
 			return buildPreview(current.analysis, config, progress)
 		}
 		val (runtimeBundle, _) = buildRuntimeBundle(baseName, current.analysis, current.atlas, current.rig, config)
-		return current.copy(config = config, runtimeBundle = runtimeBundle, baseRig = current.baseRig)
+		return current.copy(config = config, runtimeBundle = runtimeBundle)
 	}
 
 	/** Fast incremental update for rig and keyform edits replayed onto the cached base rig. */
@@ -431,7 +496,6 @@ class PSD2LivePipeline {
 			rig = rig,
 			config = config,
 			runtimeBundle = runtimeBundle,
-			baseRig = current.baseRig,
 		)
 	}
 
@@ -560,7 +624,7 @@ class PSD2LivePipeline {
 			files += writeContained(outputRoot, "$baseName.psd2live.json", report.encodeToByteArray())
 		}
 		progress.update(tr("progress.validated"), 1.0)
-		return PipelineResult(analysis, files, warnings, RigPreviewModel(analysis, atlas, rig, config, runtimeBundle, baseRig = baseRig,
+		return PipelineResult(analysis, files, warnings, RigPreviewModel(analysis, atlas, rig, config, runtimeBundle, PreviewRigSources.of(baseRig),
 			generationAtlas = fullAtlas.takeIf { it !== atlas }))
 	}
 

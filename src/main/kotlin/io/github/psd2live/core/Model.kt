@@ -478,7 +478,8 @@ data class RigPreviewModel(
 	val rig: BuiltRig,
 	val config: PipelineConfig,
 	val runtimeBundle: CubismRuntimeBundle,
-	val baseRig: BuiltRig = rig,
+	/** Where [baseRig] and [authored] come from: one is known, the other derived on first use. */
+	val sources: PreviewRigSources = PreviewRigSources.of(rig),
 	/**
 	 * The atlas [baseRig] is bound to when it is not [atlas]: the generation packs deleted layers (after a
 	 * deferred deletion) and superseded ones (the originals of a split) too, while [atlas] packs only the layers
@@ -486,6 +487,15 @@ data class RigPreviewModel(
 	 */
 	val generationAtlas: PackedAtlas? = null,
 ) {
+	/**
+	 * The generated rig the document's edits replay onto. A model built from a stored authored rig generates it only
+	 * when something asks for it.
+	 */
+	val baseRig: BuiltRig get() = sources.base
+
+	/** The authored state of [config]'s edits ([AuthoredRig]): stored, or replayed from [baseRig]. */
+	internal val authored: AuthoredRig get() = sources.authored(config.rigEdits)
+
 	/** True only when this exact preview bundle contains an active Cubism physics sidecar. */
 	val hasRuntimePhysics: Boolean
 		get() = runtimeBundle.assets.any { it.path.endsWith(".physics3.json", ignoreCase = true) }
@@ -502,4 +512,38 @@ data class PipelineResult(
 
 fun interface ProgressListener {
 	fun update(stage: String, fraction: Double)
+}
+
+/**
+ * The base and authored rigs of one preview. A rig built by generation knows its base and replays the authored state
+ * from it (the replay checkpoints make that a lookup); a rig built from a stored authored state knows that state for
+ * [storedOverlay] and generates its base only on demand.
+ */
+class PreviewRigSources private constructor(
+	private val baseSource: Lazy<BuiltRig>,
+	private val storedOverlay: RigEditOverlay?,
+	private val stored: AuthoredRig?,
+	/** What binding the base reads of its atlas ([PSD2LivePipeline.materializedPreview]); null when not known. */
+	val bindingKey: String?,
+) {
+	val base: BuiltRig by baseSource
+
+	/** Whether [base] is already at hand, so asking for it costs nothing. */
+	val baseKnown: Boolean get() = baseSource.isInitialized()
+
+	@Volatile private var replayed: Pair<RigEditOverlay, AuthoredRig>? = null
+
+	internal fun authored(overlay: RigEditOverlay): AuthoredRig {
+		if (stored != null && (overlay === storedOverlay || overlay == storedOverlay)) return stored
+		replayed?.let { (key, value) -> if (key === overlay || key == overlay) return value }
+		return base.authoredRig(overlay).also { replayed = overlay to it }
+	}
+
+	companion object {
+		fun of(base: BuiltRig, bindingKey: String? = null) = PreviewRigSources(lazyOf(base), null, null, bindingKey)
+
+		/** [authored] is [overlay]'s authored state; [base] generates the rig it came from when asked. */
+		internal fun materialized(overlay: RigEditOverlay, authored: AuthoredRig, bindingKey: String, base: () -> BuiltRig) =
+			PreviewRigSources(lazy(base), overlay, authored, bindingKey)
+	}
 }

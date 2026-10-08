@@ -28,9 +28,26 @@ Saves write v2. Each history revision is split into content-addressed document n
 | `auxiliary/tasks.json` | Agent task records and events |
 | `workspace.json` | Durable UI layout, camera, selection, parameter preview, annotations and logs |
 | `images/<hash>.png` | Log images |
+| `rig/` | Optional, each revision's authored rig (see "Authored rig" below) |
 | `cache/head/` | Optional, disposable cache for rebuilding the head revision (see "Head cache" below) |
 
-Document node, override and clip files are named by the SHA-256 of their bytes, checked on open. Splitting is lossless: opening joins every revision's complete document from its index, so revision IDs, node IDs and branches are unchanged. The rig model (`PuppetModel`) is never stored; opening still rebuilds it from source, settings and edits. Auxiliary entries depend on features used; `cache/` holds only disposable rebuild caches and takes part in no identity.
+Document node, override and clip files are named by the SHA-256 of their bytes, checked on open. Splitting is lossless: opening joins every revision's complete document from its index, so revision IDs, node IDs and branches are unchanged. The complete rig model is never stored; a revision with an authored rig builds from it on open, any other from source, settings and edits. Auxiliary entries depend on features used; `cache/` holds only disposable rebuild caches and takes part in no identity.
+
+### Authored rig
+
+`rig/` holds each revision's authored rig: the generated base (with the skeleton bake) after the legacy static edits and the whole journal, before swings, simulation write-back and override merging (design in Chinese: [materialized rig](../../zh/spec/MATERIALIZED_RIG.md)).
+
+| Path | Content |
+| --- | --- |
+| `rig/objects/<sha256>.bin` | One rig object (`RigIrObjects`): the frame (everything but deformers and meshes), one deformer or one mesh, named by the SHA-256 of its bytes and shared between revisions |
+| `rig/revisions/<revision>.json` | `{header, frame, deformers:[...], meshes:[...]}`: the header and the object hashes in rig order |
+
+- Objects use the binary form of the neutral IR (`RigIrBinary`, floats bit for bit) with a magic number, encoding version and object kind; reading accepts every version from `RigIrObjects.MIN_VERSION` on, a new IR field being read only from the version that added it.
+- The header `{format:"psd2live-authored-rig", version:1, build, binding_key, pages, layers, bounds, face, warnings, skipped, visibility}`: meshes to texture pages, source layers and neutral bounds, the face centre, radii and initial tilt, generation warnings, entries the replay skipped, meshes whose layer visibility applies, and the atlas binding key. Floats are written as their raw bits.
+- The revision key in a file name is the document's revision ID (`WorkspaceRevisions.of`), the key builds look it up by.
+- The binding key digests the atlas placements, page sizes and texture layer rectangles the generated base was bound to. On open the current build packs the revision's atlas and uses the stored rig only under an equal key (its texture coordinates address the same places); otherwise, or when an entry is unreadable or fails its checksum, the revision generates and replays as before.
+- A save writes the authored rigs this process built for its revisions and those read from the opened archive; other revisions get none. `-Dpsd2live.materializedRigs=false` turns reading and writing off.
+- The folder lives outside `history/` and `document/` and enters no revision ID or document node; archives without it open as before. Earlier v2 builds unpack it and never read it, so they still open such archives; their next save drops it. Imported CMO3 models write no authored rig.
 
 ### Head cache
 
