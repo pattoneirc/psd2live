@@ -4,7 +4,6 @@ import io.github.psd2live.ui.theme.CustomTheme
 import io.github.psd2live.ui.theme.ThemeCatalog
 import io.github.psd2live.ui.theme.ThemeCodec
 import java.awt.GraphicsEnvironment
-import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.util.prefs.Preferences
@@ -371,12 +370,12 @@ object AppSettings {
 
 	fun rememberRecentFile(path: String) {
 		val normalized = normalizeRecentPath(path) ?: return
-		val next = rememberRecentPaths(recentFiles(), normalized) { candidate ->
-			candidate.equals(normalized, ignoreCase = true) ||
-				runCatching { Files.isRegularFile(Path.of(candidate)) }.getOrDefault(false)
-		}
-		saveRecentFiles(next)
+		// Missing files stay listed and are hidden where shown (RecentFileProbe): a drive plugged back
+		// in brings them back, and checking here would stall the caller on an offline share.
+		saveRecentFiles(rememberRecentPaths(recentFiles(), normalized))
 	}
+
+	fun clearRecentFiles() = saveRecentFiles(emptyList())
 
 	fun forgetRecentFile(path: String) {
 		saveRecentFiles(forgetRecentPath(recentFiles(), normalizeRecentPath(path) ?: path))
