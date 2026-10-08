@@ -493,6 +493,7 @@ private fun buildTutorialCatalog(): Map<TutorialId, TutorialDefinition> = mapOf(
 			step("historyTab", TutorialTargetId.HISTORY_TAB, TutorialCompletion.HISTORY_TAB, ensureHistoryTab = true, showAction = true),
 			step("restore", TutorialTargetId.HISTORY_TAB, ensureHistoryTab = true),
 			step("branch", TutorialTargetId.HISTORY_TAB, ensureHistoryTab = true),
+			step("regenerate", TutorialTargetId.TOOLS_MENU, preferSideBubble = false),
 			step("done", isDone = true, preferSideBubble = false),
 		),
 	),

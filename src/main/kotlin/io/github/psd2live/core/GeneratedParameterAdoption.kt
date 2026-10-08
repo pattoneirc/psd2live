@@ -32,22 +32,6 @@ internal object GeneratedParameterAdoption {
 		return listOf(create(shown, authored, named.map(generated::getValue))) + journal
 	}
 
-	/**
-	 * Raw edits with the generated parameters left out of every Glue pose: Glue pairs vertices where the rig shows
-	 * them, and the journal it replays in has no generator motion, so it pairs them as they rest under the generators.
-	 */
-	fun withoutGeneratedGluePose(shown: PuppetModel, authored: PuppetModel, edits: JsonArray): JsonArray {
-		val generated = generated(shown, authored)
-		if (generated.isEmpty()) return edits
-		return JsonArray(edits.map { element ->
-			val command = element as? JsonObject ?: return@map element
-			if (command["op"]?.jsonPrimitive?.contentOrNull !in setOf("canvas_create_glue", "canvas_glue_edit")) return@map command
-			val pose = command["pose"] as? JsonObject ?: return@map command
-			val kept = pose.filterKeys { it !in generated }
-			if (kept.size == pose.size) command else JsonObject(command + ("pose" to JsonObject(kept)))
-		})
-	}
-
 	/** The parameters [command] names where the journal stage must have them; panel moves and links replay after the generators. */
 	fun references(command: JsonObject): Set<String> {
 		fun keys(field: String, source: JsonObject = command) = (source[field] as? JsonObject)?.keys.orEmpty()

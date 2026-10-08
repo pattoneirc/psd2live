@@ -41,7 +41,6 @@ internal object WorkspaceCanvasWeightEdits {
         val a = mesh(model, request.getValue("mesh_a").jsonPrimitive.content)
         val b = mesh(model, request.getValue("mesh_b").jsonPrimitive.content)
         require(a != b) { "Glue requires two different meshes" }
-        val pose = pose(model, request)
         fun hits(field: String, id: DrawableId): Set<Int> {
             val values = request[field]?.jsonArray.orEmpty().map { it.jsonPrimitive.int }
             val count = model.drawables.single { it.id == id }.mesh!!.vertexCount
@@ -62,7 +61,6 @@ internal object WorkspaceCanvasWeightEdits {
             put("op", "canvas_glue_edit"); put("id", id); put("action", action)
             put("mesh_a", a.raw); put("mesh_b", b.raw)
             put("hits_a", JsonArray(hitsA.sorted().map(::JsonPrimitive))); put("hits_b", JsonArray(hitsB.sorted().map(::JsonPrimitive)))
-            put("pose", JsonObject(pose.mapValues { JsonPrimitive(it.value) }))
             put("distance", request["distance"] ?: JsonPrimitive(40f))
             put("weight_mode", request["weight_mode"] ?: JsonPrimitive("balance"))
             put("delta", request["delta"] ?: JsonPrimitive(0.35f))

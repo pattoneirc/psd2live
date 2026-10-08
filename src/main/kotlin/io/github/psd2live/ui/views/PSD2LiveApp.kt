@@ -564,6 +564,9 @@ fun FrameWindowScope.PSD2LiveApp(
                             }
                         },
                         onOpenProject = onOpenProjectAction,
+						recentFiles = state.recentFiles,
+						onOpenRecent = viewModel::openRecentFile,
+						onClearRecent = viewModel::clearRecentFiles,
                         onSaveProject = { viewModel.requestProjectSave() },
                         onSaveProjectAs = { viewModel.requestProjectSave(true) },
                         projectTitle = (state.projectFile ?: tr("project.untitled")) + if (state.projectDirty) " *" else "",

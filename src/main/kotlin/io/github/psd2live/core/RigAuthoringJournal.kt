@@ -2,7 +2,6 @@ package io.github.psd2live.core
 
 import kotlinx.serialization.json.*
 import org.umamo.runtime.model.*
-import kotlin.math.abs
 
 /** Materialized edits: no point arrays cross the MCP boundary, but replay never reinterprets a brush. */
 internal object RigAuthoringJournal {
@@ -91,16 +90,6 @@ internal object RigAuthoringJournal {
     }
 
     /** Compile against the preceding edit's evaluated model; validate the whole batch before persisting. */
-    private fun withoutDefaultPose(model: PuppetModel, command: JsonObject): JsonObject {
-        val pose = command["pose"] as? JsonObject ?: return command
-        val defaults = model.parameters.associate { it.id.raw to it.default }
-        val kept = pose.filter { (id, value) ->
-            val default = defaults[id]
-            default == null || (value as? JsonPrimitive)?.floatOrNull?.let { abs(it - default) <= org.umamo.runtime.eval.EPS_KEY } != true
-        }
-        return if (kept.size == pose.size) command else JsonObject(command + ("pose" to JsonObject(kept)))
-    }
-
     fun compile(model: PuppetModel, commands: JsonArray): Pair<PuppetModel, List<JsonObject>> {
         require(commands.size in 1..128) { "Use 1..128 edits" }
         var current = model
@@ -192,8 +181,8 @@ internal object RigAuthoringJournal {
                 // Absolute points from the producer become sparse deltas against the geometry shown here.
                 "canvas_geometry" -> CanvasGeometryJournal.encode(current, command)
                 GeneratedOverrides.OP, DepthSplit.OP, MeshGenerationBaseline.OP, RigGenerationBaseline.OP, RigGenerationScaffold.OP, RigGenerationJournal.OP, RigGenerationFrames.OP, RigMeshActivation.OP, RigWarpTopology.OP, RigBezierJournal.OP, SourcePartitionJournal.OP, ArtPrimitiveJournal.OP, RasterMeshJournal.OP, RasterMeshCreation.OP, "parameter_keys", "set", "copy", "delete", "warp", "structure", "path_delete", VertexGroupJournal.PUT, VertexGroupJournal.DELETE, "canvas_topology", "canvas_create_warp", "canvas_create_rotation" -> command
-                // Glue pairs vertices where the whole rig shows them, so every parameter counts; one at its default reads the same left out.
-                "canvas_create_glue", "canvas_glue_edit" -> withoutDefaultPose(current, command)
+                // Glue pairs vertices where both meshes rest, as Cubism's glue: a weld does nothing at rest. Older records keep their pose.
+                "canvas_create_glue", "canvas_glue_edit" -> JsonObject(command - "pose")
                 else -> error("Unknown authoring operation: $op")
             }
             // Ask against the model *before* this command is applied: the question is whether the slot

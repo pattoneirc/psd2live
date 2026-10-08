@@ -64,6 +64,29 @@ class GlueEditingTest {
         assertSame(last.channelGrids, model.channelGridsOf(owner))
     }
 
+    @Test fun aWeldIsMadeWhereTheMeshesRestWhateverPoseItWasBrushedAt() {
+        // As Cubism's glue: the record keeps no pose, so a swing the generators add after the journal - here carrying b
+        // far off at 1 - neither changes the weld nor has to exist when it replays.
+        fun square(id: String, x: Float) = Drawable(DrawableId(id), id, null, BlendMode.Normal, emptyList(),
+            DrawableMesh(floatArrayOf(x, 0f, x + 10f, 0f, x, 10f, x + 10f, 10f), floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f),
+                intArrayOf(0, 1, 2, 1, 3, 2)), null)
+        val a = square("a", 0f); val b = square("b", 5f)
+        val authored = PuppetModel(emptyList(), emptyList(), emptyList(), listOf(a, b), listOf(OrgChild.Drawable(a.id), OrgChild.Drawable(b.id)), null)
+        val swing = Parameter(ParameterId("ParamSwing"), "Swing", 0f, 1f, 0f)
+        val away = KeyformGrid(listOf(KeyformAxis(swing.id, floatArrayOf(0f, 1f))), listOf(KeyformCell(intArrayOf(0), MeshDeltaForm(FloatArray(8))),
+            KeyformCell(intArrayOf(1), MeshDeltaForm(FloatArray(8) { if (it % 2 == 0) 100f else 0f }))))
+        val generated = authored.copy(parameters = listOf(swing), drawables = listOf(a, b.copy(geometryGrid = away)))
+        val stroke = buildJsonObject {
+            put("op", "canvas_glue_edit"); put("id", "seam"); put("mesh_a", "a"); put("mesh_b", "b"); put("action", "brush"); put("distance", 1f)
+            putJsonArray("hits_a") { add(1); add(3) }; putJsonObject("pose") { put("ParamSwing", 1f) }
+        }
+        val (welded, journal) = RigAuthoringJournal.compile(generated, JsonArray(listOf(stroke)))
+        assertFalse("pose" in journal.single())
+        fun pairs(model: PuppetModel) = model.glues.single().pairs.map { listOf(it.indexA, it.indexB) }
+        assertEquals(2, pairs(welded).size)
+        assertEquals(pairs(welded), pairs(RigAuthoringJournal.apply(authored, journal.single())))
+    }
+
     private fun glue(a: String, b: String, vararg pairs: Pair<Int, Int>) =
         Glue(DrawableId(a), DrawableId(b), pairs.map { GluePair(it.first, it.second, 0.5f, 0.5f) })
 

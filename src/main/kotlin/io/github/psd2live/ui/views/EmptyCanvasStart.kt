@@ -6,6 +6,7 @@ import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.i18n.tr
+import io.github.psd2live.ui.CanvasTool
 import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.components.GridIcon
 import io.github.psd2live.ui.components.IconChevron
@@ -46,13 +48,11 @@ import io.github.psd2live.ui.components.document
 import io.github.psd2live.ui.state.RecentFile
 import io.github.psd2live.ui.state.RecentFileKind
 import io.github.psd2live.ui.state.WorkspacePreset
-import io.github.psd2live.ui.state.recentFilesFrom
+import io.github.psd2live.ui.state.rememberExistingRecentFiles
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.tutorial.TutorialId
 import java.awt.Cursor
-import java.nio.file.Files
-import java.nio.file.Path
 
 @Composable
 internal fun EmptyCanvasStart(
@@ -69,9 +69,7 @@ internal fun EmptyCanvasStart(
 ) {
 	val colors = LocalToolColors.current
 	val typography = LocalToolTypography.current
-	val recent = remember(recentPaths) {
-		recentFilesFrom(recentPaths).filter { runCatching { Files.isRegularFile(Path.of(it.path)) }.getOrDefault(false) }
-	}
+	val recent = rememberExistingRecentFiles(recentPaths)
 
 	BoxWithConstraints(
 		modifier.fillMaxSize().background(colors.windowBackground).padding(horizontal = 18.dp, vertical = 14.dp),
@@ -135,7 +133,8 @@ internal fun EmptyCanvasStart(
 
 @Composable
 private fun StartSection(
-	recent: List<RecentFile>,
+	/** Null while the recent files are still being checked. */
+	recent: List<RecentFile>?,
 	enabled: Boolean,
 	openProjectShortcut: String?,
 	openPsdShortcut: String?,
@@ -158,10 +157,11 @@ private fun StartSection(
 			StartActionRow(tr("canvas.start.importPsd"), tr("canvas.start.importPsd.desc"), openPsdShortcut, icon = { tint -> IconDocument(tint = tint) }, enabled = enabled, onClick = it)
 		}
 		SectionTitle(tr("canvas.start.recent"), Modifier.padding(top = 6.dp))
-		if (recent.isEmpty()) {
+		// While the check runs nothing shows, rather than "none" for a moment.
+		if (recent?.isEmpty() == true) {
 			Text(tr("canvas.start.recent.empty"), style = typography.caption.copy(fontSize = 11.sp), color = colors.textDisabled, modifier = Modifier.padding(4.dp))
 		} else {
-			recent.take(4).forEach { file ->
+			recent.orEmpty().take(4).forEach { file ->
 				RecentFileRow(file, enabled) { onOpenRecent(file.path) }
 			}
 		}
@@ -182,10 +182,11 @@ private fun UpdatesSection(
 			modifier = Modifier.padding(bottom = 1.dp),
 		)
 		listOf(
-			TutorialId.SIMULATION to "simulation",
-			TutorialId.SKELETON to "skeleton",
-			TutorialId.ANIMATION to "animation",
-			TutorialId.WORKSPACE to "workspace",
+			TutorialId.TOOL_DETAILS to "tools",
+			TutorialId.DEFORM_MODE to "deform",
+			TutorialId.WORKSPACE to "texture",
+			TutorialId.PROJECT_HISTORY to "regenerate",
+			TutorialId.LIVE2D_BRIDGE to "export",
 		).forEach { (tutorial, key) ->
 			FeatureUpdateRow(
 				title = tr("canvas.start.update.$key.title"),
@@ -233,7 +234,9 @@ private fun FeatureUpdateRow(
 			TutorialId.ANIMATION -> IconPlay(modifier = Modifier.size(14.dp), tint = iconTint)
 			TutorialId.SKELETON -> IconSkeleton(modifier = Modifier.size(15.dp), tint = iconTint)
 			TutorialId.PROJECT_HISTORY -> WorkspacePresetIcon(WorkspacePreset.HISTORY, iconTint, Modifier.size(15.dp))
-			TutorialId.WORKSPACE -> WorkspacePresetIcon(WorkspacePreset.EDIT, iconTint, Modifier.size(15.dp))
+			TutorialId.WORKSPACE -> WorkspacePresetIcon(WorkspacePreset.TEXTURE, iconTint, Modifier.size(15.dp))
+			TutorialId.DEFORM_MODE -> ModeIcon(EditHierarchyMode.DEFORM, iconTint, 15.dp)
+			TutorialId.TOOL_DETAILS -> Box(Modifier.size(15.dp), contentAlignment = Alignment.Center) { ToolIcon(CanvasTool.BRUSH, iconTint) }
 			TutorialId.PHYSICS -> IconPhysics(active = true, modifier = Modifier.size(15.dp), tint = iconTint)
 			TutorialId.SIMULATION -> ModeIcon(EditHierarchyMode.SIMULATE, iconTint, 15.dp)
 			else -> IconRoute(tint = iconTint)
