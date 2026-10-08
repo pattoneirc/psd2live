@@ -1295,6 +1295,8 @@ object RigBuilder {
 		var skeletonKey: String? = null
 		fun finish(): BuiltRig {
 			val unbound = assembled.withDerivedRenderRoot().let { withoutLegacyHairSway(it, config) }
+			// Version 2 parts join the rig after this: they leave the legacy sway warp the same way.
+			val v2Parts = if (maskedParts.isEmpty()) maskedParts else withoutLegacyHairSway(assembled.copy(drawables = maskedParts), config).drawables
 			// The skeleton bakes the unbound rig: the joint rows it inserts interpolate layer offsets, which the
 			// binding then turns into page uvs like every other vertex. So the bake never reads the atlas, and
 			// moving, scaling or repacking tiles reuses it. Split parts its bones bind are skinned with it and handed
@@ -1302,7 +1304,7 @@ object RigBuilder {
 			val parts = skeleton?.let { skinnablePrimitives(unbound, it, config) }.orEmpty()
 			if (v2) {
 				// Version 2 parts bake with the base - a deferred-parent part has no skin - and passengers never bind.
-				val baked = maskedParts.filter { it.id !in deferredParts }
+				val baked = v2Parts.filter { it.id !in deferredParts }
 				val withParts = unbound.copy(drawables = unbound.drawables + parts + baked)
 				val locked = handEditedTopology(config) + resolution.parts.filter { it.fixedTopology }.map { it.drawableId.raw } +
 					SkeletonCanvasSkin.lockedTopology(withParts, config.rigEdits, canvasSkinned)
@@ -1312,7 +1314,7 @@ object RigBuilder {
 					SkeletonRig.generate(withParts, it, context.bodyFrame, locked, context.stance, canvasSkinned - ghostIds.mapTo(HashSet()) { id -> id.raw })
 						.also { skeletonKey = SkeletonRig.takeLastKey() }
 				} } ?: withParts
-				val (skinnedBase, skins) = parked(skeletal, parts.mapTo(HashSet()) { it.id }, maskedParts, deferredParts, resolution,
+				val (skinnedBase, skins) = parked(skeletal, parts.mapTo(HashSet()) { it.id }, v2Parts, deferredParts, resolution,
 					generatedMasks, partSlots, partLayerById, partNeutralBounds)
 				val skeletonPuppet = RigBuildProfile.stage("binding: UvBinding.bind") {
 					UvBinding.bind(skinnedBase, inputAnalysis, atlas) { classifiedByDrawable[it.id] }.puppet
