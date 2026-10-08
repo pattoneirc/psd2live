@@ -7,9 +7,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import io.github.psd2live.application.WorkspaceTextureEdit
 import io.github.psd2live.core.CanvasViewport
@@ -20,7 +18,6 @@ import io.github.psd2live.ui.SkiaRigPainter
 import io.github.psd2live.ui.SourcePixelImages
 import io.github.psd2live.ui.state.DesktopWorkspace
 import io.github.psd2live.ui.state.PSD2LiveViewModel
-import io.github.psd2live.ui.theme.CompactToolTheme
 import io.github.psd2live.ui.theme.ToolColors
 import io.github.psd2live.ui.views.texture.AtlasPageView
 import io.github.psd2live.ui.views.texture.TextureInspectorPanel
@@ -43,20 +40,11 @@ class TextureWorkspaceTool {
 	@OptIn(ExperimentalComposeUiApi::class)
 	@Test fun renderWorkspace() = runBlocking<Unit> {
 		requireTools()
-		val previousLanguage = I18n.currentLanguage
 		val directory = output("texture-workspace")
-		fun write(name: String, width: Int, height: Int, content: @androidx.compose.runtime.Composable () -> Unit) {
-			val scene = ImageComposeScene(width, height, density = Density(1f)) {
-				CompactToolTheme(colors = ToolColors.Dark) { content() }
-			}
-			try {
-				// Page images are made off the UI thread: give them a moment, then draw the settled frame.
-				repeat(6) { frame -> scene.render(frame * 16_000_000L).close(); Thread.sleep(250) }
-				val rendered = scene.render(200_000_000L)
-				try { File(directory, "$name.png").writeBytes(requireNotNull(rendered.encodeToData()).bytes) } finally { rendered.close() }
-			} finally { scene.close() }
-		}
-		try {
+		// Page images are made off the UI thread: give them a moment, then draw the settled frame.
+		fun write(name: String, width: Int, height: Int, content: @androidx.compose.runtime.Composable () -> Unit) =
+			renderPng(File(directory, "$name.png"), width, height, frames = 6, settleMillis = 250, content = content)
+		keepingLanguage {
 			PSD2LiveViewModel().use { vm ->
 				DesktopWorkspace(vm, temporary.resolve("store")).use { workspace ->
 					vm.attachWorkspace(workspace)
@@ -125,6 +113,6 @@ class TextureWorkspaceTool {
 					}
 				}
 			}
-		} finally { I18n.setLanguage(previousLanguage, persist = false) }
+		}
 	}
 }

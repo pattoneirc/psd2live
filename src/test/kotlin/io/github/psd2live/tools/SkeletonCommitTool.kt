@@ -25,11 +25,10 @@ import kotlin.test.assertEquals
  *
  * PSD2LIVE_TOOLS=1 ./gradlew test --tests '*SkeletonCommitTool'
  * PSD2LIVE_SAMPLE picks the PSD (tml by default), PSD2LIVE_SCALE (default 2) upscales every layer's pixels, so the
- * document is that many times larger on each side. Writes build/tools/skeleton-commit/report.txt.
+ * document is that many times larger on each side; PSD2LIVE_GEOMETRY_EDITS (default 24) sets how many geometry commits
+ * [profile] makes on the largest mesh before it times the skeleton commits. Writes build/tools/skeleton-commit/report.txt.
  */
 class SkeletonCommitTool {
-	private fun ms(start: Long) = (System.nanoTime() - start) / 1e6
-
 	private class Session(val runtime: WorkspaceRuntime<RigPreviewModel>, val commands: WorkspaceDocumentCommands)
 
 	private fun session(): Session {
@@ -64,15 +63,15 @@ class SkeletonCommitTool {
 	private suspend fun Session.setup(path: File, geometryEdits: Int, report: StringBuilder): String {
 		var t = System.nanoTime()
 		WorkspaceSourceImporter(runtime).importPsd(path.absoluteFile.toPath(), null, runtime.state.value.state, initialConfig = PipelineConfig())
-		report.appendLine("import: %.0f ms".format(ms(t)))
+		report.appendLine("import: %.0f ms".format(since(t)))
 		t = System.nanoTime()
 		op("skeleton_auto", JsonObject(emptyMap()))
-		report.appendLine("skeleton_auto: %.0f ms".format(ms(t)))
+		report.appendLine("skeleton_auto: %.0f ms".format(since(t)))
 		val model = runtime.capture().model
 		val target = model.rig.puppet.drawables.filter { it.mesh != null }.maxBy { it.mesh!!.positions.size }.id.raw
 		t = System.nanoTime()
 		repeat(geometryEdits) { journal(geometry(runtime.capture().model, target, it), "Geometry $it") }
-		report.appendLine("$geometryEdits geometry commits: %.0f ms".format(ms(t)))
+		report.appendLine("$geometryEdits geometry commits: %.0f ms".format(since(t)))
 		// A painted group: a skeleton commit on a document with one also migrates the painted weights.
 		val skinned = runtime.capture().model
 		val back = skinned.rig.puppet.drawables.filter { it.mesh != null && it.id.raw != target }.maxBy { it.mesh!!.positions.size }
@@ -112,7 +111,7 @@ class SkeletonCommitTool {
 				RigBuildProfile.reset(); RigBuildProfile.recording = true
 				val t = System.nanoTime()
 				try { block() } finally { RigBuildProfile.recording = false }
-				report.appendLine("$title: %.0f ms".format(ms(t)))
+				report.appendLine("$title: %.0f ms".format(since(t)))
 				RigBuildProfile.snapshot().filterValues { it.first >= 5.0 || it.first == 0.0 }
 					.forEach { (k, v) -> report.appendLine("    $k: %.0f ms (calls ${v.second})".format(v.first)) }
 			}
@@ -152,12 +151,11 @@ class SkeletonCommitTool {
 			}
 			// What matching replay checkpoints by the base's content would cost against what it could save.
 			val model = s.runtime.capture().model
-			fun mean(block: () -> Unit): Double { block(); val t = System.nanoTime(); repeat(3) { block() }; return ms(t) / 3 }
-			report.appendLine("base content hash (IR): %.1f ms".format(mean { ContentHash.of(PuppetIr.toIr(model.baseRig.puppet)) }))
+			report.appendLine("base content hash (IR): %.1f ms".format(mean(3) { ContentHash.of(PuppetIr.toIr(model.baseRig.puppet)) }))
 			val was = ReplayCheckpoints.enabled
 			ReplayCheckpoints.enabled = false
 			try {
-				report.appendLine("full replay of ${model.config.rigEdits.authoringJournal.size} entries: %.1f ms".format(mean {
+				report.appendLine("full replay of ${model.config.rigEdits.authoringJournal.size} entries: %.1f ms".format(mean(3) {
 					model.baseRig.withRigEdits(model.config.rigEdits, model.config.layerVisibility, model.config.drawOrderOverrides) }))
 			} finally { ReplayCheckpoints.enabled = was }
 		}
@@ -173,12 +171,15 @@ class SkeletonCommitTool {
 		model.config.toString().hashCode().toString(),
 	)
 
-	/** A fresh builder with every process-wide cache emptied and the stage caches off: the reopen of [document]. */
+	/**
+	 * A fresh builder with every process-wide cache emptied, the stage caches off and no stored authored rig to build
+	 * from: [document] generated and replayed.
+	 */
 	private fun cold(document: WorkspaceDocument): RigPreviewModel {
 		val stages = RigStageCache.enabled; val checkpoints = ReplayCheckpoints.enabled
 		RigStageCache.enabled = false; ReplayCheckpoints.enabled = false
 		SkeletonRig.clearCache()
-		try { return runBlocking { WorkspacePreviewBuilder().build(document) } }
+		try { return withoutMaterializedRigs { runBlocking { WorkspacePreviewBuilder().build(document) } } }
 		finally { RigStageCache.enabled = stages; ReplayCheckpoints.enabled = checkpoints }
 	}
 

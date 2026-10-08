@@ -34,21 +34,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.imageio.ImageIO
 
-private fun since(start: Long) = (System.nanoTime() - start) / 1e6
-
-private inline fun <T> timed(block: () -> T): Pair<T, Double> {
-	val start = System.nanoTime()
-	return block() to since(start)
-}
-
-/** Mean of [runs] calls after one warm-up call. */
-private inline fun mean(runs: Int, block: () -> Unit): Double {
-	block()
-	val start = System.nanoTime()
-	repeat(runs) { block() }
-	return since(start) / runs
-}
-
 private fun List<Double>.median(): Double = sorted().let { if (it.isEmpty()) 0.0 else it[it.size / 2] }
 
 /**
@@ -56,7 +41,11 @@ private fun List<Double>.median(): Double = sorted().let { if (it.isEmpty()) 0.0
  * application path does. Stage rows are means of repeated warm calls; commit rows are wall times through
  * [WorkspaceDocumentCommands] / [WorkspaceRasterCommands] with the history persisted after each commit, as the
  * desktop does. The native Cubism reload needs a GL context and is not measured; writing the runtime files it
- * loads ("materialize") is.
+ * loads ("materialize") is. Full rebuilds (a fresh builder, as a reopen) leave out the authored rigs the process has
+ * stored ([withoutMaterializedRigs]), so they generate the base rig and replay the journal.
+ *
+ * Run through [CommitPerfTool]: PSD2LIVE_TOOLS=1 ./gradlew test --tests '*CommitPerfTool.baseline' (or .rigStages);
+ * PSD2LIVE_RIG_MODES=staged or unstaged limits the rig stages to one mode of the stage cache.
  */
 internal class CommitBaseline(private val sample: Sample, private val out: File, private val rigOnly: Boolean = false) {
 	private val builder = WorkspacePreviewBuilder()
@@ -232,7 +221,7 @@ internal class CommitBaseline(private val sample: Sample, private val out: File,
 			val afterTopology = runtime.capture()
 			suspend fun reopen(document: WorkspaceDocument): Triple<Double, Int, Int> {
 				val h = SkeletonRig.cacheHits; val m = SkeletonRig.cacheMisses
-				val ms = timed { WorkspacePreviewBuilder().build(document) }.second
+				val ms = withoutMaterializedRigs { timed { WorkspacePreviewBuilder().build(document) }.second }
 				return Triple(ms, SkeletonRig.cacheHits - h, SkeletonRig.cacheMisses - m)
 			}
 			val reopenBefore = reopen(beforeTopology.document)
@@ -472,10 +461,12 @@ internal class CommitBaseline(private val sample: Sample, private val out: File,
 			put("rebuild_ms", JsonArray(rebuilds.map { JsonPrimitive(r1(it)) }))
 			put("last_commit_stages", buildJsonObject { stages.forEach { (k, v) -> put(k, buildJsonObject { put("ms", r1(v.first)); put("calls", v.second) }) } })
 		}
-		// A reopen of the result: a fresh builder, so only the process-wide caches (skeleton, motions) carry over.
+		// A reopen of the result: a fresh builder, so only the process-wide caches (skeleton, motions) carry over; the
+		// stored authored rig is left out, so the base is generated and the journal replayed.
 		val document = runtime.capture().document
 		RigBuildProfile.reset(); RigBuildProfile.recording = true
-		val cold = try { timed { WorkspacePreviewBuilder().build(document) }.second } finally { RigBuildProfile.recording = false }
+		val cold = try { withoutMaterializedRigs { timed { WorkspacePreviewBuilder().build(document) }.second } }
+			finally { RigBuildProfile.recording = false }
 		val coldStages = RigBuildProfile.snapshot()
 		section("[$mode] (i) full rebuild of the result (reopen, fresh builder)")
 		row("whole build", cold)
@@ -533,7 +524,8 @@ internal class CommitBaseline(private val sample: Sample, private val out: File,
 					null, null, false) }, document.source.groups)))
 		}
 		stages["materialize runtime files"] = materialize(model)
-		stages["whole buildPreview (fresh builder, skeleton cached)"] = timed { runBlocking { WorkspacePreviewBuilder().build(document) } }.second
+		stages["whole buildPreview (fresh builder, skeleton cached)"] =
+			withoutMaterializedRigs { timed { runBlocking { WorkspacePreviewBuilder().build(document) } }.second }
 		return stages
 	}
 

@@ -26,7 +26,7 @@ Windows ではリポジトリ直下の `run-gui.bat` でも GUI を起動でき�
 | --- | --- | --- |
 | `--input <path>` | 必須 | 入力するレイヤー付き PSD |
 | `--output <path>` | PSD と同じ場所の `psd2live-output` | 出力先 |
-| `--lang <zh\|en\|ja>` | システム言語 | ログの言語 |
+| `--lang <zh\|en\|ja\|ko>` | システム言語 | ログの言語 |
 | `--clear-user-data` | — | 単独で使用：現在のユーザーの設定、ワークスペースの保存領域、`~/.psd2live` 内のランタイムとキャッシュを削除して終了。エディター実行中は何も削除せず 1 を返します。Windows のアンインストーラーでデータ削除を選んだときに実行されます |
 | `--atlas <size>` | 4096 | テクスチャアトラスのサイズ |
 | `--mesh-spacing <px>` | 64 | メッシュ間隔 |
@@ -102,37 +102,42 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `MotionSheetTool.idle` | 待機 12 秒のフレーム画像 | `motion-frames/<サンプル>-idle/` |
 | `ModelProfileTool.cmo3` | `.cmo3` のパラメータ、デフォーマツリー（グリッド軸と範囲）、メッシュ、帯ごとの動きのプロファイル、体パラメータでの各メッシュの移動、体 X × 体 Y のシルエット、物理グループ | `model-profile/<名前>.txt`、`.png`、`-physics.txt` |
 | `ModelProfileTool.sample` | 生成モデル（スケルトンなしと自動スケルトン）の帯ごとの動きのプロファイル、体レイヤーと自動ボーン | `model-profile/<サンプル>.txt` |
+| `SimBakeBenchmark` | `tml` の後ろ髪をいくつかの設定で焼き込み、フィットに使わなかった動きでシミュレーションと書き出し結果を比較 | 標準出力 |
+| `CanvasPerfTool` | Xvfb 上で実際のウィンドウを開き、編集キャンバスで待機、ホバー、ホイールズーム、中ボタンのパン、変形モードで顔の全点のドラッグを順に行う。GPU 描画とソフトウェア描画で各 1 回、フレーム間隔、UI スレッドの遅延とホットスポットを報告。`xvfb-run -a -s "-screen 0 1920x1080x24"` が必要 | `canvas-perf/report.txt`、各段階のキャプチャと `.jfr` |
 | `DragonBonesFidelityTool` | `tml` と `ds`（スケルトンなしと自動スケルトン）を DragonBones に書き出し、`tools/dragonbones-check`（公式 DragonBones 5.7 ランタイムのコア、node が必要）で再生する。パラメータアニメーションを各キーフレームでエディタの評価と比較し（書き出しが報告した許容差以内）、クリップの誤差を測る | `dragonbones-fidelity/report.txt` |
-| `RuntimeConformanceTool` | Rust ランタイムの参照データ：ランダムなモデル（ワープ、回転、入れ子、疎なキーフォーム、ブレンドシェイプ、グルー、チャンネル、パーツ）、サンプル、ローカルのプロジェクトをランダムなポーズでエディタが評価した結果と、ランダムな振り子グループとサンプルの物理のフレームごとの軌跡。`runtime/` の `p2lrt-conformance` で比較する | `runtime-conformance/<ケース>/`、`runtime-physics/<ケース>/` |
+| `RuntimeConformanceTool.generate` / `.physics` | Rust ランタイムの参照データ。`generate` はランダムなモデル（ワープ、回転、入れ子、疎なキーフォーム、ブレンドシェイプ、グルー、チャンネル、パーツ）、サンプル、`PSD2LIVE_RUNTIME_PROJECT` で指定したプロジェクトをランダムなポーズでエディタが評価した結果（スケルトンのサンプルは最も細かくベイクした `rig.fine.p2lrt` も）。`physics` はランダムな振り子グループとサンプルの物理のフレームごとの軌跡。`runtime/` の `p2lrt-conformance` で比較する | `runtime-conformance/<ケース>/`、`runtime-physics/<ケース>/` |
+| `RuntimeConformanceTool.simulation` / `.simulationRig` | シミュレーションの参照軌跡。`simulation` はランダムな布（上辺を固定、剛性はランダム）を、揺れ・回転・跳ねる目標と固定点で動かしてエディタの XPBD ソルバーで解いた各フレームの結果（半数は動くカプセル衝突体つき）。`simulationRig` は `tml` の後ろ髪（上 10 分の 1 を固定）をベイクしてライブシーンごと書き出したモデルと、未ベイクの Rig 上で頭と体の動きに従うエディタのシーン。それぞれ `p2lrt-conformance --sim`、`--sim-rig` が読む | `runtime-sim/<ケース>/trace.bin`、`runtime-sim-rig/back-hair/` |
+| `RuntimeSamplesTool` | プレイヤーを目視確認するための合成モデル：グラデーション上の全カラーブレンドモード、乗算色とスクリーン色、マスクと反転マスク。ソフトウェアラスタライザーの描画を参照画像として書き出す | `runtime-samples/features.p2lrt`、`features.png`、`layout.txt` |
 | `WarpProbeTool` | エディタの評価器のブラックボックス探査：格子内外のワープ写像、ワープ下の回転フレーム、反転、ブレンドシェイプ、疎なキーフォーム。ランタイムの独立実装の照合用 | `warp-probe/*.tsv` |
-| `SwingCostTool` | tml での 2 つのスイングの生成時間、その入力の単純なハッシュ時間、編集全体の再生時間。生成器に生成キャッシュを付ける価値があるかの判断に使う | `swing-cost/report.txt` |
-| `GeneratorCostTool` | 各生成器（スケルトンの有無による Rig 生成、スケルトンのベイクのキャッシュ前後、物理グループ一覧、生成モーションのキャッシュ前後、Rig IR のコンパイル、シミュレーションのベイクと書き戻し）の時間と、その入力のコンテンツハッシュ時間。`PSD2LIVE_SAMPLE` でサンプルを指定 | `generator-cost/report.txt` |
-| `ExportGoldenTool` | `tml` と `ds` の、スケルトンなし・自動スケルトン・作成したモーションの 3 種での全書き出しファイルのダイジェスト（cmo3 は読み戻して moc3 に下げたもの）。リファクタリング前後の書き出しをバイト単位で比較する。`PSD2LIVE_GOLDEN_LABEL` で出力名を指定 | `export-golden/<名前>.txt` |
+| `GeneratorCostTool` | 各生成器（スケルトンの有無による Rig 生成、スケルトンのベイクのキャッシュ前後、物理グループ一覧、生成モーションのキャッシュ前後、Rig IR のコンパイル、揺れ 2 つの生成と再生、シミュレーションのベイクと書き戻し）の時間と、その入力のコンテンツハッシュ時間。生成キャッシュを付ける価値があるかの判断に使う。`PSD2LIVE_SAMPLE` でサンプルを指定（前髪と後ろ髪が必要） | `generator-cost/report.txt` |
+| `ExportGoldenTool` | `tml` と `ds` の、スケルトンなし・自動スケルトン・作成したモーションの 3 種と、スケルトンなしの cmo3 を新規プロジェクトとして読み込んだものについて、全書き出しファイルとプレビューバンドルのダイジェスト（cmo3 は読み戻して moc3 に下げたものと物理グループ数）。リファクタリング前後の書き出しをバイト単位で比較する。`PSD2LIVE_GOLDEN_LABEL` で出力名を指定 | `export-golden/<名前>.txt`、`<名前>/<サンプル>-<種類>/` |
 | `ExportPerfTool` | サンプル PSD（`PSD2LIVE_SAMPLE`）を整数倍に最近傍拡大し（`PSD2LIVE_EXPORT_SCALES`、既定 `1,2`）、書き出し先ごと（`PSD2LIVE_EXPORT_TARGETS`、既定は動画以外すべて）に時間を計り、書き出した全ファイルのダイジェスト（cmo3 は画像エントリと、読み戻して moc3 に下げたもの）を記録する。書き出し高速化の前後で時間とバイトを比較する。ラスター書き出しは拡大 1 段につき 1024 px、5 fps。`PSD2LIVE_GOLDEN_LABEL` で出力名を指定し、大きな倍率では `-Ppsd2live.testHeap=8g` などでテストのヒープを増やす | `export-perf/<名前>.txt`、`<名前>.digest.txt` |
+| `ArtPrimitiveV2VisualTool` | `tml` で脚を左右の連結成分ごとに、左目のまつ毛と口をポリゴンで分割し、それぞれバージョン 1 と 2 のレコードとして書く。分割前、v1、v2、v1/v2 の差分（×4）を目の開き・半目・閉じ、口の閉じ・開き・笑顔のポーズで並べ、継ぎ目、ずれ、欠けたピクセルを確認する | `art-primitive-v2/{legs,eye,mouth}.png` |
 | `SafetyGoldenTool` | 自動スケルトン Rig 上の、シード付きランダムなジオメトリ編集 24 件の完全なジオメトリ安全性レポート（`coverage` を除く）。検査器の変更前後で分類をバイト単位で比較する。`PSD2LIVE_GOLDEN_LABEL` で出力名を指定 | `safety-golden/<名前>.txt` |
 | `BundleProfileTool` | moc3 プレビューバンドルの段階別時間（IR コンパイル、IR からの復元、静止メッシュのキャンバス空間への変換、physics3/motion3、moc の変換と書き出し、cdi3）とジオメトリ安全性検査の時間。`PSD2LIVE_SAMPLER=1` でスタックサンプラーのホットスポットも出力 | 標準出力のみ |
-| `TextureWorkspaceTool` | `tml` にいくつかの密度、ロック、固定を設定し、アトラスのページとテクスチャパネル（中国語と英語、単一・複数・未選択、ヒートマップのオン／オフ、密度スライダーのプレビュー）、および編集キャンバスのアトラスと元画像のピクセルの比較を描画 | `texture-workspace/*.png` |
-| `AtlasFramePerfTool` | `tml` のアトラスページとテクスチャパネルのフレームコストをヘッドレスで計測：`ImageComposeScene` に待機、ホバー、角（密度）のドラッグ、ホイールズーム、タイルのドラッグ、ワイヤーフレームなしのホバーのポインター入力を送り、各描画の時間（中央値、p90、最大）を記録。まずソフトウェア、OpenGL が使えれば次に GPU で計測し、モードごとに角のドラッグ中・静止したページ・拡大のフレームを保存 | `atlas-frame-perf/report.txt`、`software-*.png`、`gpu-*.png` |
+| `CubismCoreCheckTool` | `tml` と `ds` のプレビューバンドルの moc3 を公式 Cubism Core の整合性検査（`csmHasMocConsistency`）にかける。`PSD2LIVE_TEST_CUBISM_CORE` で Core のライブラリを指定しないと skip される。小さな新規モデルの同じ検査は `:umamo` の `MocDefaultColorsTest` にある | 標準出力のみ |
+| `TextureWorkspaceTool` | `tml` にいくつかの密度とロックを設定してメッシュの形で一度配置し、アトラスのページとテクスチャパネル（中国語と英語、単一・複数・未選択、ヒートマップのオン／オフ、密度スライダーのプレビュー）、および編集キャンバスのアトラスと元画像のピクセルの比較を描画 | `texture-workspace/*.png` |
+| `AtlasFramePerfTool` | `tml` のアトラスページとテクスチャパネルのフレームコストを、ウィンドウなし・ソフトウェア描画で計測：`ImageComposeScene` に待機、ホバー、角（密度）のドラッグ、ホイールズーム、タイルのドラッグ、ワイヤーフレームなしのホバーのポインター入力を送り、各描画の時間（中央値、p90、最大）を記録し、角のドラッグ中・編集セッション・静止したページ・拡大の 4 フレームを保存。GPU 描画はウィンドウの Skia コンテキストが必要なので `AtlasWindowPerfTool` と `PreviewWindowTool` で計測する | `atlas-frame-perf/report.txt`、`{corner-drag,session,frame,zoomed}.png` |
 | `AtlasWindowPerfTool` | 実際のエディタウィンドウをテクスチャワークスペースで開き（`PSD2LIVE_SAMPLE` に `.psd` か `.psd2live` を指定可。コピーを使うこと）、ポインター入力を AWT イベントとして送る（実カーソルは動かさない）：ビューモデル経由の移動と密度変更、タイルのドラッグ、角のドラッグ、互いを待たない 6 回の連続ドラッグ。フレーム間隔、UI 遅延、各ビジーフラグが下りた時刻、UI スレッドのホットスポット、ドラッグプレビューの描画回数、ビューごとの GPU フレーム数を記録。キャプチャは画面ではなくウィンドウ自身の Skia フレームから取る | `atlas-window-perf/report.txt`、`*.jfr`、`*-after.png` |
 | `PreviewWindowTool` | Skia を OpenGL にして実際のエディタウィンドウを開き、編集キャンバスと両方のプレビューランタイムがウィンドウの Skia コンテキストで描画されること、再生 2 秒で届くフレーム数を確認し、各ビューのテクスチャを GPU から読み出す（画面はキャプチャしない）。2 分止まるとスレッドを書き出して終了 | `preview-window/report.txt`、`{edit,cubism,p2lrt}.png` |
+| `TexturePerfTool` | テクスチャコマンド（タイルの固定、密度の変更、自動配置、予算の変更）のコミット時間。`runtime` はアプリケーションのコマンドを通して再構築を別に計測し、`TEXTURE_PERF_SCENARIO` は `plain`、`skeleton`（自動スケルトン）、`deleted`（自動スケルトンで 1 層をソフト削除）から選ぶ。`TEXTURE_PERF_JFR=1` でそれらの回を `texture-perf/runtime.jfr` に記録。`desktop` はビューモデルとデスクトップアダプタを通し、Swing スレッドの停止、UI のキャプチャ、ページ PNG を記録。環境変数は Gradle タスクの入力ではないので、シナリオを替えるときは `--rerun` を付ける | `texture-perf/runtime-<シナリオ>.txt`、`desktop.txt` |
 | `ExportDialogTool` | 「インポート」と「形式を指定して書き出し」サブメニューを開いた「ファイル」メニュー、各ターゲットの書き出しダイアログ、Live2D と PSD の書き出しダイアログ、「書き出し完了」ダイアログ（中国語と英語、ダークテーマ。完了ダイアログはライトテーマも）。メニューの分類、ラベルとレイアウトの確認用 | `export-dialog/<言語>-<ターゲットまたはメニュー>.png` |
-| `ModalDialogTool` | 共通のモーダル枠に載せた設定、ヘルプ、テクスチャ高解像度化、描画順、メッシュ再構築ダイアログ（中国語、ダークテーマ）。タイトル行、本文、フッターがそろっているかの確認用 | `modal-dialog/<ダイアログ>.png` |
-| `SimBakeBenchmark` | `tml` の後ろ髪をいくつかの設定で焼き込み、フィットに使わなかった動きでシミュレーションと書き出し結果を比較 | 標準出力 |
+| `ModalDialogTool.renderDialogs` / `.depthSplit` | 共通のモーダル枠に載せたダイアログ（中国語）。タイトル行、本文、フッターがそろっているかの確認用：`renderDialogs` は設定、ヘルプ、テクスチャ高解像度化、描画順、メッシュ再構築ダイアログ（ダークテーマ）、`depthSplit` は前後分割ダイアログ（ダーク、ライト、大きな文字） | `modal-dialog/<ダイアログ>.png`、`depth-split-{dark,light,large-text}.png` |
+| `CanvasLookSheetTool.meshLook` / `.toolIcons` | キャンバスが描くものの一覧：`meshLook` は編集可能なジオメトリ（`MeshLook`）の各状態（構造、選択、ホバー、ブラシの影響範囲）を暗い・中間・明るい・彩度の高い下地の上に、`toolIcons` はすべてのキャンバスツールのアイコンとプレビューレールのトグルを両テーマで | `canvas-look/mesh-look.png`、`tool-icons-{dark,light}.png` |
 | `CommitPerfTool.profile` / `.desktop` | 1 回の編集コミットにかかる時間。`profile` はアプリケーション層のコマンド境界を通し、段階別（リビジョン、設定のデコード、再構築、ジオメトリ検査）に分けて計測。`desktop` はデスクトップのビューモデルとアダプタを通してメッシュ頂点編集とブラシのストロークを続けてコミットし、コミット時間と UI スレッドの最長停止を報告。`JAVA_TOOL_OPTIONS=-XX:StartFlightRecording=...` と併用してサンプリング可能 | `commit-perf/report.txt`、`desktop.txt` |
-| `CommitPerfTool.baseline` | コミット経路の段階別ベースライン。自動スケルトン、揺れ 2 つ、ベイク済みシミュレーション 1 つを持つプロジェクトで、完全再構築の各段階（解析、テクスチャアトラスのパッキングと PNG エンコード、基礎 Rig、スケルトンキャッシュのヒット/ミス、ジャーナル再生、揺れ/シミュレーションの書き戻し、上書き、IR、moc3 バンドル、`validateBundle`、リビジョンハッシュ、ランタイムファイルの書き出し）と、ジオメトリのコミット、小さなレイヤーへの描画、画像の差し替え（同形状/メッシュ再構築）、無関係なトポロジー編集後のスケルトンキャッシュ、ジャーナル 50/200 件追加時のコミット時間と増加を計測。各コミット後に履歴を保存する。ネイティブプレビューの再読み込み（GL コンテキストが必要）は計測しない | `commit-perf/baseline.json`、`baseline.md` |
-| `SkeletonCommitTool.profile` / `.equivalence` | スケルトンのコミット。`profile` は `PSD2LIVE_SCALE` 倍（既定 2）に拡大したサンプルでコマンド境界を通してボーンの作成・バインドと関節の移動（最大のメッシュをスキンする肢の関節を含む）を行い、コミット時間と Rig 構築の段階別時間を報告。`equivalence` はスケルトン・ジオメトリ・頂点グループのコミット、元に戻す/やり直し/ブランチ切り替えの後、ランタイムモデルをキャッシュを空にした冷再構築と比較 | `skeleton-commit/report.txt`、`equivalence.txt` |
+| `CommitPerfTool.baseline` | コミット経路の段階別ベースライン。自動スケルトン、揺れ 2 つ、ベイク済みシミュレーション 1 つを持つプロジェクトで、完全再構築（プロセス内に保存済みの作成 Rig を使わず、基礎 Rig を生成してジャーナルを再生する）の各段階（解析、テクスチャアトラスのパッキングと PNG エンコード、基礎 Rig、スケルトンキャッシュのヒット/ミス、ジャーナル再生、揺れ/シミュレーションの書き戻し、上書き、IR、moc3 バンドル、`validateBundle`、リビジョンハッシュ、ランタイムファイルの書き出し）と、ジオメトリのコミット、小さなレイヤーへの描画、画像の差し替え（同形状/メッシュ再構築）、無関係なトポロジー編集後のスケルトンキャッシュ、ジャーナル 50/200 件追加時のコミット時間と増加を計測。各コミット後に履歴を保存する。ネイティブプレビューの再読み込み（GL コンテキストが必要）は計測しない | `commit-perf/baseline.json`、`baseline.md` |
+| `CommitPerfTool.rigStages` | `baseline` の準備と生成系のコミット（レイヤー分類、レイヤーメッシュ）だけを行い、各コミットでの Rig 構築の段階を記録してから結果を完全に再構築する。`PSD2LIVE_RIG_MODES` を `staged` か `unstaged` にすると段階キャッシュの片方のモードだけを計測（既定は両方） | `commit-perf/rig-stages.json`、`rig-stages.md` |
+| `SkeletonCommitTool.profile` / `.equivalence` | スケルトンのコミット。`profile` は `PSD2LIVE_SCALE` 倍（既定 2）に拡大したサンプルで、先に `PSD2LIVE_GEOMETRY_EDITS` 回（既定 24）のジオメトリコミットを行い、コマンド境界を通してボーンの作成・バインドと関節の移動（最大のメッシュをスキンする肢の関節を含む）を行い、コミット時間と Rig 構築の段階別時間を報告。`equivalence` はスケルトン・ジオメトリ・頂点グループのコミット、元に戻す/やり直し/ブランチ切り替えの後、ランタイムモデルを、キャッシュを空にし保存済みの作成 Rig を使わない冷再構築・再生と比較 | `skeleton-commit/report.txt`、`equivalence.txt` |
 | `SkeletonBakeDiffTool` | スケルトンベイクの前後比較。拡大したサンプル（`PSD2LIVE_SCALE`、既定 2）で各スキンメッシュがキーフォームグリッドの各セルとブレンドシェイプの各キーで置かれるキャンバス座標を記録し、各肢を極端なポーズでレンダリング。`PSD2LIVE_LABEL` で結果に名前を付け、`PSD2LIVE_REFERENCE` を指定するとその結果と比較し、メッシュごとの最大頂点差（ピクセル）とレンダリング差を報告 | `skeleton-bake/<label>.bin`、`<label>-limbs.png`、`<label>-vs-<reference>.png` |
-| `OpenPerfTool.profile` | プロジェクトを開く時間。自動スケルトン、揺れ 2 つ、ベイク済みシミュレーション 1 つを持つプロジェクトをヘッドキャッシュあり/なしで保存し、空のスケルトンキャッシュでそれぞれ 3 回開いて、展開/シードとヘッドの再構築を計測し、両者の再構築モデルが同一であることを確認 | `open-perf/report.json`、`report.md` |
+| `OpenPerfTool.profile` | アプリと同じ経路（`ProjectRepository.open` の後、新しい `WorkspacePreviewBuilder` がヘッドを構築）でプロジェクトを開く時間。自動スケルトン、揺れ 2 つ、ベイク済みシミュレーション 1 つを持つプロジェクトで、アプリが今書く形（各リビジョンの作成 Rig とヘッドキャッシュ）、ヘッドキャッシュのみ（保存 Rig なしの生成と再生）、どちらもなしの 3 種のアーカイブを保存し、空の作成 Rig キャッシュとスケルトンキャッシュでそれぞれ 3 回開いて、展開/シードとヘッドの構築を計測し、3 種の構築モデルが同一であることを確認 | `open-perf/report.json`、`report.md` |
 | `SavePerfTool.profile` | 現実的な規模の生成プロジェクト（`PSD2LIVE_SAVE_LAYERS`、`PSD2LIVE_SAVE_SIZE`、`PSD2LIVE_SAVE_REVISIONS`）の保存時間。同じキャプチャを 3 回、開き直した後に 2 回保存し、1 回開く | `save-perf/report.txt` |
 | `RigSourcePerfTool.profile` | 生成入力を持つ大きな文書（サンプルを `PSD2LIVE_SCALE` 倍、既定 3 倍に拡大）での再構築のうち画素数に比例する段階。3 層ごとに数ピクセル切り詰め（固定矩形まで補われる）、5 層ごとに 2 倍密度とし、コールド構築・ウォーム再構築・描画後の再構築の段階別時間と、アトラスページのコールド合成とプレビュー PNG エンコードを計測 | `rig-source-perf/report.txt` |
-| `MeshTraceTool` | 合成レイヤー（1024² テクスチャ上のまつ毛付きの目、細い髪束、キャンバス解像度のレイヤー、6000 px と 2048 px ドキュメントのレイヤー）をキャンバストレースとテクスチャトレースでメッシュ化して並べて描画（灰色がテクスチャ alpha、青がメッシュ、赤がメッシュ外の不透明テクスチャピクセル）し、頂点数、時間、`detail`、メッシュ外のピクセル数とメッシュ面積を出力。`wrap` はまつ毛、細い髪束、手をテクスチャトレースで包み込み 0〜32 でメッシュ化し、頂点数、輪郭ループ数、時間、メッシュ外のピクセル数を出力 | `mesh-trace/<ケース>.png`、`report.txt`；`mesh-wrap/<ケース>.png`、`report.txt` |
-| `Cmo3HiresTool` | キャンバスより高密度のレイヤーを `.cmo3` に書く方法の調査。tml の目のレイヤー 1 枚を 4 倍に拡大し（中央 3 分の 1 に 1 テクセルの市松模様）、ベースライン、レイヤーはキャンバス解像度でアトラスのみ高解像度、高解像度レイヤーにモデル画像のスケールアフィン（レイヤー矩形はラスターサイズまたはキャンバスサイズ）、レイヤー画像全体を 4 倍にしたものをそれぞれ書き出し、リーダーで配置を読み戻す。ファイルは Cubism Editor で手動確認する | `cmo3-hires/*.cmo3`、`report.txt`、`README.txt` |
+| `MeshTraceTool.compare` / `.wrap` | `compare` は合成レイヤー（1024² テクスチャ上のまつ毛付きの目、細い髪束、キャンバス解像度のレイヤー、6000 px と 2048 px ドキュメントのレイヤー）をキャンバストレースとテクスチャトレースでメッシュ化して並べて描画（灰色がテクスチャ alpha、青がメッシュ、赤がメッシュ外の不透明テクスチャピクセル）し、頂点数、時間、`detail`、メッシュ外のピクセル数とメッシュ面積を出力。`wrap` はまつ毛、細い髪束、手をテクスチャトレースで包み込み 0〜32 でメッシュ化し、頂点数、輪郭ループ数、時間、メッシュ外のピクセル数を出力 | `mesh-trace/<ケース>.png`、`report.txt`；`mesh-wrap/<ケース>.png`、`report.txt` |
 
 | 環境変数 | 効果 |
 | --- | --- |
 | `PSD2LIVE_SAMPLE` | サンプル名（`tml`、`ds`）または PSD のパス。既定は `tml`。`CommitPerfTool.desktop` は `.psd2live` プロジェクトも受け付ける |
 | `PSD2LIVE_CMO3` | `ModelProfileTool.cmo3` の入力。`.cmo3` ファイルまたはそのディレクトリ |
-| `PSD2LIVE_HIRES_TILE` | `Cmo3HiresTool` が拡大するレイヤー名。既定は最小の目のレイヤー |
 | `PSD2LIVE_PROBES` | プロファイルで調べるパラメータ。`id=値,...`。既定は体 X・Y・Z の両端 |
 | `PSD2LIVE_SHEET_PARAM` | シルエットを体 X × 体 Y ではなくこのパラメータに沿って並べる |
 | `PSD2LIVE_BONES` | `MotionSheetTool.body` で自動スケルトンのボーン位置を補正。`id=頭x,頭y,尾x,尾y;...`（キャンバスピクセル） |
@@ -140,10 +145,14 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `PSD2LIVE_ZOOM` | 脚の拡大範囲。`左,上,右,下` をキャンバスに対する比率で指定 |
 | `PSD2LIVE_VERBOSE` | `1` で `motions` が各カーブも出力 |
 | `PSD2LIVE_BAKE_CONFIGS` | `SimBakeBenchmark` の設定。`モード数:キー数,...`。既定は `2:5,2:7,1:5` |
+| `PSD2LIVE_RUNTIME_PROJECT` | `RuntimeConformanceTool.generate` が追加で書き出すプロジェクト（`.psd2live` または PSD）。ケース名は `project` |
+| `PSD2LIVE_GEOMETRY_EDITS` | `SkeletonCommitTool.profile` がスケルトンのコミットの前に行うジオメトリコミットの回数。既定は 24 |
+| `PSD2LIVE_RIG_MODES` | `CommitPerfTool.baseline` / `.rigStages` の生成系コミットを `staged` か `unstaged` だけにする。既定は `both` |
+| `PSD2LIVE_TEST_CUBISM_CORE` | 公式 Cubism Core ライブラリのパス。`CubismCoreCheckTool` と `:umamo` の `MocDefaultColorsTest` が使い、未設定ならどちらも skip |
 
 ## コード構成
 
-ソースは `src/main/kotlin/` 以下の二つのトップレベルパッケージに分かれています。
+ソースは複数の Gradle モジュールに分かれ、依存は下向きだけで、ビルドがそれを保証します。Umamo から移植したエンジン `org.umamo.*` は `:umamo`（`umamo/src/main/kotlin/`。製品コードに依存しない）にあり、中立 Rig IR `:format-model`、書き出しフレームワーク `:format-compile` とラスター書き出し `:targets:raster`、ランタイムモデル `:targets:runtime` とランタイムバインディング `:format-eval` は MIT で、GPL のモジュールに依存しません。`:targets:cubism`（IR 変換、moc3、cmo3）と `:targets:psd` はエンジンを使い、製品層 `io.github.psd2live.*` はルートプロジェクト（`src/main/kotlin/`）にあります。書き出しモジュールは[中立 Rig IR と書き出しターゲット（中国語）](../../zh/spec/EXPORT_TARGETS.md)を参照してください。主なパッケージは次のとおりです。
 
 | パッケージ | 役割 |
 | --- | --- |
@@ -153,20 +162,25 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `org.umamo.render` | LWJGL / OpenGL プレビュー |
 | `org.umamo.edit` | モデルに対する不変の編集プリミティブ |
 | `io.github.psd2live.core` | 生成パイプライン（`PSD2LivePipeline`、`LayerClassifier`、`AdaptiveMeshGenerator`、`RigBuilder`、`MotionGenerator`、`PhysicsGenerator`）と再生可能な編集 |
-| `io.github.psd2live.project` | `.psd2live` アーカイブ、セッション、ワークスペース状態のシリアライズ |
+| `io.github.psd2live.project` | 中立なワークスペース文書（`WorkspaceDocument`）、履歴ストア（`WorkspaceStore`）と `.psd2live` アーカイブ。`application`、Compose、MCP に依存しない |
+| `io.github.psd2live.application` | 中立なランタイム（`WorkspaceRuntime`）、コマンド登録とスキーマ、プレビューセッション、プロセス内のバックグラウンドジョブ。UI と MCP が共用 |
 | `io.github.psd2live.history` | 分岐する元に戻す / やり直し |
 | `io.github.psd2live.agent` | ローカル MCP サーバーと公開ツールの定義 |
+| `io.github.psd2live.render` | 編集キャンバスと p2lrt プレビューの GPU 描画（`CanvasGpu`、`GlCanvasRenderer`、`P2lrtGlRenderer`、`SkiaGpu`） |
 | `io.github.psd2live.ui` | Compose UI：`state`（ViewModel、ショートカット登録）、`views`（ワークスペースとパネル）、`components`（ダイアログと部品）、`tutorial`。キャンバス編集と描画は `ui` 直下 |
 | `io.github.psd2live.i18n` | UI 文言。リソースは `src/main/resources/i18n/` |
 
-生成と書き出しのロジックは `core` / `project` に置き、Compose のコードには書かないでください。
+生成と書き出しのロジックは `core` / `project` / `application` に置き、Compose のコードには書かないでください。
 
 ## 基本ルール：再構築と再生
 
 `PuppetModel` は永続化されません。プロジェクトが保存するのは、元画像、レイヤー分類、設定と、シリアライズ可能な編集記録（`RigEditOverlay`）です。開くたび、また変更のたびに次の処理が行われます。
 
 1. `RigBuilder` が元画像から基本のリグを再生成する
-2. `RigEditOverlay.applyTo` が編集を決まった順序で再生する：パラメータの削除 / 作成 → Warp と構造 → キーフォーム → 記録順の編集ジャーナル → 最後に揺れを生成
+2. 作成段階（`RigEditOverlay.replayAuthored`）：ジャーナルの最後の `rig_checkpoint` レコードが保存した Rig から始め、なければ基本のリグから始めて旧形式の静的フィールド（パラメータの削除 / 作成、Warp、構造、キーフォーム）を先に再生し、その後の `authoringJournal` を記録順に再生する
+3. 仕上げ（`RigEditOverlay.finish`）：生成器の依存グラフ（`core/DocumentGenerators.kt`）の順に揺れ、シミュレーションなどの生成器を実行し、生成結果の上書き（`generated_override`）を三方向マージし、生成パラメータを参照するパネル編集を再生する
+
+作成 Rig が保存されているリビジョン（このプロセスで構築したもの、またはアーカイブの `rig/` にあるもの）はそこから構築し、基本のリグの生成もジャーナルの再生も行いません。詳しくは[固化 Rig（中国語）](../../zh/spec/MATERIALIZED_RIG.md)と[文書層（中国語）](../../zh/spec/DOCUMENT_LAYER.md)を参照してください。
 
 そのため新しい編集機能では次の点を守ってください。
 
@@ -174,7 +188,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 - UI と MCP は同じ編集コマンドを使います。`org.umamo.edit` の低レベルメソッドは、そのまま公開インターフェースになるわけではありません。
 - 受け入れ確認の流れ：ドメインデータ → 履歴の再生 → 保存と再読み込み → 対象 Cubism バージョンの処理 → 書き出しと読み戻し → 目視確認。詳しくは[ランタイムと書き出しの境界](../../zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)（中国語）を参照してください。
 
-UI 文言を追加するときは、`Messages.properties`、`Messages_zh_CN.properties`、`Messages_ja.properties` の三つに同時に追加し、キー数をそろえてください。
+UI 文言を追加するときは、`Messages.properties`、`Messages_zh_CN.properties`、`Messages_ja.properties`、`Messages_ko.properties` の四つに同時に追加し、キー数をそろえてください（`MessageBundleParityTest` が検査します）。
 
 ## 書き出し結果の確認
 

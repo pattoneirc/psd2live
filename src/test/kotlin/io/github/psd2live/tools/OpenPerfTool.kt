@@ -9,6 +9,7 @@ import io.github.psd2live.core.sim.SimAuthoring
 import io.github.psd2live.core.sim.SimBaker
 import io.github.psd2live.core.sim.SimKind
 import io.github.psd2live.format.compile.document.ContentHash
+import io.github.psd2live.project.MaterializedRigStore
 import io.github.psd2live.project.ProjectRepository
 import io.github.psd2live.project.ProjectSaveCapture
 import io.github.psd2live.project.WorkspaceStore
@@ -23,16 +24,19 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Time to open a saved project and rebuild its head, with and without the archive's head cache.
+ * Time to open a saved project and build its head's preview as the app does (ProjectRepository.open, then a fresh
+ * WorkspacePreviewBuilder with no current model), for three archives of one project: as the app saves it now, with
+ * each revision's authored rig (rig/revisions/, built from without generation or replay) and the head cache; with the
+ * head cache only, as archives from before stored rigs open (generation and replay, the skeleton bake seeded); with
+ * neither (generation, replay and the skeleton bake).
  *
  * PSD2LIVE_TOOLS=1 ./gradlew test --tests '*OpenPerfTool'
  * PSD2LIVE_SAMPLE picks the PSD (tml by default). The project has the auto skeleton, two swings and one baked
- * simulation. Each run starts from an empty skeleton cache, as a freshly started app does; other in-process
- * caches (atlas pages, generated geometry) are warm after the first run for both variants alike, so the
- * difference between the two is what the cache saves. Writes build/tools/open-perf/report.json and report.md.
+ * simulation. Each run starts from empty authored rig and skeleton caches, as a freshly started app does; other
+ * in-process caches (atlas pages, generated geometry) are warm after the first run for every variant alike. Every
+ * variant must build the saved model. Writes build/tools/open-perf/report.json and report.md.
  */
 class OpenPerfTool {
-	private fun since(start: Long) = (System.nanoTime() - start) / 1e6
 	private fun r1(value: Double) = Math.round(value * 10) / 10.0
 
 	@Test fun profile() {
@@ -78,37 +82,41 @@ class OpenPerfTool {
 			val storeRoot = Files.createTempDirectory("psd2live-open-perf-")
 			val store = WorkspaceStore(storeRoot)
 			val capture = ProjectSaveCapture(plain.projectId, runtime.history(), JsonObject(emptyMap()), sample.path.toAbsolutePath(), store)
-			val cachedFile = out.toPath().resolve("cached.psd2live")
-			val plainFile = out.toPath().resolve("plain.psd2live")
-			Files.deleteIfExists(cachedFile); Files.deleteIfExists(plainFile)
-			var start = System.nanoTime()
-			ProjectRepository().save(capture, cachedFile)
-			val saveCached = since(start)
-			start = System.nanoTime()
-			ProjectRepository(writeHeadCache = false).save(capture, plainFile)
-			val savePlain = since(start)
+			class Archive(val variant: String, val file: java.nio.file.Path, val saveMs: Double)
+			val archives = listOf(
+				Triple("authored rig", "authored.psd2live", ProjectRepository()),
+				Triple("head cache only", "cached.psd2live", ProjectRepository()),
+				Triple("neither", "plain.psd2live", ProjectRepository(writeHeadCache = false)),
+			).map { (variant, name, repository) ->
+				val file = out.toPath().resolve(name)
+				Files.deleteIfExists(file)
+				val (_, ms) = timed {
+					if (variant == "authored rig") repository.save(capture, file) else withoutMaterializedRigs { repository.save(capture, file) }
+				}
+				Archive(variant, file, ms)
+			}
 
 			class Run(val variant: String, val openMs: Double, val rebuildMs: Double, val bakes: Int)
 			val runs = ArrayList<Run>()
 			repeat(3) {
-				for ((variant, file) in listOf("without cache" to plainFile, "with cache" to cachedFile)) {
+				for (archive in archives) {
+					MaterializedRigStore.clear()
 					SkeletonRig.clearCache()
-					start = System.nanoTime()
-					val head = ProjectRepository().open(file).use { it.history.head().snapshot }
-					val openMs = since(start)
+					val (opened, openMs) = timed { ProjectRepository().open(archive.file) }
 					val misses = SkeletonRig.cacheMisses
-					start = System.nanoTime()
-					val rebuilt = WorkspacePreviewBuilder().build(head)
-					val rebuildMs = since(start)
-					assertEquals(expected, ContentHash.of(PuppetIr.toIr(rebuilt.rig.puppet)), "$variant rebuilds the saved model")
-					runs += Run(variant, openMs, rebuildMs, SkeletonRig.cacheMisses - misses)
+					// Inside the open, as the app builds it: the stored rigs read their objects from the extracted archive.
+					val (rebuilt, rebuildMs) = opened.use { timed { WorkspacePreviewBuilder().build(it.history.head().snapshot) } }
+					assertEquals(expected, ContentHash.of(PuppetIr.toIr(rebuilt.rig.puppet)), "${archive.variant} builds the saved model")
+					runs += Run(archive.variant, openMs, rebuildMs, SkeletonRig.cacheMisses - misses)
 				}
 			}
+			MaterializedRigStore.clear()
 			fun median(values: List<Double>) = values.sorted()[values.size / 2]
 			val report = buildJsonObject {
 				put("sample", sample.name)
-				put("archive_bytes_with_cache", Files.size(cachedFile)); put("archive_bytes_without_cache", Files.size(plainFile))
-				put("save_ms_with_cache", r1(saveCached)); put("save_ms_without_cache", r1(savePlain))
+				putJsonArray("archives") { archives.forEach { archive -> addJsonObject {
+					put("variant", archive.variant); put("bytes", Files.size(archive.file)); put("save_ms", r1(archive.saveMs))
+				} } }
 				putJsonArray("runs") { runs.forEach { run -> addJsonObject {
 					put("variant", run.variant); put("open_ms", r1(run.openMs)); put("rebuild_ms", r1(run.rebuildMs))
 					put("total_ms", r1(run.openMs + run.rebuildMs)); put("skeleton_bakes", run.bakes)
@@ -116,14 +124,13 @@ class OpenPerfTool {
 			}
 			out.resolve("report.json").writeText(report.toString())
 			val table = StringBuilder()
-			table.appendLine("# Open with and without the head cache (${sample.name})").appendLine()
-			table.appendLine("archive %.1f MB with cache, %.1f MB without; save %.0f / %.0f ms".format(
-				Files.size(cachedFile) / 1e6, Files.size(plainFile) / 1e6, saveCached, savePlain)).appendLine()
-			table.appendLine("| variant | open (extract, unpack, seed) | rebuild head | total = first display | skeleton bakes |")
+			table.appendLine("# Open a project (${sample.name})").appendLine()
+			table.appendLine(archives.joinToString("; ") { "%s: archive %.1f MB, save %.0f ms".format(it.variant, Files.size(it.file) / 1e6, it.saveMs) }).appendLine()
+			table.appendLine("| archive | open (extract, unpack, seed, adopt) | build head | total = first display | skeleton bakes |")
 			table.appendLine("| --- | ---: | ---: | ---: | ---: |")
-			for (variant in listOf("without cache", "with cache")) {
-				val mine = runs.filter { it.variant == variant }
-				table.appendLine("| $variant | %.0f ms | %.0f ms | %.0f ms | %s |".format(median(mine.map { it.openMs }), median(mine.map { it.rebuildMs }),
+			for (archive in archives) {
+				val mine = runs.filter { it.variant == archive.variant }
+				table.appendLine("| ${archive.variant} | %.0f ms | %.0f ms | %.0f ms | %s |".format(median(mine.map { it.openMs }), median(mine.map { it.rebuildMs }),
 					median(mine.map { it.openMs + it.rebuildMs }), mine.joinToString("/") { it.bakes.toString() }))
 			}
 			table.appendLine().appendLine("medians of 3 runs; all runs: " + runs.joinToString { "%s %.0f+%.0f".format(it.variant, it.openMs, it.rebuildMs) })
