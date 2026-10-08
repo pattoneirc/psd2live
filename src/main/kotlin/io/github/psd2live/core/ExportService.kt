@@ -59,7 +59,8 @@ internal object ExportService {
 	 * `<baseName>.<target>.report.json`. Files are staged and moved in only after the export succeeds.
 	 */
 	fun export(preview: RigPreviewModel, target: ExportTarget, options: ExportOptions, directory: Path): ExportReport {
-		val ir = RigIrCompiler.compile(preview, tileArt = target.id == "cmo3")
+		// The runtime's own targets carry its advanced mode's live simulations.
+		val ir = RigIrCompiler.compile(preview, tileArt = target.id == "cmo3", simulations = target.id == "p2lrt" || target.id == "web")
 		val root = directory.toAbsolutePath().normalize()
 		Files.createDirectories(root)
 		val stage = Files.createTempDirectory(root, ".export-")

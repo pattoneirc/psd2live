@@ -124,9 +124,14 @@ class SimScene private constructor(
         calibrated.state.goalOffsetY.copyInto(state.goalOffsetY)
     }
 
-    /** Writes goals and anchors for this frame. */
+    /** Writes goals, anchors and colliders for this frame. */
     private fun place(world: Map<DrawableId, FloatArray>): Boolean {
         val s = state
+        s.colliders = edit.colliders.mapNotNull { c ->
+            val positions = world[DrawableId(c.mesh)] ?: return@mapNotNull null
+            if (maxOf(c.a, c.b) * 2 + 1 >= positions.size) return@mapNotNull null
+            PlacedCollider(positions[c.a * 2], positions[c.a * 2 + 1], positions[c.b * 2], positions[c.b * 2 + 1], c.radius, c.radiusB, c.friction)
+        }
         for ((id, offset) in offsets) {
             val positions = world[id] ?: return false
             for (v in 0 until vertexCounts.getValue(id)) {
@@ -162,6 +167,9 @@ class SimScene private constructor(
         }
         return if (dot == 0f && cross == 0f) 0f else kotlin.math.atan2(cross, dot)
     }
+
+    /** The mesh and vertex particle [i]'s pin follows, or null for its own position. */
+    internal fun anchorOf(i: Int): Pair<DrawableId, Int>? = anchors[i]?.let { it.drawable to it.vertex }
 
     /** The simulated vertices of [id], world space. */
     fun positions(id: DrawableId): FloatArray? {

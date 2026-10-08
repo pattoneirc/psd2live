@@ -3,15 +3,16 @@
 //! come before children; both versions read into the same [Rig].
 
 use crate::container::{self, Chunk};
+use crate::sim::Simulation;
 use std::fmt;
 
 /// The newest major version this reader understands; version 1 is read too.
 pub const VERSION: u32 = 2;
 /// The chunks this reader understands, with the newest version of each.
-pub const CHUNKS: [(&str, u16); 16] = [
+pub const CHUNKS: [(&str, u16); 18] = [
     ("STRS", 1), ("CANV", 1), ("PARM", 1), ("DEFM", 1), ("PART", 1), ("MESH", 1), ("GLUE", 1),
     ("DRAW", 1), ("TEXR", 1), ("PHYS", 1), ("CLIP", 1), ("ROLE", 1), ("PGUI", 1), ("META", 1),
-    ("BONE", 1), ("SKIN", 1),
+    ("BONE", 1), ("SKIN", 1), ("COLL", 1), ("SIMS", 1),
 ];
 
 #[derive(Debug)]
@@ -384,7 +385,24 @@ pub struct Arc {
     pub center: [f32; 2],
 }
 
-/// The runtime's advanced data: skeleton bones, exact links and skins.
+/// A circle, or a capsule from [a] to [b], that simulated particles keep out of: in [deformer]'s space, between
+/// [mesh]'s vertices as evaluated, or fixed in canvas space. Radii are canvas pixels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Collider {
+    pub id: String,
+    pub capsule: bool,
+    pub deformer: Option<usize>,
+    pub mesh: Option<usize>,
+    pub vertex_a: usize,
+    pub vertex_b: usize,
+    pub a: [f32; 2],
+    pub b: [f32; 2],
+    pub radius_a: f32,
+    pub radius_b: f32,
+    pub friction: f32,
+}
+
+/// The runtime's advanced data: skeleton bones, exact links, skins, colliders and simulations.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Extensions {
     pub bone_header: Option<ExtensionHeader>,
@@ -396,6 +414,12 @@ pub struct Extensions {
     pub arcs: Vec<Arc>,
     pub skin_header: Option<ExtensionHeader>,
     pub skins: Vec<Skin>,
+    pub collider_header: Option<ExtensionHeader>,
+    pub colliders: Vec<Collider>,
+    pub simulation_header: Option<ExtensionHeader>,
+    pub simulations: Vec<Simulation>,
+    /// Per simulation, the parameters it holds at their defaults and the physics groups it skips.
+    pub simulation_overrides: Vec<(Vec<usize>, Vec<usize>)>,
 }
 
 /// How a parameter panel groups and shows the parameters; it does not affect evaluation.
@@ -597,6 +621,28 @@ impl Rig {
             }
             if !skin.from.is_empty() && skin.from.len() != mesh.vertex_count() {
                 return err(format!("Skin weights of {} do not match its vertices", mesh.id));
+            }
+        }
+        for c in &self.extensions.colliders {
+            if let Some(m) = c.mesh {
+                if c.vertex_a.max(c.vertex_b) >= self.meshes[m].vertex_count() {
+                    return err(format!("Collider {} rides vertices its mesh does not have", c.id));
+                }
+            }
+        }
+        for sim in &self.extensions.simulations {
+            let particles = sim.particles();
+            let last = sim.targets.last().map_or(0, |(m, first)| first + self.meshes[*m].vertex_count());
+            if last != particles || sim.targets.iter().enumerate().any(|(k, (m, first))| sim.targets.get(k + 1).map_or(false, |(_, next)| next - first != self.meshes[*m].vertex_count())) {
+                return err("A simulation's targets do not match their meshes");
+            }
+            if sim.anchors.iter().flatten().any(|(m, v)| *m >= self.meshes.len() || *v >= self.meshes[*m].vertex_count()) {
+                return err("A simulation pins to a vertex the rig does not have");
+            }
+            for (_, keys, offsets) in &sim.statics {
+                if offsets.iter().any(|(m, per)| per.iter().any(|o| o.len() != self.meshes[*m].vertex_count() * 2) || per.len() != keys.len()) {
+                    return err("A simulation's static offsets do not match their meshes");
+                }
             }
         }
         Ok(())
@@ -1052,6 +1098,127 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
+    /// COLL: the header, then the colliders.
+    fn colliders(&mut self, ext: &mut Extensions) -> Result<()> {
+        ext.collider_header = Some(self.extension_header()?);
+        let n = self.count(45)?;
+        for _ in 0..n {
+            let id = self.str()?;
+            let capsule = self.bool()?;
+            let deformer = self.optional(self.deformers, "deformer")?;
+            let mesh = self.optional(self.meshes, "mesh")?;
+            let (vertex_a, vertex_b) = (self.u32()? as usize, self.u32()? as usize);
+            let a = [self.f32()?, self.f32()?];
+            let b = [self.f32()?, self.f32()?];
+            let (radius_a, radius_b, friction) = (self.f32()?, self.f32()?, self.f32()?);
+            if !(radius_a > 0.0 && radius_b > 0.0) || !(0.0..=1.0).contains(&friction) {
+                return err(format!("Collider {} has an invalid radius or friction", id));
+            }
+            ext.colliders.push(Collider { id, capsule, deformer, mesh, vertex_a, vertex_b, a, b, radius_a, radius_b, friction });
+        }
+        Ok(())
+    }
+
+    /// SIMS: the header, then each simulation's scene.
+    fn simulations(&mut self, ext: &mut Extensions, physics_groups: usize) -> Result<()> {
+        ext.simulation_header = Some(self.extension_header()?);
+        let n = self.count(1)?;
+        for _ in 0..n {
+            let mut sim = Simulation { fps: 0.0, ..Default::default() };
+            let id = self.str()?;
+            sim.fps = self.f32()?;
+            sim.substeps = self.u32()?;
+            if !(sim.fps > 0.0) || !(1..=128).contains(&sim.substeps) {
+                return err(format!("Simulation {} has an invalid rate", id));
+            }
+            sim.gravity = [self.f32()?, self.f32()?];
+            sim.wind = [self.f32()?, self.f32()?];
+            sim.pin_compliance = self.f32()?;
+            let count = self.count(8)?;
+            let mut first = 0;
+            for _ in 0..count {
+                let mesh = self.index(self.meshes, "mesh")?;
+                sim.targets.push((mesh, first));
+                first += self.u32()? as usize;
+            }
+            let particles = first;
+            let floats = |r: &mut Self, len: usize| -> Result<Vec<f32>> {
+                let v = r.floats()?;
+                if v.len() != len { err(format!("Simulation {} has {} values where it needs {}", id, v.len(), len)) } else { Ok(v) }
+            };
+            let indices = |r: &mut Self, limit: usize, len: Option<usize>| -> Result<Vec<u32>> {
+                let v = r.indices()?;
+                if len.is_some_and(|l| v.len() != l) || v.iter().any(|i| *i as usize >= limit) {
+                    err(format!("Simulation {} refers past its particles or constraints", id))
+                } else {
+                    Ok(v)
+                }
+            };
+            sim.inv_mass = floats(self, particles)?;
+            sim.damping = floats(self, particles)?;
+            sim.wind_factor = floats(self, particles)?;
+            sim.pin_weight = floats(self, particles)?;
+            sim.goal_compliance = floats(self, particles)?;
+            sim.goal_offset_x = floats(self, particles)?;
+            sim.goal_offset_y = floats(self, particles)?;
+            let anchor_mesh = self.indices()?;
+            let anchor_vertex = self.indices()?;
+            if anchor_mesh.len() != particles || anchor_vertex.len() != particles {
+                return err(format!("Simulation {} has anchors that do not match its particles", id));
+            }
+            sim.anchors = anchor_mesh.iter().zip(&anchor_vertex).map(|(m, v)| (*m != u32::MAX).then_some((*m as usize, *v as usize))).collect();
+            sim.stretch_a = indices(self, particles, None)?;
+            let edges = sim.stretch_a.len();
+            sim.stretch_b = indices(self, particles, Some(edges))?;
+            sim.stretch_rest = floats(self, edges)?;
+            sim.stretch_compliance = floats(self, edges)?;
+            sim.compression_compliance = floats(self, edges)?;
+            sim.tri_a = indices(self, particles, None)?;
+            let triangles = sim.tri_a.len();
+            sim.tri_b = indices(self, particles, Some(triangles))?;
+            sim.tri_c = indices(self, particles, Some(triangles))?;
+            sim.area_compliance = floats(self, triangles)?;
+            sim.bend_t1 = indices(self, triangles, None)?;
+            let bends = sim.bend_t1.len();
+            sim.bend_t2 = indices(self, triangles, Some(bends))?;
+            sim.bend_compliance = floats(self, bends)?;
+            sim.weld_a = indices(self, particles, None)?;
+            let welds = sim.weld_a.len();
+            sim.weld_b = indices(self, particles, Some(welds))?;
+            sim.weld_weight_a = floats(self, welds)?;
+            sim.weld_weight_b = floats(self, welds)?;
+            sim.weld_compliance = floats(self, welds)?;
+            sim.long_particle = indices(self, particles, None)?;
+            let long = sim.long_particle.len();
+            sim.long_root = indices(self, particles, Some(long))?;
+            sim.long_distance = floats(self, long)?;
+            let count = self.count(4)?;
+            let parameters = (0..count).map(|_| self.parameter()).collect::<Result<Vec<_>>>()?;
+            let count = self.count(4)?;
+            let groups = (0..count).map(|_| self.index(physics_groups, "physics group")).collect::<Result<Vec<_>>>()?;
+            let count = self.count(12)?;
+            for _ in 0..count {
+                let parameter = self.parameter()?;
+                let keys = self.floats()?;
+                if keys.is_empty() || keys.windows(2).any(|w| w[1] < w[0]) {
+                    return err(format!("Simulation {} has static keys out of order", id));
+                }
+                let meshes = self.count(4)?;
+                let mut offsets = Vec::with_capacity(meshes);
+                for _ in 0..meshes {
+                    let mesh = self.index(self.meshes, "mesh")?;
+                    offsets.push((mesh, (0..keys.len()).map(|_| self.floats()).collect::<Result<Vec<_>>>()?));
+                }
+                sim.statics.push((parameter, keys, offsets));
+            }
+            let count = self.count(4)?;
+            sim.colliders = (0..count).map(|_| self.index(ext.colliders.len(), "collider")).collect::<Result<Vec<_>>>()?;
+            ext.simulations.push(sim);
+            ext.simulation_overrides.push((parameters, groups));
+        }
+        Ok(())
+    }
+
     fn meta(&mut self) -> Result<Vec<(String, String)>> {
         let n = self.count(8)?;
         (0..n).map(|_| Ok((self.str()?, self.str()?))).collect()
@@ -1462,6 +1629,17 @@ fn read_chunks(bytes: &[u8], verify_crc: bool) -> Result<Rig> {
         r.deformers += extensions.virtual_bones.len();
         r.skins(&mut extensions)?;
         r.end("SKIN")?;
+    }
+    if let Some(data) = chunk("COLL") {
+        let mut r = reader(data);
+        r.deformers += extensions.virtual_bones.len();
+        r.colliders(&mut extensions)?;
+        r.end("COLL")?;
+    }
+    if let Some(data) = chunk("SIMS") {
+        let mut r = reader(data);
+        r.simulations(&mut extensions, physics.len())?;
+        r.end("SIMS")?;
     }
     let rig = Rig { canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui, meta, extensions };
     rig.validate_extensions()?;

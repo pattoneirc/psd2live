@@ -11,6 +11,7 @@ pub mod eval;
 pub mod ffi;
 pub mod physics;
 pub mod rig;
+pub mod sim;
 pub mod warp;
 
 pub use eval::{render_order, Evaluator, Pose, Transform};

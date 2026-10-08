@@ -93,6 +93,11 @@ uint32_t p2l_render_order(const P2lRig *rig, uint32_t *out, uint32_t capacity);
 #define P2L_COLLISION 8u
 uint32_t p2l_advanced_available(const P2lRig *rig);
 uint32_t p2l_set_advanced(P2lRig *rig, uint32_t features);
+/* P2L_SIM: cloth and hair run live, stepped by p2l_update at their own rate; p2l_evaluate draws the last step.
+ * The baked swing parameters stay at rest and their pendulums are skipped. P2L_COLLISION adds the colliders. */
+void p2l_sim_reset(P2lRig *rig);
+/* Wind every simulation feels besides its own, canvas pixels per second squared (x right, y down). */
+void p2l_sim_wind(P2lRig *rig, float x, float y);
 /* Bones a host can attach things to, and each one's canvas frame at the last evaluation as an affine map
  * [a, b, c, d, tx, ty]: x' = a x + b y + tx, y' = c x + d y + ty. */
 uint32_t p2l_bone_count(const P2lRig *rig);

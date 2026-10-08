@@ -23,18 +23,31 @@ import kotlin.math.sqrt
  *   toward it, and it is the rest shape of every edge, triangle and bend: what the rig reshapes on purpose
  *   the material takes on, instead of fighting it with the default pose's lengths.
  * Both are interpolated across the substeps from the previous frame's values, so a fast rig motion does not
- * arrive as one jump.
+ * arrive as one jump. So are the [SimState.colliders] the particles keep out of.
  */
+
+/**
+ * A circle at [ax], [ay] of [radiusA], or a capsule from there to [bx], [by] whose radius runs to [radiusB], placed
+ * in world space for one frame. [friction] 0..1 is the share of a touching particle's slide it takes away.
+ */
+class PlacedCollider(val ax: Float, val ay: Float, val bx: Float, val by: Float, val radiusA: Float, val radiusB: Float, val friction: Float) {
+    fun lerp(to: PlacedCollider, t: Float): PlacedCollider {
+        fun mix(a: Float, b: Float) = a + (b - a) * t
+        return PlacedCollider(mix(ax, to.ax), mix(ay, to.ay), mix(bx, to.bx), mix(by, to.by), to.radiusA, to.radiusB, to.friction)
+    }
+}
 
 /** Particle state. Positions are world px (y up); [invMass] 0 is kinematic. */
 class SimState(val count: Int) {
-    internal class Snapshot(val arrays: List<FloatArray>, val angle: Float, val lastAngle: Float)
+    internal class Snapshot(val arrays: List<FloatArray>, val angle: Float, val lastAngle: Float,
+                            val colliders: List<PlacedCollider>, val lastColliders: List<PlacedCollider>)
     private fun arrays() = listOf(x, y, vx, vy, invMass, damping, windFactor, anchorX, anchorY, goalX, goalY,
         goalOffsetX, goalOffsetY, px, py, lastAnchorX, lastAnchorY, lastGoalX, lastGoalY, stepAnchorX, stepAnchorY, stepGoalX, stepGoalY)
-    internal fun snapshot() = Snapshot(arrays().map { it.copyOf() }, frameAngle, lastFrameAngle)
+    internal fun snapshot() = Snapshot(arrays().map { it.copyOf() }, frameAngle, lastFrameAngle, colliders, lastColliders)
     internal fun restore(snapshot: Snapshot) {
         arrays().zip(snapshot.arrays).forEach { (target, saved) -> saved.copyInto(target) }
         frameAngle = snapshot.angle; lastFrameAngle = snapshot.lastAngle
+        colliders = snapshot.colliders; lastColliders = snapshot.lastColliders
     }
     val x = FloatArray(count)
     val y = FloatArray(count)
@@ -67,6 +80,10 @@ class SimState(val count: Int) {
     internal val stepAnchorY = FloatArray(count)
     internal val stepGoalX = FloatArray(count)
     internal val stepGoalY = FloatArray(count)
+    /** Where the colliders are this frame; the caller writes them with the goals. */
+    var colliders: List<PlacedCollider> = emptyList()
+    internal var lastColliders: List<PlacedCollider> = emptyList()
+    internal var stepColliders: List<PlacedCollider> = emptyList()
 
     /** Places every particle at [positions] at rest, with anchors and goals there too. */
     fun reset(positions: FloatArray) {
@@ -91,6 +108,7 @@ class SimState(val count: Int) {
             lastGoalX[i] = goalX[i]; lastGoalY[i] = goalY[i]
         }
         lastFrameAngle = frameAngle
+        lastColliders = colliders
     }
 
     fun positions(): FloatArray = FloatArray(count * 2) { if (it % 2 == 0) x[it / 2] else y[it / 2] }
@@ -257,6 +275,7 @@ class XpbdSolver(
                 s.stepGoalX[i] = s.lastGoalX[i] + (s.goalX[i] - s.lastGoalX[i]) * t
                 s.stepGoalY[i] = s.lastGoalY[i] + (s.goalY[i] - s.lastGoalY[i]) * t
             }
+            s.stepColliders = s.colliders.mapIndexed { k, c -> s.lastColliders.getOrNull(k)?.lerp(c, t) ?: c }
             val angle = s.lastFrameAngle + (s.frameAngle - s.lastFrameAngle) * t
             val reverse = sub % 2 == 0
             measureRest()
@@ -271,6 +290,7 @@ class XpbdSolver(
             solveWelds(h, reverse)
             checkpoint()
             solveGoals(h, angle)
+            solveCollisions()
             solveLongRange(reverse)
             // Goals and long-range limits pull particles after the edges are done: one more sweep the
             // other way puts the length back, which is what keeps hair from stretching under a hard drag.
@@ -509,6 +529,37 @@ class XpbdSolver(
         val dyDelta = (-(s.y[i] - ty) - alpha * lambda[i * 2 + 1]) / (w + alpha)
         lambda[i * 2 + 1] += dyDelta
         s.y[i] += w * dyDelta
+    }
+
+    /**
+     * Every free particle pushed out of every collider to its surface, rigidly; a collider with friction then
+     * takes that share of the particle's slide along the surface this substep away.
+     */
+    private fun solveCollisions() {
+        val s = state
+        if (s.stepColliders.isEmpty()) return
+        for (i in 0 until n) {
+            if (kinematic(i)) continue
+            for (c in s.stepColliders) {
+                val ex = c.bx - c.ax; val ey = c.by - c.ay
+                val length2 = ex * ex + ey * ey
+                val t = if (length2 > 1e-12f) (((s.x[i] - c.ax) * ex + (s.y[i] - c.ay) * ey) / length2).coerceIn(0f, 1f) else 0f
+                val cx = c.ax + ex * t; val cy = c.ay + ey * t
+                val radius = c.radiusA + (c.radiusB - c.radiusA) * t
+                val dx = s.x[i] - cx; val dy = s.y[i] - cy
+                val distance = sqrt(dx * dx + dy * dy)
+                if (distance >= radius) continue
+                val nx = if (distance > 1e-6f) dx / distance else 0f
+                val ny = if (distance > 1e-6f) dy / distance else 1f
+                val depth = radius - distance
+                s.x[i] += nx * depth; s.y[i] += ny * depth
+                if (c.friction > 0f) {
+                    val mx = s.x[i] - s.px[i]; val my = s.y[i] - s.py[i]
+                    val along = mx * -ny + my * nx
+                    s.x[i] -= -ny * along * c.friction; s.y[i] -= nx * along * c.friction
+                }
+            }
+        }
     }
 
     private fun solveLongRange(reverse: Boolean) {

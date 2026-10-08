@@ -178,6 +178,11 @@ impl Physics {
 
     /// Advances by [dt] seconds from [values], one per parameter, and writes the outputs into them.
     pub fn step(&mut self, rig: &Rig, dt: f32, values: &mut [f32]) {
+        self.step_skipping(rig, dt, values, &[]);
+    }
+
+    /// [step] with the groups [skip] marks left out: neither moved nor written.
+    pub fn step_skipping(&mut self, rig: &Rig, dt: f32, values: &mut [f32], skip: &[bool]) {
         if !(dt > 0.0) || self.strands.is_empty() {
             return;
         }
@@ -194,7 +199,10 @@ impl Physics {
                 self.caches[j] = input[j] * (1.0 - weight) + values[j] * weight;
                 input[j] = self.caches[j];
             }
-            for (group, strand) in rig.physics.iter().zip(self.strands.iter_mut()) {
+            for (g, (group, strand)) in rig.physics.iter().zip(self.strands.iter_mut()).enumerate() {
+                if skip.get(g) == Some(&true) {
+                    continue;
+                }
                 strand.previous.copy_from_slice(&strand.current);
                 let mut translation = V2::default();
                 let mut angle = 0.0f32;
@@ -223,7 +231,10 @@ impl Physics {
             self.remain -= h;
         }
         let alpha = self.remain / h;
-        for (group, strand) in rig.physics.iter().zip(&self.strands) {
+        for (g, (group, strand)) in rig.physics.iter().zip(&self.strands).enumerate() {
+            if skip.get(g) == Some(&true) {
+                continue;
+            }
             for (k, o) in group.outputs.iter().enumerate() {
                 if o.vertex < 1 || o.vertex >= strand.particles.len() {
                     continue;

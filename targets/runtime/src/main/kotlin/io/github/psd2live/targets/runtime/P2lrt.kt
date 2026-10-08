@@ -107,9 +107,13 @@ public object P2lrt {
 	// Advanced features and the evaluation hooks extension chunks declare.
 	private const val SKIN = 1
 	private const val EXACT_LINKS = 2
+	private const val SIM = 4
+	private const val COLLISION = 8
+	private const val H1 = 1
 	private const val H2 = 2
 	private const val H3 = 4
 	private const val H4 = 8
+	private const val H6 = 32
 
 	private class Chunk(val tag: String, val required: Boolean, val data: ByteArray, val compressible: Boolean = true)
 
@@ -196,7 +200,7 @@ public object P2lrt {
 			return container(chunks, options)
 		}
 
-		/** The advanced chunks the rig offers, each a tag and its body: BONE (bones and arcs), SKIN. */
+		/** The advanced chunks the rig offers, each a tag and its body: BONE (bones and arcs), SKIN, COLL, SIMS. */
 		private fun advanced(): List<Pair<String, () -> Unit>> {
 			val arcs = AdvancedData.arcs(ir)
 			val skins = AdvancedData.skins(ir)
@@ -209,6 +213,16 @@ public object P2lrt {
 			val virtual = ir.advanced.virtualBones.filter { it.id in needed }
 			val virtualIndex = virtual.withIndex().associate { it.value.id to deformers.size + it.index }
 			fun bone(id: String?): Int = id?.let { virtualIndex[it] } ?: deformer(id)
+			// Simulations whose meshes and parameters all made it into the file, and the colliders they use.
+			val sims = ir.advanced.simulations.filter { sim ->
+				sim.targets.all { it.mesh in meshIndex } && sim.particles.anchorMesh.all { it.isEmpty() || it in meshIndex } &&
+					sim.statics.all { st -> st.parameter in parameterIndex && st.offsets.keys.all { it in meshIndex } }
+			}
+			val colliders = ir.advanced.colliders.filter { c ->
+				sims.any { c.id in it.colliders } && (c.mesh == null || c.mesh in meshIndex) && (c.deformer == null || c.deformer in deformerIndex)
+			}
+			val colliderIndex = colliders.withIndex().associate { it.value.id to it.index }
+			val groupIndex = ir.physics.groups.withIndex().associate { it.value.id to it.index }
 			return buildList {
 				if (bones.isNotEmpty()) add("BONE" to {
 					extensionHeader(EXACT_LINKS, H2 or H3, arcs.map { bone(it.deformer) })
@@ -228,13 +242,60 @@ public object P2lrt {
 						out.indices(Ints.Empty); out.indices(Ints.Empty); out.floats(FloatArray(0))
 					}
 				})
+				if (colliders.isNotEmpty()) add("COLL" to {
+					extensionHeader(COLLISION, H6)
+					out.u32(colliders.size)
+					for (c in colliders) {
+						out.str(c.id); out.bool(c.capsule); out.i32(c.deformer?.let(::bone) ?: -1); out.i32(c.mesh?.let(::mesh) ?: -1)
+						out.u32(c.vertexA); out.u32(c.vertexB)
+						out.f32(c.ax); out.f32(c.ay); out.f32(c.bx); out.f32(c.by); out.f32(c.radiusA); out.f32(c.radiusB); out.f32(c.friction)
+					}
+				})
+				if (sims.isNotEmpty()) add("SIMS" to {
+					val parameters = sims.flatMap { it.parameters }.filter { it in parameterIndex }.distinct()
+					val groups = sims.flatMap { it.physicsGroups }.mapNotNull(groupIndex::get).distinct()
+					extensionHeader(SIM, H1 or H4 or H6, parameters = parameters.map(::parameter), groups = groups)
+					out.u32(sims.size)
+					sims.forEach { simulation(it, ::mesh, groupIndex, colliderIndex) }
+				})
 			}
 		}
 
-		/** An extension chunk's opening: its feature bit and hooks, then what it overrides (nothing here but frames). */
-		private fun extensionHeader(feature: Int, hooks: Int, deformers: List<Int> = emptyList()) {
+		/** One simulation's scene; an infinite compliance (no constraint) is written as -1. */
+		private fun simulation(sim: SimulationIR, mesh: (String) -> Int, groups: Map<String, Int>, colliders: Map<String, Int>) {
+			fun compliances(values: Floats) = out.floats(FloatArray(values.size) { values[it].takeIf(Float::isFinite) ?: -1f })
+			out.str(sim.id); out.f32(sim.fps); out.u32(sim.substeps)
+			out.f32(sim.gravityX); out.f32(sim.gravityY); out.f32(sim.windX); out.f32(sim.windY); out.f32(sim.pinCompliance)
+			out.u32(sim.targets.size); sim.targets.forEach { out.u32(mesh(it.mesh)); out.u32(it.vertexCount) }
+			with(sim.particles) {
+				out.floats(invMass); out.floats(damping); out.floats(windFactor); out.floats(pinWeight); compliances(goalCompliance)
+				out.floats(goalOffsetX); out.floats(goalOffsetY)
+				out.indices(Ints.wrap(IntArray(anchorMesh.size) { if (anchorMesh[it].isEmpty()) -1 else mesh(anchorMesh[it]) })); out.indices(anchorVertex)
+			}
+			with(sim.stretch) { out.indices(a); out.indices(b); out.floats(rest); out.floats(compliance); out.floats(compressionCompliance) }
+			with(sim.triangles) { out.indices(a); out.indices(b); out.indices(c); compliances(areaCompliance) }
+			with(sim.bends) { out.indices(t1); out.indices(t2); out.floats(compliance) }
+			with(sim.welds) { out.indices(a); out.indices(b); out.floats(weightA); out.floats(weightB); out.floats(compliance) }
+			with(sim.longRange) { out.indices(particle); out.indices(root); out.floats(maxDistance) }
+			val parameters = sim.parameters.filter { it in parameterIndex }
+			out.u32(parameters.size); parameters.forEach { out.u32(parameter(it)) }
+			val own = sim.physicsGroups.mapNotNull(groups::get)
+			out.u32(own.size); own.forEach(out::u32)
+			out.u32(sim.statics.size)
+			for (st in sim.statics) {
+				out.u32(parameter(st.parameter)); out.floats(st.keys)
+				out.u32(st.offsets.size)
+				for ((m, per) in st.offsets) { out.u32(mesh(m)); require(per.size == st.keys.size) { "Static offsets must match their keys" }; per.forEach(out::floats) }
+			}
+			val used = sim.colliders.mapNotNull(colliders::get)
+			out.u32(used.size); used.forEach(out::u32)
+		}
+
+		/** An extension chunk's opening: its feature bit and hooks, then what it overrides. */
+		private fun extensionHeader(feature: Int, hooks: Int, deformers: List<Int> = emptyList(), parameters: List<Int> = emptyList(), groups: List<Int> = emptyList()) {
 			out.u16(feature); out.u16(hooks)
-			out.u32(0); out.u32(0)
+			out.u32(parameters.size); parameters.forEach(out::u32)
+			out.u32(groups.size); groups.forEach(out::u32)
 			out.u32(deformers.size); deformers.forEach(out::u32)
 			out.u32(0); out.u32(0)
 		}

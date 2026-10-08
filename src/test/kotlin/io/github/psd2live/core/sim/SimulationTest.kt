@@ -357,6 +357,22 @@ class SimulationTest {
         assertEquals(SimMaterial.preset(SimKind.HAIR), edit.patched(buildJsonObject { put("kind", "hair") }).material)
     }
 
+    @Test fun obstaclesRoundTripAndKeepParticlesOut() {
+        val edit = RigSimEdit("skirt", "Skirt", SimKind.CLOTH, listOf("cloth"),
+            colliders = listOf(SimCollider("leg", 3, 7, 12f, 9f, 0.25f), SimCollider("arm", 1, radius = 5f)))
+        assertEquals(edit, RigSimEdit.fromJson(edit.toJson()))
+        assertFailsWith<IllegalArgumentException> { edit.copy(colliders = listOf(SimCollider("cloth", 0, radius = 1f))) }
+        // A free particle falling onto a circle rests on top of it.
+        val state = SimState(1)
+        state.reset(floatArrayOf(0f, 50f))
+        state.colliders = listOf(PlacedCollider(0f, 0f, 0f, 0f, 10f, 10f, 0f))
+        state.settle()
+        val solver = XpbdSolver(state, settings = SimSettings(substeps = 8))
+        repeat(120) { solver.step(1f / 60f) }
+        assertEquals(10f, hypot(state.x[0], state.y[0]), 1e-3f)
+        assertTrue(state.y[0] > 9f)
+    }
+
     @Test fun retiredCollisionSettingsAreDroppedOnLoad() {
         val old = buildJsonObject {
             put("id", "skirt"); put("name", "Skirt"); put("kind", "cloth"); putJsonArray("targets") { add("cloth") }

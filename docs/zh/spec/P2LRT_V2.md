@@ -2,7 +2,7 @@
 
 [运行时](RUNTIME.md) · [工程、运行时与导出边界](RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)
 
-状态：容器、核心块、`PGUI` 与 `META` 已实现，导出默认写版本 2；扩展块（`BONE`、`SKIN`、`SIMS`、`COLL`）与附带块（`EXPR`、`POSE`、`HITA`、`UDAT`）只登记了标签，尚未实现。读取器支持全部压缩方式、数组编码与贴图页类型；写出器目前只写 deflate 压缩、f32 浮点数组和内嵌 PNG。
+状态：容器、核心块、`PGUI`、`META` 与扩展块 `BONE`、`SKIN`、`COLL`、`SIMS` 已实现，导出默认写版本 2；附带块（`EXPR`、`POSE`、`HITA`、`UDAT`）只登记了标签，尚未实现。读取器支持全部压缩方式、数组编码与贴图页类型；写出器目前只写 deflate 压缩、f32 浮点数组和内嵌 PNG。
 
 ## 目标
 
@@ -279,7 +279,7 @@ u32 n × u8[4] depends_on  依赖的其他扩展块标签
 | 1 | `SKIN`（引用虚拟骨骼时需 `BONE`） | 运行时蒙皮 |
 | 2 | `BONE` 的圆弧 | 精确链接（沿圆弧插值的枢轴） |
 | 4 | `SIMS` | 顶点级实时模拟 |
-| 8 | `COLL`（需 `SIMS`） | 碰撞 |
+| 8 | `COLL`（需 `SIMS`；随模拟开启） | 碰撞 |
 
 - `p2l_advanced_available()` 返回文件携带且运行时支持的位；`p2l_set_advanced(bits)` 返回实际开启的位，0 为 Cubism 模式（默认）。切换时重置模拟状态。
 - `p2l_bone_count / p2l_bone_id / p2l_bone_transform` 输出 H3 的骨骼帧。
@@ -321,14 +321,59 @@ u32 n × {
 
 写出器为父级是旋转变形器、并在其下方（经旋转变形器相连，可含虚拟骨骼）有按网格轴建键的旋转变形器的网格写出 `SKIN`，最多 16 根骨骼、8 条轴。腿部网格挂在站姿 Warp 上，保持烘焙。
 
+## 扩展块 `COLL`（版本 1）
+
+```
+公共头                      feature 8，hooks H6
+u32 n × { sref id, u8 capsule, i32 deformer, i32 mesh, u32 vertexA, u32 vertexB,
+          f32 ax, ay, bx, by, radiusA, radiusB, friction }
+```
+
+碰撞体是圆（capsule 为 0，只用 a 端）或从 a 到 b、半径从 radiusA 渐变到 radiusB 的胶囊，半径为画布像素。它的位置按以下方式之一确定：
+
+- **跟随网格顶点**：mesh 不为 -1 时，两端取该网格的 vertexA / vertexB 在本次求值中的位置。编辑器导出的碰撞体都是这种，所以编辑器与运行时看到的位置相同。
+- **跟随变形器**：deformer 不为 -1（可为虚拟骨骼）时，(ax, ay)、(bx, by) 是该变形器局部空间中的点。
+- **固定**：两者都为 -1 时，两端是画布中的固定点。
+
+friction 取 0–1，表示接触时抵消的滑动比例。碰撞只在模拟中生效：`SIMS` 的每个模拟列出它要避开的碰撞体。
+
+## 扩展块 `SIMS`（版本 1）
+
+```
+公共头                      feature 4，hooks H1 | H4 | H6；parameters、physics groups 为各模拟替换项的并集
+u32 n × {
+  sref id, f32 fps, u32 substeps, f32 gravityX, gravityY, windX, windY, pinCompliance
+  u32 n × { ref mesh, u32 vertexCount }                 目标网格，粒子按此顺序排列
+  array<f32> invMass, damping, windFactor, pinWeight, goalCompliance, goalOffsetX, goalOffsetY
+  array<u32> anchorMesh (0xFFFFFFFF 为跟随自身), array<u32> anchorVertex
+  array<u32> stretchA, stretchB; array<f32> rest, compliance, compressionCompliance
+  array<u32> triA, triB, triC; array<f32> areaCompliance
+  array<u32> bendT1, bendT2; array<f32> bendCompliance
+  array<u32> weldA, weldB; array<f32> weightA, weightB, weldCompliance
+  array<u32> longParticle, longRoot; array<f32> maxDistance
+  u32 n × ref parameter                                 本模拟替换的烘焙模式参数
+  u32 n × u32 physicsGroup                              本模拟替换的摆锤组（PHYS 下标）
+  u32 n × { ref parameter, array<f32> keys, u32 n × { ref mesh, keys × array<f32> offsets } }   烘焙加入的静态修正
+  u32 n × u32 collider                                  COLL 下标
+}
+```
+
+场景与编辑器的 XPBD 求解器（`XpbdSolver`）逐项对应。世界空间为画布 x、取负的画布 y（y 向上）。compliance 为负表示没有该约束（编辑器中的无穷大）。
+
+开启模拟后：
+
+- **H1**：替换的模式参数保持默认值，对应的摆锤组被跳过。
+- **H4**：目标网格减去静态修正（各键之间线性插值，与烘焙写入关键形的方式一致）。此时求值出的目标网格就是未烘焙的绑定，作为每个粒子的目标；钉住的粒子跟随自身或所跟随网格顶点的位置。
+- **H6**：`p2l_update` 按场景自身的 fps 定步长推进。每次更新最多 4 步，超出的时间丢弃，绘制在最后两步之间插值；`p2l_evaluate` 只绘制上一步。首次更新时粒子静止于当时的姿势。`p2l_sim_reset` 让下次更新重新开始，`p2l_sim_wind` 叠加宿主的风。
+
+导出时（只对运行时与网页目标），编辑器在最终绑定上重建并校准每个已烘焙的模拟。在默认姿势下，模式参数为零、静态修正处于静止键，所以场景与烘焙时相同。
+
 ## 已登记的后续块
 
 以下标签已保留，布局在各自实现时另立文档，遵守演进规则和上面的公共头。
 
 | 标签 | 层 | 内容 | 必需 |
 | --- | --- | --- | --- |
-| `SIMS` | 扩展 | 顶点级 XPBD 模拟场景及其替换的 `ParamSim*` 参数与摆锤组 | 否 |
-| `COLL` | 扩展 | 碰撞体（圆、胶囊），挂在画布、变形器、骨骼或网格顶点上 | 否 |
 | `EXPR` | 附带 | 表情（参数 Add / Multiply / Overwrite 与淡入淡出） | 否 |
 | `POSE` | 附带 | 部件互斥组与切换淡化 | 否 |
 | `HITA` | 附带 | 点击区域（id、名称、网格） | 否 |

@@ -134,6 +134,66 @@ fn a_virtual_bone_skins_as_the_rigs_own_rotation_would() {
     assert!((frame.c - 45f32.to_radians().sin()).abs() < 1e-5);
 }
 
+/// A triangle hanging from its two top corners, its free corner dropping onto a circle collider below.
+fn hanging() -> Rig {
+    use crate::sim::Simulation;
+    let mesh = Mesh {
+        id: "cloth".into(), name: "cloth".into(), parent: None, blend: 0, alpha_blend: 0, masked_by: vec![], invert_mask: false, culling: false,
+        visible: true, page: -1,
+        geometry: Some(Geometry { positions: vec![0.0, 0.0, 20.0, 0.0, 10.0, 30.0], uvs: vec![0.0; 6], indices: vec![0, 1, 2] }),
+        offsets: None, channels: vec![], draw_order: 500.0, opacity: 1.0, multiply: WHITE, screen: BLACK, shapes: vec![],
+    };
+    let mut rig = base_rig(vec![], vec![], vec![mesh]);
+    let sim = Simulation {
+        fps: 60.0, substeps: 8, gravity: [0.0, -980.0], wind: [0.0, 0.0], pin_compliance: 1e-4, targets: vec![(0, 0)],
+        inv_mass: vec![1.0; 3], damping: vec![1.0; 3], wind_factor: vec![1.0; 3], pin_weight: vec![1.0, 1.0, 0.0],
+        goal_compliance: vec![-1.0; 3], goal_offset_x: vec![0.0; 3], goal_offset_y: vec![0.0; 3], anchors: vec![None; 3],
+        stretch_a: vec![0, 1], stretch_b: vec![2, 2], stretch_rest: vec![31.6, 31.6], stretch_compliance: vec![1e-8; 2], compression_compliance: vec![1e-3; 2],
+        colliders: vec![0],
+        ..Default::default()
+    };
+    rig.extensions.simulations.push(sim);
+    rig.extensions.simulation_overrides.push((vec![], vec![]));
+    // A circle of radius 8 just left of where the free corner hangs, in canvas pixels (y down).
+    rig.extensions.colliders.push(Collider {
+        id: "ball".into(), capsule: false, deformer: None, mesh: None, vertex_a: 0, vertex_b: 0,
+        a: [4.0, 36.0], b: [4.0, 36.0], radius_a: 8.0, radius_b: 8.0, friction: 0.0,
+    });
+    rig
+}
+
+#[test]
+fn a_simulated_mesh_hangs_and_keeps_out_of_its_collider() {
+    use crate::advanced::{COLLISION, SIM};
+    let rig = hanging();
+    let mut advanced = Advanced::new();
+    assert_eq!(Advanced::available(&rig), SIM | COLLISION);
+    assert_eq!(advanced.set(&rig, SIM | COLLISION), SIM | COLLISION);
+    let mut evaluator = Evaluator::new();
+    let mut free = [0.0f32; 2];
+    for frame in 0..240 {
+        evaluator.evaluate_ext(&rig, &[], Some(&mut advanced));
+        advanced.step_simulations(&rig, &[], if frame == 0 { 0.0 } else { 1.0 / 60.0 }, &mut evaluator.pose);
+        let v = &evaluator.pose.vertices[0];
+        // The pinned corners stay put; the free one never enters the ball.
+        assert_eq!(&v[..4], &[0.0, 0.0, 20.0, 0.0]);
+        free = [v[4], v[5]];
+        assert!(free.iter().all(|c| c.is_finite()));
+        assert!((free[0] - 4.0).hypot(free[1] - 36.0) >= 8.0 - 1e-3, "frame {} at {:?}", frame, free);
+    }
+    // At rest it hangs below its pins, pushed off the ball to the right and kept at its length.
+    assert!(free[0] > 10.0 && free[1] > 25.0, "{:?}", free);
+    assert!((free[0] - 0.0).hypot(free[1]) < 31.6 * 1.05);
+    // Without collision it drops back to where it was drawn, straight under its pins.
+    advanced.set(&rig, SIM);
+    for frame in 0..240 {
+        evaluator.evaluate_ext(&rig, &[], Some(&mut advanced));
+        advanced.step_simulations(&rig, &[], if frame == 0 { 0.0 } else { 1.0 / 60.0 }, &mut evaluator.pose);
+    }
+    let v = &evaluator.pose.vertices[0];
+    assert!((v[4] - 10.0).abs() < 1.0, "{:?}", v);
+}
+
 #[test]
 fn given_weights_are_used_as_they_are() {
     let (mut rig, forearm) = arm();

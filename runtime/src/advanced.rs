@@ -6,9 +6,15 @@
 //!   adds the difference between that blend now and the same blend interpolated over the keys, which is zero
 //!   at every key - where the bake is exact - and the arc's departure from its chord in between.
 //! - Exact links (`EXACT_LINKS`): pivots keyed along a circle interpolate on it (see `eval::along_arc`).
+//! - Simulation (`SIM`): cloth and hair the bake reduced to pendulum-driven keyforms run live in the editor's
+//!   XPBD solver (`sim`). The baked mode parameters stay at their defaults, their pendulums are skipped and the
+//!   static corrections are taken back out, so the evaluated targets are the scene's goals; each update then
+//!   steps the scene at its own rate and draws the particles in their place.
+//! - Collision (`COLLISION`): the simulations' colliders, placed each step from the pose.
 
-use crate::eval::{deformer_frame, mesh_local, span, Transform};
+use crate::eval::{deformer_frame, mesh_local, span, Pose, Transform};
 use crate::rig::{Rig, Skin};
+use crate::sim::{self, PlacedCollider, SimState, Solver};
 
 pub const SKIN: u32 = 1;
 pub const EXACT_LINKS: u32 = 2;
@@ -84,9 +90,28 @@ struct SkinState {
     weight: Vec<f32>,
 }
 
+/// One simulation as it runs: its particles, and the time not yet stepped.
+struct SimRun {
+    state: SimState,
+    started: bool,
+    remain: f32,
+    /// Firmly pinned particles, whose anchors give the body's turn, and those anchors at rest.
+    frame: Vec<usize>,
+    frame_rest: Vec<f32>,
+    /// World positions after the step before last and after the last one; drawn between them.
+    previous: Vec<f32>,
+    current: Vec<f32>,
+}
+
+/// Steps one update may run before the rest of a long frame is dropped.
+const MAX_SIM_STEPS: f32 = 4.0;
+
 /// The advanced features of one rig instance and the state they keep.
 #[derive(Default)]
 pub struct Advanced {
+    runs: Vec<SimRun>,
+    /// Wind the host adds to every simulation, world space (y up).
+    wind: [f32; 2],
     enabled: u32,
     skins: Vec<SkinState>,
     /// The skin of each mesh, by index into [skins].
@@ -104,7 +129,10 @@ impl Advanced {
     /// The features [rig]'s extensions offer.
     pub fn available(rig: &Rig) -> u32 {
         let ext = &rig.extensions;
-        (if ext.skins.is_empty() { 0 } else { SKIN }) | (if ext.arcs.is_empty() { 0 } else { EXACT_LINKS })
+        (if ext.skins.is_empty() { 0 } else { SKIN })
+            | (if ext.arcs.is_empty() { 0 } else { EXACT_LINKS })
+            | (if ext.simulations.is_empty() { 0 } else { SIM })
+            | (if ext.simulations.iter().any(|s| !s.colliders.is_empty()) { COLLISION } else { 0 })
     }
 
     pub fn enabled(&self) -> u32 {
@@ -132,12 +160,50 @@ impl Advanced {
                 }
             }
         }
+        // Collision only acts inside a simulation.
+        let features = if features & SIM == 0 { features & !COLLISION } else { features };
+        self.runs = if features & SIM == 0 { Vec::new() } else { rig.extensions.simulations.iter().map(SimRun::new).collect() };
         self.enabled = features;
         features
     }
 
-    /// H1: parameters an extension evaluates at their defaults while it is on. None of this rig's yet.
-    pub(crate) fn override_parameters(&self, _rig: &Rig, _values: &mut [f32], _defaults: &[f32]) {}
+    /// Starts every simulation again from the pose of its next update.
+    pub fn reset_simulations(&mut self) {
+        for run in &mut self.runs {
+            run.started = false;
+        }
+    }
+
+    /// Wind every simulation feels besides its own, canvas pixels per second² (y down).
+    pub fn set_wind(&mut self, x: f32, y: f32) {
+        self.wind = [x, -y];
+    }
+
+    /// H1: the baked mode parameters, held at their defaults while the simulations run.
+    pub(crate) fn override_parameters(&self, rig: &Rig, values: &mut [f32], defaults: &[f32]) {
+        if self.enabled & SIM == 0 {
+            return;
+        }
+        for (parameters, _) in &rig.extensions.simulation_overrides {
+            for p in parameters {
+                values[*p] = defaults[*p];
+            }
+        }
+    }
+
+    /// H1: the physics groups the simulations replace, to skip; empty with simulation off.
+    pub fn skipped_physics(&self, rig: &Rig) -> Vec<bool> {
+        let mut skip = Vec::new();
+        if self.enabled & SIM != 0 {
+            skip = vec![false; rig.physics.len()];
+            for (_, groups) in &rig.extensions.simulation_overrides {
+                for g in groups {
+                    skip[*g] = true;
+                }
+            }
+        }
+        skip
+    }
 
     /// Bone [d]'s canvas frame at [values] (normalized), a rig deformer or a virtual bone.
     pub fn bone_frame(&mut self, rig: &Rig, values: &[f32], d: usize) -> Option<Affine> {
@@ -152,6 +218,92 @@ impl Advanced {
         let frames = self.frames(rig, values, &defaults, &needed, &mut cells);
         self.cells = cells;
         frames[d].as_ref().and_then(Affine::of)
+    }
+
+    /// H4: the static corrections the simulations' bakes added to mesh [m], taken back out (they interpolate
+    /// linearly between their keys, as the bake wrote them into the keyforms).
+    fn without_statics(rig: &Rig, m: usize, values: &[f32], out: &mut [f32]) {
+        for sim in &rig.extensions.simulations {
+            for (parameter, keys, offsets) in &sim.statics {
+                let Some((_, per)) = offsets.iter().find(|(mesh, _)| *mesh == m) else { continue };
+                let s = span(keys, values[*parameter]);
+                for (o, (a, b)) in out.iter_mut().zip(per[s.lo].iter().zip(&per[s.hi])) {
+                    *o -= a + (b - a) * s.t;
+                }
+            }
+        }
+    }
+
+    /// H6: steps every simulation by [dt] from the evaluated [pose] - its targets there are the goals - and
+    /// draws the particles over them. [values] are the evaluation's (normalized).
+    pub fn step_simulations(&mut self, rig: &Rig, values: &[f32], dt: f32, pose: &mut Pose) {
+        if self.enabled & SIM == 0 {
+            return;
+        }
+        let collide = self.enabled & COLLISION != 0;
+        for k in 0..self.runs.len() {
+            let sim = &rig.extensions.simulations[k];
+            let colliders = if collide { self.place_colliders(rig, sim, values, pose) } else { Vec::new() };
+            let run = &mut self.runs[k];
+            if !run.place(sim, pose) {
+                continue;
+            }
+            run.state.colliders = colliders;
+            if !run.started {
+                run.start(sim);
+            } else if dt > 0.0 {
+                run.state.frame_angle = sim::frame_angle(&run.frame, &run.frame_rest, &run.state);
+                let h = 1.0 / sim.fps;
+                run.remain = (run.remain + dt).min(h * MAX_SIM_STEPS);
+                while run.remain >= h {
+                    std::mem::swap(&mut run.previous, &mut run.current);
+                    let wind = [sim.wind[0] + self.wind[0], sim.wind[1] + self.wind[1]];
+                    Solver { sim, state: &mut run.state, wind }.step(h);
+                    run.capture();
+                    run.remain -= h;
+                }
+            }
+            run.draw(sim, pose, sim.fps);
+        }
+    }
+
+    /// Draws the simulations' last state over [pose] without stepping, as an evaluation without time does.
+    pub fn show_simulations(&self, rig: &Rig, pose: &mut Pose) {
+        if self.enabled & SIM == 0 {
+            return;
+        }
+        for (run, sim) in self.runs.iter().zip(&rig.extensions.simulations) {
+            if run.started {
+                run.draw(sim, pose, sim.fps);
+            }
+        }
+    }
+
+    /// The particle positions of simulation [k] after its last step, world space; for tests and tools.
+    pub fn simulation_state(&self, k: usize) -> Option<(&[f32], &[f32])> {
+        self.runs.get(k).filter(|r| r.started).map(|r| (&r.state.x[..], &r.state.y[..]))
+    }
+
+    /// The colliders [sim] uses, placed in world space at this pose.
+    fn place_colliders(&mut self, rig: &Rig, sim: &sim::Simulation, values: &[f32], pose: &Pose) -> Vec<PlacedCollider> {
+        let world = |p: [f32; 2]| [p[0], -p[1]];
+        sim.colliders.iter().filter_map(|&c| {
+            let c = &rig.extensions.colliders[c];
+            let (a, b) = match (c.mesh, c.deformer) {
+                (Some(m), _) => {
+                    let v = &pose.vertices[m];
+                    ([v[c.vertex_a * 2], v[c.vertex_a * 2 + 1]], [v[c.vertex_b * 2], v[c.vertex_b * 2 + 1]])
+                }
+                (None, Some(d)) if d < pose.deformers.len() => (pose.deformers[d].apply(c.a[0], c.a[1]), pose.deformers[d].apply(c.b[0], c.b[1])),
+                (None, Some(d)) => {
+                    let frame = self.bone_frame(rig, values, d)?;
+                    (frame.apply(c.a[0], c.a[1]), frame.apply(c.b[0], c.b[1]))
+                }
+                (None, None) => (c.a, c.b),
+            };
+            let b = if c.capsule { b } else { a };
+            Some(PlacedCollider::of(c, world(a), world(b)))
+        }).collect()
     }
 
     /// H2: the arc deformer [d] follows, with exact links on.
@@ -301,6 +453,9 @@ impl Advanced {
     /// H4: adds to mesh [m]'s vertices (in its parent's space) the skin's departure from its own interpolation
     /// over the axis keys.
     pub(crate) fn correct_mesh(&mut self, rig: &Rig, m: usize, values: &[f32], defaults: &[f32], out: &mut [f32]) {
+        if self.enabled & SIM != 0 {
+            Advanced::without_statics(rig, m, values, out);
+        }
         if self.enabled & SKIN == 0 {
             return;
         }
@@ -350,6 +505,85 @@ impl Advanced {
             let w = state.weight[v];
             out[v * 2] += a[0] + (b[0] - a[0]) * w;
             out[v * 2 + 1] += a[1] + (b[1] - a[1]) * w;
+        }
+    }
+}
+
+impl SimRun {
+    fn new(sim: &sim::Simulation) -> SimRun {
+        SimRun {
+            state: SimState::new(sim),
+            started: false,
+            remain: 0.0,
+            frame: (0..sim.particles()).filter(|i| sim.pin_weight[*i] >= 0.5).collect(),
+            frame_rest: Vec::new(),
+            previous: Vec::new(),
+            current: Vec::new(),
+        }
+    }
+
+    /// Goals and anchors from [pose]: each target vertex where the rig puts it, each pin on its own vertex or the
+    /// vertex it follows. False when a target is missing from the pose.
+    fn place(&mut self, sim: &sim::Simulation, pose: &Pose) -> bool {
+        let s = &mut self.state;
+        for (k, &(mesh, first)) in sim.targets.iter().enumerate() {
+            let end = sim.targets.get(k + 1).map_or(sim.particles(), |t| t.1);
+            let v = &pose.vertices[mesh];
+            if v.len() < (end - first) * 2 {
+                return false;
+            }
+            for j in 0..end - first {
+                s.goal_x[first + j] = v[j * 2];
+                s.goal_y[first + j] = -v[j * 2 + 1];
+            }
+        }
+        for i in 0..sim.particles() {
+            let (x, y) = match sim.anchors[i] {
+                Some((m, v)) => (pose.vertices[m][v * 2], -pose.vertices[m][v * 2 + 1]),
+                None => (s.goal_x[i], s.goal_y[i]),
+            };
+            s.anchor_x[i] = x;
+            s.anchor_y[i] = y;
+        }
+        true
+    }
+
+    /// At rest on the goals, the anchors' rest kept for the body's turn, as the editor's scene resets.
+    fn start(&mut self, _sim: &sim::Simulation) {
+        let positions: Vec<f32> = self.state.goal_x.iter().zip(&self.state.goal_y).flat_map(|(x, y)| [*x, *y]).collect();
+        let (anchor_x, anchor_y) = (self.state.anchor_x.clone(), self.state.anchor_y.clone());
+        let colliders = std::mem::take(&mut self.state.colliders);
+        self.state.reset(&positions);
+        self.state.anchor_x = anchor_x;
+        self.state.anchor_y = anchor_y;
+        self.state.colliders = colliders;
+        self.frame_rest = self.frame.iter().flat_map(|&i| [self.state.anchor_x[i], self.state.anchor_y[i]]).collect();
+        self.state.frame_angle = 0.0;
+        self.state.settle();
+        self.started = true;
+        self.remain = 0.0;
+        self.capture();
+        self.previous = self.current.clone();
+    }
+
+    fn capture(&mut self) {
+        self.current.clear();
+        self.current.extend(self.state.x.iter().zip(&self.state.y).flat_map(|(x, y)| [*x, *y]));
+    }
+
+    /// The particles over the targets in [pose], between the last two steps by the time left over.
+    fn draw(&self, sim: &sim::Simulation, pose: &mut Pose, fps: f32) {
+        let alpha = (self.remain * fps).clamp(0.0, 1.0);
+        for (k, &(mesh, first)) in sim.targets.iter().enumerate() {
+            let end = sim.targets.get(k + 1).map_or(sim.particles(), |t| t.1);
+            let out = &mut pose.vertices[mesh];
+            for j in 0..end - first {
+                let i = (first + j) * 2;
+                let (px, py) = (self.previous[i], self.previous[i + 1]);
+                let (cx, cy) = (self.current[i], self.current[i + 1]);
+                out[j * 2] = px + (cx - px) * alpha;
+                out[j * 2 + 1] = -(py + (cy - py) * alpha);
+            }
         }
     }
 }

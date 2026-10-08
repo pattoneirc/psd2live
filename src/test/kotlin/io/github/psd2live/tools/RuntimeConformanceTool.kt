@@ -5,12 +5,14 @@ import io.github.psd2live.core.IrGeometryEvaluator
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.RigIrCompiler
 import io.github.psd2live.core.SkeletonAutoBuilder
+import io.github.psd2live.core.sim.*
 import io.github.psd2live.format.model.*
 import io.github.psd2live.targets.runtime.P2lrt
 import java.io.DataOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.pow
 import kotlin.random.Random
 import kotlin.test.Test
 
@@ -91,6 +93,148 @@ class RuntimeConformanceTool {
 		}.distinctBy { it.outputs.map(PhysicsOutput::parameter).toSet() }
 		val fps = listOf(30f, 60f, null).random(random)
 		return RigIR(Canvas(100f, 100f), parameters, physics = Physics(groups, fps))
+	}
+
+	/**
+	 * Simulation traces: random cloth sheets (pinned along the top, random stiffness) driven through the editor's
+	 * XPBD solver by goals and pins that sway, turn and jump, with and without a moving capsule collider. Writes
+	 * build/tools/runtime-sim/<case>/trace.bin, read by `p2lrt-conformance --sim`: the scene's arrays, the rest
+	 * positions, then per frame the inputs and the positions the solver reached.
+	 */
+	@Test fun simulation() {
+		requireTools()
+		val root = output("runtime-sim").apply { deleteRecursively(); mkdirs() }
+		repeat(12) { seed -> simTrace(File(root, "sheet-$seed").apply { mkdirs() }, Random(seed + 7000), collide = seed % 2 == 1) }
+		println("Wrote 12 simulation cases to $root")
+	}
+
+	/**
+	 * A baked simulation end to end: tml's back hair (top tenth pinned) baked and exported with its live scene, and
+	 * the editor's scene on the unbaked rig driven through head and body motion. Writes
+	 * build/tools/runtime-sim-rig/back-hair/{rig.p2lrt, poses.bin, positions.bin}, read by `p2lrt-conformance --sim-rig`.
+	 */
+	@Test fun simulationRig() {
+		requireTools()
+		val dir = output("runtime-sim-rig/back-hair").apply { deleteRecursively(); mkdirs() }
+		val initial = PSD2LivePipeline().buildPreview(File("examples/tml/psd-input/tml.psd").toPath())
+		val puppet = initial.rig.puppet
+		val layers = initial.analysis.layers.associateBy { it.source.id.raw }
+		val back = puppet.drawables.first { d ->
+			d.mesh != null && layers[initial.rig.layerIdByDrawableId[d.id.raw] ?: d.id.raw]?.semantic?.tag == io.github.psd2live.core.SemanticTag.BACK_HAIR
+		}
+		val world = org.umamo.render.eval.CpuDeformationEvaluator().evaluate(puppet, emptyMap()).worldPositions.getValue(back.id)
+		val ys = (1 until world.size step 2).map { world[it] }
+		val top = ys.max(); val bottom = ys.min()
+		val pin = org.umamo.runtime.model.VertexGroup("pin", back.id, org.umamo.runtime.model.VertexGroupKind.PIN,
+			FloatArray(world.size / 2) { if (world[it * 2 + 1] > top - (top - bottom) * 0.1f) 1f else 0f })
+		val grouped = initial.config.rigEdits.copy(authoringJournal = initial.config.rigEdits.authoringJournal + io.github.psd2live.core.VertexGroupJournal.encode(pin))
+		val withSim = SimAuthoring.put(grouped, grouped.applyTo(initial.baseRig.puppet), RigSimEdit("back", "Back hair", SimKind.HAIR, listOf(back.id.raw),
+			inputs = RigSimEdit.defaultInputs(puppet.parameters.mapTo(HashSet()) { it.id.raw }, SimKind.HAIR)))
+		val baked = SimAuthoring.withBake(withSim, "back", SimAuthoring.bake(withSim, initial.baseRig.puppet, "back"))
+		val preview = PSD2LivePipeline().buildPreview(initial.analysis, initial.config.copy(rigEdits = baked))
+		val ir = RigIrCompiler.compile(preview, simulations = true)
+		require(ir.advanced.simulations.isNotEmpty()) { "The simulation did not export" }
+		File(dir, "rig.p2lrt").writeBytes(P2lrt.write(ir))
+
+		// The editor's scene, as its preview plays it: on the rig without the bake, calibrated, at rest at the first pose.
+		val unbaked = SimAuthoring.unbakedModel(baked, initial.baseRig.puppet, "back")
+		val scene = SimScene.build(unbaked, baked.simEdits.single()).also { it.calibrate(unbaked) }
+		val frames = 180
+		val poses = (0 until frames).map { frame ->
+			val t = frame / 60f
+			mapOf("ParamAngleX" to 25f * kotlin.math.sin(t * 2.3f), "ParamAngleZ" to 15f * kotlin.math.sin(t * 1.4f),
+				"ParamBodyAngleX" to 8f * kotlin.math.sin(t * 3.1f), "ParamBodyAngleZ" to (if (frame in 60..75) 10f else 0f))
+				.filterKeys { id -> ir.parameters.any { it.id == id } }
+		}
+		val poseBuffer = ByteBuffer.allocate(8 + frames * ir.parameters.size * 4).order(ByteOrder.LITTLE_ENDIAN)
+		poseBuffer.putInt(frames); poseBuffer.putInt(ir.parameters.size)
+		for (pose in poses) for (p in ir.parameters) poseBuffer.putFloat(pose[p.id] ?: p.default)
+		File(dir, "poses.bin").writeBytes(poseBuffer.array())
+		val n = scene.state.count
+		val positions = ByteBuffer.allocate(8 + frames * n * 8).order(ByteOrder.LITTLE_ENDIAN)
+		positions.putInt(frames); positions.putInt(n)
+		for ((frame, pose) in poses.withIndex()) {
+			val values = pose.mapKeys { org.umamo.runtime.model.ParameterId(it.key) }
+			if (frame == 0) scene.reset(unbaked, values) else scene.drive(unbaked, values, 1f / 60f)
+			for (i in 0 until n) { positions.putFloat(scene.state.x[i]); positions.putFloat(scene.state.y[i]) }
+		}
+		File(dir, "positions.bin").writeBytes(positions.array())
+		println("Wrote the back hair simulation, $n particles over $frames frames, to $dir")
+	}
+
+	private fun simTrace(dir: File, random: Random, collide: Boolean) {
+		val sim = run {
+			val columns = random.nextInt(2, 6); val rows = random.nextInt(3, 7)
+			val n = columns * rows
+			val rest = FloatArray(n * 2) { if (it % 2 == 0) (it / 2 % columns) * 20f + random.nextFloat() * 4f else -(it / 2 / columns) * 22f + random.nextFloat() * 4f }
+			val state = SimState(n)
+			for (i in 0 until n) { state.invMass[i] = 0.5f + random.nextFloat(); state.damping[i] = random.nextFloat() * 2f; state.windFactor[i] = random.nextFloat()
+				state.goalOffsetX[i] = random.nextFloat() - 0.5f; state.goalOffsetY[i] = random.nextFloat() - 0.5f }
+			val pin = FloatArray(n) { if (it < columns) (if (random.nextBoolean()) 1f else 0.6f) else 0f }
+			val goal = FloatArray(n) { if (random.nextInt(3) == 0) Float.POSITIVE_INFINITY else 0.002f + random.nextFloat() * 0.05f }
+			val ea = ArrayList<Int>(); val eb = ArrayList<Int>()
+			val ta = ArrayList<Int>(); val tb = ArrayList<Int>(); val tc = ArrayList<Int>()
+			for (r in 0 until rows) for (c in 0 until columns) {
+				val i = r * columns + c
+				if (c + 1 < columns) { ea += i; eb += i + 1 }
+				if (r + 1 < rows) { ea += i; eb += i + columns }
+				if (c + 1 < columns && r + 1 < rows) { ta += i; tb += i + columns; tc += i + 1; ta += i + 1; tb += i + columns; tc += i + columns + 1 }
+			}
+			fun len(a: Int, b: Int) = kotlin.math.hypot(rest[a * 2] - rest[b * 2], rest[a * 2 + 1] - rest[b * 2 + 1])
+			val stretch = DistanceConstraints(ea.toIntArray(), eb.toIntArray(), FloatArray(ea.size) { len(ea[it], eb[it]) },
+				FloatArray(ea.size) { 1e-9f * 10f.pow(random.nextFloat() * 4f) }, FloatArray(ea.size) { 1e-4f + random.nextFloat() * 1e-3f })
+			val triangles = TriangleConstraints(ta.toIntArray(), tb.toIntArray(), tc.toIntArray(),
+				FloatArray(ta.size) { if (random.nextBoolean()) Float.POSITIVE_INFINITY else random.nextFloat() * 0.5f })
+			val bends = BendConstraints(IntArray(ta.size / 2) { it * 2 }, IntArray(ta.size / 2) { it * 2 + 1 }, FloatArray(ta.size / 2) { random.nextFloat() * 1e-3f })
+			val welds = if (n > 4) WeldConstraints(intArrayOf(n - 1), intArrayOf(n - 2), floatArrayOf(0.5f), floatArrayOf(0.5f), floatArrayOf(1e-4f)) else WeldConstraints.Empty
+			val longRange = LongRangeConstraints(IntArray(n - columns) { columns + it }, IntArray(n - columns) { (columns + it) % columns },
+				FloatArray(n - columns) { len(columns + it, (columns + it) % columns) * 1.1f })
+			val settings = SimSettings(gravityY = -980f, windX = random.nextFloat() * 200f, substeps = random.nextInt(4, 17), pinCompliance = 1e-4f)
+			state.reset(rest)
+			XpbdSolver(state, stretch, triangles, bends, welds, longRange, pin, goal, settings) to rest
+		}
+		val (solver, rest) = sim
+		val s = solver.state
+		val n = s.count
+		val out = java.io.DataOutputStream(File(dir, "trace.bin").outputStream().buffered())
+		fun le(v: Int) = out.writeInt(Integer.reverseBytes(v))
+		fun f(v: Float) = le(java.lang.Float.floatToRawIntBits(v))
+		fun floats(v: FloatArray) { le(v.size); v.forEach(::f) }
+		fun ints(v: IntArray) { le(v.size); v.forEach(::le) }
+		with(solver) {
+			floats(s.invMass); floats(s.damping); floats(s.windFactor); floats(pinWeight); floats(goalCompliance); floats(s.goalOffsetX); floats(s.goalOffsetY)
+			ints(stretch.a); ints(stretch.b); floats(stretch.rest); floats(stretch.compliance); floats(stretch.compressionCompliance)
+			ints(triangles.a); ints(triangles.b); ints(triangles.c); floats(triangles.areaCompliance)
+			ints(bends.t1); ints(bends.t2); floats(bends.compliance)
+			ints(welds.a); ints(welds.b); floats(welds.weightA); floats(welds.weightB); floats(welds.compliance)
+			ints(longRange.particle); ints(longRange.root); floats(longRange.maxDistance)
+			le(settings.substeps); f(settings.gravityX); f(settings.gravityY); f(settings.windX); f(settings.windY); f(settings.pinCompliance)
+		}
+		floats(rest)
+		val frames = 240
+		le(frames)
+		var time = 0f
+		for (frame in 0 until frames) {
+			val dt = 1f / 60f
+			time += dt
+			val angle = 0.4f * kotlin.math.sin(time * 2.1f)
+			val dx = 30f * kotlin.math.sin(time * 3.3f) + if (frame in 100..110) 40f else 0f
+			val dy = 15f * kotlin.math.sin(time * 1.7f)
+			for (i in 0 until n) {
+				val x = rest[i * 2]; val y = rest[i * 2 + 1]
+				val rx = x * kotlin.math.cos(angle) - y * kotlin.math.sin(angle) + dx
+				val ry = x * kotlin.math.sin(angle) + y * kotlin.math.cos(angle) + dy
+				s.goalX[i] = rx; s.goalY[i] = ry; s.anchorX[i] = rx; s.anchorY[i] = ry
+			}
+			s.frameAngle = angle
+			s.colliders = if (!collide) emptyList() else listOf(PlacedCollider(
+				10f + 20f * kotlin.math.sin(time * 2f), -60f, 30f, -90f + 10f * kotlin.math.cos(time), 18f, 12f, 0.3f))
+			f(dt); floats(s.goalX); floats(s.goalY); floats(s.anchorX); floats(s.anchorY); f(s.frameAngle)
+			le(s.colliders.size); s.colliders.forEach { f(it.ax); f(it.ay); f(it.bx); f(it.by); f(it.radiusA); f(it.radiusB); f(it.friction) }
+			solver.step(dt)
+			floats(s.x); floats(s.y)
+		}
+		out.close()
 	}
 
 	private fun trace(dir: File, ir: RigIR, random: Random) {

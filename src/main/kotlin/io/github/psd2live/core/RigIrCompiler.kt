@@ -16,10 +16,16 @@ import io.github.psd2live.targets.cubism.PuppetIr
  * their presets into curves.
  */
 internal object RigIrCompiler {
-	fun compile(preview: RigPreviewModel, tileArt: Boolean = false): RigIR = compile(preview.analysis, preview.atlas, preview.rig, preview.config, tileArt)
+	fun compile(preview: RigPreviewModel, tileArt: Boolean = false, simulations: Boolean = false): RigIR =
+		compile(preview.analysis, preview.atlas, preview.rig, preview.config, tileArt, simulations)
 
-	/** [tileArt] adds every tile's unpacked source pixels, which only formats with editable source layers need. */
-	fun compile(analysis: PipelineAnalysis, atlas: PackedAtlas, rig: BuiltRig, config: PipelineConfig, tileArt: Boolean = false): RigIR {
+	/**
+	 * [tileArt] adds every tile's unpacked source pixels, which only formats with editable source layers need;
+	 * [simulations] the baked simulations as the runtime's advanced mode plays them, each calibrated anew (a second
+	 * or so each), which only the runtime's own targets read.
+	 */
+	fun compile(analysis: PipelineAnalysis, atlas: PackedAtlas, rig: BuiltRig, config: PipelineConfig, tileArt: Boolean = false,
+				simulations: Boolean = false): RigIR {
 		val parameterIds = rig.puppet.parameters.mapTo(linkedSetOf()) { it.id.raw }
 		val physicsGroups = PhysicsCatalog.active(analysis, config, parameterIds)
 		val base = PuppetIr.toIr(
@@ -46,17 +52,27 @@ internal object RigIrCompiler {
 			}),
 			// The open mouth keeps its texture coordinates over the whole artwork in a canvas-space base mesh.
 			restPose = if (config.rigEdits.importedCmo3 != null) emptyMap() else mapOf(StandardParameters.MOUTH_OPEN.raw to 1f),
-			advanced = advanced(rig, config),
+			advanced = advanced(rig, config, base, simulations),
 		)
 	}
 
-	/** What the runtime's advanced mode plays live that the rig bakes: the skeleton's folded bones. */
-	private fun advanced(rig: BuiltRig, config: PipelineConfig): AdvancedIR {
-		val spec = config.rigEdits.skeleton ?: return AdvancedIR()
+	/**
+	 * What the runtime's advanced mode plays live that the rig bakes: the skeleton's folded bones and, with
+	 * [simulations], the baked simulations and their colliders.
+	 */
+	private fun advanced(rig: BuiltRig, config: PipelineConfig, base: RigIR, simulations: Boolean): AdvancedIR {
 		val model = rig.puppet
-		val frame = Bounds(0f, 0f, model.canvasWidth.coerceAtLeast(1f), model.canvasHeight.coerceAtLeast(1f))
-		val bones = runCatching { SkeletonRig.virtualBones(model, spec, frame) }.getOrElse { emptyList() }
-		return AdvancedIR(virtualBones = bones.map { PuppetIr.deformerToIr(it) as io.github.psd2live.format.model.Deformer.Rotation })
+		val bones = config.rigEdits.skeleton?.let { spec ->
+			val frame = Bounds(0f, 0f, model.canvasWidth.coerceAtLeast(1f), model.canvasHeight.coerceAtLeast(1f))
+			runCatching { SkeletonRig.virtualBones(model, spec, frame) }.getOrElse { emptyList() }
+		}.orEmpty()
+		val sims = if (!simulations) null else io.github.psd2live.core.sim.SimExport.export(model, config.rigEdits.simEdits,
+			base.parameters.mapTo(HashSet()) { it.id }, base.physics.groups.mapTo(HashSet()) { it.id })
+		return AdvancedIR(
+			virtualBones = bones.map { PuppetIr.deformerToIr(it) as io.github.psd2live.format.model.Deformer.Rotation },
+			simulations = sims?.simulations.orEmpty(),
+			colliders = sims?.colliders.orEmpty(),
+		)
 	}
 
 	/**

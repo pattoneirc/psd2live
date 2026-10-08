@@ -210,7 +210,10 @@ pub unsafe extern "C" fn p2l_role_parameters(handle: *const Handle, role: *const
 /// Deforms the rig at the current parameter values.
 #[no_mangle]
 pub unsafe extern "C" fn p2l_evaluate(handle: *mut Handle) {
-    with_mut!(handle, (), |h| evaluate(h))
+    with_mut!(handle, (), |h| {
+        evaluate(h);
+        h.advanced.show_simulations(&h.rig, &mut h.evaluator.pose);
+    })
 }
 
 /// Advances clips, behaviors and physics by [dt] seconds over the current values, then evaluates.
@@ -219,8 +222,13 @@ pub unsafe extern "C" fn p2l_update(handle: *mut Handle, dt: f32) {
     with_mut!(handle, (), |h| {
         h.player.update(&h.rig, dt, &mut h.values);
         h.behaviors.update(&h.rig, dt, &mut h.values);
-        h.physics.step(&h.rig, dt, &mut h.values);
-        evaluate(h)
+        let skip = h.advanced.skipped_physics(&h.rig);
+        h.physics.step_skipping(&h.rig, dt, &mut h.values, &skip);
+        evaluate(h);
+        if h.advanced.enabled() & crate::advanced::SIM != 0 {
+            let values: Vec<f32> = h.rig.parameters.iter().zip(&h.values).map(|(p, v)| p.normalize(*v)).collect();
+            h.advanced.step_simulations(&h.rig, &values, dt, &mut h.evaluator.pose);
+        }
     })
 }
 
@@ -501,6 +509,18 @@ pub unsafe extern "C" fn p2l_set_advanced(handle: *mut Handle, features: u32) ->
         evaluate(h);
         on
     })
+}
+
+/// Starts the simulations again from the next update's pose, at rest.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_sim_reset(handle: *mut Handle) {
+    with_mut!(handle, (), |h| h.advanced.reset_simulations())
+}
+
+/// Wind every simulation feels besides its own, canvas pixels per second² (x right, y down).
+#[no_mangle]
+pub unsafe extern "C" fn p2l_sim_wind(handle: *mut Handle, x: f32, y: f32) {
+    with_mut!(handle, (), |h| h.advanced.set_wind(x, y))
 }
 
 #[no_mangle]

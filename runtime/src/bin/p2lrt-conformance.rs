@@ -285,8 +285,147 @@ fn against_fine(dir: &Path) -> Result<Option<(f32, f32)>, String> {
     Ok(Some((baked, advanced)))
 }
 
+/// A simulation trace from RuntimeConformanceTool.simulation: the scene, its rest, then per frame the inputs
+/// and the positions the editor's solver reached. Returns the worst position error over the trace.
+fn compare_sim(dir: &Path) -> Result<(f32, String), String> {
+    use p2l_runtime::sim::{PlacedCollider, SimState, Simulation, Solver};
+    let bytes = fs::read(dir.join("trace.bin")).map_err(|e| e.to_string())?;
+    let mut at = 0usize;
+    let mut word = || { let v = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()); at += 4; v };
+    let floats = |word: &mut dyn FnMut() -> u32| -> Vec<f32> { let n = word() as usize; (0..n).map(|_| f32::from_bits(word())).collect() };
+    let ints = |word: &mut dyn FnMut() -> u32| -> Vec<u32> { let n = word() as usize; (0..n).map(|_| word()).collect() };
+    // The editor writes no-goal and no-area compliances as infinity; the runtime reads any non-finite as none.
+    let mut sim = Simulation { fps: 60.0, ..Default::default() };
+    sim.inv_mass = floats(&mut word); sim.damping = floats(&mut word); sim.wind_factor = floats(&mut word);
+    sim.pin_weight = floats(&mut word); sim.goal_compliance = floats(&mut word); sim.goal_offset_x = floats(&mut word); sim.goal_offset_y = floats(&mut word);
+    sim.stretch_a = ints(&mut word); sim.stretch_b = ints(&mut word); sim.stretch_rest = floats(&mut word);
+    sim.stretch_compliance = floats(&mut word); sim.compression_compliance = floats(&mut word);
+    sim.tri_a = ints(&mut word); sim.tri_b = ints(&mut word); sim.tri_c = ints(&mut word); sim.area_compliance = floats(&mut word);
+    sim.bend_t1 = ints(&mut word); sim.bend_t2 = ints(&mut word); sim.bend_compliance = floats(&mut word);
+    sim.weld_a = ints(&mut word); sim.weld_b = ints(&mut word); sim.weld_weight_a = floats(&mut word); sim.weld_weight_b = floats(&mut word);
+    sim.weld_compliance = floats(&mut word);
+    sim.long_particle = ints(&mut word); sim.long_root = ints(&mut word); sim.long_distance = floats(&mut word);
+    sim.substeps = word();
+    let f = |w: u32| f32::from_bits(w);
+    sim.gravity = [f(word()), f(word())];
+    sim.wind = [f(word()), f(word())];
+    sim.pin_compliance = f(word());
+    let n = sim.inv_mass.len();
+    sim.anchors = vec![None; n];
+    let rest = floats(&mut word);
+    let mut state = SimState::new(&sim);
+    state.reset(&rest);
+    state.settle();
+    let frames = word();
+    let mut worst = (0f32, String::new());
+    for frame in 0..frames {
+        let dt = f(word());
+        state.goal_x = floats(&mut word); state.goal_y = floats(&mut word);
+        state.anchor_x = floats(&mut word); state.anchor_y = floats(&mut word);
+        state.frame_angle = f(word());
+        let colliders = word();
+        state.colliders = (0..colliders).map(|_| {
+            let v: Vec<f32> = (0..7).map(|_| f(word())).collect();
+            PlacedCollider { a: [v[0], v[1]], b: [v[2], v[3]], radius_a: v[4], radius_b: v[5], friction: v[6] }
+        }).collect();
+        let wind = sim.wind;
+        Solver { sim: &sim, state: &mut state, wind }.step(dt);
+        let (x, y) = (floats(&mut word), floats(&mut word));
+        for i in 0..n {
+            let e = (state.x[i] - x[i]).abs().max((state.y[i] - y[i]).abs());
+            if !(e <= worst.0) {
+                worst = (if e.is_nan() { f32::INFINITY } else { e }, format!("frame {} particle {} got ({}, {}) want ({}, {})", frame, i, state.x[i], state.y[i], x[i], y[i]));
+            }
+        }
+    }
+    Ok(worst)
+}
+
+/// A baked simulation exported with its live scene, played through advanced mode at the editor's poses, against
+/// where the editor's own scene put each particle: the worst distance over the first half second, the mean
+/// distance over the whole run, and where the worst early one was. The two evaluate their goals a few
+/// hundred-thousandths of a pixel apart and cloth amplifies that over time, so the run as a whole is judged
+/// by its mean; the solver alone matches the editor's bit for bit (--sim).
+fn compare_sim_rig(dir: &Path) -> Result<(f32, f32, String), String> {
+    use p2l_runtime::advanced::{Advanced, COLLISION, SIM};
+    let rig = Rig::read(&fs::read(dir.join("rig.p2lrt")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let mut adv = Advanced::new();
+    if adv.set(&rig, SIM | COLLISION) & SIM == 0 {
+        return Err("the file carries no simulation".into());
+    }
+    let poses = fs::read(dir.join("poses.bin")).map_err(|e| e.to_string())?;
+    let expected = fs::read(dir.join("positions.bin")).map_err(|e| e.to_string())?;
+    let frames = u32::from_le_bytes(poses[0..4].try_into().unwrap()) as usize;
+    let params = u32::from_le_bytes(poses[4..8].try_into().unwrap()) as usize;
+    let n = u32::from_le_bytes(expected[4..8].try_into().unwrap()) as usize;
+    let values: Vec<f32> = f32s(&poses[8..]).collect();
+    let want: Vec<f32> = f32s(&expected[8..]).collect();
+    let mut evaluator = Evaluator::new();
+    let (mut worst, mut sum, mut count, mut at) = (0f32, 0f64, 0usize, String::new());
+    for frame in 0..frames {
+        let pose: Vec<f32> = rig.parameters.iter().zip(&values[frame * params..(frame + 1) * params]).map(|(p, v)| p.normalize(*v)).collect();
+        evaluator.evaluate_ext(&rig, &pose, Some(&mut adv));
+        adv.step_simulations(&rig, &pose, if frame == 0 { 0.0 } else { 1.0 / 60.0 }, &mut evaluator.pose);
+        let (x, y) = adv.simulation_state(0).ok_or("the simulation did not start")?;
+        if x.len() != n {
+            return Err(format!("{} particles, the editor has {}", x.len(), n));
+        }
+        if env::var("P2L_DEBUG").is_ok() {
+            let e = (0..n).map(|i| (x[i] - want[(frame * n + i) * 2]).hypot(y[i] - want[(frame * n + i) * 2 + 1])).fold(0f32, f32::max);
+            eprintln!("frame {} worst {:.4}", frame, e);
+        }
+        for i in 0..n {
+            let (wx, wy) = (want[(frame * n + i) * 2], want[(frame * n + i) * 2 + 1]);
+            let e = (x[i] - wx).hypot(y[i] - wy);
+            sum += e as f64;
+            count += 1;
+            if frame < 30 && !(e <= worst) {
+                worst = if e.is_nan() { f32::INFINITY } else { e };
+                at = format!("frame {} particle {} got ({}, {}) want ({}, {})", frame, i, x[i], y[i], wx, wy);
+            }
+            if e.is_nan() {
+                return Err(format!("frame {} particle {} is not a number", frame, i));
+            }
+        }
+    }
+    Ok((worst, (sum / count.max(1) as f64) as f32, at))
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--sim-rig") {
+        let dir = Path::new(args.get(2).map(String::as_str).unwrap_or("../build/tools/runtime-sim-rig/back-hair"));
+        match compare_sim_rig(dir) {
+            Ok((worst, mean, at)) => {
+                let ok = worst < 0.25 && mean < 0.5;
+                println!("{} back hair: first half second worst {:.5} px, whole run mean {:.5} px  {}", if ok { "ok  " } else { "FAIL" }, worst, mean, if ok { "" } else { &at });
+                std::process::exit(if ok { 0 } else { 1 });
+            }
+            Err(e) => {
+                println!("ERR  {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+    if args.get(1).map(String::as_str) == Some("--sim") {
+        let root = Path::new(args.get(2).map(String::as_str).unwrap_or("../build/tools/runtime-sim"));
+        let mut dirs: Vec<_> = fs::read_dir(root).expect("trace directory").filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        dirs.sort();
+        let mut failed = 0;
+        for dir in dirs {
+            let name = dir.file_name().unwrap().to_string_lossy().to_string();
+            match compare_sim(&dir) {
+                Ok((e, at)) => {
+                    let ok = e < 1e-3;
+                    if !ok { failed += 1; }
+                    println!("{} {:<12} position {:>10.6}  {}", if ok { "ok  " } else { "FAIL" }, name, e, if ok { "" } else { &at });
+                }
+                Err(e) => { failed += 1; println!("ERR  {:<12} {}", name, e); }
+            }
+        }
+        println!("{} failing", failed);
+        std::process::exit(if failed == 0 { 0 } else { 1 });
+    }
     if args.get(1).map(String::as_str) == Some("--advanced") {
         let root = Path::new(args.get(2).map(String::as_str).unwrap_or("../build/tools/runtime-conformance"));
         let mut dirs: Vec<_> = fs::read_dir(root).expect("reference directory").filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join("poses.bin").exists()).collect();

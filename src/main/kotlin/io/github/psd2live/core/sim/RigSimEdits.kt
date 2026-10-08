@@ -170,6 +170,34 @@ data class SimOutput(val id: String? = null, val range: Float? = null, val gain:
  * [groups] names the vertex group used for each kind; a kind without an entry uses the target's first
  * group of that kind, and none at all means the material value everywhere (no pins, for [VertexGroupKind.PIN]).
  */
+/**
+ * A body the simulated particles keep out of: a circle on vertex [a] of [mesh] (not a target), or with [b] a
+ * capsule along the two, following the mesh as the rig deforms it - an arm, a leg, the torso. [radius] runs to
+ * [radiusB] at [b]; [friction] 0..1 is the share of a touching particle's slide taken away.
+ */
+data class SimCollider(val mesh: String, val a: Int, val b: Int = a, val radius: Float, val radiusB: Float = radius, val friction: Float = 0f) {
+    init {
+        require(mesh.isNotBlank() && a >= 0 && b >= 0) { "A collider needs a mesh and its vertices" }
+        require(radius.isFinite() && radius > 0f && radiusB.isFinite() && radiusB > 0f) { "A collider radius must be positive" }
+        require(friction in 0f..1f) { "Collider friction is within 0..1" }
+    }
+
+    fun toJson() = buildJsonObject {
+        put("mesh", mesh); put("a", a); if (b != a) put("b", b)
+        put("radius", radius); if (radiusB != radius) put("radius_b", radiusB)
+        if (friction != 0f) put("friction", friction)
+    }
+
+    companion object {
+        fun fromJson(o: JsonObject): SimCollider {
+            val a = requireNotNull(o["a"]?.jsonPrimitive?.intOrNull) { "A collider needs vertex a" }
+            val radius = requireNotNull(o.number("radius")) { "A collider needs a radius" }
+            return SimCollider(requireNotNull(o.string("mesh")) { "A collider needs a mesh" }, a, o["b"]?.jsonPrimitive?.intOrNull ?: a,
+                radius, o.number("radius_b") ?: radius, o.number("friction") ?: 0f)
+        }
+    }
+}
+
 data class RigSimEdit(
     val id: String,
     val name: String,
@@ -220,6 +248,8 @@ data class RigSimEdit(
     val outputs: Map<String, SimOutput> = emptyMap(),
     /** The materialized bake; the rebuild writes it back without simulating. */
     val bake: SimBakeResult? = null,
+    /** Bodies the particles keep out of; the bake learns the motion they shape. */
+    val colliders: List<SimCollider> = emptyList(),
 ) {
     init {
         require(listOf(id, name).all { it.isNotBlank() && it.none(Char::isISOControl) }) { "Simulation ID and name are required" }
@@ -234,6 +264,7 @@ data class RigSimEdit(
         require(outputNames.all { (k, v) -> k.isNotBlank() && v.isNotBlank() && v.none(Char::isISOControl) }) { "Output names must not be blank" }
         require(outputs.values.none { it.isDefault }) { "An output setting must change something" }
         require(outputs.keys.map(::outputId).let { it.distinct().size == it.size }) { "Each output needs its own ID" }
+        require(colliders.none { it.mesh in targets }) { "A collider rides a mesh the simulation does not move" }
     }
 
     /** The ID mode parameter [baked] (as the bake names it) is written under. */
@@ -269,6 +300,8 @@ data class RigSimEdit(
         if (exaggeration != DEFAULT_EXAGGERATION) put("exaggeration", exaggeration)
         if (outputNames.isNotEmpty()) putJsonObject("output_names") { outputNames.forEach { (k, v) -> put(k, v) } }
         if (outputs.isNotEmpty()) putJsonObject("outputs") { outputs.forEach { (k, v) -> put(k, v.toJson()) } }
+        // "colliders" held the retired margin-based collision and is ignored on load.
+        if (colliders.isNotEmpty()) putJsonArray("obstacles") { colliders.forEach { add(it.toJson()) } }
         bake?.let { put("bake", it.toJson()) }
     }
 
@@ -319,6 +352,7 @@ data class RigSimEdit(
                 is JsonNull -> null
                 else -> SimBakeResult.fromJson(value.jsonObject)
             },
+            colliders = o["obstacles"]?.jsonArray?.map { SimCollider.fromJson(it.jsonObject) } ?: colliders,
         )
     }
 
