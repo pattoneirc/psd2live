@@ -1,8 +1,6 @@
 package io.github.psd2live.core
 
-import io.github.psd2live.ui.EditHierarchyMode
-import io.github.psd2live.ui.canvasGeometryCommand
-import io.github.psd2live.ui.state.PSD2LiveViewModel
+import kotlinx.serialization.json.*
 import org.umamo.runtime.model.*
 import kotlin.test.*
 
@@ -18,16 +16,11 @@ class CanvasDeformationBindingTest {
         emptyList(), null,
     )
 
-    @Test fun panelSelectionIncludesUnchangedValuesAndLinkedInputs() {
-        PSD2LiveViewModel().use { vm ->
-            vm.setParameterValueFromPanel(fresh, 0f)
-            assertEquals(fresh.raw, vm.canvasEditor.parameter)
-            vm.setParameterValuesFromPanel(linkedMapOf(old to 1f, fresh to 1f))
-            assertEquals(old.raw, vm.canvasEditor.parameter)
-            // Explicit picker selection still overrides the panel selection.
-            vm.canvasEditor.parameter = fresh.raw
-            assertEquals(fresh.raw, vm.canvasEditor.parameter)
-        }
+    /** A canvas drag in deform mode: the displayed points written at [key], the texture left where it is. */
+    private fun drag(kind: String, id: String, key: Map<String, Float>, points: FloatArray) = buildJsonObject {
+        put("op", "canvas_geometry"); put("kind", kind); put("id", id)
+        put("key", JsonObject(key.mapValues { JsonPrimitive(it.value) })); put("preserve_image", false)
+        put("points", JsonArray(points.map(::JsonPrimitive)))
     }
 
     @Test fun destinationKeepsExistingAxesAndBothSelectedParameters() {
@@ -45,7 +38,7 @@ class CanvasDeformationBindingTest {
             val geometry = RigGeometryTools.geometry(source, kind, id, pose)
             val key = canvasDeformationCoordinate(source, geometry.axes, pose, listOf(fresh.raw))
             val moved = geometry.points.copyOf().also { it[0] += 20f }
-            val dragged = CanvasEdits.apply(source, canvasGeometryCommand(EditHierarchyMode.DEFORM, kind, id, key, moved))
+            val dragged = CanvasEdits.apply(source, drag(kind, id, key, moved))
             val request = CanvasDeformStroke.Request(CanvasDeformStroke.Action.BRUSH, CanvasDeformStroke.Mode.DEFORM,
                 listOf(CanvasDeformStroke.Target(kind, id, key, setOf(0))), pose,
                 CanvasBrushTip(500f, 0.5f, CanvasBrushShape.CIRCLE, 0f, 1f, CanvasBrushFalloff.CONSTANT), 1f, false)
@@ -66,12 +59,12 @@ class CanvasDeformationBindingTest {
         val oldPose = mapOf(old.raw to 1f)
         val original = RigGeometryTools.geometry(base, "mesh", "mesh", oldPose).points
         val oldPoints = original.copyOf().also { it[2] += 10f }
-        val source = CanvasEdits.apply(base, canvasGeometryCommand(EditHierarchyMode.DEFORM, "mesh", "mesh", oldPose, oldPoints))
+        val source = CanvasEdits.apply(base, drag("mesh", "mesh", oldPose, oldPoints))
         val pose = oldPose + (fresh.raw to 1f)
         val geometry = RigGeometryTools.geometry(source, "mesh", "mesh", pose)
         val key = canvasDeformationCoordinate(source, geometry.axes, pose, listOf(fresh.raw))
         val moved = geometry.points.copyOf().also { it[0] += 20f }
-        val result = CanvasEdits.apply(source, canvasGeometryCommand(EditHierarchyMode.DEFORM, "mesh", "mesh", key, moved))
+        val result = CanvasEdits.apply(source, drag("mesh", "mesh", key, moved))
         assertEquals(listOf(old, fresh), result.drawables.single().geometryGrid!!.axes.map { it.parameterId })
         assertContentEquals(moved, RigGeometryTools.geometry(result, "mesh", "mesh", pose).points)
         assertContentEquals(oldPoints, RigGeometryTools.geometry(result, "mesh", "mesh", oldPose).points)

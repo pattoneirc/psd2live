@@ -2,10 +2,9 @@ package io.github.psd2live.core
 
 import io.github.psd2live.format.compile.document.ContentHash
 import io.github.psd2live.project.WorkspaceSourceArt
-import io.github.psd2live.project.WorkspaceSourceLayer
+import io.github.psd2live.project.islandLayer
 import io.github.psd2live.targets.cubism.PuppetIr
 import kotlinx.serialization.json.*
-import org.umamo.format.art.*
 import org.umamo.runtime.model.DrawableId
 import org.umamo.runtime.model.VertexGroup
 import org.umamo.runtime.model.VertexGroupKind
@@ -16,13 +15,7 @@ class MaterializedPreviewTest {
 	private val width = 240
 	private val height = 240
 
-	private fun layer(id: String, order: Int, box: IntArray) = WorkspaceSourceLayer(LayerId(id), id, "", SourceLayerKind.Raster, true, order,
-		LayerBounds(0, 0, width, height), 1f, false, LayerBlend.Normal, ChannelMask.ALL, LayerRaster(width, height, ByteArray(width * height * 4).also { rgba ->
-			for (y in box[1] until box[3]) for (x in box[0] until box[2]) {
-				val offset = (y * width + x) * 4
-				rgba[offset] = 120; rgba[offset + 1] = 90; rgba[offset + 2] = 60; rgba[offset + 3] = 255.toByte()
-			}
-		}), null, null, false)
+	private fun layer(id: String, order: Int, box: IntArray) = islandLayer(id, order, width, height, box)
 
 	private val source = WorkspaceSourceArt(width, height, listOf(
 		layer("back", 0, intArrayOf(60, 20, 180, 200)),

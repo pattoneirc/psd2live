@@ -17,8 +17,6 @@ import kotlin.test.Test
  * since the generated layers have no rig worth caching. Writes build/tools/save-perf/report.txt.
  */
 class SavePerfTool {
-	private fun since(start: Long) = (System.nanoTime() - start) / 1_000_000
-
 	@Test fun profile() {
 		requireTools()
 		val out = output("save-perf")
@@ -32,7 +30,7 @@ class SavePerfTool {
 			repeat(3) { run ->
 				val start = System.nanoTime()
 				repository.save(project.capture(), target)
-				lines += "save ${run + 1}: ${since(start)} ms"
+				lines += "save ${run + 1}: %.0f ms".format(since(start))
 			}
 			lines += "archive: ${Files.size(target) / 1024} KiB"
 			repository.open(target).use { opened ->
@@ -40,12 +38,12 @@ class SavePerfTool {
 				repeat(2) { run ->
 					val start = System.nanoTime()
 					repository.save(capture, directory.resolve("reopened.psd2live"))
-					lines += "save after open ${run + 1}: ${since(start)} ms"
+					lines += "save after open ${run + 1}: %.0f ms".format(since(start))
 				}
 			}
 			val start = System.nanoTime()
 			repository.open(target).close()
-			lines += "open: ${since(start)} ms"
+			lines += "open: %.0f ms".format(since(start))
 		}
 		lines.forEach(::println)
 		out.resolve("report.txt").writeText(lines.joinToString("\n", postfix = "\n"))

@@ -5,6 +5,7 @@ import io.github.psd2live.core.PipelineConfig
 import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.project.WorkspaceSourceArt
 import io.github.psd2live.project.WorkspaceSourceLayer
+import io.github.psd2live.testing.missingMessages
 import io.github.psd2live.ui.BrushShape
 import io.github.psd2live.ui.CREATE_GROUP_TOOLS
 import io.github.psd2live.ui.CREATION_TOOLS
@@ -232,5 +233,21 @@ class ToolOptionCatalogTest {
         editor.hierarchyMode = EditHierarchyMode.SKELETON
         editor.tool = CanvasTool.SKELETON_POSE
         assertTrue(toolOptions(editor).none { it is ToggleOption }, "skin weights are a display toggle, not a tool option")
+    }
+
+    @Test fun everyOptionIsNamed() = editor { editor ->
+        val keys = LinkedHashSet<String>()
+        everyState(editor) {
+            for (option in toolOptions(editor)) keys += when (option) {
+                is SliderOption -> option.labelKey
+                is ChoiceOption<*> -> option.labelKey
+                is ToggleOption -> option.labelKey
+                is ActionOption -> option.labelKey
+                is SectionOption -> option.labelKey
+                is NoteOption -> continue
+            }
+        }
+        assertTrue(keys.isNotEmpty())
+        assertEquals(emptyList(), missingMessages(keys))
     }
 }

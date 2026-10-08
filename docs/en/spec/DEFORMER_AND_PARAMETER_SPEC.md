@@ -22,7 +22,7 @@ These are rigging presets, not general 3D reconstruction. Layering, anchor estim
 
 ## Default parameters
 
-The table follows RigParameters. Mesh-only mode, disabled deformers or missing parts may change the actual set. User parameters and variants can extend it.
+The table follows StandardParameters. Mesh-only mode, disabled deformers or missing parts may change the actual set. User parameters and variants can extend it.
 
 | ID | Range | Default |
 | --- | --- | --- |
@@ -40,4 +40,4 @@ The table follows RigParameters. Mesh-only mode, disabled deformers or missing p
 
 Inspect neutral, endpoints, combined angles and intermediate values, including parent/local interactions. Pipeline geometry diagnostics and export readback are checks, not proof of all poses or identical editor behavior. Target versions may require feature reduction.
 
-[RigBuilder / RigParameters](../../../src/main/kotlin/io/github/psd2live/core/RigBuilder.kt) · [Pipeline](../../../src/main/kotlin/io/github/psd2live/core/PSD2LivePipeline.kt) · [PuppetModel](../../../umamo/src/main/kotlin/org/umamo/runtime/model/PuppetModel.kt) · [Architecture (中文)](../../zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)
+[RigBuilder / StandardParameters](../../../src/main/kotlin/io/github/psd2live/core/RigBuilder.kt) · [Pipeline](../../../src/main/kotlin/io/github/psd2live/core/PSD2LivePipeline.kt) · [PuppetModel](../../../umamo/src/main/kotlin/org/umamo/runtime/model/PuppetModel.kt) · [Architecture (中文)](../../zh/spec/RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)

@@ -16,7 +16,6 @@ import androidx.compose.ui.input.pointer.PointerButtons
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
-import io.github.psd2live.render.SkiaGpu
 import io.github.psd2live.ui.state.AppSettings
 import io.github.psd2live.ui.state.DesktopWorkspace
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -29,11 +28,12 @@ import java.nio.file.Path
 import kotlin.test.Test
 
 /**
- * Frame cost of the texture workspace's atlas page and layer panel under pointer input, headless:
- * PSD2LIVE_TOOLS=1 ./gradlew test --tests '*AtlasFramePerfTool'. Each phase sends pointer events to an
- * [ImageComposeScene] and times every render (recomposition, layout and drawing on the UI thread), first with the
- * software painter, then with the GPU renderer when an OpenGL context can be had. Writes build/tools/atlas-frame-perf/:
- * the report and, per mode, a frame mid corner drag, the settled page and a close zoom.
+ * Frame cost of the texture workspace's atlas page and layer panel under pointer input, headless, with the software
+ * painter: PSD2LIVE_TOOLS=1 ./gradlew test --tests '*AtlasFramePerfTool'. Each phase sends pointer events to an
+ * [ImageComposeScene] and times every render (recomposition, layout and drawing on the UI thread). The GPU renderer
+ * draws in a window's Skia OpenGL context, which a scene has not: AtlasWindowPerfTool and PreviewWindowTool measure it
+ * in a real window. Writes build/tools/atlas-frame-perf/: the report, a frame mid corner drag (corner-drag.png), the
+ * open edit session (session.png), the settled page (frame.png) and a close zoom (zoomed.png).
  */
 class AtlasFramePerfTool {
 	@OptIn(ExperimentalComposeUiApi::class)
@@ -44,24 +44,14 @@ class AtlasFramePerfTool {
 		out.listFiles()?.filter { it.extension == "png" }?.forEach { it.delete() }
 		val report = StringBuilder()
 		val savedSoftware = AppSettings.softwareCanvas
-		try {
-			for (gpu in listOf(false, true)) {
-				AppSettings.softwareCanvas = !gpu
-				if (gpu) {
-					// The GPU renderer draws in a window's Skia OpenGL context; this tool has no window.
-					val status = SkiaGpu.status.value
-					report.appendLine("GPU: $status")
-					if (status !is SkiaGpu.Status.Ready) break
-				} else report.appendLine("software")
-				profile(sample, out, report, if (gpu) "gpu" else "software")
-			}
-		} finally { AppSettings.softwareCanvas = savedSoftware }
+		AppSettings.softwareCanvas = true
+		try { profile(sample, out, report) } finally { AppSettings.softwareCanvas = savedSoftware }
 		File(out, "report.txt").writeText(report.toString())
 		println(report)
 	}
 
 	@OptIn(ExperimentalComposeUiApi::class)
-	private fun profile(sample: Sample, out: File, report: StringBuilder, mode: String) {
+	private fun profile(sample: Sample, out: File, report: StringBuilder) {
 		PSD2LiveViewModel().use { vm ->
 			DesktopWorkspace(vm, Path.of(out.path, "workspace")).use { workspace ->
 				vm.attachWorkspace(workspace)
@@ -86,10 +76,10 @@ class AtlasFramePerfTool {
 					scene.render(clock).close()
 					return (System.nanoTime() - t) / 1e6
 				}
-				/** A settled frame: the GPU's frame for the current scene has had time to land. */
+				/** A settled frame: images made off the UI thread have had time to land. */
 				fun shot(name: String) {
 					repeat(3) { frame(); Thread.sleep(60) }
-					scene.render(clock).use { File(out, "$mode-$name.png").writeBytes(requireNotNull(it.encodeToData()).bytes) }
+					scene.render(clock).use { File(out, "$name.png").writeBytes(requireNotNull(it.encodeToData()).bytes) }
 				}
 				repeat(20) { frame(); Thread.sleep(50) }
 				// The page as it fits the view: margin 24, centred.

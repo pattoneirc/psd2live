@@ -113,8 +113,6 @@ class WorkspaceGeometrySafetyTest {
                 WorkspaceViewBackground.TRANSPARENT, WorkspaceViewOutputSpec(256)).png
             val pixels = png(final.model)
             assertContentEquals(pixels, png(reopened))
-            val visual = Path.of("build/geometry-safety-visual"); Files.createDirectories(visual)
-            Files.write(visual.resolve("accepted.png"), pixels)
             runtime.checkout(final.projectId, final.state, before.historyHead)
             runtime.checkout(final.projectId, runtime.capture().state, final.historyHead)
             assertEquals(final.revision, runtime.capture().revision)

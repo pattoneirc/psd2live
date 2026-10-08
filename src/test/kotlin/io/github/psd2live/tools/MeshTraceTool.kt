@@ -36,6 +36,8 @@ import kotlin.test.Test
  *
  * [wrap] meshes lashes, hair strands and a hand under the texture trace at several wrap sizes ([MeshSettings.wrap])
  * into build/tools/mesh-wrap/.
+ *
+ * PSD2LIVE_TOOLS=1 ./gradlew test --tests '*MeshTraceTool' (or '*MeshTraceTool.wrap' for one of them)
  */
 class MeshTraceTool {
 	private class Case(val name: String, val layer: WorkspaceSourceLayer, val unitScale: Float, val settings: MeshSettings)
@@ -80,7 +82,8 @@ class MeshTraceTool {
 		}
 	}
 
-	private val cases = listOf(
+	// Built when a case runs, not with the class: the large rasters would cost every test run that only skips the tool.
+	private val cases by lazy { listOf(
 		Case("eye-dense-1024-on-64", layer("eye", LayerBounds(0, 0, 64, 64), raster(1024, 1024) { u, v -> eye(u, v, 0.004) }),
 			1f, MeshSettings(maxEdgeDistance = 12f, interiorDensity = 18f)),
 		Case("eye-dense-512-on-96", layer("eye", LayerBounds(0, 0, 96, 96), raster(512, 512) { u, v -> eye(u, v, 0.008) }),
@@ -93,7 +96,7 @@ class MeshTraceTool {
 			MeshResolution.unitScale(MeshUnits.DOCUMENT, 6000, 6000), MeshSettings(maxEdgeDistance = 16f, interiorDensity = 26f)),
 		Case("hair-2048doc-1200px", layer("hair", LayerBounds(0, 0, 1200, 1200), raster(1200, 1200, ::hair)),
 			1f, MeshSettings(maxEdgeDistance = 16f, interiorDensity = 26f)),
-	)
+	) }
 
 	private class Run(val mesh: AdaptiveMeshGenerator.Result?, val millis: Double, val detail: Float)
 
@@ -200,7 +203,7 @@ class MeshTraceTool {
 		return tips.indices.any { k -> nearSegment(u, v, roots[k], 0.62, tips[k].first, tips[k].second, 0.045) }
 	}
 
-	private val wrapCases = listOf(
+	private val wrapCases by lazy { listOf(
 		Case("lashes-1024-on-64", layer("eye", LayerBounds(0, 0, 64, 64), raster(1024, 1024) { u, v -> eye(u, v, 0.004) }),
 			1f, MeshSettings(maxEdgeDistance = 12f, interiorDensity = 18f)),
 		Case("lashes-512-on-160", layer("eye", LayerBounds(0, 0, 160, 160), raster(512, 512) { u, v -> eye(u, v, 0.008) }),
@@ -209,7 +212,7 @@ class MeshTraceTool {
 			1f, MeshSettings(maxEdgeDistance = 16f, interiorDensity = 26f)),
 		Case("hand-512-on-128", layer("hand", LayerBounds(0, 0, 128, 128), raster(512, 512, ::hand)),
 			1f, MeshSettings(maxEdgeDistance = 12f, interiorDensity = 18f)),
-	)
+	) }
 
 	@Test fun wrap() {
 		requireTools()

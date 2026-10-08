@@ -1,8 +1,5 @@
-package io.github.psd2live.project
+package io.github.psd2live.ui.state
 
-import io.github.psd2live.ui.state.WorkspaceStateCodec
-
-import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.project.ParameterSnapshot
 import org.umamo.runtime.model.ParameterId
 import kotlin.test.Test

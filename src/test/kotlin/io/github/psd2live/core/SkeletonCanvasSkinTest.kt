@@ -1,9 +1,8 @@
 package io.github.psd2live.core
 
-import io.github.psd2live.project.WorkspaceSourceArt
-import io.github.psd2live.project.WorkspaceSourceLayer
+import io.github.psd2live.core.SkeletonCharacterFixture.drawableOf
+import io.github.psd2live.core.SkeletonCharacterFixture.layer
 import kotlinx.serialization.json.*
-import org.umamo.format.art.*
 import org.umamo.render.eval.CpuDeformationEvaluator
 import org.umamo.runtime.model.DrawableId
 import org.umamo.runtime.model.ParameterId
@@ -16,43 +15,27 @@ import kotlin.test.*
  * over the upper arm and the elbow and a hand overlapping the sleeve's end, both bound to an arm skeleton.
  */
 class SkeletonCanvasSkinTest {
-	private val width = 420
-	private val height = 420
-
-	private fun layer(id: String, order: Int, box: IntArray): WorkspaceSourceLayer {
-		val rgba = ByteArray(width * height * 4)
-		for (y in box[1] until box[3]) for (x in box[0] until box[2]) {
-			val offset = (y * width + x) * 4
-			rgba[offset] = 120; rgba[offset + 1] = 90; rgba[offset + 2] = 60; rgba[offset + 3] = 255.toByte()
-		}
-		return WorkspaceSourceLayer(LayerId(id), id, "", SourceLayerKind.Raster, true, order, LayerBounds(0, 0, width, height), 1f, false,
-			LayerBlend.Normal, ChannelMask.ALL, LayerRaster(width, height, rgba), null, null, false)
+	private companion object {
+		val source = SkeletonCharacterFixture.source(
+			layer("face", 5, intArrayOf(170, 30, 250, 110)),
+			layer("top", 3, intArrayOf(160, 115, 260, 240)),
+			layer("skirt", 1, intArrayOf(165, 235, 255, 290)),
+			layer("legs", 2, intArrayOf(175, 285, 245, 410)),
+			layer("sleeve", 4, intArrayOf(258, 120, 340, 148)),
+			layer("hand", 6, intArrayOf(330, 118, 400, 150)),
+		)
+		val baseConfig = SkeletonCharacterFixture.config(mapOf(
+			"face" to LayerClassificationOverride(tag = SemanticTag.FACE),
+			"top" to LayerClassificationOverride(tag = SemanticTag.TOPWEAR),
+			"skirt" to LayerClassificationOverride(tag = SemanticTag.BOTTOMWEAR),
+			"legs" to LayerClassificationOverride(tag = SemanticTag.LEGWEAR),
+			"sleeve" to LayerClassificationOverride(SemanticTag.HANDWEAR, Side.LEFT),
+			"hand" to LayerClassificationOverride(SemanticTag.HANDWEAR, Side.LEFT),
+		))
+		val plain by lazy { PSD2LivePipeline().buildPreview(source, baseConfig) }
+		val sleeve by lazy { plain.drawableOf("sleeve") }
+		val hand by lazy { plain.drawableOf("hand") }
 	}
-
-	private val layers = listOf(
-		layer("face", 5, intArrayOf(170, 30, 250, 110)),
-		layer("top", 3, intArrayOf(160, 115, 260, 240)),
-		layer("skirt", 1, intArrayOf(165, 235, 255, 290)),
-		layer("legs", 2, intArrayOf(175, 285, 245, 410)),
-		layer("sleeve", 4, intArrayOf(258, 120, 340, 148)),
-		layer("hand", 6, intArrayOf(330, 118, 400, 150)),
-	)
-
-	private val overrides = mapOf(
-		"face" to LayerClassificationOverride(tag = SemanticTag.FACE),
-		"top" to LayerClassificationOverride(tag = SemanticTag.TOPWEAR),
-		"skirt" to LayerClassificationOverride(tag = SemanticTag.BOTTOMWEAR),
-		"legs" to LayerClassificationOverride(tag = SemanticTag.LEGWEAR),
-		"sleeve" to LayerClassificationOverride(SemanticTag.HANDWEAR, Side.LEFT),
-		"hand" to LayerClassificationOverride(SemanticTag.HANDWEAR, Side.LEFT),
-	)
-
-	private val source = WorkspaceSourceArt(width, height, layers, emptyList())
-	private val baseConfig = PipelineConfig(atlasSize = 1024, generatePhysics = false, exportMoc3 = false, layerOverrides = overrides)
-	private val plain by lazy { PSD2LivePipeline().buildPreview(source, baseConfig) }
-	private fun drawableOf(layer: String) = plain.rig.layerIdByDrawableId.entries.single { it.value == layer }.key
-	private val sleeve by lazy { drawableOf("sleeve") }
-	private val hand by lazy { drawableOf("hand") }
 
 	/**
 	 * An arm drawn by hand: the upper arm along the sleeve, the forearm through the hand. Without [withHand] the hand

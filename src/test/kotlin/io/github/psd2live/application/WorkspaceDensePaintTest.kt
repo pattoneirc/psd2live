@@ -11,17 +11,6 @@ import kotlin.test.*
 class WorkspaceDensePaintTest {
     private val builder = WorkspacePreviewBuilder()
 
-    /** A disc touching all four edges of [size] pixels, coloured by position so any resampling shows. */
-    private fun disc(size: Int): LayerRaster = LayerRaster(size, size, ByteArray(size * size * 4).also { rgba ->
-        val r = size / 2f
-        for (y in 0 until size) for (x in 0 until size) {
-            val dx = x + 0.5f - r; val dy = y + 0.5f - r
-            if (dx * dx + dy * dy > r * r) continue
-            val o = (y * size + x) * 4
-            rgba[o] = (40 + 160 * x / size).toByte(); rgba[o + 1] = 60; rgba[o + 2] = (200 - 120 * y / size).toByte(); rgba[o + 3] = -1
-        }
-    })
-
     /** Every pixel of [raster] opaque, coloured by position. */
     private fun gradient(width: Int, height: Int) = LayerRaster(width, height, ByteArray(width * height * 4).also { rgba ->
         for (y in 0 until height) for (x in 0 until width) {
@@ -30,15 +19,11 @@ class WorkspaceDensePaintTest {
         }
     })
 
-    private fun layer(id: String, order: Int, bounds: LayerBounds, raster: LayerRaster) = WorkspaceSourceLayer(
-        LayerId(id), id, "", SourceLayerKind.Raster, true, order, bounds, 1f, false, LayerBlend.Normal, ChannelMask.ALL,
-        raster, null, null, false)
-
     private fun document(art: LayerRaster, bounds: LayerBounds = LayerBounds(70, 30, 32, 32)): WorkspaceDocument {
         val body = LayerRaster(40, 56, ByteArray(40 * 56 * 4) { if (it % 4 == 3) -1 else 120 })
         val source = WorkspaceSourceArt(128, 96, listOf(
-            layer("body", 0, LayerBounds(10, 20, 40, 56), body),
-            layer("art", 1, bounds, art),
+            sourceLayer("body", 0, LayerBounds(10, 20, 40, 56), body),
+            sourceLayer("art", 1, bounds, art),
         ), emptyList())
         val config = PipelineConfig(atlasSize = 2048, meshSpacing = 8, meshOnly = true, generatePhysics = false, exportMoc3 = false)
         return WorkspaceDocument(source, emptyMap(), emptySet(),
@@ -110,7 +95,8 @@ class WorkspaceDensePaintTest {
     }
 
     @Test fun aStrokeOnAHighResolutionPupilStaysHighResolution() = runBlocking<Unit> {
-        val document = document(disc(1024))
+        // A disc touching all four edges, coloured by position so any resampling shows.
+        val document = document(discRaster(1024, fill = 1f))
         val runtime = runtime(document)
         val before = runtime.capture()
         val result = WorkspaceRasterCommands(runtime).execute(before.projectId, before.state,

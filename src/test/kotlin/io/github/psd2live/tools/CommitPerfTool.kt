@@ -22,8 +22,6 @@ import kotlin.test.Test
  * [baseline] times each stage of the commit paths across scenarios into baseline.json and baseline.md.
  */
 class CommitPerfTool {
-	private fun ms(start: Long) = (System.nanoTime() - start) / 1_000_000.0
-
 	@Test fun profile() {
 		requireTools()
 		val sample = Sample.fromEnvironment()
@@ -36,7 +34,7 @@ class CommitPerfTool {
 		runBlocking {
 			val start = System.nanoTime()
 			WorkspaceSourceImporter(runtime).importPsd(sample.path.toAbsolutePath(), null, runtime.state.value.state, initialConfig = PipelineConfig())
-			report.appendLine("import: %.0f ms".format(ms(start)))
+			report.appendLine("import: %.0f ms".format(since(start)))
 			val mesh = runtime.capture().model.rig.puppet.drawables.filter { it.mesh != null }.maxBy { it.mesh!!.positions.size }
 			report.appendLine("drawables=${runtime.capture().model.rig.puppet.drawables.size} target=${mesh.id.raw} vertices=${mesh.mesh!!.positions.size / 2}")
 			repeat(8) { round ->
@@ -50,18 +48,18 @@ class CommitPerfTool {
 				}
 				var t = System.nanoTime()
 				commands.executeJournal(before.projectId, before.state, "Stroke $round", JsonArray(listOf(edit)), MutationAuthor.USER)
-				report.appendLine("commit $round: %.0f ms".format(ms(t)))
+				report.appendLine("commit $round: %.0f ms".format(since(t)))
 				val after = runtime.capture()
 				t = System.nanoTime(); repeat(5) { WorkspaceRevisions.of(after.document) }
-				report.appendLine("  revision x1: %.1f ms".format(ms(t) / 5))
+				report.appendLine("  revision x1: %.1f ms".format(since(t) / 5))
 				t = System.nanoTime(); after.document.config()
-				report.appendLine("  config decode: %.1f ms".format(ms(t)))
+				report.appendLine("  config decode: %.1f ms".format(since(t)))
 				t = System.nanoTime(); builder.normalizeMeshEdits(after.document, before.model)
-				report.appendLine("  normalizeMeshEdits: %.0f ms".format(ms(t)))
+				report.appendLine("  normalizeMeshEdits: %.0f ms".format(since(t)))
 				t = System.nanoTime(); builder.build(after.document, before.model)
-				report.appendLine("  build(fast?): %.0f ms".format(ms(t)))
+				report.appendLine("  build(fast?): %.0f ms".format(since(t)))
 				t = System.nanoTime(); GeometrySafetyEvaluator.evaluate(before.model.rig.puppet, after.model.rig.puppet, blockFoldovers = false)
-				report.appendLine("  geometry safety: %.0f ms".format(ms(t)))
+				report.appendLine("  geometry safety: %.0f ms".format(since(t)))
 				report.appendLine("  journal size=${after.document.rigEdits.authoringJournal.size} chars=${after.document.rigEdits.toString().length}")
 			}
 		}
@@ -127,9 +125,9 @@ class CommitPerfTool {
 			maxGap.set(0)
 			javax.swing.SwingUtilities.invokeLater { viewModel.saveAuthoringEdits(state, JsonArray(listOf(edit))) { failure = it; done.countDown() } }
 			done.await()
-			val committed = ms(t)
+			val committed = since(t)
 			waitFor(30, "idle") { !viewModel.state.value.workspaceEditBusy }
-			report.appendLine("geometry $round: commit %.0f ms, idle %.0f ms, max EDT gap %.0f ms %s".format(committed, ms(t), maxGap.get() / 1e6, failure ?: ""))
+			report.appendLine("geometry $round: commit %.0f ms, idle %.0f ms, max EDT gap %.0f ms %s".format(committed, since(t), maxGap.get() / 1e6, failure ?: ""))
 			Thread.sleep(300)
 		}
 		val layer = viewModel.state.value.previewModel!!.rig.layerIdByDrawableId.getValue(mesh.id.raw)
@@ -143,9 +141,9 @@ class CommitPerfTool {
 			maxGap.set(0)
 			javax.swing.SwingUtilities.invokeLater { viewModel.savePaintSession(session, false, false, "Stroke") { done.countDown() } }
 			done.await(60, java.util.concurrent.TimeUnit.SECONDS)
-			val committed = ms(t)
+			val committed = since(t)
 			waitFor(30, "idle") { !viewModel.state.value.workspaceEditBusy }
-			report.appendLine("paint $round: commit %.0f ms, idle %.0f ms, max EDT gap %.0f ms %s".format(committed, ms(t), maxGap.get() / 1e6, viewModel.state.value.errorMessage ?: ""))
+			report.appendLine("paint $round: commit %.0f ms, idle %.0f ms, max EDT gap %.0f ms %s".format(committed, since(t), maxGap.get() / 1e6, viewModel.state.value.errorMessage ?: ""))
 			Thread.sleep(300)
 		}
 		out.resolve("desktop.txt").writeText(report.toString())

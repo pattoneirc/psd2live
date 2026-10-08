@@ -17,15 +17,7 @@ class WorkspaceImportResolutionTest {
     @TempDir lateinit var temporary: Path
     private val builder = WorkspacePreviewBuilder()
 
-    private fun disc(size: Int): RasterImage = RasterImage(size, size, ByteArray(size * size * 4).also { rgba ->
-        val r = size / 2f
-        for (y in 0 until size) for (x in 0 until size) {
-            val dx = x + 0.5f - r; val dy = y + 0.5f - r
-            if (dx * dx + dy * dy > r * r * 0.81f) continue
-            val o = (y * size + x) * 4
-            rgba[o] = (40 + 160 * x / size).toByte(); rgba[o + 1] = 60; rgba[o + 2] = (200 - 120 * y / size).toByte(); rgba[o + 3] = -1
-        }
-    })
+    private fun disc(size: Int) = RasterImage(size, size, discPixels(size))
 
     private fun pupil(model: RigPreviewModel, id: String) = model.rig.puppet.drawables.single { model.rig.layerIdByDrawableId[it.id.raw] == id }
 

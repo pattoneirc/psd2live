@@ -1,10 +1,6 @@
-package io.github.psd2live.agent
-
-import io.github.psd2live.ui.state.DesktopWorkspace
+package io.github.psd2live.ui.state
 
 import io.github.psd2live.project.MutationAuthor
-import io.github.psd2live.project.WorkspaceStore
-import io.github.psd2live.ui.state.PSD2LiveViewModel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.*
@@ -49,7 +45,7 @@ class WorkspaceProjectPersistenceTest {
                 viewModel.saveProjectNow(archive)
                 assertTrue(Files.isRegularFile(archive))
                 assertFalse(viewModel.state.value.projectDirty)
-                val session = io.github.psd2live.ui.state.ProjectController(viewModel)
+                val session = ProjectController(viewModel)
                 session.open(workspace, archive)
                 assertEquals(edited.historyNodeId, workspace.snapshot().historyHeadNodeId)
                 assertContentEquals(raster, viewModel.state.value.analysis!!.source.layers.single().raster.rgba)
@@ -93,7 +89,7 @@ class WorkspaceProjectPersistenceTest {
                 val savedHead = viewModel.saveProjectNow(currentFile)
                 val captured = viewModel.state.value
                 viewModel.projectSaveStarted()
-                io.github.psd2live.ui.state.ProjectController(viewModel).open(workspace, currentFile)
+                ProjectController(viewModel).open(workspace, currentFile)
                 val reopened = workspace.snapshot()
                 val parameter = reopened.parameters.first { it.min < it.max }
                 workspace.setPreviewSession(buildJsonObject {

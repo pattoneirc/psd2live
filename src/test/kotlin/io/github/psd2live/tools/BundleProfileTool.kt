@@ -20,11 +20,7 @@ import kotlin.test.Test
  * PSD2LIVE_TOOLS=1 ./gradlew test --tests '*BundleProfileTool'
  */
 class BundleProfileTool {
-	private fun time(runs: Int = 10, block: () -> Unit): Double {
-		repeat(3) { block() }
-		val t = System.nanoTime(); repeat(runs) { block() }
-		return (System.nanoTime() - t) / 1e6 / runs
-	}
+	private fun time(runs: Int = 10, block: () -> Unit): Double = mean(runs, warmups = 3, block)
 
 	/** A stack sampler over [block] run for about three seconds: the hottest frames, self and inclusive. */
 	private fun sample(name: String, block: () -> Unit) {

@@ -43,6 +43,9 @@ import kotlin.test.Test
  * band's mean shift and width change in percent of the figure's height: PSD2LIVE_PROBES picks the probes
  * (id=value,..., Body X, Body Y and Body Z at their ends by default). PSD2LIVE_SHEET_PARAM draws the
  * silhouettes over that parameter instead of Body X and Body Y.
+ *
+ * PSD2LIVE_TOOLS=1 PSD2LIVE_CMO3=<file or directory> ./gradlew test --tests '*ModelProfileTool.cmo3'
+ * PSD2LIVE_TOOLS=1 ./gradlew test --tests '*ModelProfileTool.sample'
  */
 class ModelProfileTool {
 	@Test fun cmo3() {

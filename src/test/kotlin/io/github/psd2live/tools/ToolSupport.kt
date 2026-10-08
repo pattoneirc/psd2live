@@ -1,21 +1,37 @@
 package io.github.psd2live.tools
 
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.unit.Density
 import io.github.psd2live.application.WorkspaceViewRenderer
-
-import io.github.psd2live.project.WorkspaceViewBackground
-import io.github.psd2live.project.WorkspaceViewFrame
-import io.github.psd2live.project.WorkspaceViewOutputSpec
 import io.github.psd2live.core.Bounds
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.core.SkeletonAutoBuilder
 import io.github.psd2live.core.SkeletonSpec
+import io.github.psd2live.i18n.AppLanguage
+import io.github.psd2live.i18n.I18n
+import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.WorkspaceSourceLayer
+import io.github.psd2live.project.WorkspaceViewBackground
+import io.github.psd2live.project.WorkspaceViewFrame
+import io.github.psd2live.project.WorkspaceViewOutputSpec
+import io.github.psd2live.ui.theme.CompactToolTheme
+import io.github.psd2live.ui.theme.ToolColors
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.umamo.format.art.LayerBounds
+import org.umamo.format.art.LayerRaster
+import org.umamo.format.art.SourceArt
+import org.umamo.format.art.SourceLayer
+import org.umamo.format.psd.PsdReader
+import org.umamo.format.psd.PsdWriter
 import java.awt.Color
 import java.awt.Font
 import java.awt.image.BufferedImage
 import java.io.File
+import java.nio.file.Files
 import java.nio.file.Path
+import java.security.MessageDigest
 import javax.imageio.ImageIO
 
 /*
@@ -50,23 +66,36 @@ internal class Sample(val name: String, val path: Path) {
 	}
 }
 
-/** [sample]'s PSD with every layer and the canvas scaled [factor] times by pixel repetition, written to [out] once. */
+/** [source] with every layer and the canvas [factor] times larger by pixel repetition; a layer's pixels are scaled when first read. */
+internal fun upscaled(source: SourceArt, factor: Int): SourceArt = if (factor == 1) source else object : SourceArt {
+	override val warnings: List<String> = source.warnings
+	override val groups = source.groups
+	override val widthPx: Int = source.widthPx * factor
+	override val heightPx: Int = source.heightPx * factor
+	override val layers: List<SourceLayer> = source.layers.map { layer ->
+		object : SourceLayer by layer {
+			override val bounds = layer.bounds.let { LayerBounds(it.left * factor, it.top * factor, it.width * factor, it.height * factor) }
+			override val raster: LayerRaster by lazy {
+				val r = layer.raster
+				val w = r.width * factor; val h = r.height * factor
+				val rgba = ByteArray(w * h * 4)
+				for (y in 0 until h) for (x in 0 until w) System.arraycopy(r.rgba, ((y / factor) * r.width + x / factor) * 4, rgba, (y * w + x) * 4, 4)
+				LayerRaster(w, h, rgba)
+			}
+		}
+	}
+}
+
+/** [sample]'s PSD [upscaled] [factor] times, written to [out] once. */
 internal fun scaledSample(sample: Sample, factor: Int, out: File): File {
 	val file = File(out, "${sample.name}-x$factor.psd")
 	if (file.isFile) return file
-	val art = org.umamo.format.psd.PsdReader.read(java.nio.file.Files.readAllBytes(sample.path))
-	fun scale(raster: org.umamo.format.art.LayerRaster): org.umamo.format.art.LayerRaster {
-		val w = raster.width * factor; val h = raster.height * factor
-		val bytes = ByteArray(w * h * 4)
-		for (y in 0 until h) for (x in 0 until w) System.arraycopy(raster.rgba, ((y / factor) * raster.width + x / factor) * 4, bytes, (y * w + x) * 4, 4)
-		return org.umamo.format.art.LayerRaster(w, h, bytes)
-	}
+	val art = upscaled(PsdReader.read(Files.readAllBytes(sample.path)), factor)
 	val layers = art.layers.map { l ->
-		io.github.psd2live.project.WorkspaceSourceLayer(l.id, l.name, l.groupPath, l.kind, l.visible, l.order,
-			org.umamo.format.art.LayerBounds(l.bounds.left * factor, l.bounds.top * factor, l.bounds.width * factor, l.bounds.height * factor),
-			l.opacity, l.clipped, l.blend, l.channelMask, scale(l.raster), null, null, false)
+		WorkspaceSourceLayer(l.id, l.name, l.groupPath, l.kind, l.visible, l.order, l.bounds, l.opacity, l.clipped, l.blend,
+			l.channelMask, l.raster, null, null, false)
 	}
-	file.writeBytes(org.umamo.format.psd.PsdWriter.write(io.github.psd2live.project.WorkspaceSourceArt(art.widthPx * factor, art.heightPx * factor, layers, art.groups)))
+	file.writeBytes(PsdWriter.write(WorkspaceSourceArt(art.widthPx, art.heightPx, layers, art.groups)))
 	return file
 }
 
@@ -119,3 +148,83 @@ internal fun sheet(frames: List<Pair<String, BufferedImage>>, file: File, column
 }
 
 private const val LABEL = 20
+
+/** Milliseconds since [start], a [System.nanoTime] reading. */
+internal fun since(start: Long): Double = (System.nanoTime() - start) / 1e6
+
+/** [block]'s result and its wall time in milliseconds. */
+internal inline fun <T> timed(block: () -> T): Pair<T, Double> {
+	val start = System.nanoTime()
+	return block() to since(start)
+}
+
+/** The mean milliseconds of [runs] calls of [block], after [warmups] calls that are not timed. */
+internal inline fun mean(runs: Int = 10, warmups: Int = 1, block: () -> Unit): Double {
+	repeat(warmups) { block() }
+	val start = System.nanoTime()
+	repeat(runs) { block() }
+	return since(start) / runs
+}
+
+/** The SHA-256 of [bytes] in hex. */
+internal fun sha256(bytes: ByteArray): String = java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes))
+
+/**
+ * What a cmo3 holds, comparable across exports: its editor GUIDs are random, so the SHA-256 of its read-back rig
+ * lowered to moc3, and its physics group count. `error:<type>` when it does not read back.
+ */
+internal fun cmo3Readback(bytes: ByteArray): String = runCatching {
+	val source = org.umamo.format.cmo3.Cmo3.read(bytes).root as org.umamo.format.cmo3.model.custom.CModelSource
+	val puppet = org.umamo.interop.cmo3.Cmo3Import.fromModelSource(source)
+	val bundle = org.umamo.interop.moc3.Moc3Sidecars.bundle(puppet, "readback", pages = emptyList())
+	val physics = (source.physicsSettingsSourceSet as? org.umamo.format.cmo3.model.gen.CPhysicsSettingsSourceSet)
+		?._sourceCubismPhysics.let { (it as? Iterable<*>)?.count() ?: 0 }
+	sha256(bundle.files.single { it.name.endsWith(".moc3") }.bytes) + " physics=$physics"
+}.getOrElse { "error:${it.javaClass.simpleName}" }
+
+/**
+ * Runs [block] with stored authored rigs off (`-Dpsd2live.materializedRigs=false`, see MaterializedRigStore): builds
+ * generate the base and replay the journal, saves write no rig/revisions/. The property is set back afterwards.
+ */
+internal inline fun <T> withoutMaterializedRigs(block: () -> T): T {
+	val previous = System.getProperty("psd2live.materializedRigs")
+	System.setProperty("psd2live.materializedRigs", "false")
+	try {
+		return block()
+	} finally {
+		if (previous == null) System.clearProperty("psd2live.materializedRigs") else System.setProperty("psd2live.materializedRigs", previous)
+	}
+}
+
+/** Runs [block] in [language] (or the current one) and sets the app's language back afterwards, unsaved either way. */
+internal inline fun <T> keepingLanguage(language: AppLanguage? = null, block: () -> T): T {
+	val previous = I18n.currentLanguage
+	language?.let { I18n.setLanguage(it, persist = false) }
+	try {
+		return block()
+	} finally {
+		I18n.setLanguage(previous, persist = false)
+	}
+}
+
+/**
+ * Renders [scene] into the PNG [file] and closes it: [frames] frames 16 ms apart from [startNanos], each followed by
+ * [settleMillis] of waiting for work done off the UI thread (images made in the background), then the frame written.
+ */
+internal fun writePng(scene: ImageComposeScene, file: File, frames: Int = 1, settleMillis: Long = 0, startNanos: Long = 0) {
+	try {
+		repeat(frames) { frame ->
+			scene.render(startNanos + frame * 16_000_000L).close()
+			if (settleMillis > 0) Thread.sleep(settleMillis)
+		}
+		val rendered = scene.render(startNanos + frames * 16_000_000L)
+		try { file.writeBytes(requireNotNull(rendered.encodeToData()).bytes) } finally { rendered.close() }
+	} finally { scene.close() }
+}
+
+/** [content] in the app's theme ([colors], [fontScale]) on a [width] x [height] scene at [density], into the PNG [file] (see [writePng]). */
+internal fun renderPng(file: File, width: Int, height: Int, colors: ToolColors = ToolColors.Dark, density: Float = 1f, fontScale: Float = 1f,
+	frames: Int = 1, settleMillis: Long = 0, content: @Composable () -> Unit) =
+	writePng(ImageComposeScene(width, height, density = Density(density)) {
+		CompactToolTheme(colors = colors, fontScale = fontScale) { content() }
+	}, file, frames, settleMillis)

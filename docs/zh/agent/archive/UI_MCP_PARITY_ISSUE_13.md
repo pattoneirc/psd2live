@@ -1,14 +1,16 @@
 # UI / MCP 能力对照
 
-[文档目录](../../README.md) · [MCP 使用与接口](MCP_AUTHORING.md) · [Agent 设计与验收](AGENT_DESIGN.md)
+[文档目录](../../../README.md) · [MCP 使用与接口](../MCP_AUTHORING.md) · [Agent 设计与验收](../AGENT_DESIGN.md)
 
-本页列出每项编辑能力在界面与 MCP 中的入口，以及两者共用的数据与验收重点，起源于 [Issue #13](https://github.com/tsunehimatoi/psd2live/issues/13)。「可达」指用户或 MCP 客户端能经公开入口完成该操作，交互形式不必相同。MCP 公开工具以 [MCP 使用与接口](MCP_AUTHORING.md) 为准，内部适配名称不算公开入口。
+> 归档资料：Issue #13 已于 2026-09-24 关闭，本表停止维护，其中的操作计数、测试类名和缺口描述为当时状态。现行公开操作以 [MCP 接口](../MCP_AUTHORING.md) 为准。
 
-逐入口审计收口的骨架编辑、局部画布显隐/层级、设置联动、物理组试听和多步画布草稿五个域已实现共享入口（`e133d37`），其后至 `046a725` 补齐字段会话设置开关、GUI 显隐写入的辅助 CAS 与形变笔刷预览/提交一致性；仍待桌面手动验收，GUI 部分只有 PR CI 证据。显隐/隔离的既有语义是每 workspace/canvas/mode 的持久呈现，不能改变共享模型或导出。下表区分已存在入口与完整业务验收；进度见 [重构进度](REFACTOR_PROGRESS.md)，未结问题见 [CLAUDE_HANDOFF.md](CLAUDE_HANDOFF.md#仍未结的问题)。
+本页列出每项编辑能力在界面与 MCP 中的入口，以及两者共用的数据与验收重点，起源于 [Issue #13](https://github.com/tsunehimatoi/psd2live/issues/13)。「可达」指用户或 MCP 客户端能经公开入口完成该操作，交互形式不必相同。MCP 公开工具以 [MCP 使用与接口](../MCP_AUTHORING.md) 为准，内部适配名称不算公开入口。
+
+逐入口审计收口的骨架编辑、局部画布显隐/层级、设置联动、物理组试听和多步画布草稿五个域已实现共享入口（`e133d37`），其后至 `046a725` 补齐字段会话设置开关、GUI 显隐写入的辅助 CAS 与形变笔刷预览/提交一致性；仍待桌面手动验收，GUI 部分只有 PR CI 证据。显隐/隔离的既有语义是每 workspace/canvas/mode 的持久呈现，不能改变共享模型或导出。下表区分已存在入口与完整业务验收；进度见 [重构进度](REFACTOR_PROGRESS.md)，未结问题见 CLAUDE_HANDOFF.md。
 
 全部 170 项公开操作已有必需的严格输出契约，包括全部 79 项批量成员、复合 inspect、素材以及模拟/预设；58 项后台工具还要求终态契约。真实 HTTP 发布的完整 schema 与执行校验一致。素材准备、导入、配准及重处理已共用独立辅助 CAS 和文件发布边界；输出字段完整不能替代 GUI/MCP 全部业务绑定及双向业务验收。
 
-`workspace_apply_edits` 已将 79 项实际文档修改组合成一个原子候选及一个历史节点，成员与单项调用共用业务 schema 和编辑函数。后续成员读取前序候选模型，包含新建物理组后拟合和创建父 Warp 后嵌套独立 Warp；后台任务报告逐项准备及求解进度；失败、提交前取消、冲突保留整批之前的状态。成功 CAS 后立即记录完整结果，迟到取消或刷新异常保留 completed；断线及原请求重试返回同一任务。以发现结果的 `batchable` 为准，GUI 参数对话框与画布 journal 已进入同一提交边界；字段完成已接入异步候选队列，其余业务准备和文档命令尚在迁移；详见 [接口说明](MCP_AUTHORING.md#原子文档编辑) 和 [验收进度](REFACTOR_PROGRESS.md)。
+`workspace_apply_edits` 已将 79 项实际文档修改组合成一个原子候选及一个历史节点，成员与单项调用共用业务 schema 和编辑函数。后续成员读取前序候选模型，包含新建物理组后拟合和创建父 Warp 后嵌套独立 Warp；后台任务报告逐项准备及求解进度；失败、提交前取消、冲突保留整批之前的状态。成功 CAS 后立即记录完整结果，迟到取消或刷新异常保留 completed；断线及原请求重试返回同一任务。以发现结果的 `batchable` 为准，GUI 参数对话框与画布 journal 已进入同一提交边界；字段完成已接入异步候选队列，其余业务准备和文档命令尚在迁移；详见 [接口说明](../MCP_AUTHORING.md#原子文档编辑) 和 [验收进度](REFACTOR_PROGRESS.md)。
 
 ## 快捷对照
 
@@ -76,7 +78,7 @@
 - GUI 参数修改（滑块、数值、锁、重置、IK 目标、吸附到关键帧）先写入作者姿态并登记为待提交值，再经 ViewModel 的 FIFO 姿态队列提交；每项携带手势开始时的 state，队列只沿自己已落地的提交前进。较早的提交落地时保留之后的待提交值，失败时撤销全部待提交值并回到 `WorkspacePreviewPort.authoredPose`。拖动滑块时每个采样立即写入作者姿态（同一待提交值），松手只提交一次、取消即撤回，并与提交相同地求解骨骼约束。滑条显示拖动值，否则显示求值帧与所开动作在播放头处的曲线值（`livePose`），与聚焦哪个画布无关；编辑画布与滑条读同一 `shownPose`；作者姿态提交后保留打开的动作及播放头；其他编辑、撤销/重做和保存经 `workspaceEditBusy` 等待姿态队列。绘画和深度拆分在自己的提交完成后恢复画笔；查询只读取已提交捕获。
 - 设置、分类和网格配置经 `WorkspaceGenerationCommands` 使用与批量相同的候选；MCP 单项返回后台任务，准备/重建可取消，提交后立即保留精确结果。分类省略字段在核对状态后的捕获模型中合并。GUI 连续全局网格拖动、分类文字输入保留实时草稿，结束时提交一次；生成差异草稿由应用层转换为纯候选。单层网格预览确认恢复基线后正式提交，重置也使用同一入口。真实 GUI/MCP 保存重开与多姿态导出读回已有回归，复杂分类迁移仍待验收。
 - GUI 连通块拆分检测与确认保留同一起始状态，辅助修改即使不改变历史节点也使旧对话框失效。多层确认顺序重建后只提交一个 USER 节点，桌面不再准备拆分候选。`source_get_components` 使用独立捕获；公开连通块/多边形拆分及批量共用纯候选，保留原像素、分类/父级/可见性/网格/绘制顺序覆盖、稳定源图与网格 ID 及无关编辑；普通目标的关键形、通道、混合形、路径、顶点组和模拟通过有序日志迁移；连通块保留 Glue，多边形逐连接 Glue 插值和导入模型分区共用同一候选。独立应用回归与真实 GUI/MCP 回归验证取消/冲突、后项失败无前缀、历史重放、保存重开、CMO3 多姿态读回和 PNG 一致，见 `WorkspacePartitionCommandsTest` / `WorkspacePartitionIntegrationTest`。
-- GUI 深度拆分与 `source_split_depth` 共用独立候选，菜单、多选及对话框保留打开时的完整状态，一次 USER 提交后才进入前层绘画。辅助数据变更也使旧确认失效；专项验证 GUI/MCP 像素和运动一致、嘴部只新增所选网格、取消/冲突及后项失败无前缀、任务断线重试、历史重放、保存重开和 CMO3 多姿态/Glue 读回。架构规则见 [CLAUDE.md](../../../CLAUDE.md)，用例为 `WorkspaceDepthSplitCommandsTest` / `WorkspaceDepthSplitIntegrationTest`。
+- GUI 深度拆分与 `source_split_depth` 共用独立候选，菜单、多选及对话框保留打开时的完整状态，一次 USER 提交后才进入前层绘画。辅助数据变更也使旧确认失效；专项验证 GUI/MCP 像素和运动一致、嘴部只新增所选网格、取消/冲突及后项失败无前缀、任务断线重试、历史重放、保存重开和 CMO3 多姿态/Glue 读回。架构规则见 `CLAUDE.md`，用例为 `WorkspaceDepthSplitCommandsTest` / `WorkspaceDepthSplitIntegrationTest`。
 - 设置开关经 `WorkspaceSettingsIntent` 一次解析：meshOnly 未显式给出 generateDeformers 时联动为 `!meshOnly`（导入 CMO3 除外），动作子项未显式给出 exportMotions 时联动为子项是否全开；关闭来源时按 `Parameter.default` 逐工作区释放其驱动的作者姿态并跳过该工作区的锁，文档、模型与辅助数据在一个草稿上一次 CAS。文档只存原始设置，`WorkspaceSettingsPolicy` 在读取时套用生效规则。GUI 字段会话内的开关仍先更新本地草稿用于显示，同时按顺序记录；提交草稿时先经同一意图重放这些开关（关闭再开启也会释放姿态），与其余草稿差异一次 CAS。
 - GUI 内部 DTO 与 journal 同样使用不透明状态；摆动会话和离线模拟烘焙保留开始时的状态。模拟编辑通过可信用户上下文提交，避免作者误记为 Agent。参数对话框失败不发布定义、文件夹或关键点前缀；通道捕获和重开渲染/CMO3 读回已有回归。
 - 公开修改携带唯一 `request_id`，工作区修改还带当前 `project_id` 和不透明 `state`。历史节点不能作为状态令牌；若 UI 改动或工程重开导致过期，客户端应重读 `workspace_inspect` 并使用新请求 ID。预览参数不写模型历史。

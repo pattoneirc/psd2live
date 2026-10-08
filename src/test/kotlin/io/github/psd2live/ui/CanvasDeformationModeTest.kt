@@ -1,7 +1,8 @@
-package io.github.psd2live.core
+package io.github.psd2live.ui
 
-import io.github.psd2live.ui.EditHierarchyMode
-import io.github.psd2live.ui.canvasGeometryCommand
+import io.github.psd2live.core.CanvasEdits
+import io.github.psd2live.core.RigCommandDelta
+import io.github.psd2live.core.RigGeometryTools
 import org.umamo.render.eval.CpuDeformationEvaluator
 import org.umamo.runtime.model.*
 import kotlin.test.*

@@ -1,6 +1,6 @@
 # 任意の Cubism Native プレビュー
 
-[ドキュメント一覧](../../README.md) · [中文](../../zh/guide/CUBISM_SDK_SETUP.md) · [English](../../en/guide/CUBISM_SDK_SETUP.md) · [操作早見表](USER_GUIDE.md)
+[ドキュメント一覧](../../README.md) · [中文](../../zh/guide/CUBISM_SDK_SETUP.md) · [English](../../en/guide/CUBISM_SDK_SETUP.md) · [操作早見表](USER_GUIDE.md) · [CI とリリース（中国語）](../../zh/guide/CUBISM_CI_RELEASE.md)
 
 内蔵レンダラーと基本的な出力に公式 SDK は不要です。この手順はブリッジを構築し、公式ランタイムの描画・物理を確認するためのものです。エディタの全機能や全画素の一致を保証しません。
 
@@ -57,7 +57,7 @@ src/main/resources/cubism/linux-x86_64/
 
 ## 確認
 
-モデルを開き、レンダラー表示とログを確認してください。読み込めない場合は内蔵ソフトウェア描画が使われます。モデルが表示されたことだけでは SDK の有効化を確認できません。
+モデルを開き、レンダラー表示とログを確認してください。ネイティブ資源が無いか読み込めない場合、プレビューは PSD2Live ランタイム（p2lrt）に切り替わり、Cubism を使えない理由がログに記録されます（ランタイムライブラリも無い場合のみ編集キャンバスの描画にフォールバックします）。モデルが表示されたことだけでは SDK の有効化を確認できません。
 
 ## 代替パスと問題解決
 
@@ -76,5 +76,7 @@ VCRUNTIME / MSVCP エラーは /MD の古いビルドが原因の場合があり
 環境変数変更後は起動元プロセスを再起動してください。
 
 配布するのはオープンソースのブリッジだけです。公式 Core・Framework・シェーダーは別途取得し、そのライセンスに従ってください。この文書は利用許諾ではありません。
+
+自動ビルドと Cubism を含むリリースの流れは [CUBISM_CI_RELEASE（中国語）](../../zh/guide/CUBISM_CI_RELEASE.md) を参照してください（公開リポジトリでは SDK の zip を公開 Release に添付しないでください）。
 
 [Native build](../../../native/live2d_renderer/README.md) · [ビルドスクリプト](../../../native/) · [Third-party notices](../../../THIRD_PARTY_NOTICES.md)

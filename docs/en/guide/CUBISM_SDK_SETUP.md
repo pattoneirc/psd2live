@@ -57,7 +57,7 @@ src/main/resources/cubism/linux-x86_64/
 
 ## Verify
 
-Start the application, load a model and inspect the renderer status and logs. Missing or unloadable native resources use the built-in software renderer. A visible model alone does not prove the SDK was loaded.
+Start the application, load a model and inspect the renderer status and logs. With the native resources missing or unloadable, the preview switches to the PSD2Live runtime (p2lrt) and the log records why Cubism is unavailable; only when the runtime library is unavailable too does it fall back to the edit canvas's drawing. A visible model alone does not prove the SDK was loaded.
 
 ## Other locations and troubleshooting
 
@@ -71,7 +71,7 @@ VCRUNTIME / MSVCP failures can indicate an old /MD build; the current script use
 ### Linux
 Check dependencies with `ldd liblive2d_renderer.so`. Expected system libraries: `libGL.so`, `libGLX.so` (or Mesa GLX), `libX11.so`, `libpthread.so`, `libdl.so`.
 
-Offscreen preview opens a GLX context and needs a valid X11 `DISPLAY`. On headless hosts install Xvfb and run e.g. `xvfb-run -a ./gradlew run` (or `xvfb-run -a java -jar …`). Missing `DISPLAY` fails native init and falls back to the software renderer.
+Offscreen preview opens a GLX context and needs a valid X11 `DISPLAY`. On headless hosts install Xvfb and run e.g. `xvfb-run -a ./gradlew run` (or `xvfb-run -a java -jar …`). Missing `DISPLAY` fails native init, and the preview switches to the PSD2Live runtime (falling back to the edit canvas's drawing only when the runtime library is unavailable too).
 
 Restart the launching process after changing environment variables.
 

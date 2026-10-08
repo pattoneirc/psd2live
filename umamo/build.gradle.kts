@@ -22,6 +22,8 @@ dependencies {
 	api("org.lwjgl:lwjgl")
 	api("org.lwjgl:lwjgl-opengl")
 	testImplementation(kotlin("test"))
+	// MocDefaultColorsTest hands fresh models to the official Cubism Core, when PSD2LIVE_TEST_CUBISM_CORE names it.
+	testImplementation("net.java.dev.jna:jna:5.18.0")
 }
 
 tasks.withType<Test>().configureEach {

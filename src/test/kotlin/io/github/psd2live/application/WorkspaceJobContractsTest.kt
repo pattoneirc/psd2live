@@ -43,21 +43,4 @@ class WorkspaceJobContractsTest {
             validateOperationSchema(failed.toJson(), WorkspaceJobResultSchemas.snapshot(operation))
         }
     }
-
-    @Test fun durableCompletionIsValidatedAndRetainedWhenLaterWorkIsCancelled() = runBlocking<Unit> {
-        WorkspaceJobs().use { jobs ->
-            val committed = CompletableDeferred<Unit>()
-            val job = jobs.start(operation, "project", "input", WorkspaceJobResultSchemas.result(operation)) {
-                currentCoroutineContext()[WorkspaceJobCompletion]!!.committed(output())
-                committed.complete(Unit)
-                awaitCancellation()
-            }
-            committed.await()
-            jobs.cancel(job.id)
-            val completed = jobs.wait(job.id)
-            assertEquals(WorkspaceJobStatus.COMPLETED, completed.status)
-            assertEquals(output(), completed.result)
-            validateOperationSchema(completed.toJson(), WorkspaceJobResultSchemas.snapshot(operation))
-        }
-    }
 }

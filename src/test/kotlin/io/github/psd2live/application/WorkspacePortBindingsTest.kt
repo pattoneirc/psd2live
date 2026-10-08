@@ -3,10 +3,13 @@ package io.github.psd2live.application
 import io.github.psd2live.project.*
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
+import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.*
 
 class WorkspacePortBindingsTest {
+    @TempDir lateinit var temporary: Path
+
     @Test fun sourceAndObservationCatalogsRunWithoutACompleteBackendOrGui() = runBlocking<Unit> {
         val requests = mutableListOf<JsonObject>()
         val source = object : WorkspaceSourcePort {
@@ -51,7 +54,7 @@ class WorkspacePortBindingsTest {
         val artwork = buildJsonObject {
             put("width", 16); put("height", 16)
             putJsonArray("layers") { add(buildJsonObject {
-                put("path", Path.of("build/port-art.png").toAbsolutePath().toString()); put("name", "Artwork")
+                put("path", temporary.resolve("port-art.png").toString()); put("name", "Artwork")
             }) }
         }
         val created = catalog.invoke("asset_create_artwork", artwork)

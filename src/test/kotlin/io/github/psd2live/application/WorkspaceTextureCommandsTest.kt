@@ -35,25 +35,11 @@ class WorkspaceTextureCommandsTest {
         }
     }
 
-    /** A disc of radius [size]/2 at [size] pixels, coloured by position. */
-    private fun disc(size: Int): LayerRaster = LayerRaster(size, size, ByteArray(size * size * 4).also { rgba ->
-        val r = size / 2f
-        for (y in 0 until size) for (x in 0 until size) {
-            val dx = x + 0.5f - r; val dy = y + 0.5f - r
-            if (dx * dx + dy * dy > r * r * 0.81f) continue
-            val o = (y * size + x) * 4
-            rgba[o] = (40 + 160 * x / size).toByte(); rgba[o + 1] = 60; rgba[o + 2] = (200 - 120 * y / size).toByte(); rgba[o + 3] = -1
-        }
-    })
-
-    private fun layer(id: String, order: Int, bounds: LayerBounds, raster: LayerRaster) = WorkspaceSourceLayer(
-        LayerId(id), id, "", SourceLayerKind.Raster, true, order, bounds, 1f, false, LayerBlend.Normal, ChannelMask.ALL, raster, null, null, false)
-
     private suspend fun fixture(): WorkspaceRuntime<RigPreviewModel> {
         val body = LayerRaster(40, 56, ByteArray(40 * 56 * 4) { if (it % 4 == 3) -1 else 120 })
         val source = WorkspaceSourceArt(128, 96, listOf(
-            layer("body", 0, LayerBounds(10, 20, 40, 56), body),
-            layer("pupil", 1, LayerBounds(70, 30, 32, 32), disc(32)),
+            sourceLayer("body", 0, LayerBounds(10, 20, 40, 56), body),
+            sourceLayer("pupil", 1, LayerBounds(70, 30, 32, 32), discRaster(32)),
         ), emptyList())
         val config = PipelineConfig(atlasSize = 2048, meshSpacing = 8, meshOnly = true, exportMoc3 = false)
         val document = WorkspaceDocument(source, emptyMap(), emptySet(), emptyMap(), emptyMap(), config.rigEdits, WorkspaceSettingsCodec.encode(config))
@@ -97,7 +83,7 @@ class WorkspaceTextureCommandsTest {
     @Test fun replacingA32UnitPupilWithA1024PixelImageKeepsGeometryAndUndoes() = runBlocking<Unit> {
         val runtime = fixture(); val before = runtime.capture(); val nodes = runtime.history().selections.size
         WorkspaceOperations(Host(runtime)).use { operations ->
-            val replacement = upscaled(disc(32), 32)
+            val replacement = upscaled(discRaster(32), 32)
             val result = operations.completed("layer_replace_image", input(runtime, "replace", buildJsonObject {
                 put("layer_id", "pupil"); put("png_base64", Base64.getEncoder().encodeToString(png(replacement)))
             }))
@@ -199,7 +185,7 @@ class WorkspaceTextureCommandsTest {
             fun edit(id: String, fields: JsonObject) = buildJsonObject { put("operation", id); put("request", fields) }
             val batch = operations.completed("workspace_apply_edits", input(runtime, "batch", buildJsonObject {
                 putJsonArray("edits") {
-                    add(edit("layer_replace_image", buildJsonObject { put("layer_id", "pupil"); put("png_base64", Base64.getEncoder().encodeToString(png(disc(64)))) }))
+                    add(edit("layer_replace_image", buildJsonObject { put("layer_id", "pupil"); put("png_base64", Base64.getEncoder().encodeToString(png(discRaster(64)))) }))
                     add(edit("layer_set_pixel_density", buildJsonObject { putJsonArray("layer_ids") { add("pupil") }; put("density", 0.5) }))
                     add(edit("atlas_set_budget", buildJsonObject { put("padding", 4) }))
                 }
@@ -210,7 +196,7 @@ class WorkspaceTextureCommandsTest {
             assertEquals(32, after.model.atlas.placementByLayerId.getValue("pupil").width)
             assertEquals(4, after.document.config().effectiveAtlasBudget().padding)
 
-            val file = temporary.resolve("pupil.png"); Files.write(file, png(disc(32)))
+            val file = temporary.resolve("pupil.png"); Files.write(file, png(discRaster(32)))
             val rejected = operations.job("workspace_apply_edits", input(runtime, "bad", buildJsonObject {
                 putJsonArray("edits") { add(edit("layer_replace_image", buildJsonObject { put("layer_id", "pupil"); put("path", file.toString()) })) }
             }))
@@ -315,7 +301,7 @@ class WorkspaceTextureCommandsTest {
                 assertTrue(abs(a[0] - b[0]) < 0.01f && abs(a[1] - b[1]) < 0.01f, "vertex $v: ${a.toList()} vs ${b.toList()}")
             }
             // And the turned page holds the raster's pixels there: the disc's colour by position survives the turn.
-            val raster = disc(32)
+            val raster = discRaster(32)
             for ((rx, ry) in listOf(16 to 16, 10 to 14, 20 to 9, 13 to 22)) {
                 val p = placed.toPage(rx + 0.5f, ry + 0.5f)
                 val c = pageAfter.getRGB(p[0].toInt(), p[1].toInt())

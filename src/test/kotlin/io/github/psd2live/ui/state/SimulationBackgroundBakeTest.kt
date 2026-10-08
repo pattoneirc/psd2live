@@ -14,7 +14,8 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.awt.image.BufferedImage
-import java.nio.file.Files
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -26,8 +27,9 @@ import kotlin.test.assertTrue
  * history node on the version current then, keeping those edits.
  */
 class SimulationBackgroundBakeTest {
+    @TempDir lateinit var temp: Path
+
     @Test fun editsCommitWhileBakingAndTheBakeLandsOnTop() = runBlocking<Unit> {
-        val temp = Files.createTempDirectory("sim-background-bake")
         val strip = temp.resolve("strip.png").also { path ->
             val image = BufferedImage(12, 72, BufferedImage.TYPE_INT_ARGB)
             for (y in 0 until 72) for (x in 0 until 12) image.setRGB(x, y, 0xff506e8c.toInt())

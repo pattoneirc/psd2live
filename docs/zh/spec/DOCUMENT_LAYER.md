@@ -168,7 +168,7 @@
 
 规范化网格编辑（`normalizeMeshEdits`）在有顶点组时先构建一次不含顶点组条目的预览以迁移权重，随后的提交构建命中进程级烘焙缓存，只多出非骨架部分（约 60–120 ms）。顶点组条目可经 `SkeletonCanvasSkin.lockedTopology` 影响基础 Rig，故不把前一次构建直接用于后一次。
 
-只改日志的提交走快速路径（`PSD2LivePipeline.canFastUpdateRig`，在缓存的基础 Rig 上重放），但骨架烘焙也读取日志：手工拓扑（`canvas_topology`）的网格、骨骼绑定的拆分部件记录、日志放置的画布蒙皮网格及其顶点寻址记录的顶点数（`RigBuilder.skeletonJournalInputs`）。这些内容变化时（例如对骨骼绑定网格的拓扑编辑及其撤销）不走快速路径，改为重建，结果与冷重建一致（`SkeletonFastUpdateTest`）。
+只改日志的提交走快速路径（`PSD2LivePipeline.canFastUpdateRig`，在缓存的基础 Rig 上重放），但骨架烘焙也读取日志：手工拓扑（`canvas_topology`）的网格、骨骼绑定的拆分部件记录、日志放置的画布蒙皮网格及其顶点寻址记录的顶点数（`RigBuilder.skeletonJournalInputs`）。这些内容变化时（例如对骨骼绑定网格的拓扑编辑及其撤销）不走快速路径，改为重建，结果与冷重建一致（`SkeletonIncrementalBakeTest`）。
 
 效果（`SkeletonCommitTool.profile`，tml 每边放大 2 倍，4096² 画布，自动骨架 + 24 条几何日志 + 一个顶点组；同机前后对比，经 `WorkspaceDocumentCommands` 的提交墙钟时间）：
 
@@ -240,7 +240,7 @@
 - 提交携带裁剪到不透明像素的栅格与其画布矩形（`WorkspacePaintRaster.rect`），不缩回画布分辨率。矩形从图层原矩形量起：未移动的边保留原坐标，扩展或裁剪都保持密度，整数边界取外包框，矩形与整数边界相同时不存储。提交时只读取图层原区域与笔触写过的区域，不复制整张画布。完全擦空的图层与此前相同，变为画布原点的 1×1 透明像素。
 - 深度拆分前层保持栅格尺寸：按像素中心从提交像素取样，网格对齐时逐位复制。保留网格的绘画、重建网格的绘画与导入 CMO3 的绘画都按 `LayerSpace` 寻址图块（`RasterPaintCommit` 的切片重映射、`Cmo3ModelImport` 的绘画纹理坐标）；连通块拆分在源图层自身的栅格中裁剪部件，部件保持原密度。
 
-尚未完成：纹理应用命令与 MCP。纹理工作区（纹理集页面与密度热力图、逐层尺寸面板、编辑画布的原始像素预览）已有界面，只经 `WorkspaceTexturePort` 提交，见[操作速查](../guide/USER_GUIDE.md#纹理工作区)。分数矩形写入 umamo 的源图层清单（整数）时取整数边界；按清单解析纹理的网格迁移（`LayerTexture.of`）对分数矩形只是近似（整数矩形精确：图块宽高为栅格尺寸、清单为画布尺寸，比值即密度）。生成输入的补边（`RigGenerationSource.padded`，保留网格、新建网格与 `art_primitive` 部件的纹理覆盖）对高密度图层按原密度补透明，不降采样；`art_primitive`、`canvas_mesh_create` / `canvas_mesh_rebuild` 的 `canvas_uvs` 为画布单位，经 `LayerTexture.of` 映射到高分辨率图块。
+纹理命令（`application/WorkspaceTextureEdits`、`WorkspaceTextureOperations`）：纹理工作区（纹理集页面与密度热力图、逐层尺寸面板、编辑画布的原始像素预览，见[操作速查](../guide/USER_GUIDE.md#纹理工作区)）经 `WorkspaceTexturePort` 提交，与 MCP `layer_set_canvas_rect`、`layer_replace_image`、`layer_set_pixel_density`、`atlas_set_tile`、`atlas_set_budget`、`atlas_pack` 共用同一纯候选，均为后台任务与原子批量成员，查询为 `layer_get_texture`、`atlas_get`、`atlas_check_placement` 与 `atlas_render_page`（见 [MCP 接口](../agent/MCP_AUTHORING.md#纹理与纹理集)）。分数矩形写入 umamo 的源图层清单（整数）时取整数边界；按清单解析纹理的网格迁移（`LayerTexture.of`）对分数矩形只是近似（整数矩形精确：图块宽高为栅格尺寸、清单为画布尺寸，比值即密度）。生成输入的补边（`RigGenerationSource.padded`，保留网格、新建网格与 `art_primitive` 部件的纹理覆盖）对高密度图层按原密度补透明，不降采样；`art_primitive`、`canvas_mesh_create` / `canvas_mesh_rebuild` 的 `canvas_uvs` 为画布单位，经 `LayerTexture.of` 映射到高分辨率图块。
 
 ## 性能基线
 
@@ -271,12 +271,12 @@
 - 绘画改为在图层栅格空间提交之后（见上文“逐层尺寸”中的绘画），候选不再复制整张画布：工具改用与绘画会话相同的捕获方式（图层原区域与笔触区域），同一台机器上小图层绘画提交中位约 0.25 s → 约 0.17 s，其中候选准备约 56 ms → 约 1.5 ms，其余为提交内重建。
 - 纹理集改为规范布局 + 页面配方缓存 + 条带预览 PNG、绘画候选不再打包之后（见上文“纹理集与绘画”），同一台机器在并发负载下前后对比（两次运行的绝对值都高于上表的空闲机数字）：小图层绘画提交中位约 2.5 s → 约 0.35 s（稳定后约 0.3 s），其中候选准备约 1.5 s → 约 0.17 s、提交内重建约 1.2 s → 约 0.2 s；同形状换图约 2.1 s → 约 0.3 s；镜像换图并重建网格约 3.1 s → 约 0.45–0.8 s；带骨架的完整重建（骨架命中）约 1.0–1.6 s → 约 0.25–0.4 s。整页预览条带编码约 20 ms（规范 PNG 约 0.5 s，只在导出时生成）；两遍分析合计约 0.2 s → 约 0.03–0.06 s。导出文件与改动前逐字节相同（`ExportGoldenTool`）；预览包除纹理页 PNG 编码外不变。
 
-**打开工程**：骨架烘焙缓存只在进程内，冷启动后首次打开带骨架的工程仍要烘焙约 5–7 s。保存时把头部的烘焙写入归档的可选头部缓存 `cache/head/`（格式见[工程格式](PROJECT_FORMAT.md#头部缓存)），打开时按 revision、程序版本、生成器常量与语言核对后种入 `SkeletonRig` 的缓存；重建仍走完整路径，由骨架缓存自身的内容键决定命中，结果与冷重建逐位相同。存储的烘焙只保留读取集内的网格和变形器，读取集外的对象只留 ID 与顺序，命中时取自新的基础 Rig。`OpenPerfTool.profile` 在上述场景（骨架 + 两个摆动 + 烘焙模拟）上、空骨架缓存下各打开 3 次：
+**打开工程**：骨架烘焙缓存只在进程内，冷启动后首次打开带骨架的工程仍要烘焙约 5–7 s。保存时把头部的烘焙写入归档的可选头部缓存 `cache/head/`（格式见[工程格式](PROJECT_FORMAT.md#头部缓存)），打开时按 revision、程序版本、生成器常量与语言核对后种入 `SkeletonRig` 的缓存；重建仍走完整路径，由骨架缓存自身的内容键决定命中，结果与冷重建逐位相同。存储的烘焙只保留读取集内的网格和变形器，读取集外的对象只留 ID 与顺序，命中时取自新的基础 Rig。`OpenPerfTool.profile` 在上述场景（骨架 + 两个摆动 + 烘焙模拟）上保存三种归档：应用现在的写法（各修订的作者态 Rig 与头部缓存，打开时不生成也不重放，见[固化 Rig](MATERIALIZED_RIG.md#10-实现进度)）、仅头部缓存（生成与重放，种入骨架烘焙）、两者皆无（生成、重放与骨架烘焙）；每次打开前清空作者态 Rig 存储（`MaterializedRigStore.clear()`）与骨架缓存（`SkeletonRig.clearCache()`），各打开 3 次，并核对三者构建出相同的模型。下表是引入作者态 Rig 之前对后两种归档的测量（各打开 3 次，空骨架缓存）：
 
 | 归档 | 解包与种入 | 头部重建 | 合计（即首次显示） | 骨架烘焙 |
 | --- | ---: | ---: | ---: | ---: |
-| 无头部缓存（5.5 MB） | 约 0.35–0.4 s | 约 4.7–5.4 s | 约 5.5 s | 每次 1 |
-| 有头部缓存（10.9 MB，烘焙条目 6.9 MB，压缩后 5.4 MB） | 约 0.37–0.47 s | 约 0.18–0.25 s | 约 0.7 s | 0 |
+| 两者皆无（5.5 MB） | 约 0.35–0.4 s | 约 4.7–5.4 s | 约 5.5 s | 每次 1 |
+| 仅头部缓存（10.9 MB，烘焙条目 6.9 MB，压缩后 5.4 MB） | 约 0.37–0.47 s | 约 0.18–0.25 s | 约 0.7 s | 0 |
 
 保存多约 0.5 s（序列化与压缩烘焙）。打开后的首次显示即完整重建的结果，未另外缓存运行包；带缓存时重建只剩约 0.2 s，先显示旧运行包再替换收益有限。
 

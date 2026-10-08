@@ -6,17 +6,15 @@ import io.github.psd2live.project.LayerCanvasRect
 import io.github.psd2live.project.WorkspaceDocument
 import io.github.psd2live.project.WorkspaceSettingsCodec
 import io.github.psd2live.project.WorkspaceSourceArt
+import io.github.psd2live.project.discPixels
+import io.github.psd2live.project.sourceLayer
 import io.github.psd2live.project.WorkspaceSourceLayer
 import io.github.psd2live.project.canvasRect
 import io.github.psd2live.project.storedCanvasRect
 import io.github.psd2live.targets.cubism.Cmo3Target
 import kotlinx.coroutines.runBlocking
-import org.umamo.format.art.ChannelMask
-import org.umamo.format.art.LayerBlend
 import org.umamo.format.art.LayerBounds
-import org.umamo.format.art.LayerId
 import org.umamo.format.art.LayerRaster
-import org.umamo.format.art.SourceLayerKind
 import org.umamo.format.cmo3.Cmo3
 import org.umamo.format.raster.RasterImage
 import kotlin.math.abs
@@ -31,15 +29,7 @@ import kotlin.test.assertTrue
 /** Imported rasters keep their pixels; only their canvas rectangle says how large they are on the canvas. */
 class LayerImportResolutionTest {
 	/** A disc of radius [size]/2 at [size] pixels, coloured by position. */
-	private fun disc(size: Int): RasterImage = RasterImage(size, size, ByteArray(size * size * 4).also { rgba ->
-		val r = size / 2f
-		for (y in 0 until size) for (x in 0 until size) {
-			val dx = x + 0.5f - r; val dy = y + 0.5f - r
-			if (dx * dx + dy * dy > r * r * 0.81f) continue
-			val o = (y * size + x) * 4
-			rgba[o] = (40 + 160 * x / size).toByte(); rgba[o + 1] = 60; rgba[o + 2] = (200 - 120 * y / size).toByte(); rgba[o + 3] = -1
-		}
-	})
+	private fun disc(size: Int) = RasterImage(size, size, discPixels(size))
 
 	@Test fun anImageLargerThanTheCanvasIsPlacedFittedWithEveryPixel() {
 		val image = RasterImage(400, 200, ByteArray(400 * 200 * 4) { -1 })
@@ -78,15 +68,11 @@ class LayerImportResolutionTest {
 		assertEquals(LayerBounds(3, 7, 33, 32), bounds); assertEquals(LayerCanvasRect(3.25f, 7f, 32f, 32f), rect)
 	}
 
-	private fun layer(id: String, order: Int, bounds: LayerBounds, raster: LayerRaster) = WorkspaceSourceLayer(
-		LayerId(id), id, "", SourceLayerKind.Raster, true, order, bounds, 1f, false, LayerBlend.Normal, ChannelMask.ALL,
-		raster, null, null, false)
-
 	private fun document(pupil: LayerRaster): WorkspaceDocument {
 		val body = LayerRaster(40, 56, ByteArray(40 * 56 * 4) { if (it % 4 == 3) -1 else 120 })
 		val source = WorkspaceSourceArt(128, 96, listOf(
-			layer("body", 0, LayerBounds(10, 20, 40, 56), body),
-			layer("pupil", 1, LayerBounds(70, 30, 32, 32), pupil),
+			sourceLayer("body", 0, LayerBounds(10, 20, 40, 56), body),
+			sourceLayer("pupil", 1, LayerBounds(70, 30, 32, 32), pupil),
 		), emptyList())
 		// Traced from the canvas view, a dense layer meshes exactly like its canvas-resolution twin.
 		val config = PipelineConfig(atlasSize = 2048, meshSpacing = 8, meshOnly = true, meshTrace = MeshTrace.CANVAS)

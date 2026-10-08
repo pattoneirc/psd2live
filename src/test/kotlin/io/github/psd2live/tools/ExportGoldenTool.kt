@@ -7,16 +7,16 @@ import io.github.psd2live.core.MotionKey
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.SkeletonAutoBuilder
 import java.io.File
-import java.security.MessageDigest
 import kotlin.test.Test
 
 /**
- * SHA-256 of every exported file for the bundled samples, plain and on their auto skeleton, so a refactor of
- * the export path can be checked byte for byte against the previous commit.
+ * SHA-256 of every exported file and of the preview bundle for the bundled samples - plain, on their auto skeleton,
+ * with an authored clip, and the plain cmo3 imported back as a new project - so a refactor of the export path can be
+ * checked byte for byte against the previous commit.
  *
  * PSD2LIVE_TOOLS=1 ./gradlew test --tests '*ExportGoldenTool'
- * Writes build/tools/export-golden/<label>.txt. The cmo3 carries an export timestamp, so it is listed by
- * size only; its content is compared through its read-back elsewhere.
+ * PSD2LIVE_GOLDEN_LABEL names the output (current by default). Writes build/tools/export-golden/<label>.txt and the
+ * exports under <label>/<sample>-<variant>/. A cmo3 holds random editor GUIDs, so it is listed by [cmo3Readback].
  */
 class ExportGoldenTool {
 	@Test fun dump() {
@@ -39,10 +39,10 @@ class ExportGoldenTool {
 				for (file in result.exportedFiles.sortedBy { it.path.toString() }) {
 					val bytes = file.path.toFile().readBytes()
 					val name = dir.toPath().toAbsolutePath().relativize(file.path.toAbsolutePath()).toString().replace('\\', '/')
-					val digest = if (name.endsWith(".cmo3")) "readback=" + cmo3Readback(bytes) else sha(bytes)
+					val digest = if (name.endsWith(".cmo3")) "readback=" + cmo3Readback(bytes) else sha256(bytes)
 					report.appendLine("$sample-$variant $name $digest")
 				}
-				for (asset in preview.runtimeBundle.assets.sortedBy { it.path }) report.appendLine("$sample-$variant preview:${asset.path} ${sha(asset.bytes)}")
+				for (asset in preview.runtimeBundle.assets.sortedBy { it.path }) report.appendLine("$sample-$variant preview:${asset.path} ${sha256(asset.bytes)}")
 			}
 			// An imported CMO3 keeps its own atlas page list and page bindings apart from the packed pages.
 			val plainCmo3 = File(out, "$label/$sample-plain/$sample.cmo3").readBytes()
@@ -53,24 +53,11 @@ class ExportGoldenTool {
 			for (file in imported.exportedFiles.sortedBy { it.path.toString() }) {
 				val bytes = file.path.toFile().readBytes()
 				val name = dir.toPath().toAbsolutePath().relativize(file.path.toAbsolutePath()).toString().replace('\\', '/')
-				report.appendLine("$sample-imported $name ${if (name.endsWith(".cmo3")) "readback=" + cmo3Readback(bytes) else sha(bytes)}")
+				report.appendLine("$sample-imported $name ${if (name.endsWith(".cmo3")) "readback=" + cmo3Readback(bytes) else sha256(bytes)}")
 			}
-			for (asset in imported.previewModel.runtimeBundle.assets.sortedBy { it.path }) report.appendLine("$sample-imported preview:${asset.path} ${sha(asset.bytes)}")
+			for (asset in imported.previewModel.runtimeBundle.assets.sortedBy { it.path }) report.appendLine("$sample-imported preview:${asset.path} ${sha256(asset.bytes)}")
 		}
 		File(out, "$label.txt").writeText(report.toString())
 		println(report)
 	}
-
-	/** The cmo3's editor GUIDs are random; its read-back rig, lowered to moc3, is not. */
-	private fun cmo3Readback(bytes: ByteArray): String = runCatching {
-		val source = org.umamo.format.cmo3.Cmo3.read(bytes).root as org.umamo.format.cmo3.model.custom.CModelSource
-		val puppet = org.umamo.interop.cmo3.Cmo3Import.fromModelSource(source)
-		val bundle = org.umamo.interop.moc3.Moc3Sidecars.bundle(puppet, "readback", pages = emptyList())
-		val physics = (source.physicsSettingsSourceSet as? org.umamo.format.cmo3.model.gen.CPhysicsSettingsSourceSet)
-			?._sourceCubismPhysics.let { (it as? Iterable<*>)?.count() ?: 0 }
-		sha(bundle.files.single { it.name.endsWith(".moc3") }.bytes) + " physics=$physics"
-	}.getOrElse { "error:${it.javaClass.simpleName}" }
-
-	private fun sha(bytes: ByteArray) = java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes))
 }
-

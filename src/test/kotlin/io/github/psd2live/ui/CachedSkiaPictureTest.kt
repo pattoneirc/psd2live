@@ -1,6 +1,8 @@
 package io.github.psd2live.ui
 
+import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.EncodedImageFormat
+import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.Paint
 import org.jetbrains.skia.Rect
 import org.jetbrains.skia.Surface
@@ -44,6 +46,33 @@ class CachedSkiaPictureTest {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    @Test fun stableArtworkIsRasterizedAndPanReusesIt() {
+        CachedSkiaPicture().use { cache ->
+            Surface.makeRasterN32Premul(16, 16).use { surface ->
+                var records = 0
+                fun draw(key: String, pan: PanShift? = null) = cache.draw(surface.canvas, listOf(key), 16, 16, pan) { canvas ->
+                    records++
+                    Paint().use { canvas.drawRect(Rect.makeXYWH(0f, 0f, 4f, 4f), it) }
+                }
+                draw("a", PanShift(listOf("a"), 0.0, 0.0, panning = false))
+                draw("a")
+                draw("a")
+                assertEquals(1, records)
+                // Panning by (8, 8) draws the cached pass shifted instead of recording the moved camera.
+                surface.canvas.clear(0)
+                draw("b", PanShift(listOf("a"), 8.0, 8.0, panning = true))
+                assertEquals(1, records)
+                val shifted = Bitmap().apply { allocPixels(ImageInfo.makeN32Premul(16, 16)) }
+                surface.readPixels(shifted, 0, 0)
+                assertEquals(0, shifted.getColor(2, 2) ushr 24, "the pass left its old place")
+                assertEquals(255, shifted.getColor(10, 10) ushr 24, "the pass moved with the pan")
+                // The pan's release draws at the final camera.
+                draw("b", PanShift(listOf("a"), 8.0, 8.0, panning = false))
+                assertEquals(2, records)
             }
         }
     }

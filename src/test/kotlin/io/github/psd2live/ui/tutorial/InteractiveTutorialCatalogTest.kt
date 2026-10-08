@@ -1,6 +1,7 @@
 package io.github.psd2live.ui.tutorial
 
 import io.github.psd2live.ui.EditHierarchyMode
+import io.github.psd2live.testing.missingMessages
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -75,15 +76,11 @@ class InteractiveTutorialCatalogTest {
 	}
 
 	@Test
-	fun openModelStepHasTranslationsAcrossLocales() {
-		listOf("Messages", "Messages_zh_CN", "Messages_ja", "Messages_ko").forEach { name ->
-			val props = java.util.Properties()
-			javaClass.getResourceAsStream("/i18n/$name.properties")!!.reader(Charsets.UTF_8).use(props::load)
-			listOf(
-				OpenModelStep.titleKey(TutorialId.SIMULATION), OpenModelStep.bodyKey(TutorialId.SIMULATION),
-				OpenModelStep.actionKey(TutorialId.SIMULATION), "tutorial.common.hint.required", "tutorial.common.progress.prepare",
-			).forEach { key -> assertTrue(props.getProperty(key).orEmpty().isNotBlank(), "$name missing $key") }
-		}
+	fun openModelStepIsTranslated() {
+		assertEquals(emptyList(), missingMessages(listOf(
+			OpenModelStep.titleKey(TutorialId.SIMULATION), OpenModelStep.bodyKey(TutorialId.SIMULATION),
+			OpenModelStep.actionKey(TutorialId.SIMULATION), "tutorial.common.hint.required", "tutorial.common.progress.prepare",
+		)))
 	}
 
 	@Test
@@ -177,48 +174,21 @@ class InteractiveTutorialCatalogTest {
 	}
 
 	@Test
-	fun allTutorialStepsHaveTranslationsAcrossLocales() {
-		val bundles = listOf("Messages", "Messages_zh_CN", "Messages_ja", "Messages_ko").map { name ->
-			val props = java.util.Properties()
-			javaClass.getResourceAsStream("/i18n/$name.properties")!!.reader(Charsets.UTF_8).use(props::load)
-			name to props
-		}
-		val missing = mutableListOf<String>()
-		TutorialId.entries.forEach { id ->
-			val def = tutorialDefinition(id)
-			bundles.forEach { (bundleName, props) ->
-				if (props.getProperty(id.titleKey).orEmpty().isBlank()) missing += "$bundleName missing ${id.titleKey}"
-				if (props.getProperty(id.descKey).orEmpty().isBlank()) missing += "$bundleName missing ${id.descKey}"
-				def.steps.forEach { step ->
-					val titleK = step.titleKey(id)
-					val bodyK = step.bodyKey(id)
-					if (props.getProperty(titleK).orEmpty().isBlank()) missing += "$bundleName missing $titleK"
-					if (props.getProperty(bodyK).orEmpty().isBlank()) missing += "$bundleName missing $bodyK"
-					if (step.showAction) {
-						val actionK = step.actionKey(id)
-						if (props.getProperty(actionK).orEmpty().isBlank()) missing += "$bundleName missing $actionK"
-					}
-				}
+	fun allTutorialStepsAreTranslated() {
+		val keys = TutorialId.entries.flatMap { id ->
+			listOf(id.titleKey, id.descKey) + tutorialDefinition(id).steps.flatMap { step ->
+				listOfNotNull(step.titleKey(id), step.bodyKey(id), step.actionKey(id).takeIf { step.showAction })
 			}
 		}
+		val missing = missingMessages(keys)
 		assertTrue(missing.isEmpty(), "Missing tutorial translations:\n" + missing.joinToString("\n"))
 	}
 
 	@Test
-	fun startCanvasUpdatesHaveTranslationsAcrossLocales() {
-		val bundles = listOf("Messages", "Messages_zh_CN", "Messages_ja", "Messages_ko").map { name ->
-			val props = java.util.Properties()
-			javaClass.getResourceAsStream("/i18n/$name.properties")!!.reader(Charsets.UTF_8).use(props::load)
-			name to props
+	fun startCanvasUpdatesAreTranslated() {
+		val keys = io.github.psd2live.ui.views.StartCanvasUpdates.map { it.second }.flatMap { key ->
+			listOf("canvas.start.update.$key.title", "canvas.start.update.$key.desc")
 		}
-		val keys = io.github.psd2live.ui.views.StartCanvasUpdates.map { it.second }
-		bundles.forEach { (bundleName, props) ->
-			keys.forEach { key ->
-				val title = props.getProperty("canvas.start.update.$key.title")
-				val desc = props.getProperty("canvas.start.update.$key.desc")
-				assertTrue(title.orEmpty().isNotBlank(), "$bundleName missing canvas.start.update.$key.title")
-				assertTrue(desc.orEmpty().isNotBlank(), "$bundleName missing canvas.start.update.$key.desc")
-			}
-		}
+		assertEquals(emptyList(), missingMessages(keys))
 	}
 }

@@ -16,18 +16,14 @@ class WorkspaceUnpinnedPaintTest {
 
     private fun opaque(width: Int, height: Int) = LayerRaster(width, height, ByteArray(width * height * 4) { if (it % 4 == 3) -1 else 110 })
 
-    private fun layer(id: String, order: Int, bounds: LayerBounds, raster: LayerRaster, rect: LayerCanvasRect? = null) = WorkspaceSourceLayer(
-        LayerId(id), id, "", SourceLayerKind.Raster, true, order, bounds, 1f, false, LayerBlend.Normal, ChannelMask.ALL,
-        raster, null, null, false, rect)
-
     /**
      * A document whose generation input was frozen before the "added" layer existed; a [dense] one holds two
      * raster pixels per canvas unit on a fractional rectangle.
      */
     private fun document(dense: Boolean, trace: MeshTrace = MeshTrace.TEXTURE): WorkspaceDocument {
-        val body = layer("body", 0, LayerBounds(10, 20, 40, 56), opaque(40, 56))
-        val added = if (dense) layer("added", 1, LayerBounds(64, 16, 48, 48), opaque(94, 94), LayerCanvasRect(64.5f, 16.5f, 47f, 47f))
-            else layer("added", 1, LayerBounds(64, 16, 48, 48), opaque(48, 48))
+        val body = sourceLayer("body", 0, LayerBounds(10, 20, 40, 56), opaque(40, 56))
+        val added = if (dense) sourceLayer("added", 1, LayerBounds(64, 16, 48, 48), opaque(94, 94), LayerCanvasRect(64.5f, 16.5f, 47f, 47f))
+            else sourceLayer("added", 1, LayerBounds(64, 16, 48, 48), opaque(48, 48))
         val config = PipelineConfig(atlasSize = 2048, meshSpacing = 8, meshOnly = true, generatePhysics = false, exportMoc3 = false,
             meshTrace = trace)
         return WorkspaceDocument(WorkspaceSourceArt(128, 96, listOf(body, added), emptyList()), emptyMap(), emptySet(),

@@ -1,10 +1,8 @@
 # 工程、运行时与导出边界
 
-[文档目录](../../README.md) · [工程格式](PROJECT_FORMAT.md) · [实现导览](IMPLEMENTATION_COMPARISON.md)
+[文档目录](../../README.md) · [工程格式](PROJECT_FORMAT.md) · [实现概览](IMPLEMENTATION_COMPARISON.md)
 
 按当前源码整理。解析器存在某个类型、保留原文件未知字段、能够在 UI 编辑，以及在目标软件中效果一致，是四种不同的支持程度。
-
-独立 Warp 的普通及混合形几何迁移由共享核心编辑执行；应用层在候选模型中解析共同父级并保存有序日志。局部拟合覆盖叠加混合形包络，保留默认关键形参考，防止只缩放普通关键形而改变动画。旧静态 Warp 记录仍可重放；任务和原子批量使用同一提交边界。实测与未完成范围见 [重构进度](../agent/REFACTOR_PROGRESS.md)。
 
 ## 数据流
 
@@ -45,7 +43,7 @@ PSD 导入与图片工程创建共用独立应用层 `WorkspaceSourceImporter`�
 
 主画布已提供选择、形变、网格拓扑、变形器创建、Glue、路径和绘画会话。参数、检视、动画和物理面板提供相应控制。
 
-GUI 与 MCP 当前处于应用层重构迁移阶段，参数公开 `parameter_create/update/delete`，骨架与动作片段使用 `skeleton_* / motion_*`，既有源图层分类使用 `layer_classify`，画布结构与拓扑使用 `canvas_* / rig_edit_structure`，工程设置与模型导出使用 `settings_update / project_export_model`，模型预设使用 `model_apply_preset`。素材支持 PSD 导入、CMO3 新建/替换导入、图片工程创建与源图绘画；`source_get_components` 查询当前连通块，`source_split_components/source_split_polygon` 为后台和批量操作。GUI 连通块对话框与 MCP 共用独立候选/重建/CAS，稳定身份和生成输入可保存重放；目标已有编辑绑定的分区仍拒绝，完整迁移尚待完成。`source_split_depth` 与 GUI 共用应用候选、后台任务及原子批量，复制当前所选网格的运动、路径和权重，方向 Glue 保持原后层运动；固定两层绘制顺序，嘴部不再额外生成嘴唇。历史重放、保存重开及 CMO3 运动/Glue 读回已有回归，导入 CMO3 深度拆分不支持。另有逐图层网格配置、预览参数会话与 PSD 导出。低层对象方法不能自动视为公开接口。详见 [MCP 契约](../agent/MCP_AUTHORING.md)。
+GUI 与 MCP 共用应用层命令：参数公开 `parameter_create/update/delete`，骨架与动作片段使用 `skeleton_* / motion_*`，既有源图层分类使用 `layer_classify`，画布结构与拓扑使用 `canvas_* / rig_edit_structure`，工程设置与模型导出使用 `settings_update / project_export_model`，模型预设使用 `model_apply_preset`。素材支持 PSD 导入、CMO3 新建/替换导入、图片工程创建与源图绘画。源图拆分（`source_split_components/source_split_polygon/source_split_depth`）为后台任务和批量成员，与 GUI 共用候选/重建/CAS：生成的模型上部件以 `art_primitive` 记录取代原图层，携带原图层已有的关键形、通道、混合形、路径、顶点权重与 Glue；导入 CMO3 模型沿用旧记录：连通块与多边形拆分软删除原图层，深度拆分在原网格之上复制出前层（见[文档层](DOCUMENT_LAYER.md#拆分物化画元记录-art_primitive)）。另有逐图层网格配置、预览参数会话与 PSD 导出。低层对象方法不能自动视为公开接口。详见 [MCP 契约](../agent/MCP_AUTHORING.md)。
 
 `org.umamo.edit` 的通用编辑会话也不是 PSD2Live 历史的唯一权威入口。接入底层编辑能力时，需要转换为工作区可保存、可重放的操作。
 
@@ -55,11 +53,11 @@ GUI 与 MCP 当前处于应用层重构迁移阶段，参数公开 `parameter_cr
 | --- | --- | --- |
 | 网格、Warp / Rotation、参数、普通关键形 | 核心模型、编辑与导出 | 跨父级换绑不等于全运动保真；源图 / 参数配置影响生成结果 |
 | 颜色、透明度、绘制顺序、遮罩 | 模型与编辑通道 | 目标版本和格式表达能力可能带来降级 |
-| Glue | 模型、可视创建与关键形 | 不等于完整的权重刷、配对修复工具链 |
+| Glue | 模型、可视创建、刷接、方向权重与关键形 | 配对修复与诊断工具仍有限 |
 | Blend Shape、Part 绘制组等 | 底层模型与格式映射 | 完整产品编辑工作流仍有缺口 |
 | 变形路径 | 工作区编辑、CMO3 控制器、MOC3 烘焙 | 单 ArtMesh；未宣称与官方编辑算法一致 |
 | 物理 | 统一的物理组目录（预设 / 骨骼 / 摆动 / 自定义，可修改、关闭、恢复、调整计算顺序），多输入多输出与 1–16 个摆锤，计算 FPS，physics3.json 导入，输入与摆锤预置，面板可视化编辑，MCP `physics_put/delete/simulate/fit/config/import`、`physics_audition*` 试听与 `physics_preset_*` 预置，软件预览按 Cubism 求值 | 输入 / 输出类型限位置X 与角度（CMO3 支持的范围），不含风力等全局物理设置 |
-| 动作 | 基础动作生成与播放 | 不等于通用动作时间轴编辑 |
+| 动作 | 基础动作生成与播放；动画面板与 `motion_*` 编辑片段、参数曲线和时间线关键帧（插值类型、控制柄、键的移动 / 粘贴 / 替换） | 生成的基础动作须先转为同名覆盖片段（`motion_seed_builtin`）才能编辑；导出须启用 `exportMotions` |
 | Expression / Pose / UserData | 格式 / 边车层有相应处理 | 不能把透传当作完整可编辑工程资产 |
 | ArtPath、Motion Sync、扩展插值与部分编辑器元数据 | 类型或原对象图可能存在 | 不能据此宣称从 PSD 可创建或完整语义编辑 |
 
@@ -80,5 +78,3 @@ CMO3 的格式库可以保留原对象图中的部分未知信息，但从 PSD �
 新增功能至少覆盖：领域数据 → 历史重放 → 工程保存恢复 → 目标版本处理 → 导出读回 → 视觉检查。只有测试实际覆盖的范围才能写成兼容性结论。
 
 源码：[工程](../../../src/main/kotlin/io/github/psd2live/project/) · [核心流水线](../../../src/main/kotlin/io/github/psd2live/core/) · [运行时](../../../umamo/src/main/kotlin/org/umamo/runtime/) · [格式转换](../../../umamo/src/main/kotlin/org/umamo/interop/)。
-
-文件图片放置的 GUI 预览、确认和取消已进入独立应用会话，与 `layer_set_bounds/layer_cancel_import` 共用文档候选。预览不改持久源图，保存等待确认；定位保留身份、实际父级和原生成帧，重复缩放读取保存的原像素。自建父级的后续网格重生使用同一核心中性坐标转换。完整源图/分类迁移及其余 GUI 业务验收仍见重构进度。

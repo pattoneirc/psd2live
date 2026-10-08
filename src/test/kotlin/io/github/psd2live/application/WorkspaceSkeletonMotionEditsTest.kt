@@ -1,6 +1,4 @@
-package io.github.psd2live.agent
-
-import io.github.psd2live.application.WorkspaceSkeletonMotionEdits
+package io.github.psd2live.application
 
 import io.github.psd2live.core.BoneRole
 import io.github.psd2live.core.MotionClips

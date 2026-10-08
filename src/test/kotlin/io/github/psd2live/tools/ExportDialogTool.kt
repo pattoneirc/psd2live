@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -31,16 +32,11 @@ class ExportDialogTool {
 	@OptIn(ExperimentalComposeUiApi::class)
 	@Test fun renderMenuAndDialogs() {
 		requireTools()
-		val previousLanguage = I18n.currentLanguage
 		val preview = PSD2LivePipeline().buildPreview(File("examples/tml/psd-input/tml.psd").toPath())
 		val directory = output("export-dialog")
-		fun write(name: String, scene: ImageComposeScene) {
-			try {
-				val rendered = scene.render()
-				try { File(directory, "$name.png").writeBytes(requireNotNull(rendered.encodeToData()).bytes) } finally { rendered.close() }
-			} finally { scene.close() }
-		}
-		try {
+		fun write(name: String, width: Int, height: Int, colors: ToolColors = ToolColors.Dark, content: @Composable () -> Unit) =
+			renderPng(File(directory, "$name.png"), width, height, colors = colors, frames = 0, content = content)
+		keepingLanguage {
 			PSD2LiveViewModel().use { vm ->
 				vm.setStateForTest(vm.state.value.copy(previewModel = preview, outputPath = "D:/output"))
 				for (language in listOf(AppLanguage.CHINESE, AppLanguage.ENGLISH)) {
@@ -65,34 +61,24 @@ class ExportDialogTool {
 						scene.render().close()
 						scene.sendPointerEvent(PointerEventType.Move, hover)
 						scene.render(16_000_000).close()
-						write("$tag-$name", scene)
+						writePng(scene, File(directory, "$tag-$name.png"), frames = 0, startNanos = 32_000_000)
 					}
 					for (target in vm.otherExportTargets().filter { it.id !in io.github.psd2live.core.ExportService.experimental }) {
 						vm.setStateForTest(vm.state.value.copy(otherExportTarget = target.id))
-						write("$tag-${target.id}", ImageComposeScene(560, 520, density = Density(1f)) {
-							CompactToolTheme(colors = ToolColors.Dark) {
-								OtherFormatExportDialog(vm.state.value, vm, onChooseOutput = {})
-							}
-						})
+						write("$tag-${target.id}", 560, 520) { OtherFormatExportDialog(vm.state.value, vm, onChooseOutput = {}) }
 					}
 					vm.setStateForTest(vm.state.value.copy(otherExportTarget = null, showExportDialog = true))
-					write("$tag-cubism", ImageComposeScene(640, 760, density = Density(1f)) {
-						CompactToolTheme(colors = ToolColors.Dark) { ExportDialog(vm.state.value, vm, onChooseOutput = {}, onDismiss = {}) }
-					})
+					write("$tag-cubism", 640, 760) { ExportDialog(vm.state.value, vm, onChooseOutput = {}, onDismiss = {}) }
 					vm.setStateForTest(vm.state.value.copy(showExportDialog = false, analysis = preview.analysis, showExportPsdDialog = true))
-					write("$tag-psd", ImageComposeScene(600, 480, density = Density(1f)) {
-						CompactToolTheme(colors = ToolColors.Dark) { ExportPsdDialog(vm.state.value, vm) }
-					})
+					write("$tag-psd", 600, 480) { ExportPsdDialog(vm.state.value, vm) }
 					vm.setStateForTest(vm.state.value.copy(showExportPsdDialog = false))
 					val success = ExportSuccess(tr("export.other.success", tr("export.target.gif"), 3), "D:/output/tml-gif",
 						tr("export.other.losses", 2), listOf("drop: physics are not simulated", "approximate: blend modes are flattened"))
 					for ((name, colors) in listOf("success" to ToolColors.Dark, "success-light" to ToolColors.Light)) {
-						write("$tag-$name", ImageComposeScene(560, 360, density = Density(1f)) {
-							CompactToolTheme(colors = colors) { ExportSuccessDialog(success, onOpenFolder = {}, onDismiss = {}, onDontShowAgain = {}) }
-						})
+						write("$tag-$name", 560, 360, colors) { ExportSuccessDialog(success, onOpenFolder = {}, onDismiss = {}, onDontShowAgain = {}) }
 					}
 				}
 			}
-		} finally { I18n.setLanguage(previousLanguage, persist = false) }
+		}
 	}
 }
