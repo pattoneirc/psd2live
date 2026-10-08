@@ -55,12 +55,12 @@ fun main(arguments: Array<String>) {
 	val config = PipelineConfig(
 		atlasSize = options.int("--atlas", 4096),
         textureUpscale = io.github.psd2live.core.TextureUpscaleConfig(
-            scale = options.value("--upscale")?.toInt() ?: 1,
+            scale = options.int("--upscale", 1),
             python = options.value("--upscale-python") ?: "python",
             nunifDirectory = options.value("--nunif-dir") ?: "",
             modelDirectory = options.value("--upscale-model") ?: "",
-            tileSize = options.value("--upscale-tile")?.toInt() ?: 256,
-            noiseLevel = options.value("--upscale-noise")?.toInt() ?: 1,
+            tileSize = options.int("--upscale-tile", 256),
+            noiseLevel = options.int("--upscale-noise", 1),
             neuralAlpha = !options.flags.contains("--no-upscale-neural-alpha"),
         ),
 		meshSpacing = options.int("--mesh-spacing", 64),
@@ -227,11 +227,11 @@ private fun printUsage() {
 private data class CliOptions(val values: Map<String, String>, val flags: Set<String>) {
 	fun value(name: String): String? = values[name]
 	fun required(name: String): String = value(name) ?: error(tr("cli.missingRequired", name))
-	fun int(name: String, default: Int): Int = value(name)?.toIntOrNull() ?: default
-	fun float(name: String, default: Float): Float = value(name)?.toFloatOrNull() ?: default
+	fun int(name: String, default: Int): Int = value(name)?.let { it.toIntOrNull() ?: error(tr("cli.invalidNumber", name, it)) } ?: default
+	fun float(name: String, default: Float): Float = value(name)?.let { it.toFloatOrNull() ?: error(tr("cli.invalidNumber", name, it)) } ?: default
 
 	companion object {
-		private val flagNames = setOf("--no-upscale-neural-alpha", "--upscale-neural-alpha", "--no-physics", "--no-cmo3", "--no-moc3", "--mesh-only", "--no-deformers", "--no-motions", "--no-json")
+		private val flagNames = setOf("--no-upscale-neural-alpha", "--upscale-neural-alpha", "--mesh-pixels", "--no-physics", "--no-cmo3", "--no-moc3", "--mesh-only", "--no-deformers", "--no-motions", "--no-json")
 		private val valueNames = setOf("--upscale", "--upscale-noise", "--upscale-python", "--nunif-dir", "--upscale-model", "--upscale-tile", "--input", "--output", "--lang", "--atlas", "--mesh-spacing", "--mesh-wrap", "--head-strength", "--body-strength")
 		fun parse(arguments: Array<String>): CliOptions {
 			val values = linkedMapOf<String, String>()
@@ -244,7 +244,8 @@ private data class CliOptions(val values: Map<String, String>, val flags: Set<St
 					flags += name
 					index++
 				} else {
-					require(index + 1 < arguments.size) { tr("cli.missingValue", name) }
+					// "--output --no-json" is a missing value, not an output directory named "--no-json".
+					require(index + 1 < arguments.size && arguments[index + 1] !in flagNames && arguments[index + 1] !in valueNames) { tr("cli.missingValue", name) }
 					values[name] = arguments[index + 1]
 					index += 2
 				}

@@ -90,7 +90,7 @@ internal object RigAuthoringJournal {
         }
     }
 
-    /** Compile against the preceding edit's evaluated model; validate the whole batch before persisting. */
+    /** [command] without the viewing pose entries that sit at their parameter's default. */
     private fun withoutDefaultPose(model: PuppetModel, command: JsonObject): JsonObject {
         val pose = command["pose"] as? JsonObject ?: return command
         val defaults = model.parameters.associate { it.id.raw to it.default }
@@ -101,6 +101,7 @@ internal object RigAuthoringJournal {
         return if (kept.size == pose.size) command else JsonObject(command + ("pose" to JsonObject(kept)))
     }
 
+    /** Compile against the preceding edit's evaluated model; validate the whole batch before persisting. */
     fun compile(model: PuppetModel, commands: JsonArray): Pair<PuppetModel, List<JsonObject>> {
         require(commands.size in 1..128) { "Use 1..128 edits" }
         var current = model

@@ -112,4 +112,41 @@ class WorkspaceJobsTest {
             assertNull(completed.error)
         }
     }
+
+    @Test fun anErrorThrownByTheActionStillEndsTheJob() = runBlocking {
+        WorkspaceJobs().use { jobs ->
+            val job = jobs.start("rebuild", "project", "state") { throw StackOverflowError("deep") }
+            val failed = jobs.wait(job.id)
+            assertEquals(WorkspaceJobStatus.FAILED, failed.status)
+            assertNotNull(failed.error); Unit
+        }
+    }
+
+    @Test fun progressFromALaterStageNeverMovesBackOrFailsTheJob() = runBlocking {
+        WorkspaceJobs().use { jobs ->
+            val reported = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val job = jobs.start("batch", "project", "state") {
+                progress(0.6f, "First")
+                progress(0.1f, "Second")
+                reported.complete(Unit)
+                release.await()
+                result()
+            }
+            reported.await()
+            assertEquals(0.6f, jobs.get(job.id).progress)
+            assertEquals("Second", jobs.get(job.id).message)
+            release.complete(Unit)
+            assertEquals(WorkspaceJobStatus.COMPLETED, jobs.wait(job.id).status)
+        }
+    }
+
+    @Test fun finishedJobsBeyondTheRetainedCountAreDroppedOldestFirst() = runBlocking {
+        WorkspaceJobs().use { jobs ->
+            val ids = (0..256).map { jobs.start("op", null, "s") { result() }.id.also { id -> jobs.wait(id) } }
+            jobs.start("op", null, "s") { result() }.also { jobs.wait(it.id) }
+            assertFailsWith<IllegalArgumentException> { jobs.get(ids.first()) }
+            assertEquals(WorkspaceJobStatus.COMPLETED, jobs.get(ids.last()).status)
+        }
+    }
 }

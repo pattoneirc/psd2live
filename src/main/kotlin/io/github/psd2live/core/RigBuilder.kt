@@ -2970,7 +2970,7 @@ object RigBuilder {
             val py = data.mesh.positions[v * 2 + 1]
             try {
                 DeformPathTools.bind(data.mesh.positions, data.mesh.indices, px, py, corner = (c == 0 || c == colCount - 1))
-            } catch (_: Throwable) {
+            } catch (_: IllegalArgumentException) {
                 null
             }
         }
@@ -2980,7 +2980,7 @@ object RigBuilder {
             val py = data.mesh.positions[v * 2 + 1]
             try {
                 DeformPathTools.bind(data.mesh.positions, data.mesh.indices, px, py, corner = (c == 0 || c == colCount - 1))
-            } catch (_: Throwable) {
+            } catch (_: IllegalArgumentException) {
                 null
             }
         }
@@ -3107,7 +3107,7 @@ object RigBuilder {
                 val ny = normalizeY(p.second, frame)
                 try {
                     DeformPathTools.bind(positions, indices, nx, ny, corner = (idx == startIdx || idx == endIdx))
-                } catch (_: Throwable) {
+                } catch (_: IllegalArgumentException) {
                     null
                 }
             }

@@ -30,7 +30,6 @@ import org.umamo.edit.withDrawablesDeleted
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
-import java.time.Instant
 
 class PSD2LivePipeline {
 	internal val meshCache = PreviewMeshCache()
@@ -621,7 +620,7 @@ class PSD2LivePipeline {
 		if (config.exportCmo3) {
 			val ir = RigIrCompiler.compile(analysis, atlas, rig, config, tileArt = true)
 			val cmo3 = io.github.psd2live.targets.cubism.Cmo3Target { BezierWarp.configureEditor(it, config.rigEdits) }
-			val cmo3Options = io.github.psd2live.format.compile.ExportOptions(baseName, settings = mapOf("timestamp" to Instant.now().toEpochMilli().toString()))
+			val cmo3Options = io.github.psd2live.format.compile.ExportOptions(baseName)
 			val converted = cmo3.convert(ir, cmo3Options)
 			val bytes = Cmo3.write(converted.model)
 			files += writeContained(outputRoot, "$baseName.cmo3", bytes)

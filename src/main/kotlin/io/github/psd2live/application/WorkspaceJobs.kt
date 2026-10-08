@@ -72,6 +72,7 @@ internal class WorkspaceJobs(
     dispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val clock: () -> Instant = Instant::now,
 ) : AutoCloseable {
+    private companion object { const val RETAINED_FINISHED = 256 }
     private data class Entry(val state: MutableStateFlow<WorkspaceJobSnapshot>, val job: Job)
     private val lock = Any()
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -100,10 +101,8 @@ internal class WorkspaceJobs(
                 ensureActive()
                 change(state) { it.copy(status = WorkspaceJobStatus.RUNNING, message = "Running") }
                 val context = WorkspaceJobContext { progress, message ->
-                    change(state) {
-                        require(progress >= it.progress) { "Job progress must not decrease" }
-                        it.copy(progress = progress, message = message)
-                    }
+                    // Stages of a batch may each report from zero; the published fraction never moves back.
+                    change(state) { it.copy(progress = maxOf(progress, it.progress), message = message) }
                 }
                 val result = withContext(context) { context.action() }
                 validate(result)
@@ -115,11 +114,12 @@ internal class WorkspaceJobs(
                 change(state) { if (committed != null) it.copy(status = WorkspaceJobStatus.COMPLETED, progress = 1f,
                     message = "Completed", result = committed) else it.copy(status = WorkspaceJobStatus.CANCELLED, message = "Cancelled") }
                 throw cancelled
-            } catch (failure: Exception) {
+            } catch (failure: Throwable) {
+                // An Error (out of memory, stack overflow) still ends the job; otherwise waiters never see a terminal state.
                 val committed = completion.result
                 change(state) { if (committed != null) it.copy(status = WorkspaceJobStatus.COMPLETED, progress = 1f,
                     message = "Completed", result = committed) else it.copy(status = WorkspaceJobStatus.FAILED,
-                    message = "Failed", error = WorkspaceFailure.from(failure)) }
+                    message = "Failed", error = WorkspaceFailure.from(failure as? Exception ?: IllegalStateException(failure.toString(), failure))) }
             }
         }
         // A lazily scheduled job may be cancelled before its body starts, so its catch is insufficient.
@@ -129,6 +129,7 @@ internal class WorkspaceJobs(
             }
         }
         entries[id] = Entry(state, job)
+        evictFinished()
         job.start()
         state.value
     }
@@ -159,6 +160,16 @@ internal class WorkspaceJobs(
         if (!closed) {
             closed = true
             scope.cancel("Workspace job runner closed")
+        }
+    }
+
+    /** Finished jobs stay readable for a while; beyond [RETAINED_FINISHED] the oldest are dropped with their results. */
+    private fun evictFinished() {
+        var excess = entries.values.count { it.state.value.status.terminal } - RETAINED_FINISHED
+        if (excess <= 0) return
+        val iterator = entries.values.iterator()
+        while (excess > 0 && iterator.hasNext()) {
+            if (iterator.next().state.value.status.terminal) { iterator.remove(); excess-- }
         }
     }
 
