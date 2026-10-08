@@ -111,12 +111,20 @@ internal object SkeletonCanvasSkin {
 	 * not refined), which new vertices would no longer match.
 	 */
 	fun lockedTopology(model: PuppetModel, overlay: RigEditOverlay, placed: Set<String>): Set<String> {
-		if (placed.isEmpty()) return emptySet()
+		val bound = boundMeshes(overlay)
+		if (placed.isEmpty() && bound.isEmpty()) return emptySet()
 		val counts = addressedCounts(overlay.authoringJournal)
-		return placed.filterTo(LinkedHashSet()) { id ->
-			val count = model.drawables.firstOrNull { it.id.raw == id }?.mesh?.vertexCount
-			count != null && counts[id]?.contains(count) == true
-		}
+		fun count(id: String) = model.drawables.firstOrNull { it.id.raw == id }?.mesh?.vertexCount
+		val locked = placed.filterTo(LinkedHashSet()) { id -> count(id)?.let { counts[id]?.contains(it) } == true }
+		// Any other bound mesh whose records all expect its unrefined vertices: written before the skeleton bound it.
+		bound.filterTo(locked) { id -> count(id)?.let { counts[id] == setOf(it) } == true }
+		return locked
+	}
+
+	/** The meshes the joint bones of [overlay]'s enabled skeleton bind. */
+	fun boundMeshes(overlay: RigEditOverlay): Set<String> {
+		val spec = overlay.skeleton?.takeIf { it.enabled } ?: return emptySet()
+		return SkeletonRig.jointBones(spec).flatMapTo(LinkedHashSet()) { it.drawableIds }
 	}
 
 	/** The parameters whose keyforms this stage may write on each mesh of [placed], for the generator graph. */

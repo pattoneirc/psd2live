@@ -254,6 +254,24 @@ class SkeletonCanvasSkinTest {
 			canvas(placed, mapOf("ParamArmLA" to 60f)).getValue(DrawableId(sleeve))) > 10f, "the bones still turn it")
 	}
 
+	@Test fun aBoundMeshWithAVertexGroupFromBeforeTheSkeletonKeepsItsVertices() {
+		val spec = armSpec(withHand = false)
+		val unbound = SkeletonSpec(bones = spec.bones.map { it.copy(drawableIds = emptyList()) })
+		val count = build(unbound).rig.puppet.drawables.single { it.id.raw == sleeve }.mesh!!.vertexCount
+		assertTrue(build(spec).rig.puppet.drawables.single { it.id.raw == sleeve }.mesh!!.vertexCount > count)
+		val group = VertexGroupJournal.encode(org.umamo.runtime.model.VertexGroup("pin", DrawableId(sleeve),
+			org.umamo.runtime.model.VertexGroupKind.PIN, FloatArray(count) { 1f }))
+		// Not placed by the journal: the bake hangs it on its bone, without the joint rows the group does not know.
+		val bound = build(spec, listOf(group)).rig.puppet
+		assertEquals(count, bound.drawables.single { it.id.raw == sleeve }.mesh!!.vertexCount)
+		assertEquals(count, bound.vertexGroups.single { it.drawableId.raw == sleeve }.weights.size)
+		// A group written on the refined mesh leaves it refined.
+		val refined = build(spec).rig.puppet.drawables.single { it.id.raw == sleeve }.mesh!!.vertexCount
+		val later = VertexGroupJournal.encode(org.umamo.runtime.model.VertexGroup("pin", DrawableId(sleeve),
+			org.umamo.runtime.model.VertexGroupKind.PIN, FloatArray(refined) { 1f }))
+		assertEquals(refined, build(spec, listOf(later)).rig.puppet.drawables.single { it.id.raw == sleeve }.mesh!!.vertexCount)
+	}
+
 	@Test fun replayAndReopenGiveTheSameRig() {
 		val spec = armSpec()
 		val journal = placing(sleeve)

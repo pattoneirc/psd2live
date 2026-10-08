@@ -1527,8 +1527,9 @@ object RigBuilder {
 	internal fun skeletonJournalInputs(config: PipelineConfig): List<Any>? {
 		val skeleton = config.rigEdits.skeleton?.takeIf { it.enabled } ?: return null
 		val canvasSkinned = SkeletonCanvasSkin.placed(config.rigEdits)
+		val addressed = canvasSkinned + SkeletonCanvasSkin.boundMeshes(config.rigEdits)
 		return listOf(handEditedTopology(config), skinnedRecords(skeleton, config), canvasSkinned,
-			SkeletonCanvasSkin.addressedCounts(config.rigEdits.authoringJournal).filterKeys { it in canvasSkinned })
+			SkeletonCanvasSkin.addressedCounts(config.rigEdits.authoringJournal).filterKeys { it in addressed })
 	}
 
 	private fun handEditedTopology(config: PipelineConfig): Set<String> =
