@@ -542,7 +542,7 @@ private fun SettingsCanvasSection() {
 		verticalArrangement = Arrangement.spacedBy(6.dp),
 	) {
 		val softwareCanvas by AppSettings.softwareCanvasFlow.collectAsState()
-		val gpuStatus by io.github.psd2live.render.CanvasRenderService.status.collectAsState()
+		val gpuStatus by io.github.psd2live.render.SkiaGpu.status.collectAsState()
 		Row(
 			modifier = Modifier
 				.fillMaxWidth()
@@ -566,9 +566,9 @@ private fun SettingsCanvasSection() {
 		}
 		Text(
 			text = if (softwareCanvas) tr("dialog.settings.canvas.rendererSoftware") else when (val status = gpuStatus) {
-				is io.github.psd2live.render.CanvasRenderService.Status.Ready -> tr("dialog.settings.canvas.rendererGpu", status.description)
-				is io.github.psd2live.render.CanvasRenderService.Status.Unavailable -> tr("dialog.settings.canvas.rendererUnavailable", status.reason)
-				io.github.psd2live.render.CanvasRenderService.Status.Starting -> tr("dialog.settings.canvas.rendererStarting")
+				is io.github.psd2live.render.SkiaGpu.Status.Ready -> tr("dialog.settings.canvas.rendererGpu", status.description)
+				is io.github.psd2live.render.SkiaGpu.Status.Unavailable -> tr("dialog.settings.canvas.rendererUnavailable", status.reason)
+				io.github.psd2live.render.SkiaGpu.Status.Starting -> tr("dialog.settings.canvas.rendererStarting")
 			},
 			style = typography.caption.copy(fontSize = 10.5.sp),
 			color = colors.textMuted,

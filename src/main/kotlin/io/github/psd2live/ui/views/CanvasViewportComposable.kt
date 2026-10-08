@@ -9,11 +9,14 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.drawText
 import io.github.psd2live.render.ArtworkDrawList
 import io.github.psd2live.render.ArtworkOptions
-import io.github.psd2live.render.CanvasRenderService
+import io.github.psd2live.render.CanvasGpu
+import io.github.psd2live.render.GpuFrame
+import io.github.psd2live.render.SkiaGpu
 import io.github.psd2live.render.CanvasScene
 import io.github.psd2live.render.MeshWireframe
 import io.github.psd2live.render.OverlayItem
 import io.github.psd2live.render.OverlayScene
+import androidx.compose.ui.graphics.nativeCanvas
 import io.github.psd2live.render.RigGuides
 import io.github.psd2live.render.WireItem
 import io.github.psd2live.ui.state.AppSettings
@@ -97,6 +100,10 @@ import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.Bounds
 import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.i18n.tr
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import io.github.psd2live.core.CanvasViewport
 import io.github.psd2live.core.ComponentPalette
 import io.github.psd2live.core.CubismViewport
@@ -364,23 +371,19 @@ fun CanvasViewportComposable(
 	val snapshotArtworkCache = remember { CachedSkiaPicture() }
 	DisposableEffect(snapshotArtworkCache) { onDispose { snapshotArtworkCache.close() } }
 	val guideCache = remember { CanvasGuideImageCache() }
-	// The GPU renderer draws this canvas's artwork when it can; the Skia painter above stays the fallback.
+	// The GPU renderer draws this canvas's artwork in Skia's own context when the window renders with OpenGL;
+	// the Skia painter above stays the fallback.
+	val awtWindow = LocalAwtWindow.current
 	val softwareCanvas by AppSettings.softwareCanvasFlow.collectAsState()
-	LaunchedEffect(softwareCanvas) { if (!softwareCanvas) CanvasRenderService.ensureStarted() }
-	val gpuStatus by CanvasRenderService.status.collectAsState()
-	val gpuReady = !softwareCanvas && !sourcePixels && gpuStatus is CanvasRenderService.Status.Ready
+	val gpuPrimary by SkiaGpu.primaryFlow.collectAsState()
+	val gpuAvailable = remember(gpuPrimary, awtWindow) { CanvasGpu.available(awtWindow) }
+	val gpuReady = !softwareCanvas && !sourcePixels && gpuAvailable
 	// One GPU view per canvas whatever its mode: a switch keeps its meshes and page textures on the GPU.
 	val gpuKey = viewModel.canvasRenderKey(canvasId, CanvasMode.EDIT)
-	val gpuFrame by remember(gpuKey) { CanvasRenderService.frames(gpuKey) }.collectAsState()
-	val gpuImage = remember(gpuFrame) { gpuFrame?.bitmap?.asComposeImageBitmap() }
-	val gpuSubmission = remember(gpuKey) { GpuSceneSubmission(gpuKey) }
-	// The last snapshot ghost's geometry: its frame must not show at full strength once the hover has moved on.
-	val ghostGeometry = remember(gpuKey) { arrayOfNulls<org.umamo.render.eval.DeformedGeometry>(1) }
-	// The last regular frame and its image, shown while a ghost frame is the newest one.
-	val lastArtwork = remember(gpuKey) { arrayOfNulls<Pair<io.github.psd2live.render.RenderedFrame, ImageBitmap>>(1) }
+	val ghostKey = "$gpuKey#snapshot"
 	// The paint session this view's GPU texture holds in full; another session, or a new view, uploads all of it.
 	val paintUploaded = remember(gpuKey) { arrayOfNulls<Any>(1) }
-	DisposableEffect(gpuKey) { onDispose { CanvasRenderService.release(gpuKey) } }
+	DisposableEffect(gpuKey) { onDispose { CanvasGpu.release(gpuKey); CanvasGpu.release(ghostKey) } }
 	val drawnGeometry = remember { DrawnGeometryMemo() }
 	// A session shown by the GPU hands it changed areas instead of painting preview tiles.
 	LaunchedEffect(paintSession, gpuReady) { paintSession?.gpuPreview = gpuReady }
@@ -393,7 +396,9 @@ fun CanvasViewportComposable(
 	val simulatedFrame by viewModel.simulationFrames.collectAsState()
 	// The live simulation replaces its meshes' vertices, which only the software painter can draw.
 	val simulated = simulatedFrame?.takeIf { mode == CanvasMode.PREVIEW && it.simulationId == canvasState.simulationPreviewId }
-	val sdkBitmap = remember(sdkFrame?.image) { sdkFrame?.image?.toImageBitmapFast() }
+	val previewBackend by viewModel.previewBackend.collectAsState()
+	val previewAdvanced by AppSettings.previewAdvancedFlow.collectAsState()
+	val previewFrameRate by AppSettings.previewFrameRateFlow.collectAsState()
 	val background = canvasState.canvasBackground
 	val checkerLight = background.checkerLight?.let(::opaqueColor) ?: colors.checkerLight
 	val checkerDark = background.checkerDark?.let(::opaqueColor) ?: colors.checkerDark
@@ -420,9 +425,6 @@ fun CanvasViewportComposable(
 	val currentZoom by rememberUpdatedState(zoom)
 	val currentPanX by rememberUpdatedState(panX)
 	val currentPanY by rememberUpdatedState(panY)
-	val simultaneousPreviews = canvasState.activeWorkspace.canvases.count {
-		it.mode == CanvasMode.PREVIEW && it.id !in canvasState.activeWorkspace.hiddenModules
-	}
 
 	LaunchedEffect(frameFlow) {
 		frameFlow.collect { frame ->
@@ -535,11 +537,16 @@ fun CanvasViewportComposable(
     val continuousPump = canvasState.animationEnabled || physicsLive || parameterScrubActive
     val pausedCameraKey = if (continuousPump) Unit else Triple(zoom, panX, panY)
     val pausedPoseKey = if (continuousPump) Unit else canvasState.parameterValues
-	// The project's frame rate paces the pump; unlimited follows the display. Native Cubism renders every
-	// preview on one GL thread, so several visible previews never go past 30 FPS each.
-	val projectFps = canvasState.rigEdits.physicsFps
-	val pumpInterval = maxOf(frameIntervalNanos(projectFps), if (simultaneousPreviews > 1) 33_333_333L else 0L)
-	LaunchedEffect(renderKey, mode, previewModel, canvasState.animationEnabled, canvasState.mouseTrackingEnabled, viewSize, pausedCameraKey, pausedPoseKey, pumpInterval, physicsLive, parameterScrubActive) {
+	// The preview's own cap paces the pump, by default none: every display refresh asks for a frame. Physics
+	// steps at the project's rate whatever this is, interpolating between its steps.
+	val pumpInterval = frameIntervalNanos(previewFrameRate)
+	// The window whose Skia context this preview draws in; the frame's texture lives there.
+	val previewGpu = remember(gpuPrimary, awtWindow) { SkiaGpu.of(awtWindow) }
+	// Read where the canvas draws: each requested frame redraws it, and the draw runs the GPU work first.
+	val previewTick = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+	val runtimeSimulates = previewBackend == io.github.psd2live.core.PreviewBackend.P2LRT && previewAdvanced &&
+		canvasState.generatePhysics && !canvasState.meshOnly
+	LaunchedEffect(renderKey, mode, previewModel, canvasState.animationEnabled, canvasState.mouseTrackingEnabled, viewSize, pausedCameraKey, pausedPoseKey, pumpInterval, physicsLive, parameterScrubActive, previewBackend, previewAdvanced, previewGpu, runtimeSimulates) {
 		if (previewModel != null && viewSize.width > 0 && viewSize.height > 0) {
 			if (mode == CanvasMode.PREVIEW) {
 				fun requestFrame(deltaTime: Float, frameNanos: Long) {
@@ -560,7 +567,9 @@ fun CanvasViewportComposable(
 						deltaTime,
 						frameNanos,
                         viewId = renderKey,
+						gpu = previewGpu,
 					)
+					previewTick.intValue++
 				}
 				if (canvasState.animationEnabled || (parameterScrubActive && !physicsLive)) {
 					var previousFrameNanos = 0L
@@ -584,7 +593,8 @@ fun CanvasViewportComposable(
 					val pacer = FramePacer(pumpInterval)
 					var lastPose = viewModel.state.value.previewPanelState().parameterValues
 					while (isActive) {
-						while (isActive && !viewModel.parameterScrubActive && System.nanoTime() - started > PAUSED_PHYSICS_WARMUP_NANOS && viewModel.previewSettled &&
+						// p2lrt's advanced mode simulates on its own clock: it never reports rest, so it keeps rendering.
+						while (isActive && !runtimeSimulates && !viewModel.parameterScrubActive && System.nanoTime() - started > PAUSED_PHYSICS_WARMUP_NANOS && viewModel.previewSettled &&
 							System.nanoTime() - lastPointerActivityNanos.get() > PAUSED_TRACKING_SETTLE_NANOS) {
 							val pose = viewModel.state.value.previewPanelState().parameterValues
 							if (pose != lastPose) { lastPose = pose; break }
@@ -1171,6 +1181,10 @@ fun CanvasViewportComposable(
 			val hoverTintColor = (hoveredLayerId ?: hoveredDeformerId)?.let { ComponentPalette.strong(it).rgb } ?: 0
 
 			val nativeFrame = sdkFrame
+			// The preview runtimes' GPU work for this frame runs here, in the window's Skia context, so the
+			// texture drawn below is the frame just requested.
+			previewTick.intValue
+			val previewDrawn = if (mode == CanvasMode.PREVIEW) previewGpu?.let { gpu -> gpu.drain(); gpu.resources.frame(renderKey) } else null
 			// Path guides never paint outside the Edit tab (see 3e), so they cannot force the
 			// preview off its native SDK frame.
 			val canUseNativeSdk = mode == CanvasMode.PREVIEW &&
@@ -1180,28 +1194,13 @@ fun CanvasViewportComposable(
 				hoveredLayerId == null && hoveredDeformerId == null &&
 				(!showSelectionBounds || !hasActiveSelection) &&
 				canvasState.drawOrderOverrides.isEmpty() && simulated == null &&
-				nativeFrame != null && sdkBitmap != null &&
-				nativeFrame.image.width == w && nativeFrame.image.height == h
+				nativeFrame != null && previewDrawn != null &&
+				previewDrawn.width == w && previewDrawn.height == h
 
-			val currentSdkBitmap = sdkBitmap
 			// A snapshot hover temporarily replaces the current model, including its guides and paint tiles.
-			if (canUseNativeSdk && snapshotGeometry == null) {
-				// Native rendering can finish several frames after a pan. Reproject its last
-				// image immediately so the visible artwork follows the local camera while
-				// the latest native frame is still in flight.
-				val frameCamera = nativeFrame
-				val desiredCamera = computeCubismViewport(model, w, h, zoom, panX, panY)
-				val ratio = (desiredCamera.scale / frameCamera.cameraScale)
-					.takeIf { it.isFinite() && it > 0f } ?: 1f
-				val halfWidth = w * 0.5f
-				val halfHeight = h * 0.5f
-				val left = halfWidth * (1f - ratio + desiredCamera.offsetX - ratio * frameCamera.cameraOffsetX)
-				val top = halfHeight * (1f - ratio - desiredCamera.offsetY + ratio * frameCamera.cameraOffsetY)
-				if (ratio == 1f && left == 0f && top == 0f) drawImage(currentSdkBitmap)
-				else withTransform({
-					translate(left, top)
-					scale(ratio, ratio, pivot = Offset.Zero)
-				}) { drawImage(currentSdkBitmap) }
+			if (canUseNativeSdk && snapshotGeometry == null && previewDrawn != null) {
+				// Drawn in this draw, for this frame's request: the texture already matches the camera.
+				drawGpuFrame(previewDrawn)
 			} else if (snapshotGeometry == null) {
 				// Paint is an isolated document-canvas session: its live tiles belong only on the Edit
 				// tab, and only until Apply writes them into RigPreviewModel. The Preview tab always
@@ -1354,7 +1353,7 @@ fun CanvasViewportComposable(
 						)
 						val wireKey = wireItems.map { Triple(it.drawable.id, it.selected, it.dimmed) }
 						val gpuPaint = paintSession?.takeIf { showTexture && it.gpuPreview }
-						gpuSubmission.submit(listOf(model.rig.puppet, model.atlas, geometry, viewport, w, h, options, showTexture, wireKey,
+						CanvasGpu.draw(awtWindow, gpuKey, listOf(model.rig.puppet, model.atlas, geometry, viewport, w, h, options, showTexture, wireKey,
 							guideKey, pathIds, canvasState.pathShowWidth, canvasState.pathShowHardness, gpuPaint, gpuPaint?.gpuVersion)) {
 							val paint = gpuPaint?.let { session ->
 								val full = paintUploaded[0] !== session
@@ -1367,28 +1366,7 @@ fun CanvasViewportComposable(
 								if (showTexture) ArtworkDrawList.build(model, geometry, options) else emptyList(),
 								OverlayScene(MeshWireframe.overlay(geometry, wireItems, showTexture).items + gpuRigGuides()),
 								paint)
-						}
-						val latest = gpuFrame
-						val latestImage = gpuImage
-						if (latest != null && latestImage != null && (latest.scene as? CanvasScene)?.geometry !== ghostGeometry[0]) {
-							lastArtwork[0] = latest to latestImage
-						}
-						// A ghost frame still in flight: keep the last regular one, unless the service has released it.
-						val shown = lastArtwork[0]?.takeIf { !it.first.bitmap.isClosed }
-						val frame = shown?.first
-						val image = shown?.second
-						if (frame != null && image != null) {
-							// The frame may be a step behind the camera: move it to where the camera is now, so a pan
-							// or zoom follows the pointer at once and the exact frame replaces it when it lands.
-							val k = (viewport.scale / frame.viewport.scale).toFloat()
-							val tx = (viewport.offsetX - frame.viewport.offsetX * k).toFloat()
-							val ty = (viewport.offsetY - frame.viewport.offsetY * k).toFloat()
-							if (k == 1f && tx == 0f && ty == 0f) drawImage(image)
-							else withTransform({
-								translate(tx, ty)
-								scale(k, k, pivot = Offset.Zero)
-							}) { drawImage(image) }
-						}
+						}?.let { drawGpuFrame(it) }
 					} else if (showTexture && editingPainter != null) drawIntoCanvas { target ->
 						val key = listOf(
 							editingPainter, model.rig.puppet, geometry, viewport, w, h,
@@ -1616,21 +1594,11 @@ fun CanvasViewportComposable(
 			// One faded layer for the whole saved pose, sharing the canvas camera and visibility.
 			// Composite after rendering its parts so overlapping meshes do not darken the ghost.
 			if (snapshotGeometry != null && gpuReady) {
-				ghostGeometry[0] = snapshotGeometry
 				// The GPU frame is already one flattened layer, so fading the whole of it is the ghost.
 				val options = ArtworkOptions(visibleLayerIds = targetVisibleLayerIds, drawOrderOverrides = canvasState.drawOrderOverrides)
-				gpuSubmission.submit(listOf(model.rig.puppet, model.atlas, snapshotGeometry, viewport, w, h, options, "snapshot")) {
+				CanvasGpu.draw(awtWindow, ghostKey, listOf(model.rig.puppet, model.atlas, snapshotGeometry, viewport, w, h, options)) {
 					CanvasScene(w, h, viewport, model, snapshotGeometry, ArtworkDrawList.build(model, snapshotGeometry, options))
-				}
-				val frame = gpuFrame
-				val image = gpuImage
-				if (frame != null && image != null && (frame.scene as? CanvasScene)?.geometry === snapshotGeometry) {
-					val k = (viewport.scale / frame.viewport.scale).toFloat()
-					withTransform({
-						translate((viewport.offsetX - frame.viewport.offsetX * k).toFloat(), (viewport.offsetY - frame.viewport.offsetY * k).toFloat())
-						scale(k, k, pivot = Offset.Zero)
-					}) { drawImage(image, alpha = 0.6f) }
-				}
+				}?.let { drawGpuFrame(it, alpha = 0.6f) }
 			} else if (snapshotGeometry != null && editingPainter != null) drawIntoCanvas { target ->
 				val key = listOf(editingPainter, model, snapshotGeometry, viewport, w, h,
 					targetVisibleLayerIds, canvasState.drawOrderOverrides)
@@ -1681,12 +1649,19 @@ fun CanvasViewportComposable(
 				physicsEnabled = canvasState.generatePhysics,
 				physicsAvailable = !canvasState.meshOnly,
 				fps = canvasState.rigEdits.physicsFps,
+				runtime = previewBackend,
+				advanced = previewAdvanced,
+				p2lrtAvailable = io.github.psd2live.core.P2lrtPreviewSession.runtimeAvailable,
 				enabled = true,
 				onToggleAnimation = { viewModel.togglePreviewPlayback() },
 				onToggleMouseTracking = { viewModel.setMouseTrackingEnabled(!canvasState.mouseTrackingEnabled) },
 				onToggleSmoothTracking = { viewModel.setSmoothMouseTracking(!canvasState.smoothMouseTracking) },
 				onTogglePhysics = { viewModel.setGeneratePhysics(!canvasState.generatePhysics) },
 				onSelectFps = viewModel::setProjectFps,
+				onSelectRuntime = { backend, advanced ->
+					if (backend == io.github.psd2live.core.PreviewBackend.P2LRT) AppSettings.previewAdvanced = advanced
+					viewModel.selectPreviewBackend(backend)
+				},
 			)
 		}
         // Overlay: Empty hint or Stats Badge
@@ -1712,6 +1687,10 @@ fun CanvasViewportComposable(
 			val badgeText = when (mode) {
 				CanvasMode.PREVIEW -> when {
 					referenceSimulation -> "${fpsStr}${tr("canvas.preview.simReference", zoomPct)}"
+					sdkFrame?.backend == io.github.psd2live.core.PreviewBackend.P2LRT -> "${fpsStr}${tr(
+						if (previewModel.hasRuntimePhysics) "canvas.preview.p2lrtPhysicsOn" else "canvas.preview.p2lrtPhysicsOff",
+						zoomPct,
+					)}" + if (sdkFrame?.advanced == true) tr("canvas.preview.advancedOn") else ""
 					sdkFrame != null -> "${fpsStr}${tr(
 						if (previewModel.hasRuntimePhysics) "canvas.preview.cubismPhysicsOn" else "canvas.preview.cubismPhysicsOff",
 						zoomPct,
@@ -1731,23 +1710,33 @@ fun CanvasViewportComposable(
 
 			// Bottom-left: zoom/FPS/physics stats pill.
 			if (badgeText.isNotEmpty() && (mode != CanvasMode.EDIT || (editor.skeletonDraft == null && editor.placement == null && viewModel.swingSession == null))) {
-				Box(
-					modifier = Modifier
-						.align(Alignment.BottomStart)
-						.padding(start = 8.dp, bottom = 8.dp)
-						.frostedGlass(
-							shape = RoundedCornerShape(6.dp),
-							isHovered = false,
-							elevation = 2.dp,
-							alpha = 0.78f,
+				// In the preview the pill opens the preview's settings: runtime, advanced mode and frame rate.
+				var previewMenu by remember { mutableStateOf(false) }
+				val pillHover = remember { MutableInteractionSource() }
+				val pillHovered by pillHover.collectIsHoveredAsState()
+				Box(Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 8.dp)) {
+					Box(
+						modifier = Modifier
+							.frostedGlass(
+								shape = RoundedCornerShape(6.dp),
+								isHovered = mode == CanvasMode.PREVIEW && (pillHovered || previewMenu),
+								elevation = 2.dp,
+								alpha = 0.78f,
+							)
+							.then(if (mode == CanvasMode.PREVIEW) Modifier.hoverable(pillHover)
+								.clickable(interactionSource = pillHover, indication = null) { previewMenu = !previewMenu } else Modifier)
+							.padding(horizontal = 8.dp, vertical = 4.dp),
+					) {
+						Text(
+							text = badgeText,
+							style = typography.caption.copy(fontSize = 11.sp),
+							color = if (referenceSimulation && mode == CanvasMode.PREVIEW) colors.warning else colors.textPrimary,
 						)
-						.padding(horizontal = 8.dp, vertical = 4.dp),
-				) {
-					Text(
-						text = badgeText,
-						style = typography.caption.copy(fontSize = 11.sp),
-						color = if (referenceSimulation && mode == CanvasMode.PREVIEW) colors.warning else colors.textPrimary,
-					)
+					}
+					if (mode == CanvasMode.PREVIEW) {
+						PreviewSettingsMenu(previewMenu, { previewMenu = false }, previewBackend, viewModel::selectPreviewBackend,
+							previewAdvanced, previewFrameRate)
+					}
 				}
 			}
 			if (mode == CanvasMode.EDIT && editor.hierarchyMode == EditHierarchyMode.SKELETON && editor.committedSkeleton == null) {
@@ -1784,16 +1773,6 @@ private class GuideLabelMemo {
     }
 }
 
-/** Hands the GPU renderer a new scene only when what it shows changed; redraws in between submit nothing. */
-private class GpuSceneSubmission(private val viewId: String) {
-    private var key: List<Any?>? = null
-
-    fun submit(key: List<Any?>, scene: () -> CanvasScene) {
-        if (this.key == key) return
-        this.key = key
-        CanvasRenderService.submit(viewId, scene())
-    }
-}
 
 /**
  * The geometry the canvas draws, kept while its inputs stay the same: the edit tab's own, or the pose evaluated
@@ -1986,4 +1965,18 @@ private fun computeEditorViewport(model: RigPreviewModel, size: IntSize, zoom: D
     val fit=minOf((size.width-margin*2).coerceAtLeast(1)/width.toDouble(),(size.height-margin*2).coerceAtLeast(1)/height.toDouble())
     val scale=fit*zoom
     return CanvasViewport(scale,(size.width-width*scale)*0.5+panX,(size.height-height*scale)*0.5+panY,width,height)
+}
+
+
+/** Draws a GPU frame at the origin: the top-left [GpuFrame.width] × [GpuFrame.height] texels of its texture. */
+internal fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGpuFrame(frame: GpuFrame, alpha: Float = 1f) {
+	drawIntoCanvas { canvas ->
+		val rect = org.jetbrains.skia.Rect.makeWH(frame.width.toFloat(), frame.height.toFloat())
+		val paint = if (alpha < 1f) org.jetbrains.skia.Paint().apply { setAlphaf(alpha) } else null
+		try {
+			canvas.nativeCanvas.drawImageRect(frame.image, rect, rect, org.jetbrains.skia.SamplingMode.DEFAULT, paint, true)
+		} finally {
+			paint?.close()
+		}
+	}
 }

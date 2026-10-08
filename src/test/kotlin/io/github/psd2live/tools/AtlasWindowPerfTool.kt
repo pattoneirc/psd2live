@@ -7,7 +7,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
-import io.github.psd2live.render.CanvasRenderService
+import io.github.psd2live.render.CanvasGpu
+import io.github.psd2live.render.SkiaGpu
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.state.WorkspacePreset
 import io.github.psd2live.ui.views.PSD2LiveApp
@@ -31,6 +32,7 @@ import kotlin.test.Test
 class AtlasWindowPerfTool {
 	@Test fun profile() {
 		requireTools()
+		SkiaGpu.requestOpenGl()
 		val sample = Sample.fromEnvironment()
 		val out = output("atlas-window-perf")
 		val vm = PSD2LiveViewModel()
@@ -57,9 +59,8 @@ class AtlasWindowPerfTool {
 			vm.openRecentFile(sample.path.toAbsolutePath().toString())
 			waitFor(600, "model") { vm.state.value.previewModel != null && !vm.state.value.isBusy }
 			SwingUtilities.invokeAndWait { vm.dismissStartScreen(); vm.openWorkspacePreset(WorkspacePreset.TEXTURE) }
-			CanvasRenderService.ensureStarted()
-			waitFor(30, "GPU renderer") { CanvasRenderService.status.value !is CanvasRenderService.Status.Starting }
-			report.appendLine("GPU: ${CanvasRenderService.status.value}")
+			waitFor(30, "GPU renderer") { SkiaGpu.status.value !is SkiaGpu.Status.Starting }
+			report.appendLine("GPU: ${SkiaGpu.status.value}")
 			Thread.sleep(2500)
 			val win = window.get()!!
 			/** The window's own last frame, as Skia drew it: never the screen, which may show other windows. */
@@ -143,7 +144,7 @@ class AtlasWindowPerfTool {
 				val jfr = File(out, "$name.jfr")
 				recording.dump(jfr.toPath()); recording.close()
 				report.appendLine("    atlas lifted draws ${AtlasPageProbe.liftedDraws.getAndSet(0)}, with the GPU frame lifted ${AtlasPageProbe.liftedGpuFrames.getAndSet(0)}; " +
-					"GPU frames per view ${CanvasRenderService.framesDrawn.mapValues { it.value.getAndSet(0) }}")
+					"GPU frames per view ${CanvasGpu.framesDrawn.mapValues { it.value.getAndSet(0) }}")
 				val stamps = frames.toList().sorted()
 				val gaps = stamps.zipWithNext { a, b -> (b - a) / 1e6 }.sorted()
 				val latency = synchronized(pings) { pings.map { it / 1e6 }.sorted() }

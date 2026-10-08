@@ -20,7 +20,8 @@ import java.awt.image.DataBufferInt
 import java.util.IdentityHashMap
 
 /**
- * Draws canvas scenes with OpenGL. Every method runs on the [GlHost] thread with its context current.
+ * Draws canvas scenes with OpenGL. Every method runs with its context current: in the app Skia's own, during a
+ * [WindowGpu.turn]; in tests a headless one.
  *
  * The CPU deforms (the UI already has the geometry for picking), so the GPU only fills pixels: one VAO per mesh
  * with static UVs and indices and a dynamic position buffer, re-uploaded only when the scene hands over a
@@ -136,15 +137,13 @@ internal class GlCanvasRenderer(
 	}
 
 	/**
-	 * Draws [scene] for [viewId] and reads it back as a premultiplied RGBA bitmap, top row first. The bitmap is
-	 * new each frame and owned by the caller.
+	 * Draws [scene] for [viewId] into the bound framebuffer, whose first row is the frame's top: in the app a
+	 * [GpuTarget] in Skia's context, which Skia then samples as it is.
 	 */
-	fun render(viewId: String, scene: GpuScene): Bitmap {
+	fun draw(viewId: String, scene: GpuScene) {
 		val width = scene.width.coerceAtLeast(1)
 		val height = scene.height.coerceAtLeast(1)
 		val view = views.getOrPut(viewId) { View() }
-		ensureTarget(view, width, height)
-		GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, view.framebuffer)
 		GL11.glViewport(0, 0, width, height)
 		GL11.glDisable(GL11.GL_DEPTH_TEST)
 		GL11.glDisable(GL11.GL_CULL_FACE)
@@ -179,6 +178,21 @@ internal class GlCanvasRenderer(
 			}
 		}
 
+		GL30.glBindVertexArray(0)
+	}
+
+	/**
+	 * Draws [scene] into [viewId]'s own framebuffer and reads it back as a premultiplied RGBA bitmap, top row first;
+	 * for tests and tools on a headless context, which compare it with the software painter. The app never reads back.
+	 */
+	fun render(viewId: String, scene: GpuScene): Bitmap {
+		val width = scene.width.coerceAtLeast(1)
+		val height = scene.height.coerceAtLeast(1)
+		val view = views.getOrPut(viewId) { View() }
+		ensureTarget(view, width, height)
+		GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, view.framebuffer)
+		draw(viewId, scene)
+		GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, view.framebuffer)
 		// Straight into the bitmap's own memory: no direct buffer, no heap array, no second copy into Skia.
 		val bitmap = Bitmap()
 		bitmap.allocPixels(ImageInfo(width, height, ColorType.RGBA_8888, ColorAlphaType.PREMUL))

@@ -71,7 +71,7 @@ src/main/resources/cubism/linux-x86_64/
 ### Linux
 使用 `ldd liblive2d_renderer.so` 检查依赖。预期系统库：`libGL.so`、`libGLX.so`（或 Mesa GLX）、`libX11.so`、`libpthread.so`、`libdl.so`。
 
-离屏预览会创建 GLX 上下文，需要有效的 X11 `DISPLAY`。无图形环境请安装 Xvfb，例如 `xvfb-run -a ./gradlew run`（或 `xvfb-run -a java -jar …`）。缺少 `DISPLAY` 时原生初始化失败，会回退到内置软件渲染。
+离屏预览会创建 GLX 上下文，需要有效的 X11 `DISPLAY`。无图形环境请安装 Xvfb，例如 `xvfb-run -a ./gradlew run`（或 `xvfb-run -a java -jar …`）。缺少 `DISPLAY` 时原生初始化失败，预览改用 PSD2Live 运行时（运行时库也不可用时才回退到编辑画布的绘制）。
 
 修改环境变量后重启启动应用的进程。
 

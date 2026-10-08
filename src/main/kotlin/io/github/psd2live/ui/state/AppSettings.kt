@@ -46,6 +46,51 @@ object AppSettings {
 			runCatching { preferences.putBoolean("software_canvas", value) }
 		}
 
+	private val previewBackendState = kotlinx.coroutines.flow.MutableStateFlow(
+		runCatching { io.github.psd2live.core.PreviewBackend.valueOf(preferences.get("preview_backend", "CUBISM")) }
+			.getOrDefault(io.github.psd2live.core.PreviewBackend.CUBISM),
+	)
+
+	/** The runtime the preview canvases draw with; Cubism by default, p2lrt when Cubism cannot start anyway. */
+	var previewBackend: io.github.psd2live.core.PreviewBackend
+		get() = previewBackendState.value
+		set(value) {
+			previewBackendState.value = value
+			runCatching { preferences.put("preview_backend", value.name) }
+		}
+
+	private val previewAdvancedState = kotlinx.coroutines.flow.MutableStateFlow(
+		runCatching { preferences.getBoolean("preview_advanced", false) }.getOrDefault(false),
+	)
+
+	/** The p2lrt runtime's advanced mode in the preview: skinning along arcs, exact links, live simulation. */
+	val previewAdvancedFlow: kotlinx.coroutines.flow.StateFlow<Boolean> get() = previewAdvancedState
+
+	var previewAdvanced: Boolean
+		get() = previewAdvancedState.value
+		set(value) {
+			previewAdvancedState.value = value
+			runCatching { preferences.putBoolean("preview_advanced", value) }
+		}
+
+	/** The preview frame rates offered; 0 follows the display. */
+	val previewFrameRates = listOf(0, 30, 60, 120)
+
+	private val previewFrameRateState = kotlinx.coroutines.flow.MutableStateFlow(
+		runCatching { preferences.getInt("preview_frame_rate", 0) }.getOrDefault(0).let { if (it < 0) 0 else it },
+	)
+
+	/** The preview's frame rate cap; 0 (the default) renders on every display refresh. */
+	val previewFrameRateFlow: kotlinx.coroutines.flow.StateFlow<Int> get() = previewFrameRateState
+
+	var previewFrameRate: Int
+		get() = previewFrameRateState.value
+		set(value) {
+			val rate = value.coerceAtLeast(0)
+			previewFrameRateState.value = rate
+			runCatching { preferences.putInt("preview_frame_rate", rate) }
+		}
+
 	/** Whether edits in the simulation panel bake again as they commit; off by default, as a bake takes seconds. */
 	var simulationAutoBake: Boolean
 		get() = runCatching { preferences.getBoolean("simulation_auto_bake", false) }.getOrDefault(false)

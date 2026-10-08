@@ -23,6 +23,7 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -296,6 +297,7 @@ internal fun AccentButton(label: String?, onClick: () -> Unit, enabled: Boolean 
 /**
  * A menu dropping from a bar control, in the mode menu's style: frosted, scaling in from its anchor's corner.
  * Put it in the anchor's Box; [alignment] TopStart drops it under the anchor's left edge, TopEnd under its right.
+ * [rise] opens it above the anchor instead, for controls at the bottom of a canvas (align the Box BottomStart).
  */
 @Composable
 internal fun FloatingMenu(
@@ -303,6 +305,7 @@ internal fun FloatingMenu(
 	onDismiss: () -> Unit,
 	width: Dp = 220.dp,
 	alignment: Alignment = Alignment.TopStart,
+	rise: Boolean = false,
 	content: @Composable ColumnScope.() -> Unit,
 ) {
 	val visibility = remember { MutableTransitionState(false) }
@@ -313,7 +316,7 @@ internal fun FloatingMenu(
 	val density = LocalDensity.current
 	Popup(
 		alignment = alignment,
-		offset = with(density) { IntOffset(0, 28.dp.roundToPx()) },
+		offset = with(density) { IntOffset(0, (if (rise) -28 else 28).dp.roundToPx()) },
 		onDismissRequest = onDismiss,
 		properties = PopupProperties(focusable = true),
 	) {
@@ -327,13 +330,13 @@ internal fun FloatingMenu(
 			}, "scale") { if (it) 1f else 0.92f }
 			val lift by transition.animateFloat({
 				if (false isTransitioningTo true) tween(100, easing = FastOutSlowInEasing) else tween(80, easing = FastOutLinearInEasing)
-			}, "lift") { if (it) 0f else -6f }
+			}, "lift") { if (it) 0f else if (rise) 6f else -6f }
 			Column(
 				Modifier
 					.graphicsLayer {
 						this.alpha = alpha; scaleX = scale; scaleY = scale
 						translationY = lift * density.density
-						transformOrigin = TransformOrigin(if (alignment == Alignment.TopEnd) 0.88f else 0.12f, 0f)
+						transformOrigin = TransformOrigin(if (alignment == Alignment.TopEnd || alignment == Alignment.BottomEnd) 0.88f else 0.12f, if (rise) 1f else 0f)
 					}
 					.width(width)
 					.frostedGlass(RoundedCornerShape(7.dp), isHovered = true, elevation = 12.dp, baseColor = colors.panelElevated, alpha = 0.9f)
@@ -413,6 +416,24 @@ internal fun FloatingMenuRow(
 			modifier = Modifier.padding(start = 6.dp))
 		if (control != null) Box(Modifier.padding(start = 8.dp, end = 2.dp)) { control() }
 	}
+}
+
+/** An on/off row of a [FloatingMenu]: a sliding track at the end shows [checked]. */
+@Composable
+internal fun FloatingMenuSwitch(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit, enabled: Boolean = true,
+                                hint: String? = null) {
+	val colors = LocalToolColors.current
+	val thumb by animateDpAsState(if (checked) 10.dp else 2.dp, tween(140))
+	val track by animateColorAsState(when {
+		!enabled -> colors.border.copy(alpha = 0.4f)
+		checked -> colors.accent
+		else -> colors.border
+	}, tween(140))
+	FloatingMenuRow(label, { onCheckedChange(!checked) }, selected = checked, enabled = enabled, hint = hint, bar = false, control = {
+		Box(Modifier.size(20.dp, 12.dp).clip(RoundedCornerShape(6.dp)).background(track)) {
+			Box(Modifier.offset(x = thumb, y = 2.dp).size(8.dp).clip(CircleShape).background(Color.White.copy(alpha = if (enabled) 1f else 0.6f)))
+		}
+	})
 }
 
 /** One choice of a group in a [FloatingMenu]: a radio mark at the end, filled while [selected]. */

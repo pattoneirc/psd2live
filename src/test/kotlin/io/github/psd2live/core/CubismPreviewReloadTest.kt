@@ -166,7 +166,7 @@ class CubismPreviewReloadTest {
 
 	private val parameters = listOf(ParameterId("ParamA"), ParameterId("ParamB"))
 
-	private fun request(overrides: Map<ParameterId, Float> = emptyMap()) = CubismSdkPreviewSession.RenderRequest(
+	private fun request(overrides: Map<ParameterId, Float> = emptyMap()) = PreviewRenderRequest(
 		width = 2, height = 2, scale = 1f, offsetX = 0f, offsetY = 0f, deltaTime = 0f,
 		pointerX = 0f, pointerY = 0f, animationEnabled = false, nativeClock = false,
 		parameterOverrides = overrides, viewId = "view",
@@ -179,7 +179,7 @@ class CubismPreviewReloadTest {
 		body: (FakeNative, CubismSdkPreviewSession) -> Unit,
 	) {
 		val native = FakeNative(listOf("ParamA", "ParamB"), blockFirstCreate)
-		CubismSdkPreviewSession({}, {}, null) { CubismNativeBinding(native, memory, replace) }.use { body(native, it) }
+		CubismSdkPreviewSession({}, {}, null, nativeLoader = { CubismNativeBinding(native, memory, replace) }).use { body(native, it) }
 	}
 
 	private class FakeNative(private val parameterOrder: List<String>, private val gate: CountDownLatch?) : CubismNativeApi {
@@ -203,6 +203,7 @@ class CubismPreviewReloadTest {
 		}
 		private fun Pointer.id() = Pointer.nativeValue(this)
 
+		override fun Live2D_Init() = 0
 		override fun Live2D_InitOffscreen() = 1
 		override fun Live2D_Shutdown() { calls += "shutdown" }
 		override fun Live2D_CreateModel(modelFilePath: String): Pointer? {
@@ -229,6 +230,9 @@ class CubismPreviewReloadTest {
 			calls += "destroy"; destroyed += handle.id(); models.remove(handle.id())
 		}
 		override fun Live2D_Update(handle: Pointer, deltaTime: Float) { calls += "update" }
+		override fun Live2D_Draw(handle: Pointer, width: Int, height: Int, scale: Float, offsetX: Float, offsetY: Float) {
+			calls += "render"; renders += handle.id()
+		}
 		override fun Live2D_SetDragging(handle: Pointer, x: Float, y: Float) = Unit
 		override fun Live2D_StartMotion(handle: Pointer, group: String, index: Int, priority: Int): Int { calls += "motion"; return 1 }
 		override fun Live2D_SetParameterValue(handle: Pointer, parameterId: String, value: Float) {
@@ -242,10 +246,6 @@ class CubismPreviewReloadTest {
 			val count = minOf(capacity, parameterOrder.size)
 			for (index in 0 until count) output.setFloat(index * 4L, values.getValue(parameterOrder[index]))
 			return count
-		}
-		override fun Live2D_RenderToRgba(handle: Pointer, width: Int, height: Int, scale: Float, offsetX: Float, offsetY: Float, output: Pointer): Int {
-			calls += "render"; renders += handle.id()
-			return 1
 		}
 		override fun Live2D_GetLastError(): Pointer? = null
 	}

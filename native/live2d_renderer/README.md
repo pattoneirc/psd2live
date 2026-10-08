@@ -55,6 +55,9 @@ Check dependencies with `ldd liblive2d_renderer.so`; the expected direct depende
 ### Live preview updates
 The preview loads models from memory (`Live2D_CreateModelFromMemory`) and swaps changed texture pages in place (`Live2D_ReplaceTexture`), so an edit that only changes pixels keeps the live model, and other edits rebuild it from memory without writing a temporary directory. The application looks these symbols up when it loads the library: without `Live2D_ReplaceTexture` every change rebuilds from memory, and without `Live2D_CreateModelFromMemory` it keeps the file-based reload. Rebuild the bridge to get texture swaps.
 
+### Drawing on the application's context
+The application draws Cubism on its window's own OpenGL context: `Live2D_Init` initializes the framework on the context current on the calling thread, and `Live2D_Draw` draws into the framebuffer bound there; `Live2D_InitOffscreen` and `Live2D_RenderToRgba` (a private hidden context and a read back frame) are no longer used by the application. Bridges that export `Live2D_UsesCallerContext` keep in-memory models on the caller's context after `Live2D_Init`. Older bridges create every in-memory model on their hidden context, so with them the application loads models from temporary files and rebuilds the model on every edit; rebuild the bridge to keep in-memory reloads and texture swaps.
+
 Check application renderer status and logs. Without usable native resources, the app uses its software renderer; basic model export does not require this native library.
 
 [English setup](../../docs/en/guide/CUBISM_SDK_SETUP.md) · [中文](../../docs/zh/guide/CUBISM_SDK_SETUP.md) · [日本語](../../docs/ja/guide/CUBISM_SDK_SETUP.md) · [CMake configuration](CMakeLists.txt)

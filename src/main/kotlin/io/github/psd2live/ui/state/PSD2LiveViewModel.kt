@@ -31,8 +31,10 @@ import io.github.psd2live.core.PackedAtlas
 
 import io.github.psd2live.core.PSD2LivePipeline
 import io.github.psd2live.core.RigStructureEdits
-import io.github.psd2live.core.CubismSdkFrame
-import io.github.psd2live.core.CubismSdkPreviewSession
+import io.github.psd2live.core.PreviewFrame
+import io.github.psd2live.core.PreviewSessions
+import io.github.psd2live.core.PreviewBackend
+import io.github.psd2live.core.PreviewRenderRequest
 import io.github.psd2live.core.HierarchyImportTarget
 import io.github.psd2live.core.LayerClassificationOverride
 import io.github.psd2live.core.layerSelectionRange
@@ -2664,16 +2666,16 @@ class PSD2LiveViewModel : AutoCloseable {
 	private val _uiState = mutableStateOf(_state.value)
 	/** Same document [state] publishes, readable as Compose snapshot state so one frame cannot mix two copies. */
 	val uiState: State<PSD2LiveState> get() = _uiState
-	private val _sdkFrame = MutableStateFlow<CubismSdkFrame?>(null)
-	val sdkFrame: StateFlow<CubismSdkFrame?> = _sdkFrame.asStateFlow()
-    private val canvasFrames = mutableMapOf<String, MutableStateFlow<CubismSdkFrame?>>()
+	private val _sdkFrame = MutableStateFlow<PreviewFrame?>(null)
+	val sdkFrame: StateFlow<PreviewFrame?> = _sdkFrame.asStateFlow()
+    private val canvasFrames = mutableMapOf<String, MutableStateFlow<PreviewFrame?>>()
     private val canvasFrameUsers = mutableMapOf<String, Int>()
     fun canvasRenderKey(canvasId: String, mode: CanvasMode = state.value.activeWorkspace.canvases
         .firstOrNull { it.id == canvasId }?.mode ?: CanvasMode.EDIT): String =
         "${state.value.projectOpenGeneration}/${state.value.activeWorkspace.id}/$canvasId/${mode.name}"
-    fun sdkFrameFor(renderKey: String): StateFlow<CubismSdkFrame?> =
+    fun sdkFrameFor(renderKey: String): StateFlow<PreviewFrame?> =
         canvasFrames.getOrPut(renderKey) { MutableStateFlow(null) }
-    internal fun retainCanvasFrame(renderKey: String): StateFlow<CubismSdkFrame?> {
+    internal fun retainCanvasFrame(renderKey: String): StateFlow<PreviewFrame?> {
         val flow = sdkFrameFor(renderKey)
         canvasFrameUsers[renderKey] = (canvasFrameUsers[renderKey] ?: 0) + 1
         return flow
@@ -2722,7 +2724,7 @@ class PSD2LiveViewModel : AutoCloseable {
 
 	private fun refreshSdkSession(preview: RigPreviewModel) {
 		if (_state.value.previewLive && sdkSessionWanted) {
-			sdkSession.load(preview.runtimeBundle, preview.rig.puppet.parameters.map { it.id })
+			sdkSession.load(preview)
 			sdkSessionNeedsReload = false
 		} else {
 			sdkSessionNeedsReload = true
@@ -2734,12 +2736,12 @@ class PSD2LiveViewModel : AutoCloseable {
 			val preview = _state.value.previewModel
 			if (preview != null) {
 				sdkSessionNeedsReload = false
-				sdkSession.load(preview.runtimeBundle, preview.rig.puppet.parameters.map { it.id })
+				sdkSession.load(preview)
 			}
 		}
 	}
 
-	internal fun acceptSdkFrame(frame: CubismSdkFrame, nowNanos: Long = System.nanoTime()) {
+	internal fun acceptSdkFrame(frame: PreviewFrame, nowNanos: Long = System.nanoTime()) {
 		val current = state.value
 		val canvas = current.activeWorkspace.canvases.firstOrNull {
 			it.mode == CanvasMode.PREVIEW &&
@@ -2785,7 +2787,7 @@ class PSD2LiveViewModel : AutoCloseable {
 	}
 
 	/** The frame's pose for the panels: all of it while animating, the pointer's look while paused. */
-	private fun publishLivePose(current: PSD2LiveState, frame: CubismSdkFrame) {
+	private fun publishLivePose(current: PSD2LiveState, frame: PreviewFrame) {
 		val panel = current.previewPanelState()
 		val tracked = canvasPointers[frame.viewId] != null && panel.mouseTrackingEnabled && !current.meshOnly && current.activeWorkspace.pose?.authoringPose != true
 		val swinging = pausedPhysics
@@ -2798,13 +2800,44 @@ class PSD2LiveViewModel : AutoCloseable {
 		})
 	}
 
-	private val sdkSession = CubismSdkPreviewSession(
+	private val _previewBackend = MutableStateFlow(PreviewBackend.CUBISM)
+	/** The runtime that draws the preview canvases: the user's pick, or p2lrt when Cubism cannot start. */
+	val previewBackend: StateFlow<PreviewBackend> = _previewBackend.asStateFlow()
+
+	private val sdkSession: PreviewSessions = PreviewSessions(
         onFrame = { frame -> acceptSdkFrame(frame) },
 		onStatus = { status ->
 			if (status != "ready") { _sdkFrame.value = null; canvasFrames.values.forEach { it.value = null } }
 			updateState { it.copy(sdkStatus = status) }
+			if (status == "ready") logPreviewRenderPath()
 		},
+		onBackend = { backend -> previewBackendChanged(backend) },
 	)
+	private var loggedPreviewPath: String? = null
+
+	private fun previewBackendChanged(backend: PreviewBackend) {
+		_sdkFrame.value = null
+		canvasFrames.values.forEach { it.value = null }
+		_previewBackend.value = backend
+		sdkSession.cubismFailure?.let { reason ->
+			addLog(tr("log.preview.cubismUnavailable", reason), level = LogLevel.WARNING, tag = "Render")
+		}
+	}
+
+	/** Says once per change how the preview's frames reach the window. */
+	private fun logPreviewRenderPath() {
+		val path = "${sdkSession.active.name.lowercase()} · ${sdkSession.renderPath ?: return}"
+		if (path == loggedPreviewPath) return
+		loggedPreviewPath = path
+		addLog(tr("log.renderer.preview", path), level = if (path.contains("readback")) LogLevel.WARNING else LogLevel.INFO, tag = "Render")
+	}
+
+	/** Switches the preview runtime; the loaded model plays on it at once. */
+	fun selectPreviewBackend(backend: PreviewBackend) {
+		AppSettings.previewBackend = backend
+		sdkSession.select(backend)
+		_previewBackend.value = sdkSession.active
+	}
 
 	fun setInputPath(path: String) {
 		val normalized = path.trim()
@@ -7023,6 +7056,7 @@ class PSD2LiveViewModel : AutoCloseable {
 		deltaTime: Float = 1f / 60f,
 		frameTimeNanos: Long = System.nanoTime(),
         viewId: String = "",
+		gpu: io.github.psd2live.render.WindowGpu? = null,
 	) {
 		var snapshot = _state.value
 		val keyPrefix = "${snapshot.projectOpenGeneration}/${snapshot.activeWorkspace.id}/"
@@ -7061,7 +7095,7 @@ class PSD2LiveViewModel : AutoCloseable {
 			parameterScrubPose(snapshot, if (!isAnim && snapshot.activeWorkspace.pose?.authoringPose != true && pausedPhysics.isNotEmpty()) framed + pausedPhysics else framed)
 		}
 		sdkSession.render(
-			CubismSdkPreviewSession.RenderRequest(
+			PreviewRenderRequest(
 				width = width,
 				height = height,
 				scale = scale,
@@ -7080,6 +7114,9 @@ class PSD2LiveViewModel : AutoCloseable {
 				lockedParameters = presentation.lockedParameters,
 				frameTimeNanos = frameTimeNanos,
                 viewId = viewId,
+				gpu = gpu,
+				advanced = AppSettings.previewAdvanced,
+				physics = snapshot.generatePhysics && !snapshot.meshOnly,
 			),
 		)
 	}
@@ -7089,6 +7126,8 @@ class PSD2LiveViewModel : AutoCloseable {
 	// After every field the motion loop reads: an earlier init would race property initializers
 	// that sit lower in this class (pausedPhysics, live pose, etc.).
 	init {
+		sdkSession.select(AppSettings.previewBackend)
+		_previewBackend.value = sdkSession.active
 		startMotionLoop()
 		// What the atlas layout reports (a fit below 1, pages or locks beyond the budget) goes to the log only, once per change.
 		scope.launch {

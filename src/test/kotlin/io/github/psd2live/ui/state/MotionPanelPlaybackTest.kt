@@ -190,8 +190,8 @@ class MotionPanelPlaybackTest {
 			vm.setStateForTest(vm.state.value.copy(meshOnly = false))
 			vm.setCanvasMode(vm.state.value.activeCanvas.id, CanvasMode.PREVIEW)
 			val angle = org.umamo.runtime.model.ParameterId("ParamAngleY")
-			vm.acceptSdkFrame(io.github.psd2live.core.CubismSdkFrame(
-				BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB), mapOf(angle to -7f)))
+			vm.acceptSdkFrame(io.github.psd2live.core.PreviewFrame(
+				1, 1, mapOf(angle to -7f)))
 			assertEquals(-7f, vm.livePose.value[angle])
 			vm.setMotionPlayhead(0.3f)
 			assertEquals(-5f, vm.livePose.value[angle])

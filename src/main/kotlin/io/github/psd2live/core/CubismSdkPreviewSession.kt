@@ -13,13 +13,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.umamo.runtime.model.ParameterId
-import java.awt.image.BufferedImage
-import java.awt.image.DataBufferInt
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
-import java.util.concurrent.Executors
-import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -29,6 +25,8 @@ import kotlin.coroutines.resumeWithException
 
 /** The native preview bridge (`native/live2d_renderer`); a test can stand in for it. */
 internal interface CubismNativeApi : Library {
+	/** Initializes the framework on the context current on the calling thread; only with [CubismNativeBinding.drawCurrent]. */
+	fun Live2D_Init(): Int
 	fun Live2D_InitOffscreen(): Int
 	fun Live2D_Shutdown()
 	fun Live2D_CreateModel(modelFilePath: String): Pointer?
@@ -38,6 +36,8 @@ internal interface CubismNativeApi : Library {
 	fun Live2D_ReplaceTexture(handle: Pointer, index: Int, data: ByteArray, size: Long, width: Int, height: Int): Int
 	fun Live2D_DestroyModel(handle: Pointer)
 	fun Live2D_Update(handle: Pointer, deltaTime: Float)
+	/** Draws into the framebuffer bound on the current context; only with [CubismNativeBinding.drawCurrent]. */
+	fun Live2D_Draw(handle: Pointer, width: Int, height: Int, scale: Float, offsetX: Float, offsetY: Float)
 	fun Live2D_SetDragging(handle: Pointer, x: Float, y: Float)
 	fun Live2D_StartMotion(handle: Pointer, group: String, index: Int, priority: Int): Int
 	fun Live2D_SetParameterValue(handle: Pointer, parameterId: String, value: Float)
@@ -45,15 +45,6 @@ internal interface CubismNativeApi : Library {
 	fun Live2D_RefreshModel(handle: Pointer)
 	fun Live2D_GetParameterCount(handle: Pointer): Int
 	fun Live2D_CopyParameterValues(handle: Pointer, output: Pointer, capacity: Int): Int
-	fun Live2D_RenderToRgba(
-		handle: Pointer,
-		width: Int,
-		height: Int,
-		scale: Float,
-		offsetX: Float,
-		offsetY: Float,
-		output: Pointer,
-	): Int
 	fun Live2D_GetLastError(): Pointer?
 }
 
@@ -62,17 +53,13 @@ internal class CubismNativeBinding(
 	val api: CubismNativeApi,
 	val memoryModels: Boolean,
 	val textureReplace: Boolean,
-)
-
-/** A frame evaluated and rendered by the official Cubism 5-r.5 runtime. */
-data class CubismSdkFrame(
-	val image: BufferedImage,
-	val parameters: Map<ParameterId, Float>,
-	val animationEnabled: Boolean = true,
-    val viewId: String = "",
-    val cameraScale: Float = 1f,
-    val cameraOffsetX: Float = 0f,
-    val cameraOffsetY: Float = 0f,
+	/** `Live2D_Init` and `Live2D_Draw`: the library can draw on a context the caller owns. */
+	val drawCurrent: Boolean = false,
+	/**
+	 * `Live2D_UsesCallerContext`: after `Live2D_Init` in-memory models use the caller's context too. Older bridges
+	 * create them on their private hidden context, so with the caller's context they load models from files.
+	 */
+	val callerContextModels: Boolean = false,
 )
 
 internal data class CubismPointerTrackingBinding(
@@ -93,50 +80,36 @@ internal val CUBISM_POINTER_TRACKING_BINDINGS = listOf(
 internal const val CUBISM_NATIVE_POINTER_Y = 0f
 
 /**
- * Serializes access to Cubism's hidden OpenGL context on one daemon thread.  The Java SDK release is
- * Android-only, so Windows uses the matching 5-r.5 desktop Core/Framework ABI behind this JVM adapter.
+ * Runs the Cubism 5-r.5 runtime. The Java SDK release is Android-only, so Windows uses the matching 5-r.5
+ * desktop Core/Framework ABI behind this JVM adapter.
+ *
+ * Every native call runs as a task of [gpu]: in the app on the main window's render thread with its Skia OpenGL
+ * context current ([io.github.psd2live.render.PrimaryGpuExecutor]). The framework initializes on that context
+ * (`Live2D_Init`) and each frame draws straight into the view's texture in it (`Live2D_Draw`), which the canvas
+ * draws in the same frame; no pixel leaves the GPU. Tests run the tasks on a thread of their own.
  */
 class CubismSdkPreviewSession internal constructor(
-	private val onFrame: (CubismSdkFrame) -> Unit,
+	private val onFrame: (PreviewFrame) -> Unit,
 	private val onStatus: (String?) -> Unit,
 	/** Where observation sampling stages its temporary model files; the system temp directory by default. */
 	private val stagingRoot: java.nio.file.Path?,
 	private val nativeLoader: () -> CubismNativeBinding,
+	private val gpu: io.github.psd2live.render.GpuExecutor = io.github.psd2live.render.ThreadGpuExecutor("cubism-sdk-preview"),
 ) : AutoCloseable {
 	constructor(
-		onFrame: (CubismSdkFrame) -> Unit,
+		onFrame: (PreviewFrame) -> Unit,
 		onStatus: (String?) -> Unit,
 		stagingRoot: java.nio.file.Path? = null,
-	) : this(onFrame, onStatus, stagingRoot, CubismNativeRuntime::load)
-
-	data class RenderRequest(
-		val width: Int,
-		val height: Int,
-		val scale: Float,
-		val offsetX: Float,
-		val offsetY: Float,
-		val deltaTime: Float,
-		val pointerX: Float,
-		val pointerY: Float,
-		val animationEnabled: Boolean = true,
-		/** Cubism advances its own motion, drag and physics; false renders [parameterOverrides] as the whole pose. */
-		val nativeClock: Boolean = animationEnabled,
-		val parameterOverrides: Map<ParameterId, Float>,
-		val parameterDefinitions: List<org.umamo.runtime.model.Parameter> = emptyList(),
-		val pointerTrackingEnabled: Boolean = pointerX != 0f || pointerY != 0f,
-		val lockedParameters: Set<ParameterId> = emptySet(),
-		val frameTimeNanos: Long = System.nanoTime(),
-        val viewId: String = "",
-	)
+	) : this(onFrame, onStatus, stagingRoot, CubismNativeRuntime::load, io.github.psd2live.render.PrimaryGpuExecutor())
 
 	private data class QueuedRender(
 		val generation: Long,
-		val request: RenderRequest,
+		val request: PreviewRenderRequest,
 	)
 
 	private data class QueuedDelivery(
 		val generation: Long,
-		val frame: CubismSdkFrame,
+		val frame: PreviewFrame,
 	)
 
 	private data class PendingLoad(
@@ -151,9 +124,6 @@ class CubismSdkPreviewSession internal constructor(
 		class OnDisk(val manifest: Path) : ModelSource
 	}
 
-	private val executor = Executors.newSingleThreadExecutor { runnable ->
-		Thread(runnable, "cubism-sdk-preview").apply { isDaemon = true }
-	}
 	private val renderWorkerScheduled = AtomicBoolean(false)
 	private val latestRender = CanvasLatestQueue<QueuedRender>()
 	private val deliveryScheduled = AtomicBoolean(false)
@@ -165,18 +135,21 @@ class CubismSdkPreviewSession internal constructor(
 	@Volatile private var loadedGeneration = -1L
 	@Volatile private var closed = false
 	private var binding: CubismNativeBinding? = null
+	/** The context's resources while a task runs; null in tests. */
+	private var resources: io.github.psd2live.render.GpuResources? = null
+	/** How the session renders, for the log; null until the library is loaded. */
+	@Volatile var renderPath: String? = null
+		private set
 	private var model: Pointer? = null
 	private var parameterIds: List<ParameterId> = emptyList()
-	private var pixelMemory: Memory? = null
-	private var pixelMemoryCapacity = 0L
 	private var parameterMemory: Memory? = null
 	private var parameterMemoryCapacity = 0
 	private class NativeCanvas(var handle: Pointer) {
         var lastRenderedFrameTimeNanos = 0L
         var previousFrameWasAnimated = false
-        var lastPoseRequest: RenderRequest? = null
+        var lastPoseRequest: PreviewRenderRequest? = null
         /** The last request this view rendered, rendered again after a live update so the view shows it at once. */
-        var lastRequest: RenderRequest? = null
+        var lastRequest: PreviewRenderRequest? = null
     }
     // All handles stay on the same native GL thread, but own their animation/physics state.
     private val nativeCanvases = mutableMapOf<String, NativeCanvas>()
@@ -240,11 +213,7 @@ class CubismSdkPreviewSession internal constructor(
 	private fun applyLoad(next: PendingLoad) {
 		var stage = "load native library"
 		try {
-			val current = binding ?: nativeLoader().also {
-				stage = "initialize offscreen Cubism runtime"
-				require(it.api.Live2D_InitOffscreen() != 0) { nativeError(it.api, "Cubism runtime initialization failed") }
-				binding = it
-			}
+			val current = binding ?: initializeBinding { stage = it }
 			val native = current.api
 			stage = "compare runtime bundle"
 			val fingerprint = CubismBundleFingerprint.of(next.bundle, loadedFingerprint)
@@ -410,10 +379,7 @@ class CubismSdkPreviewSession internal constructor(
                     if (closed || result.isCancelled || cancelled()) throw java.util.concurrent.CancellationException("Motion sampling cancelled")
                 }
                 checkpoint(); progress(0f)
-                val native = (binding ?: nativeLoader().also {
-                    require(it.api.Live2D_InitOffscreen() != 0) { nativeError(it.api, "Cubism runtime initialization failed") }
-                    binding = it
-                }).api
+                val native = (binding ?: initializeBinding {}).api
                 checkpoint()
                 val directory = stagingRoot?.let { Files.createTempDirectory(it, "psd2live-motion-sample-") }
                     ?: Files.createTempDirectory("psd2live-motion-sample-")
@@ -474,10 +440,11 @@ class CubismSdkPreviewSession internal constructor(
         latestDelivery.remove(viewId)
         if (!closed) onNativeThread {
             nativeCanvases.remove(viewId)?.let { binding?.api?.Live2D_DestroyModel(it.handle) }
+            resources?.release(viewId)
         }
     }
 
-	fun render(request: RenderRequest) {
+	fun render(request: PreviewRenderRequest) {
 		if (closed || request.width <= 0 || request.height <= 0) return
 		latestRender.put(request.viewId, QueuedRender(generation, request))
 		scheduleRenderWorker()
@@ -572,20 +539,20 @@ class CubismSdkPreviewSession internal constructor(
 			if (needsRefresh) native.Live2D_RefreshModel(handle)
             if (!reusePose) canvas.lastPoseRequest = request
 
-			val pixelCount = Math.multiplyExact(Math.multiplyExact(request.width, request.height), 4)
-			val output = ensurePixelMemory(pixelCount.toLong())
-			val ok = native.Live2D_RenderToRgba(
-				handle,
-				request.width,
-				request.height,
-				request.scale,
-				request.offsetX,
-				request.offsetY,
-				output,
-			)
-			if (ok == 0) error(nativeError(native, "Cubism frame rendering failed"))
-			val frame = CubismSdkFrame(
-				image = rgbaImage(request.width, request.height, output),
+			val target = resources
+			// Cubism's renderer feeds vertices from client memory, which a core profile does not have.
+			check(target?.coreProfile != true) { "Cubism needs a compatibility OpenGL context; the window's is a core profile" }
+			if (target != null) {
+				// Cubism draws GL's way up; the target turns it upright into the texture the canvas draws.
+				target.render(request.viewId, request.width, request.height, bottomUp = true) {
+					native.Live2D_Draw(handle, request.width, request.height, request.scale, request.offsetX, request.offsetY)
+				} ?: error("Cubism frame rendering failed")
+			} else {
+				native.Live2D_Draw(handle, request.width, request.height, request.scale, request.offsetX, request.offsetY)
+			}
+			val frame = PreviewFrame(
+				width = request.width,
+				height = request.height,
 				parameters = copyParameterValues(native, handle),
 				animationEnabled = request.animationEnabled,
                 viewId = request.viewId,
@@ -599,7 +566,7 @@ class CubismSdkPreviewSession internal constructor(
 		}
 	}
 
-	private fun animationDeltaTime(canvas: NativeCanvas, request: RenderRequest): Float {
+	private fun animationDeltaTime(canvas: NativeCanvas, request: PreviewRenderRequest): Float {
 		val requested = request.deltaTime.coerceIn(0f, 0.1f)
 		val sinceLast = request.frameTimeNanos - canvas.lastRenderedFrameTimeNanos
 		// Frame stamps come from two clocks: the pump's vsync time, and System.nanoTime while paused. A stamp
@@ -629,16 +596,6 @@ class CubismSdkPreviewSession internal constructor(
 		}
 	}
 
-	private fun ensurePixelMemory(requiredBytes: Long): Memory {
-		val existing = pixelMemory
-		if (existing != null && pixelMemoryCapacity >= requiredBytes) return existing
-		existing?.close()
-		return Memory(requiredBytes).also {
-			pixelMemory = it
-			pixelMemoryCapacity = requiredBytes
-		}
-	}
-
 	private fun copyParameterValues(native: CubismNativeApi, handle: Pointer): Map<ParameterId, Float> {
 		val count = native.Live2D_GetParameterCount(handle).coerceAtLeast(0)
 		if (count == 0) return emptyMap()
@@ -660,23 +617,34 @@ class CubismSdkPreviewSession internal constructor(
 		}
 	}
 
-	private fun rgbaImage(width: Int, height: Int, rgba: Memory): BufferedImage {
-		val image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
-		val argb = (image.raster.dataBuffer as DataBufferInt).data
-		val rgbaInts = rgba.getByteBuffer(0, argb.size.toLong() * Int.SIZE_BYTES)
-			.order(java.nio.ByteOrder.LITTLE_ENDIAN)
-			.asIntBuffer()
-		rgbaInts.get(argb)
-		for (index in argb.indices) {
-			val abgr = argb[index]
-			argb[index] = (abgr and 0xff00ff00.toInt()) or
-				((abgr and 0x000000ff) shl 16) or
-				((abgr and 0x00ff0000) ushr 16)
+	/**
+	 * Loads the library and initializes it on the context the tasks run with, or on its own hidden one when they
+	 * have none (tests).
+	 */
+	private fun initializeBinding(stage: (String) -> Unit): CubismNativeBinding {
+		stage("load native library")
+		val loaded = nativeLoader()
+		val native = loaded.api
+		if (gpu.providesContext) {
+			require(loaded.drawCurrent) { "This Cubism bridge cannot draw on the window's context; rebuild native/live2d_renderer" }
+			stage("initialize Cubism runtime")
+			require(native.Live2D_Init() != 0) { nativeError(native, "Cubism runtime initialization failed") }
+			renderPath = if (loaded.callerContextModels) "texture" else "texture · models from files (rebuild native/live2d_renderer for in-memory reloads)"
+			if (!loaded.callerContextModels) {
+				// The old bridge's in-memory entry point would move the model onto its hidden context.
+				return CubismNativeBinding(native, memoryModels = false, textureReplace = loaded.textureReplace, drawCurrent = true)
+					.also { binding = it }
+			}
+		} else {
+			stage("initialize offscreen Cubism runtime")
+			require(native.Live2D_InitOffscreen() != 0) { nativeError(native, "Cubism runtime initialization failed") }
+			renderPath = "offscreen"
 		}
-		return image
+		binding = loaded
+		return loaded
 	}
 
-	private fun postFrame(frameGeneration: Long, frame: CubismSdkFrame) {
+	private fun postFrame(frameGeneration: Long, frame: PreviewFrame) {
 		latestDelivery.put(frame.viewId, QueuedDelivery(frameGeneration, frame))
 		if (deliveryScheduled.compareAndSet(false, true)) SwingUtilities.invokeLater(::deliverLatestFrame)
 	}
@@ -713,23 +681,17 @@ class CubismSdkPreviewSession internal constructor(
 				disposeModels(native)
 				native.Live2D_Shutdown()
 			}
-			pixelMemory?.close()
-			pixelMemory = null
 			parameterMemory?.close()
 			parameterMemory = null
 		}
-		executor.shutdown()
-		// The native runtime owns a GL context; let it shut down before the JVM halts under it.
-		runCatching { executor.awaitTermination(2, TimeUnit.SECONDS) }
+		gpu.close()
 	}
 
-	/** Queues [task] on the native thread; false once [close] has shut the thread down. */
+	/** Queues [task] as a GPU task; false once the executor is closed. */
 	private fun onNativeThread(task: () -> Unit): Boolean =
-		try {
-			executor.execute(task)
-			true
-		} catch (_: RejectedExecutionException) {
-			false
+		gpu.execute { context ->
+			resources = context
+			try { task() } finally { resources = null }
 		}
 
 	private object CubismNativeRuntime {
@@ -816,6 +778,8 @@ class CubismSdkPreviewSession internal constructor(
 				api = api,
 				memoryModels = exports("Live2D_CreateModelFromMemory"),
 				textureReplace = exports("Live2D_ReplaceTexture"),
+				drawCurrent = exports("Live2D_Init") && exports("Live2D_Draw"),
+				callerContextModels = exports("Live2D_UsesCallerContext"),
 			)
 		}
 

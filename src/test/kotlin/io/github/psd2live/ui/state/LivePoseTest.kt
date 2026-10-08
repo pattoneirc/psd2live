@@ -1,6 +1,6 @@
 package io.github.psd2live.ui.state
 
-import io.github.psd2live.core.CubismSdkFrame
+import io.github.psd2live.core.PreviewFrame
 import io.github.psd2live.core.Physics3Json
 import io.github.psd2live.core.PhysicsAuthoring
 import io.github.psd2live.core.PhysicsOutput
@@ -29,7 +29,7 @@ class LivePoseTest {
 			val angle = StandardParameters.ANGLE_X
 			vm.setParameterValue(hair, 0.3f)
 			fun frame(animated: Boolean, vararg values: Pair<ParameterId, Float>) =
-				CubismSdkFrame(BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB), mapOf(*values), animationEnabled = animated, viewId = key)
+				PreviewFrame(1, 1, mapOf(*values), animationEnabled = animated, viewId = key)
 
 			// Playing: each frame is the pose, not one in ten as the document publishes it.
 			vm.updateCanvasPresentation(vm.state.value.activeWorkspace.id, id, CanvasMode.PREVIEW) { it.copy(animationEnabled = true) }
@@ -64,7 +64,7 @@ class LivePoseTest {
 			vm.setAnimationEnabled(true)
 			assertTrue(vm.state.value.previewPanelState().animationEnabled)
 			val hair = ParameterId("ParamHairFront")
-			vm.acceptSdkFrame(CubismSdkFrame(BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB), mapOf(hair to 0.7f),
+			vm.acceptSdkFrame(PreviewFrame(1, 1, mapOf(hair to 0.7f),
 				animationEnabled = true, viewId = key), 1_000_000_000L)
 			// The sliders read livePose and the edit canvas resolves at the same pose, whichever canvas has focus.
 			assertEquals(0.7f, vm.livePose.value[hair])

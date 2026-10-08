@@ -71,7 +71,7 @@ VCRUNTIME / MSVCP エラーは /MD の古いビルドが原因の場合があり
 ### Linux
 `ldd liblive2d_renderer.so` で依存を確認します。期待されるシステムライブラリ：`libGL.so`、`libGLX.so`（または Mesa GLX）、`libX11.so`、`libpthread.so`、`libdl.so`。
 
-オフスクリーンプレビューは GLX コンテキストを開くため、有効な X11 `DISPLAY` が必要です。ヘッドレス環境では Xvfb を入れ、例として `xvfb-run -a ./gradlew run`（または `xvfb-run -a java -jar …`）で起動してください。`DISPLAY` が無いとネイティブ初期化に失敗し、内蔵ソフトウェア描画にフォールバックします。
+オフスクリーンプレビューは GLX コンテキストを開くため、有効な X11 `DISPLAY` が必要です。ヘッドレス環境では Xvfb を入れ、例として `xvfb-run -a ./gradlew run`（または `xvfb-run -a java -jar …`）で起動してください。`DISPLAY` が無いとネイティブ初期化に失敗し、プレビューは PSD2Live ランタイムに切り替わります（ランタイムライブラリも無い場合のみ編集キャンバスの描画にフォールバックします）。
 
 環境変数変更後は起動元プロセスを再起動してください。
 

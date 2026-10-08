@@ -16,7 +16,7 @@ import androidx.compose.ui.input.pointer.PointerButtons
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
-import io.github.psd2live.render.CanvasRenderService
+import io.github.psd2live.render.SkiaGpu
 import io.github.psd2live.ui.state.AppSettings
 import io.github.psd2live.ui.state.DesktopWorkspace
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -48,12 +48,10 @@ class AtlasFramePerfTool {
 			for (gpu in listOf(false, true)) {
 				AppSettings.softwareCanvas = !gpu
 				if (gpu) {
-					CanvasRenderService.ensureStarted()
-					val end = System.nanoTime() + 30_000_000_000L
-					while (CanvasRenderService.status.value is CanvasRenderService.Status.Starting && System.nanoTime() < end) Thread.sleep(20)
-					val status = CanvasRenderService.status.value
+					// The GPU renderer draws in a window's Skia OpenGL context; this tool has no window.
+					val status = SkiaGpu.status.value
 					report.appendLine("GPU: $status")
-					if (status !is CanvasRenderService.Status.Ready) break
+					if (status !is SkiaGpu.Status.Ready) break
 				} else report.appendLine("software")
 				profile(sample, out, report, if (gpu) "gpu" else "software")
 			}

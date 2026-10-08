@@ -19,6 +19,8 @@
 
 static Live2DAllocator s_allocator;
 static bool s_isInitialized = false;
+// Set by Live2D_Init: models draw on the caller's current context, so nothing switches to the hidden one.
+static bool s_callerContext = false;
 static std::mutex s_mutex;
 static thread_local std::string s_lastError;
 
@@ -448,7 +450,13 @@ int Live2D_Init()
     }
 
     if (!InitializeFramework()) return 0;
+    s_callerContext = true;
 
+    return 1;
+}
+
+int Live2D_UsesCallerContext()
+{
     return 1;
 }
 
@@ -465,6 +473,7 @@ void Live2D_Shutdown()
         Csm::CubismFramework::Dispose();
         Csm::CubismFramework::CleanUp();
         s_isInitialized = false;
+        s_callerContext = false;
     }
     DestroyOffscreenLocked();
 }
@@ -533,8 +542,17 @@ Live2DModelHandle Live2D_CreateModelFromMemory(const uint8_t* bundleData, size_t
         Fail("Preview bundle is empty or truncated");
         return nullptr;
     }
+    // After Live2D_Init the caller's context is current and the model lives there.
+    if (s_callerContext)
+    {
+        if (!s_isInitialized)
+        {
+            Fail("Live2D runtime is not initialized");
+            return nullptr;
+        }
+    }
     // Reloads happen on every edit: reuse a live context instead of re-running GLEW and the log line.
-    if (!(s_isInitialized && HasOffscreenContext() && MakeOffscreenCurrent()) && !InitializeOffscreenLocked())
+    else if (!(s_isInitialized && HasOffscreenContext() && MakeOffscreenCurrent()) && !InitializeOffscreenLocked())
     {
         return nullptr;
     }

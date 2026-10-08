@@ -38,6 +38,19 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 		fun p2l_mesh_opacity(rig: Pointer, index: Int): Float
 		fun p2l_mesh_draw_order(rig: Pointer, index: Int): Float
 		fun p2l_render_order(rig: Pointer, out: IntArray?, capacity: Int): Int
+		fun p2l_canvas(rig: Pointer, width: FloatArray, height: FloatArray)
+		fun p2l_parameter_range(rig: Pointer, index: Int, min: FloatArray?, max: FloatArray?, defaultValue: FloatArray?): Byte
+		fun p2l_parameter_current(rig: Pointer): Pointer?
+		fun p2l_behaviors(rig: Pointer, flags: Int)
+		fun p2l_mesh_uvs(rig: Pointer, index: Int): Pointer?
+		fun p2l_mesh_indices(rig: Pointer, index: Int, count: IntArray): Pointer?
+		fun p2l_mesh_texture(rig: Pointer, index: Int): Int
+		fun p2l_mesh_blend(rig: Pointer, index: Int, culling: ByteArray): Int
+		fun p2l_mesh_masks(rig: Pointer, index: Int, out: IntArray?, capacity: Int, inverted: ByteArray?): Int
+		fun p2l_mesh_colors(rig: Pointer, index: Int, multiply: FloatArray, screen: FloatArray)
+		fun p2l_advanced_available(rig: Pointer): Int
+		fun p2l_set_advanced(rig: Pointer, features: Int): Int
+		fun p2l_sim_reset(rig: Pointer)
 	}
 
 	/** The runtime's version, `major.minor.patch`. */
@@ -90,6 +103,16 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 		public fun vertices(index: Int): FloatArray =
 			native.p2l_mesh_vertices(h(), index)?.getFloatArray(0, native.p2l_mesh_vertex_count(h(), index) * 2) ?: FloatArray(0)
 
+		/**
+		 * Mesh [index]'s vertices from the last evaluation as a view of the runtime's own memory (canvas pixels,
+		 * y down, native byte order), valid until the next evaluation; null for a mesh without vertices.
+		 */
+		public fun verticesBuffer(index: Int): java.nio.ByteBuffer? {
+			val count = native.p2l_mesh_vertex_count(h(), index)
+			if (count == 0) return null
+			return native.p2l_mesh_vertices(h(), index)?.getByteBuffer(0, count * 8L)?.order(java.nio.ByteOrder.nativeOrder())
+		}
+
 		public fun opacity(index: Int): Float = native.p2l_mesh_opacity(h(), index)
 		public fun drawOrder(index: Int): Float = native.p2l_mesh_draw_order(h(), index)
 
@@ -99,11 +122,63 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 			return IntArray(n).also { native.p2l_render_order(h(), it, n) }
 		}
 
+		/** The canvas size in pixels. */
+		public val canvas: Pair<Float, Float> = FloatArray(1).let { w -> FloatArray(1).let { hh -> native.p2l_canvas(h(), w, hh); w[0] to hh[0] } }
+
+		/** Each parameter's default, in [parameterIds] order. */
+		public val defaults: FloatArray = FloatArray(parameterIds.size) { i ->
+			FloatArray(1).also { native.p2l_parameter_range(h(), i, null, null, it) }[0]
+		}
+
+		/** The values the last evaluation used, after clips, behaviors, physics and simulation. */
+		public val current: FloatArray
+			get() = native.p2l_parameter_current(h())?.getFloatArray(0, parameterIds.size) ?: values
+
+		/** Switches the runtime's own behaviors (1 blink, 2 breathing, 4 gaze, 8 lip sync); blinking and breathing start on. */
+		public fun behaviors(flags: Int): Unit = native.p2l_behaviors(h(), flags)
+
+		/** The advanced features the file offers (1 skin, 2 exact links, 4 simulation, 8 collision). */
+		public val advancedAvailable: Int get() = native.p2l_advanced_available(h())
+
+		/** Turns advanced [features] on, the rest off; returns those now on. */
+		public fun setAdvanced(features: Int): Int = native.p2l_set_advanced(h(), features)
+
+		public fun resetSimulation(): Unit = native.p2l_sim_reset(h())
+
+		/** Mesh [index]'s static drawing data: texture coordinates (v down), triangles and how it draws. */
+		public fun mesh(index: Int): Mesh {
+			val vertices = native.p2l_mesh_vertex_count(h(), index)
+			val count = IntArray(1)
+			val indices = native.p2l_mesh_indices(h(), index, count)?.getIntArray(0, count[0]) ?: IntArray(0)
+			val culling = ByteArray(1)
+			val blend = native.p2l_mesh_blend(h(), index, culling)
+			val inverted = ByteArray(1)
+			val maskCount = native.p2l_mesh_masks(h(), index, null, 0, null)
+			val masks = IntArray(maskCount).also { if (maskCount > 0) native.p2l_mesh_masks(h(), index, it, maskCount, inverted) else native.p2l_mesh_masks(h(), index, null, 0, inverted) }
+			return Mesh(
+				uvs = if (vertices == 0) FloatArray(0) else native.p2l_mesh_uvs(h(), index)?.getFloatArray(0, vertices * 2) ?: FloatArray(0),
+				indices = indices, texture = native.p2l_mesh_texture(h(), index), blend = blend, culling = culling[0].toInt() != 0,
+				masks = masks, invertMask = inverted[0].toInt() != 0,
+			)
+		}
+
+		/** Mesh [index]'s multiply and screen colors from the last evaluation, RGB each, into [multiply] and [screen]. */
+		public fun colors(index: Int, multiply: FloatArray, screen: FloatArray): Unit = native.p2l_mesh_colors(h(), index, multiply, screen)
+
 		override fun close() {
 			handle?.let(native::p2l_rig_free)
 			handle = null
 		}
 	}
+
+	/**
+	 * How a mesh draws: [blend] is 0 normal, 1 add, 2 multiply as Cubism draws them, 3 and up the extended modes
+	 * (`p2l_mesh_blend`); [masks] are the meshes that clip it, outside them when [invertMask].
+	 */
+	public class Mesh(
+		public val uvs: FloatArray, public val indices: IntArray, public val texture: Int, public val blend: Int,
+		public val culling: Boolean, public val masks: IntArray, public val invertMask: Boolean,
+	)
 
 	public companion object {
 		private val name = System.mapLibraryName("p2l_runtime")
