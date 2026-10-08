@@ -15,6 +15,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.TooltipArea
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
@@ -24,6 +26,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -43,6 +46,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -54,6 +58,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
@@ -66,17 +73,30 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import io.github.psd2live.ui.components.CompactSlider
 import io.github.psd2live.ui.components.GridIcon
 import io.github.psd2live.ui.components.ICON_FINE
 import io.github.psd2live.ui.components.IconClose
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.theme.frostedGlass
+import kotlin.math.exp
+import kotlin.math.ln
 
 /*
  * The atlas page's floating controls, in the edit canvas's language: a frosted bar like its mode bar, an accent
  * button like its mode button, chips like its deform-level chips and a menu that scales in like its mode menu.
  */
+
+/**
+ * Marks a control floating over a canvas as the canvas's chrome: presses and wheel turns that land on it, its
+ * padding and the gaps between its rows included, stop here instead of reaching the canvas under it. The
+ * canvas skips consumed presses, so no control has to be fenced off by a hand-kept rectangle.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+internal fun Modifier.canvasChrome(): Modifier = this
+	.onPointerEvent(PointerEventType.Press) { event -> event.changes.forEach { it.consume() } }
+	.onPointerEvent(PointerEventType.Scroll) { event -> event.changes.forEach { it.consume() } }
 
 /** A frosted bar of controls floating over a canvas; it lifts while hovered, as the edit canvas's mode bar does. */
 @OptIn(ExperimentalComposeUiApi::class)
@@ -89,6 +109,7 @@ internal fun FloatingBar(modifier: Modifier = Modifier, content: @Composable Row
 	val elevation by animateDpAsState(if (hovered) 8.dp else 2.dp, tween(200))
 	Row(
 		modifier
+			.canvasChrome()
 			.frostedGlass(RoundedCornerShape(6.dp), isHovered = hovered, elevation = elevation, alpha = if (hovered) 0.88f else 0.78f)
 			.hoverable(interactionSource)
 			.onPointerEvent(PointerEventType.Enter) { hoveredByEvent = true }
@@ -415,6 +436,135 @@ internal fun FloatingMenuRow(
 	}
 }
 
+/** An on/off row of a [FloatingMenu]: a sliding track at the end shows [checked]. */
+@Composable
+internal fun FloatingMenuSwitch(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit, enabled: Boolean = true,
+                                hint: String? = null) {
+	val colors = LocalToolColors.current
+	val thumb by animateDpAsState(if (checked) 10.dp else 2.dp, tween(140))
+	val track by animateColorAsState(when {
+		!enabled -> colors.border.copy(alpha = 0.4f)
+		checked -> colors.accent
+		else -> colors.border
+	}, tween(140))
+	FloatingMenuRow(label, { onCheckedChange(!checked) }, selected = checked, enabled = enabled, hint = hint, bar = false, control = {
+		Box(Modifier.size(20.dp, 12.dp).clip(RoundedCornerShape(6.dp)).background(track)) {
+			Box(Modifier.offset(x = thumb, y = 2.dp).size(8.dp).clip(CircleShape).background(Color.White.copy(alpha = if (enabled) 1f else 0.6f)))
+		}
+	})
+}
+
+/**
+ * A value row of a [FloatingMenu]: the label and the value as [display] shows it over a slider. [logarithmic]
+ * spreads a size range that runs to the document's long side so the small sizes keep their room.
+ */
+@Composable
+internal fun FloatingMenuSlider(
+	label: String,
+	value: Float,
+	onValueChange: (Float) -> Unit,
+	valueRange: ClosedFloatingPointRange<Float>,
+	display: String,
+	logarithmic: Boolean = false,
+	enabled: Boolean = true,
+) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+		Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+			Text(label, color = if (enabled) colors.textMuted else colors.textMuted.copy(alpha = 0.5f), fontSize = 10.5.sp, maxLines = 1,
+				overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+			Text(display, color = if (enabled) colors.textPrimary else colors.textMuted, style = typography.monoSmall.copy(fontSize = 9.5.sp))
+		}
+		val clamped = value.coerceIn(valueRange.start, valueRange.endInclusive)
+		if (logarithmic && valueRange.start > 0f) {
+			val start = ln(valueRange.start)
+			val end = ln(valueRange.endInclusive)
+			CompactSlider(ln(clamped), { onValueChange(exp(it).coerceIn(valueRange.start, valueRange.endInclusive)) },
+				valueRange = start..end, modifier = Modifier.fillMaxWidth(), height = 12.dp, enabled = enabled)
+		} else {
+			CompactSlider(clamped, onValueChange, valueRange = valueRange, modifier = Modifier.fillMaxWidth(), height = 12.dp, enabled = enabled)
+		}
+	}
+}
+
+/**
+ * A value chip of a [FloatingBar]: the label and the value. Dragging it sideways scrubs the value, the way a
+ * Blender field does; a click drops a [FloatingMenuSlider] under it for a precise pick.
+ * [scrub] maps a horizontal drag of one pixel to a new value from the value the drag started at.
+ */
+@Composable
+internal fun BarValueChip(
+	label: String,
+	display: String,
+	value: Float,
+	onValueChange: (Float) -> Unit,
+	valueRange: ClosedFloatingPointRange<Float>,
+	scrub: (start: Float, dx: Float) -> Float,
+	logarithmic: Boolean = false,
+	enabled: Boolean = true,
+	tooltip: String? = null,
+	onCommit: () -> Unit = {},
+) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val interactionSource = remember { MutableInteractionSource() }
+	val hovered by interactionSource.collectIsHoveredAsState()
+	var open by remember { mutableStateOf(false) }
+	var dragging by remember { mutableStateOf(false) }
+	val background by animateColorAsState(when {
+		dragging || open -> colors.accent.copy(alpha = 0.18f)
+		hovered && enabled -> colors.controlHover.copy(alpha = 0.7f)
+		else -> Color.Transparent
+	}, tween(80))
+	val currentValue by rememberUpdatedState(value)
+	val change by rememberUpdatedState(onValueChange)
+	val commit by rememberUpdatedState(onCommit)
+	val scrubber by rememberUpdatedState(scrub)
+	Box {
+		BarTooltip(tooltip) {
+			Row(
+				Modifier
+					.height(24.dp)
+					.clip(RoundedCornerShape(4.dp))
+					.background(background)
+					.border(0.5.dp, if (dragging || open) colors.accent.copy(alpha = 0.45f) else colors.border.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
+					.hoverable(interactionSource)
+					.pointerHoverIcon(PointerIcon(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.E_RESIZE_CURSOR)))
+					.pointerInput(enabled) {
+						if (!enabled) return@pointerInput
+						awaitEachGesture {
+							val down = awaitFirstDown()
+							down.consume()
+							val start = currentValue
+							var moved = false
+							while (true) {
+								val event = awaitPointerEvent()
+								val pointer = event.changes.firstOrNull { it.id == down.id } ?: break
+								if (!pointer.pressed) { pointer.consume(); break }
+								val dx = pointer.position.x - down.position.x
+								if (!moved && kotlin.math.abs(dx) > viewConfiguration.touchSlop / 2f) { moved = true; dragging = true }
+								if (moved) change(scrubber(start, dx).coerceIn(valueRange.start, valueRange.endInclusive))
+								pointer.consume()
+							}
+							if (moved) { dragging = false; commit() } else open = !open
+						}
+					}
+					.semantics { contentDescription = "$label $display" }
+					.padding(horizontal = 7.dp),
+				verticalAlignment = Alignment.CenterVertically,
+			) {
+				Text(label, color = if (enabled) colors.textMuted else colors.textMuted.copy(alpha = 0.5f), fontSize = 10.5.sp, maxLines = 1)
+				Spacer(Modifier.width(5.dp))
+				Text(display, color = if (enabled) colors.textPrimary else colors.textMuted, style = typography.monoSmall.copy(fontSize = 10.sp), maxLines = 1)
+			}
+		}
+		FloatingMenu(open, { open = false; commit() }, width = 200.dp) {
+			FloatingMenuSlider(label, value, onValueChange, valueRange, display, logarithmic, enabled)
+		}
+	}
+}
+
 /** One choice of a group in a [FloatingMenu]: a radio mark at the end, filled while [selected]. */
 @Composable
 internal fun FloatingMenuRadio(label: String, selected: Boolean, onSelect: () -> Unit, enabled: Boolean = true, hint: String? = null,
@@ -443,6 +593,7 @@ internal fun NoticeBanner(messages: List<Pair<String, Color>>, onClose: (() -> U
 	val accent = messages.firstOrNull()?.second ?: colors.warning
 	Row(
 		modifier
+			.canvasChrome()
 			.widthIn(max = 480.dp)
 			.frostedGlass(RoundedCornerShape(6.dp), elevation = 4.dp, alpha = 0.9f)
 			.border(0.5.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(6.dp))

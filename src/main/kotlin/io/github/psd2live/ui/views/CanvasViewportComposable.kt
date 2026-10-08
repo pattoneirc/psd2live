@@ -893,10 +893,12 @@ fun CanvasViewportComposable(
 					viewModel.focusCanvas(canvasId)
 				}
 				val change = event.changes.firstOrNull() ?: return@onPointerEvent
+                // The floating bars and rails consume the presses that land on them (canvasChrome), whatever
+                // their size at the moment; the strips along the top and bottom edge stay out of reach.
                 if(change.isConsumed) return@onPointerEvent
                 if(mode == CanvasMode.EDIT && previewModel != null) {
                     val p=change.position/density
-                    if(p.y<40f || p.y>viewSize.height/density-25f || (p.x<42f && p.y in 40f..460f)) return@onPointerEvent
+                    if(p.y<40f || p.y>viewSize.height/density-25f) return@onPointerEvent
                 }
                 focusRequester.requestFocus()
                 if (mode == CanvasMode.EDIT) editor.altHeld = event.keyboardModifiers.isAltPressed

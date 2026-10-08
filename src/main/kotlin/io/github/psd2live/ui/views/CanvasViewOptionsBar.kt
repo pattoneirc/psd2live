@@ -5,6 +5,9 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -36,6 +39,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -55,27 +59,46 @@ import io.github.psd2live.ui.components.ICON_FINE
 import io.github.psd2live.ui.state.TabViewOptions
 import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.frostedGlass
+import io.github.psd2live.ui.views.texture.BarTooltip
+import io.github.psd2live.ui.views.texture.canvasChrome
 import io.github.psd2live.ui.tutorial.TutorialTargetId
 import io.github.psd2live.ui.tutorial.tutorialTarget
 
-/** What a row of a [CanvasOptionsRail] needs to animate with it: whether the rail is open, and its labels' fade and slide. */
-internal class CanvasRailScope(val expanded: Boolean, val textAlpha: Float, val textOffset: androidx.compose.ui.unit.Dp)
+/**
+ * What a row of a [CanvasOptionsRail] needs to animate with it: whether the rail is open, its labels' fade and
+ * slide, and which edge it hangs from ([leading] for the tool palettes on the left).
+ */
+internal class CanvasRailScope(
+	val expanded: Boolean,
+	val textAlpha: Float,
+	val textOffset: androidx.compose.ui.unit.Dp,
+	val leading: Boolean = false,
+)
 
 /**
- * The bottom-right display rail of a canvas: a column of icon toggles on the trailing edge that, while hovered,
- * widens leftward and reveals each row's label - the mirror of the left tool palette. The edit canvas
- * ([CanvasViewOptionsBar]) and the atlas page build their rows with [RailToggle] and [RailDivider].
+ * A canvas rail: a column of icon rows on one edge that, while hovered, widens and reveals each row's label.
+ * The display rail sits bottom-right ([CanvasViewOptionsBar], the atlas page) and the tool palettes of the edit
+ * and preview canvases on the left ([leading]); all build their rows with [RailItem], [RailToggle] and
+ * [RailDivider]. [pinned] holds it open, for a menu dropped from one of its rows; [scrollable] lets a long
+ * palette scroll on a short canvas.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-internal fun CanvasOptionsRail(modifier: Modifier = Modifier, content: @Composable CanvasRailScope.() -> Unit) {
+internal fun CanvasOptionsRail(
+	modifier: Modifier = Modifier,
+	leading: Boolean = false,
+	expandedWidth: androidx.compose.ui.unit.Dp = 168.dp,
+	pinned: Boolean = false,
+	scrollable: Boolean = false,
+	content: @Composable CanvasRailScope.() -> Unit,
+) {
 	val toolbarInteractionSource = remember { MutableInteractionSource() }
 	val isHoveredBySource by toolbarInteractionSource.collectIsHoveredAsState()
 	var isHoveredByEvent by remember { mutableStateOf(false) }
-	val isToolbarHovered = isHoveredBySource || isHoveredByEvent
+	val isToolbarHovered = isHoveredBySource || isHoveredByEvent || pinned
 
 	val animatedWidth by animateDpAsState(
-		targetValue = if (isToolbarHovered) 168.dp else 34.dp,
+		targetValue = if (isToolbarHovered) expandedWidth else 34.dp,
 		animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
 	)
 	val textAlpha by animateFloatAsState(
@@ -86,8 +109,9 @@ internal fun CanvasOptionsRail(modifier: Modifier = Modifier, content: @Composab
 			easing = FastOutSlowInEasing,
 		),
 	)
+	// Labels slide in from the rail's own edge.
 	val textOffset by animateDpAsState(
-		targetValue = if (isToolbarHovered) 0.dp else 6.dp,
+		targetValue = if (isToolbarHovered) 0.dp else if (leading) (-6).dp else 6.dp,
 		animationSpec = tween(
 			durationMillis = if (isToolbarHovered) 180 else 80,
 			delayMillis = if (isToolbarHovered) 30 else 0,
@@ -98,10 +122,11 @@ internal fun CanvasOptionsRail(modifier: Modifier = Modifier, content: @Composab
 		targetValue = if (isToolbarHovered) 8.dp else 2.dp,
 		animationSpec = tween(durationMillis = 200),
 	)
-	val scope = CanvasRailScope(animatedWidth > 42.dp, textAlpha, textOffset)
+	val scope = CanvasRailScope(animatedWidth > 42.dp, textAlpha, textOffset, leading)
 	Column(
 		modifier = modifier
 			.width(animatedWidth)
+			.canvasChrome()
 			.frostedGlass(
 				shape = RoundedCornerShape(6.dp),
 				isHovered = isToolbarHovered,
@@ -111,28 +136,129 @@ internal fun CanvasOptionsRail(modifier: Modifier = Modifier, content: @Composab
 			.hoverable(toolbarInteractionSource)
 			.onPointerEvent(PointerEventType.Enter) { isHoveredByEvent = true }
 			.onPointerEvent(PointerEventType.Exit) { isHoveredByEvent = false }
+			.let { if (scrollable) it.verticalScroll(rememberScrollState()) else it }
 			.padding(3.dp),
 		verticalArrangement = Arrangement.spacedBy(2.dp),
-		horizontalAlignment = Alignment.End,
+		horizontalAlignment = if (leading) Alignment.Start else Alignment.End,
 	) { scope.content() }
 }
 
-/** A thin rule between groups of a [CanvasOptionsRail]. */
+/** A thin rule between groups of a [CanvasOptionsRail]; [strong] for the rule above a tool's own variants. */
 @Composable
-internal fun CanvasRailScope.RailDivider() {
+internal fun CanvasRailScope.RailDivider(strong: Boolean = false) {
 	Box(
 		modifier = Modifier
 			.fillMaxWidth()
 			.padding(horizontal = 4.dp, vertical = 2.dp)
 			.height(1.dp)
-			.background(LocalToolColors.current.border.copy(alpha = 0.35f)),
+			.background(LocalToolColors.current.border.copy(alpha = if (strong) 0.45f else 0.35f)),
 	)
 }
 
-/** One toggle of a [CanvasOptionsRail]: its icon on the trailing edge, its label while the rail is open. */
+/** One toggle of a [CanvasOptionsRail]: its icon on the rail's edge, its label while the rail is open. */
 @Composable
 internal fun CanvasRailScope.RailToggle(label: String, isChecked: Boolean, icon: @Composable (Color) -> Unit, onClick: () -> Unit) =
-	ViewOptionRow(label, isChecked, expanded, textAlpha, textOffset, icon, onClick)
+	RailItem(label, isChecked, icon = icon, onClick = onClick)
+
+/**
+ * One row of a [CanvasOptionsRail]: a tool, a tool's variant or a display toggle. [keyLabel] is the chord that
+ * reaches it, boxed as a key cap when [keyCap] (a tool) or plain (a variant). [tooltip] says why a row is disabled.
+ */
+@Composable
+internal fun CanvasRailScope.RailItem(
+	label: String,
+	selected: Boolean,
+	enabled: Boolean = true,
+	keyLabel: String = "",
+	keyCap: Boolean = false,
+	tooltip: String? = null,
+	icon: @Composable (Color) -> Unit,
+	onClick: () -> Unit,
+) {
+	val colors = LocalToolColors.current
+	val itemInteractionSource = remember { MutableInteractionSource() }
+	val isItemHovered by itemInteractionSource.collectIsHoveredAsState()
+
+	val bg = when {
+		selected -> colors.accent.copy(alpha = 0.24f)
+		isItemHovered && enabled -> colors.controlHover.copy(alpha = 0.7f)
+		else -> Color.Transparent
+	}
+	val tint = when {
+		!enabled -> colors.textDisabled
+		selected -> colors.accent
+		isItemHovered -> colors.textPrimary
+		else -> colors.textMuted
+	}
+	BarTooltip(tooltip) {
+		Row(
+			modifier = Modifier
+				.fillMaxWidth()
+				.height(28.dp)
+				.clip(RoundedCornerShape(3.dp))
+				.background(bg)
+				.semantics { contentDescription = if (keyLabel.isEmpty()) label else "$label  $keyLabel" }
+				.hoverable(itemInteractionSource)
+				.clickable(
+					interactionSource = itemInteractionSource,
+					indication = null,
+					enabled = enabled,
+					onClick = onClick,
+				),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = if (leading) Arrangement.Start else Arrangement.End,
+		) {
+			if (leading) Box(modifier = Modifier.size(28.dp), contentAlignment = Alignment.Center) { icon(tint) }
+			if (expanded) {
+				Row(
+					modifier = Modifier
+						.weight(1f)
+						.offset(x = textOffset)
+						.alpha(textAlpha)
+						.padding(start = if (leading) 2.dp else 6.dp, end = if (leading) 4.dp else 2.dp),
+					verticalAlignment = Alignment.CenterVertically,
+				) {
+					Text(
+						text = label,
+						color = when {
+							!enabled -> colors.textDisabled
+							selected || isItemHovered -> colors.textPrimary
+							else -> colors.textMuted
+						},
+						fontSize = 11.5.sp,
+						fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+						maxLines = 1,
+						overflow = TextOverflow.Ellipsis,
+						modifier = Modifier.weight(1f),
+					)
+					if (keyLabel.isNotEmpty()) RailKeyLabel(keyLabel, keyCap, selected)
+				}
+			}
+			if (!leading) Box(modifier = Modifier.size(28.dp), contentAlignment = Alignment.Center) { icon(tint) }
+		}
+	}
+}
+
+/** The chord of a rail row: a key cap for a tool, plain text for a tool's variant. */
+@Composable
+private fun RailKeyLabel(keyLabel: String, keyCap: Boolean, selected: Boolean) {
+	val colors = LocalToolColors.current
+	if (keyCap) {
+		Box(
+			modifier = Modifier
+				.background(if (selected) colors.accent.copy(alpha = 0.18f) else colors.panelElevated, RoundedCornerShape(3.dp))
+				.border(0.5.dp, if (selected) colors.accent.copy(alpha = 0.4f) else colors.border.copy(alpha = 0.6f), RoundedCornerShape(3.dp))
+				.padding(horizontal = 4.dp, vertical = 1.dp),
+			contentAlignment = Alignment.Center,
+		) {
+			Text(keyLabel, color = if (selected) colors.accent else colors.textDisabled, fontSize = 9.5.sp,
+				fontFamily = FontFamily.Monospace, maxLines = 1)
+		}
+	} else {
+		Text(keyLabel, color = colors.textMuted.copy(alpha = 0.75f), fontSize = 9.5.sp, fontFamily = FontFamily.Monospace,
+			maxLines = 1, modifier = Modifier.padding(end = 4.dp))
+	}
+}
 
 /**
  * Bottom-right mirror of the left tool palette: the most-used per-tab display toggles, so the
@@ -225,74 +351,6 @@ internal fun CanvasViewOptionsBar(
 				icon = { IconSelectedOnly(tint = it, modifier = Modifier.size(14.dp)) },
 				onClick = { apply(options.copy(filterSelectedOnly = !options.filterSelectedOnly)) },
 			)
-		}
-	}
-}
-
-@Composable
-private fun ViewOptionRow(
-	label: String,
-	isChecked: Boolean,
-	isToolbarExpanded: Boolean,
-	textAlpha: Float,
-	textOffset: androidx.compose.ui.unit.Dp,
-	icon: @Composable (Color) -> Unit,
-	onClick: () -> Unit,
-) {
-	val colors = LocalToolColors.current
-	val itemInteractionSource = remember { MutableInteractionSource() }
-	val isItemHovered by itemInteractionSource.collectIsHoveredAsState()
-
-	val bg = when {
-		isChecked -> colors.accent.copy(alpha = 0.24f)
-		isItemHovered -> colors.controlHover.copy(alpha = 0.7f)
-		else -> Color.Transparent
-	}
-	val tint = when {
-		isChecked -> colors.accent
-		isItemHovered -> colors.textPrimary
-		else -> colors.textMuted
-	}
-
-	Row(
-		modifier = Modifier
-			.fillMaxWidth()
-			.height(28.dp)
-			.clip(RoundedCornerShape(3.dp))
-			.background(bg)
-			.semantics { contentDescription = label }
-			.clickable(
-				interactionSource = itemInteractionSource,
-				indication = null,
-				onClick = onClick,
-			),
-		verticalAlignment = Alignment.CenterVertically,
-		horizontalArrangement = Arrangement.End,
-	) {
-		if (isToolbarExpanded) {
-			Text(
-				text = label,
-				color = when {
-					isChecked -> colors.textPrimary
-					isItemHovered -> colors.textPrimary
-					else -> colors.textMuted
-				},
-				fontSize = 11.5.sp,
-				fontWeight = if (isChecked) FontWeight.Medium else FontWeight.Normal,
-				maxLines = 1,
-				overflow = TextOverflow.Ellipsis,
-				modifier = Modifier
-					.weight(1f)
-					.offset(x = textOffset)
-					.alpha(textAlpha)
-					.padding(start = 6.dp, end = 2.dp),
-			)
-		}
-		Box(
-			modifier = Modifier.size(28.dp),
-			contentAlignment = Alignment.Center,
-		) {
-			icon(tint)
 		}
 	}
 }

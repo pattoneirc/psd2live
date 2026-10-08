@@ -91,6 +91,10 @@ import io.github.psd2live.ui.components.SwingSessionPanel
 import io.github.psd2live.ui.theme.frostedGlassTopBar
 import io.github.psd2live.ui.tutorial.TutorialTargetId
 import io.github.psd2live.ui.tutorial.tutorialTarget
+import io.github.psd2live.ui.views.texture.AccentButton
+import io.github.psd2live.ui.views.texture.BarChip
+import io.github.psd2live.ui.views.texture.BarDivider
+import io.github.psd2live.ui.views.texture.FloatingBar
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -2168,62 +2172,20 @@ private fun MiniStepper(
     }
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun BoxScope.CanvasToolBar(
     editor: CanvasEditor,
     keymap: Keymap,
     focus: () -> Unit,
 ) {
-    val colors = LocalToolColors.current
-    val toolbarInteractionSource = remember { MutableInteractionSource() }
-    val isHoveredBySource by toolbarInteractionSource.collectIsHoveredAsState()
-    var isHoveredByEvent by remember { mutableStateOf(false) }
-    val isToolbarHovered = isHoveredBySource || isHoveredByEvent
-
-    val animatedWidth by animateDpAsState(
-        targetValue = if (isToolbarHovered) 156.dp else 34.dp,
-        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
-    )
-    val textAlpha by animateFloatAsState(
-        targetValue = if (isToolbarHovered) 1f else 0f,
-        animationSpec = tween(
-            durationMillis = if (isToolbarHovered) 150 else 80,
-            delayMillis = if (isToolbarHovered) 40 else 0,
-            easing = FastOutSlowInEasing,
-        ),
-    )
-    val textOffset by animateDpAsState(
-        targetValue = if (isToolbarHovered) 0.dp else (-6).dp,
-        animationSpec = tween(
-            durationMillis = if (isToolbarHovered) 180 else 80,
-            delayMillis = if (isToolbarHovered) 30 else 0,
-            easing = FastOutSlowInEasing,
-        ),
-    )
-    val elevation by animateDpAsState(
-        targetValue = if (isToolbarHovered) 8.dp else 2.dp,
-        animationSpec = tween(durationMillis = 200),
-    )
-
-    Column(
+    CanvasOptionsRail(
         modifier = Modifier
             .align(Alignment.TopStart)
             .padding(start = 8.dp, top = 44.dp)
-            .width(animatedWidth)
-            .tutorialTarget(TutorialTargetId.CANVAS_TOOLBAR)
-            .frostedGlass(
-                shape = RoundedCornerShape(6.dp),
-                isHovered = isToolbarHovered,
-                elevation = elevation,
-                alpha = 0.78f
-            )
-            .hoverable(toolbarInteractionSource)
-            .onPointerEvent(PointerEventType.Enter) { isHoveredByEvent = true }
-            .onPointerEvent(PointerEventType.Exit) { isHoveredByEvent = false }
-            .verticalScroll(rememberScrollState())
-            .padding(3.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+            .tutorialTarget(TutorialTargetId.CANVAS_TOOLBAR),
+        leading = true,
+        expandedWidth = 156.dp,
+        scrollable = true,
     ) {
         // The palette is every tool walked in one fixed order, with each row's visibility following the
         // mode. Walking the mode's own list instead would be shorter, but a row that left the
@@ -2241,40 +2203,28 @@ private fun BoxScope.CanvasToolBar(
             // object mode the whole list is two select tools and every line would be a stray rule.
             if (tool in TOOLBAR_DIVIDERS) {
                 val splitsGroups = index < lastVisibleIndex && TOOLBAR_TOOL_ORDER.take(index + 1).any { it in availableTools }
-                AnimatedVisibility(
-                    visible = splitsGroups,
-                    enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
-                    exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                            .height(1.dp)
-                            .background(colors.border.copy(alpha = 0.35f))
-                    )
-                }
+                RailRows(splitsGroups) { RailDivider() }
             }
-            AnimatedVisibility(
-                visible = tool in availableTools,
-                enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
-                exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
-            ) {
-                ToolItemRow(
-                    tool = tool,
-                    isSelected = editor.tool == tool,
-                    isToolbarExpanded = animatedWidth > 42.dp,
-                    textAlpha = textAlpha,
-                    textOffset = textOffset,
-                    isBusy = editor.busy,
+            RailRows(tool in availableTools) {
+                RailItem(
+                    label = tr("editor.tool.${tool.name.lowercase()}"),
+                    selected = editor.tool == tool,
+                    enabled = !editor.busy,
                     // The shape group answers to its shapes' chords, so its row shows the one that is in
                     // hand: pressing it is how the row is reached.
                     keyLabel = keymap.labelFor(
                         if (tool == CanvasTool.PAINT_SHAPE) editor.paintShape.action else tool.action
                     ).orEmpty(),
-                    brushShape = if (tool == CanvasTool.BRUSH) editor.brushShape else null,
-                    paintShape = if (tool == CanvasTool.PAINT_SHAPE) editor.paintShape else null,
-                    skeletonEditSubTool = if (tool == CanvasTool.SKELETON_EDIT) editor.skeletonEditSubTool else null,
+                    keyCap = true,
+                    icon = { color ->
+                        ToolIcon(
+                            tool = tool,
+                            color = color,
+                            brushShape = if (tool == CanvasTool.BRUSH) editor.brushShape else null,
+                            paintShape = if (tool == CanvasTool.PAINT_SHAPE) editor.paintShape else null,
+                            skeletonEditSubTool = if (tool == CanvasTool.SKELETON_EDIT) editor.skeletonEditSubTool else null,
+                        )
+                    },
                     onClick = {
                         editor.activateTool(tool)
                         focus()
@@ -2283,58 +2233,35 @@ private fun BoxScope.CanvasToolBar(
             }
         }
 
-        // Glue's sub-tools unfold under it only while it is in hand, like the brush shapes below; the
-        // weight side is a setting of the weight sub-tool and lives in the tool panel and context menu.
-        AnimatedVisibility(
-            visible = CanvasTool.GLUE in availableTools && editor.tool == CanvasTool.GLUE,
-            enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
-            exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                        .height(1.dp)
-                        .background(colors.border.copy(alpha = 0.45f))
-                )
-                run {
-                    GLUE_SUB_TOOL_LABELS.forEach { (sub, key) ->
-                        ShapeItemRow(
-                            label = tr(key),
-                            isSelected = editor.tool == CanvasTool.GLUE && editor.glueSubTool == sub,
-                            isToolbarExpanded = animatedWidth > 42.dp,
-                            textAlpha = textAlpha,
-                            textOffset = textOffset,
-                            isBusy = editor.busy,
-                            icon = { color -> GlueSubToolIcon(subTool = sub, color = color) },
-                            onClick = {
-                                editor.glueSubTool = sub
-                                editor.activateTool(CanvasTool.GLUE)
-                                focus()
-                            },
-                        )
-                    }
+        // A tool's variants unfold under it only while it is in hand: Glue's sub-tools, the skeleton tools'
+        // sub-tools, the deform brush's tips, the paint shape's faces and the vertex groups the weight tools write.
+        RailRows(CanvasTool.GLUE in availableTools && editor.tool == CanvasTool.GLUE) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                RailDivider(strong = true)
+                GLUE_SUB_TOOL_LABELS.forEach { (sub, key) ->
+                    RailItem(
+                        label = tr(key),
+                        selected = editor.glueSubTool == sub,
+                        enabled = !editor.busy,
+                        icon = { color -> GlueSubToolIcon(subTool = sub, color = color) },
+                        onClick = {
+                            editor.glueSubTool = sub
+                            editor.activateTool(CanvasTool.GLUE)
+                            focus()
+                        },
+                    )
                 }
             }
         }
 
-        AnimatedVisibility(
-            visible = CanvasTool.SKELETON_EDIT in availableTools && editor.tool == CanvasTool.SKELETON_EDIT,
-            enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
-            exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Box(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp).height(1.dp)
-                    .background(colors.border.copy(alpha = 0.45f)))
+        RailRows(CanvasTool.SKELETON_EDIT in availableTools && editor.tool == CanvasTool.SKELETON_EDIT) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                RailDivider(strong = true)
                 SkeletonEditSubTool.entries.forEach { sub ->
-                    ShapeItemRow(
+                    RailItem(
                         label = tr(sub.labelKey),
-                        isSelected = editor.skeletonEditSubTool == sub,
-                        isToolbarExpanded = animatedWidth > 42.dp,
-                        textAlpha = textAlpha,
-                        textOffset = textOffset,
-                        isBusy = editor.busy,
+                        selected = editor.skeletonEditSubTool == sub,
+                        enabled = !editor.busy,
                         icon = { color -> SkeletonEditSubToolIcon(subTool = sub, color = color) },
                         onClick = { editor.skeletonEditSubTool = sub; focus() },
                     )
@@ -2342,56 +2269,33 @@ private fun BoxScope.CanvasToolBar(
             }
         }
 
-        AnimatedVisibility(
-            visible = CanvasTool.SKELETON_POSE in availableTools && editor.tool == CanvasTool.SKELETON_POSE,
-            enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
-            exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
-        ) {
+        RailRows(CanvasTool.SKELETON_POSE in availableTools && editor.tool == CanvasTool.SKELETON_POSE) {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Box(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp).height(1.dp).background(colors.border.copy(alpha = 0.45f)))
+                RailDivider(strong = true)
                 SkeletonPoseSubTool.entries.forEach { sub ->
-                    ShapeItemRow(label = tr(sub.labelKey), isSelected = editor.skeletonPoseSubTool == sub,
-                        isToolbarExpanded = animatedWidth > 42.dp, textAlpha = textAlpha, textOffset = textOffset, isBusy = editor.busy,
-                        icon = { color -> SkeletonPoseSubToolIcon(sub, color) }, onClick = { editor.skeletonPoseSubTool = sub; focus() })
+                    RailItem(
+                        label = tr(sub.labelKey),
+                        selected = editor.skeletonPoseSubTool == sub,
+                        enabled = !editor.busy,
+                        icon = { color -> SkeletonPoseSubToolIcon(sub, color) },
+                        onClick = { editor.skeletonPoseSubTool = sub; focus() },
+                    )
                 }
             }
         }
 
-        val isBrushTool = editor.tool in listOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE)
-
-        AnimatedVisibility(
-            visible = isBrushTool,
-            enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
-            exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                // Subtle divider separating primary tools and brush shapes
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                        .height(1.dp)
-                        .background(colors.border.copy(alpha = 0.45f))
-                )
-
-                // Three brush shapes placed at the bottom of the peer toolbar with text
+        RailRows(editor.tool in DEFORM_BRUSH_TOOLS) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                RailDivider(strong = true)
                 BrushShape.entries.forEach { shape ->
-                    ShapeItemRow(
+                    RailItem(
                         label = tr(shape.labelKey),
-                        isSelected = editor.brushShape == shape,
-                        isToolbarExpanded = animatedWidth > 42.dp,
-                        textAlpha = textAlpha,
-                        textOffset = textOffset,
-                        isBusy = editor.busy,
+                        selected = editor.brushShape == shape,
+                        enabled = !editor.busy,
                         icon = { color -> BrushShapeIcon(shape = shape, color = color) },
                         onClick = {
                             editor.brushShape = shape
-                            if (editor.tool !in listOf(CanvasTool.BRUSH, CanvasTool.SMOOTH, CanvasTool.INFLATE)) {
-                                editor.activateTool(CanvasTool.BRUSH)
-                            }
+                            if (editor.tool !in DEFORM_BRUSH_TOOLS) editor.activateTool(CanvasTool.BRUSH)
                             focus()
                         },
                     )
@@ -2401,32 +2305,15 @@ private fun BoxScope.CanvasToolBar(
 
         // The shape tool's three faces live under it, exactly the way the deform brush carries its own:
         // one row in the palette for the tool, and the shapes it draws are what changes.
-        AnimatedVisibility(
-            visible = editor.hierarchyMode == EditHierarchyMode.PAINT && editor.tool == CanvasTool.PAINT_SHAPE,
-            enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
-            exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                        .height(1.dp)
-                        .background(colors.border.copy(alpha = 0.45f))
-                )
-
+        RailRows(editor.hierarchyMode == EditHierarchyMode.PAINT && editor.tool == CanvasTool.PAINT_SHAPE) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                RailDivider(strong = true)
                 PaintShape.entries.forEach { shape ->
-                    ShapeItemRow(
+                    RailItem(
                         label = tr(shape.labelKey),
+                        selected = editor.paintShape == shape,
+                        enabled = !editor.busy,
                         keyLabel = keymap.labelFor(shape.action).orEmpty(),
-                        isSelected = editor.paintShape == shape,
-                        isToolbarExpanded = animatedWidth > 42.dp,
-                        textAlpha = textAlpha,
-                        textOffset = textOffset,
-                        isBusy = editor.busy,
                         icon = { color -> PaintShapeIcon(shape = shape, color = color) },
                         onClick = {
                             editor.selectPaintShape(shape)
@@ -2439,31 +2326,14 @@ private fun BoxScope.CanvasToolBar(
 
         // The kinds of vertex group the weight tools paint sit under them the way the brush shapes do:
         // picking one is picking which group of the mesh the strokes write.
-        AnimatedVisibility(
-            visible = editor.hierarchyMode == EditHierarchyMode.SIMULATE,
-            enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
-            exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                        .height(1.dp)
-                        .background(colors.border.copy(alpha = 0.45f))
-                )
-
+        RailRows(editor.hierarchyMode == EditHierarchyMode.SIMULATE) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                RailDivider(strong = true)
                 io.github.psd2live.ui.PAINTED_GROUP_KINDS.forEach { kind ->
-                    ShapeItemRow(
+                    RailItem(
                         label = tr("sim.group.${kind.jsonName}"),
-                        isSelected = editor.weightGroupKind == kind,
-                        isToolbarExpanded = animatedWidth > 42.dp,
-                        textAlpha = textAlpha,
-                        textOffset = textOffset,
-                        isBusy = editor.busy,
+                        selected = editor.weightGroupKind == kind,
+                        enabled = !editor.busy,
                         icon = { _ -> VertexGroupKindIcon(kind = kind, color = vertexGroupKindColor(kind)) },
                         onClick = {
                             editor.weightGroupKind = kind
@@ -2477,206 +2347,14 @@ private fun BoxScope.CanvasToolBar(
     }
 }
 
+/** Rows of the tool palette that slide in and out as the mode or the tool in hand changes. */
 @Composable
-private fun ToolItemRow(
-    tool: CanvasTool,
-    isSelected: Boolean,
-    isToolbarExpanded: Boolean,
-    textAlpha: Float,
-    textOffset: androidx.compose.ui.unit.Dp,
-    isBusy: Boolean,
-    keyLabel: String,
-    brushShape: BrushShape? = null,
-    paintShape: PaintShape? = null,
-    skeletonEditSubTool: SkeletonEditSubTool? = null,
-    onClick: () -> Unit,
-) {
-    val colors = LocalToolColors.current
-    val itemInteractionSource = remember { MutableInteractionSource() }
-    val isItemHovered by itemInteractionSource.collectIsHoveredAsState()
-
-    val label = tr("editor.tool.${tool.name.lowercase()}")
-
-    val bg = when {
-        isSelected -> colors.accent.copy(alpha = 0.24f)
-        isItemHovered -> colors.controlHover.copy(alpha = 0.7f)
-        else -> Color.Transparent
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(28.dp)
-            .clip(RoundedCornerShape(3.dp))
-            .background(bg)
-            .semantics { contentDescription = "$label  $keyLabel" }
-            .clickable(
-                interactionSource = itemInteractionSource,
-                indication = null,
-                enabled = !isBusy,
-                onClick = onClick,
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier.size(28.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            ToolIcon(
-                tool = tool,
-                color = when {
-                    isSelected -> colors.accent
-                    isItemHovered -> colors.textPrimary
-                    else -> colors.textMuted
-                },
-                brushShape = brushShape,
-                paintShape = paintShape,
-                skeletonEditSubTool = skeletonEditSubTool,
-            )
-        }
-
-        if (isToolbarExpanded) {
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .offset(x = textOffset)
-                    .alpha(textAlpha)
-                    .padding(end = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Spacer(Modifier.width(2.dp))
-                Text(
-                    text = label,
-                    color = when {
-                        isSelected -> colors.textPrimary
-                        isItemHovered -> colors.textPrimary
-                        else -> colors.textMuted
-                    },
-                    fontSize = 11.5.sp,
-                    fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                if (keyLabel.isNotEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .background(
-                                if (isSelected) colors.accent.copy(alpha = 0.18f) else colors.panelElevated,
-                                RoundedCornerShape(3.dp)
-                            )
-                            .border(
-                                0.5.dp,
-                                if (isSelected) colors.accent.copy(alpha = 0.4f) else colors.border.copy(alpha = 0.6f),
-                                RoundedCornerShape(3.dp)
-                            )
-                            .padding(horizontal = 4.dp, vertical = 1.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = keyLabel,
-                            color = if (isSelected) colors.accent else colors.textDisabled,
-                            fontSize = 9.5.sp,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * One row of a tool's shape menu: the deform brush's three below the brush, the paint shape tool's three
- * below it. The icon is whatever the caller draws for the shape, in the colour the row's state calls for.
- */
-@Composable
-private fun ShapeItemRow(
-    label: String,
-    isSelected: Boolean,
-    isToolbarExpanded: Boolean,
-    textAlpha: Float,
-    textOffset: Dp,
-    isBusy: Boolean,
-    icon: @Composable (Color) -> Unit,
-    keyLabel: String = "",
-    onClick: () -> Unit,
-) {
-    val colors = LocalToolColors.current
-    val itemInteractionSource = remember { MutableInteractionSource() }
-    val isItemHovered by itemInteractionSource.collectIsHoveredAsState()
-
-    val bg = when {
-        isSelected -> colors.accent.copy(alpha = 0.24f)
-        isItemHovered -> colors.controlHover.copy(alpha = 0.7f)
-        else -> Color.Transparent
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(28.dp)
-            .clip(RoundedCornerShape(3.dp))
-            .background(bg)
-            .semantics { contentDescription = label }
-            .clickable(
-                interactionSource = itemInteractionSource,
-                indication = null,
-                enabled = !isBusy,
-                onClick = onClick,
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier.size(28.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            icon(
-                when {
-                    isSelected -> colors.accent
-                    isItemHovered -> colors.textPrimary
-                    else -> colors.textMuted
-                }
-            )
-        }
-
-        if (isToolbarExpanded) {
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .offset(x = textOffset)
-                    .alpha(textAlpha)
-                    .padding(end = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Spacer(Modifier.width(2.dp))
-                Text(
-                    text = label,
-                    color = when {
-                        isSelected -> colors.textPrimary
-                        isItemHovered -> colors.textPrimary
-                        else -> colors.textMuted
-                    },
-                    fontSize = 11.5.sp,
-                    fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                if (keyLabel.isNotEmpty()) {
-                    Text(
-                        text = keyLabel,
-                        color = colors.textMuted.copy(alpha = 0.75f),
-                        fontSize = 9.5.sp,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        modifier = Modifier.padding(end = 4.dp),
-                    )
-                }
-            }
-        }
-    }
+private fun RailRows(visible: Boolean, content: @Composable () -> Unit) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
+        exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(120)),
+    ) { content() }
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -2694,37 +2372,12 @@ private fun BoxScope.HierarchyModeBar(
     val target = editor.target(layerId = selectedLayerId, deformerId = selectedDeformerId)
     val targetLabel = target?.geometry?.name ?: target?.id
 
-    val interactionSource = remember { MutableInteractionSource() }
-    val isHoveredBySource by interactionSource.collectIsHoveredAsState()
-    var isHoveredByEvent by remember { mutableStateOf(false) }
-    val isToolbarHovered = isHoveredBySource || isHoveredByEvent
-
-    val elevation by animateDpAsState(
-        targetValue = if (isToolbarHovered) 8.dp else 2.dp,
-        animationSpec = tween(durationMillis = 200),
-    )
-
-    Row(
-        modifier = Modifier
+    FloatingBar(
+        Modifier
             .align(Alignment.TopStart)
             .padding(start = 8.dp, top = 8.dp)
             .onSizeChanged { onWidth(it.width) }
-            .tutorialTarget(TutorialTargetId.MODE_BAR)
-            .frostedGlass(
-                shape = RoundedCornerShape(6.dp),
-                isHovered = isToolbarHovered,
-                elevation = elevation,
-                alpha = if (isToolbarHovered) 0.88f else 0.78f,
-            )
-            .hoverable(interactionSource)
-            .onPointerEvent(PointerEventType.Enter) { isHoveredByEvent = true }
-            .onPointerEvent(PointerEventType.Exit) { isHoveredByEvent = false }
-            .padding(horizontal = 4.dp, vertical = 3.dp)
-            .animateContentSize(
-                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
+            .tutorialTarget(TutorialTargetId.MODE_BAR),
     ) {
         // The mode menu: every mode, Preview included, behind one button (Blender's mode dropdown).
         CanvasModeMenu(
@@ -2759,27 +2412,20 @@ private fun BoxScope.HierarchyModeBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 2.dp)
-                        .height(14.dp)
-                        .width(1.dp)
-                        .background(colors.border.copy(alpha = 0.45f))
-                )
+                BarDivider()
                 listOf(
                     1 to (tr("editor.level.1") + " · " + tr("editor.level.1.desc")),
                     2 to (tr("editor.level.2") + " · " + tr("editor.level.2.desc")),
                     3 to (tr("editor.level.3") + " · " + tr("editor.level.3.desc")),
                 ).forEach { (lvl, tooltip) ->
-                    val isLvlSelected = editor.editLevel == lvl
-                    DeformLevelChip(
-                        level = lvl,
+                    BarChip(
+                        label = "$lvl",
+                        selected = editor.editLevel == lvl,
                         tooltip = tooltip,
-                        isSelected = isLvlSelected,
                         onClick = {
                             editor.setEditLevel(lvl)
                             focus()
-                        }
+                        },
                     )
                 }
             }
@@ -2801,13 +2447,7 @@ private fun BoxScope.HierarchyModeBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 2.dp)
-                        .height(14.dp)
-                        .width(1.dp)
-                        .background(colors.border.copy(alpha = 0.45f))
-                )
+                BarDivider()
                 val warpRows = target?.geometry?.rows ?: 4
                 val warpCols = target?.geometry?.columns ?: 4
                 Text(
@@ -2840,13 +2480,7 @@ private fun BoxScope.HierarchyModeBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 2.dp)
-                        .height(14.dp)
-                        .width(1.dp)
-                        .background(colors.border.copy(alpha = 0.45f))
-                )
+                BarDivider()
                 // Photoshop-style FG/BG swatch: overlapping squares with a tiny swap in the corner.
                 // The canvas chord for the same swap is X.
                 PaintFgBgSwatch(
@@ -2864,7 +2498,7 @@ private fun BoxScope.HierarchyModeBar(
                     color = colors.textMuted,
                     modifier = Modifier.padding(start = 2.dp),
                 )
-                ModeBarDivider()
+                BarDivider()
                 Text(
                     text = "${editor.paintSize.toInt()}px",
                     fontSize = 10.5.sp,
@@ -2919,13 +2553,14 @@ private fun BoxScope.HierarchyModeBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                ModeBarDivider()
+                BarDivider()
                 if (editor.skeletonDraft != null) {
-                    StructureActionChip(text = tr("skeleton.panel.cancel"), onClick = { editor.cancelSkeletonEdit(); focus() })
-                    StructureActionChip(text = tr("skeleton.panel.done"), onClick = { editor.finishSkeletonEdit(); focus() }, primary = true)
+                    BarChip(tr("skeleton.panel.cancel"), selected = false, onClick = { editor.cancelSkeletonEdit(); focus() })
+                    AccentButton(tr("skeleton.panel.done"), onClick = { editor.finishSkeletonEdit(); focus() })
                 } else {
-                    StructureActionChip(
-                        text = tr("animation.resetPose"),
+                    BarChip(
+                        label = tr("animation.resetPose"),
+                        selected = false,
                         onClick = { editor.resetSkeletonPose(); focus() },
                         enabled = editor.bakedSkeleton != null,
                     )
@@ -2950,13 +2585,7 @@ private fun BoxScope.HierarchyModeBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 2.dp)
-                        .height(14.dp)
-                        .width(1.dp)
-                        .background(colors.border.copy(alpha = 0.45f))
-                )
+                BarDivider()
                 SessionNameChip(
                     text = when (session?.kind) {
                         CreatePlacementKind.WARP -> tr("editor.tool.create_warp")
@@ -2986,13 +2615,7 @@ private fun BoxScope.HierarchyModeBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 2.dp)
-                        .height(14.dp)
-                        .width(1.dp)
-                        .background(colors.border.copy(alpha = 0.45f))
-                )
+                BarDivider()
                 // Edit holding several meshes names each one in the colour it is drawn in on the canvas;
                 // with two, that is glue side A then B.
                 val editMeshes = editor.editMeshTargets()
@@ -3048,18 +2671,6 @@ private fun SessionNameChip(text: String) {
     )
 }
 
-@Composable
-private fun ModeBarDivider() {
-    val colors = LocalToolColors.current
-    Box(
-        modifier = Modifier
-            .padding(horizontal = 2.dp)
-            .height(14.dp)
-            .width(1.dp)
-            .background(colors.border.copy(alpha = 0.45f))
-    )
-}
-
 /**
  * Simulate mode's strip: the vertex group the weight tools write, with its kind's colour, then the
  * simulation of the meshes in hand - create one, or run it live and restart it.
@@ -3077,7 +2688,7 @@ private fun SimulateModeExtras(editor: CanvasEditor, focus: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        ModeBarDivider()
+        BarDivider()
         VertexGroupKindIcon(editor.weightGroupKind, vertexGroupKindColor(editor.weightGroupKind), size = 12.dp)
         Text(
             text = tr("sim.group.${editor.weightGroupKind.jsonName}"),
@@ -3086,26 +2697,28 @@ private fun SimulateModeExtras(editor: CanvasEditor, focus: () -> Unit) {
             maxLines = 1,
             modifier = Modifier.padding(end = 2.dp),
         )
-        ModeBarDivider()
+        BarDivider()
         if (simulation == null) {
-            StructureActionChip(
-                text = tr("sim.newCloth"),
+            BarChip(
+                label = tr("sim.newCloth"),
+                selected = false,
                 onClick = { viewModel.createSimulationFromSelection(io.github.psd2live.core.sim.SimKind.CLOTH); focus() },
                 enabled = meshes.isNotEmpty(),
             )
-            StructureActionChip(
-                text = tr("sim.newHair"),
+            BarChip(
+                label = tr("sim.newHair"),
+                selected = false,
                 onClick = { viewModel.createSimulationFromSelection(io.github.psd2live.core.sim.SimKind.HAIR); focus() },
                 enabled = meshes.isNotEmpty(),
             )
         } else {
-            StructureActionChip(
-                text = tr("sim.previewReference"),
+            BarChip(
+                label = tr("sim.previewReference"),
+                selected = live,
                 onClick = { viewModel.setSimulationPreview(if (live) null else simulation.id); focus() },
-                primary = live,
             )
             if (live) {
-                StructureActionChip(text = tr("sim.restartShort"), onClick = { viewModel.restartSimulationPreview(); focus() })
+                BarChip(tr("sim.restartShort"), selected = false, onClick = { viewModel.restartSimulationPreview(); focus() })
             }
         }
     }
@@ -3119,133 +2732,6 @@ internal fun vertexGroupKindColor(kind: org.umamo.runtime.model.VertexGroupKind)
     org.umamo.runtime.model.VertexGroupKind.DAMPING -> Color(0xFF3FBCD6)
     org.umamo.runtime.model.VertexGroupKind.WIND -> Color(0xFF7FD4F0)
     org.umamo.runtime.model.VertexGroupKind.GOAL -> Color(0xFF3FC46B)
-}
-
-@Composable
-private fun DeformLevelChip(
-    level: Int,
-    tooltip: String,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-) {
-    val colors = LocalToolColors.current
-    val density = LocalDensity.current
-    val interactionSource = remember { MutableInteractionSource() }
-    val isHovered by interactionSource.collectIsHoveredAsState()
-
-    val bg = when {
-        isSelected -> colors.accent.copy(alpha = 0.22f)
-        isHovered -> colors.controlHover.copy(alpha = 0.7f)
-        else -> Color.Transparent
-    }
-    val textColor = when {
-        isSelected -> colors.accent
-        isHovered -> colors.textPrimary
-        else -> colors.textMuted
-    }
-
-    val yOffsetPx = with(density) { 28.dp.roundToPx() }
-
-    Box {
-        Box(
-            modifier = Modifier
-                .height(24.dp)
-                .defaultMinSize(minWidth = 24.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(bg)
-                .border(
-                    0.5.dp,
-                    if (isSelected) colors.accent.copy(alpha = 0.5f) else Color.Transparent,
-                    RoundedCornerShape(4.dp)
-                )
-                .clickable(
-                    interactionSource = interactionSource,
-                    indication = null,
-                    onClick = onClick,
-                )
-                .padding(horizontal = 7.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "$level",
-                color = textColor,
-                fontSize = 11.5.sp,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                maxLines = 1,
-            )
-        }
-
-        if (isHovered) {
-            Popup(
-                alignment = Alignment.TopStart,
-                offset = IntOffset(0, yOffsetPx),
-                properties = PopupProperties(focusable = false),
-            ) {
-                Surface(
-                    color = colors.panelElevated,
-                    border = BorderStroke(0.8.dp, colors.border),
-                    shape = RoundedCornerShape(4.dp),
-                    elevation = 6.dp,
-                ) {
-                    Text(
-                        text = tooltip,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = colors.textPrimary,
-                        maxLines = 1,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StructureActionChip(
-    text: String,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-    primary: Boolean = false,
-) {
-    val colors = LocalToolColors.current
-    val interactionSource = remember { MutableInteractionSource() }
-    val isHovered by interactionSource.collectIsHoveredAsState()
-
-    val bg = when {
-        primary && enabled -> if (isHovered) colors.accent.copy(alpha = 0.9f) else colors.accent
-        isHovered && enabled -> colors.controlHover.copy(alpha = 0.7f)
-        else -> Color.Transparent
-    }
-    val textColor = when {
-        primary && enabled -> Color.White
-        !enabled -> colors.textMuted.copy(alpha = 0.4f)
-        isHovered -> colors.textPrimary
-        else -> colors.textMuted
-    }
-
-    Row(
-        modifier = Modifier
-            .height(24.dp)
-            .clip(RoundedCornerShape(4.dp))
-            .background(bg)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                enabled = enabled,
-                onClick = onClick,
-            )
-            .padding(horizontal = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = text,
-            color = textColor,
-            fontSize = 11.sp,
-            fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-        )
-    }
 }
 
 /**
