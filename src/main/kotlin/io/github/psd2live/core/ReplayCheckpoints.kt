@@ -87,10 +87,15 @@ internal object ReplayCheckpoints {
 		}
 		val recorded = HashMap<Int, Any>()
 		var current = model ?: start().also { recorded[0] = it; from = 0 }
+		val replayStart = System.nanoTime()
 		for (i in from until journal.size) {
 			current = step(current, journal[i])
 			val index = i + 1
 			if (index % INTERVAL == 0 || index > journal.size - RECENT) recorded[index] = current
+		}
+		if (RigBuildProfile.recording) {
+			RigBuildProfile.add("replay: journal", System.nanoTime() - replayStart)
+			repeat(journal.size - from) { RigBuildProfile.count("replay: entries replayed") }
 		}
 		last.set(Replayed(from, journal.size - from))
 		remember(base, legacy, journal, found, foundShared, recorded)

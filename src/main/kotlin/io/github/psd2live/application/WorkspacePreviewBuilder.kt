@@ -45,7 +45,8 @@ internal class WorkspacePreviewBuilder {
                     it["op"]?.jsonPrimitive?.contentOrNull in setOf(VertexGroupJournal.PUT, VertexGroupJournal.DELETE)
                 }
                 val overlay = config.rigEdits.copy(authoringJournal = journal)
-                val rebuilt = pipeline.buildPreview(document.source, config.copy(rigEdits = overlay), progress)
+                val rebuilt = io.github.psd2live.core.RigBuildProfile.stage("normalize: build without vertex groups") {
+                    pipeline.buildPreview(document.source, config.copy(rigEdits = overlay), progress) }
                 // Bone binding can change a mesh's parent space. Resample in a common neutral canvas
                 // space so the weights stay on the artwork instead of moving with that local frame.
                 val previous = restMeshesToCanvasSpace(current.rig.puppet)

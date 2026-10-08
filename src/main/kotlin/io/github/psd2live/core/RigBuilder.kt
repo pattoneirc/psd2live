@@ -483,12 +483,12 @@ object RigBuilder {
 
 	/**
 	 * The settings a generation stage may read, and only those: the mesh, mouth, rig strength and tuning settings,
-	 * the generation mode, the runtime target and (for the scaffold and the deformers) the skeleton. Everything
-	 * else - the journal and static edits, per-layer maps (a stage that reads one layer's entry keys it itself),
+	 * the generation mode and the runtime target. Everything else - the skeleton (the deformers key the part they
+	 * read of it themselves, [deformerSkeleton]), the journal and static edits, per-layer maps (a stage that reads one layer's entry keys it itself),
 	 * the generation inputs, visibility, draw orders, texture, physics, motion and export settings - is left at
 	 * its default, so changing it keeps the stages' outputs.
 	 */
-	private fun stageConfig(config: PipelineConfig, skeleton: Boolean): PipelineConfig = PipelineConfig(
+	private fun stageConfig(config: PipelineConfig): PipelineConfig = PipelineConfig(
 		meshOuterMargin = config.meshOuterMargin, meshEdgeMode = config.meshEdgeMode, meshEdgeWidth = config.meshEdgeWidth,
 		meshMaxEdgeDistance = config.meshMaxEdgeDistance, meshInteriorDensity = config.meshInteriorDensity,
 		meshFillAlgorithm = config.meshFillAlgorithm, meshSuppressBoundaryDiagonals = config.meshSuppressBoundaryDiagonals,
@@ -498,7 +498,7 @@ object RigBuilder {
 		mouthOutlineEnabled = config.mouthOutlineEnabled, mouthShape = config.mouthShape, mouthCurve = config.mouthCurve,
 		mouthColor = config.mouthColor, mouthThickness = config.mouthThickness,
 		hairSimulationFront = config.hairSimulationFront, hairSimulationBack = config.hairSimulationBack, runtimeTarget = config.runtimeTarget,
-		rigEdits = if (skeleton) RigEditOverlay.Empty.copy(skeleton = config.rigEdits.skeleton) else RigEditOverlay.Empty,
+		rigEdits = RigEditOverlay.Empty,
 	)
 
 	private fun deformerStage(
@@ -520,7 +520,9 @@ object RigBuilder {
 	private data class DeformerKey(
 		val stance: String, val bodyFrame: Bounds, val character: Bounds, val head: Bounds, val face: Bounds,
 		val frontHair: Bounds?, val backHair: Bounds?, val faceRig: List<Any?>, val anchors: RigAnchors,
-		val sided: List<Pair<LayerMeta, Bounds>>, val topwear: List<Bounds>, val config: PipelineConfig, val language: String,
+		val sided: List<Pair<LayerMeta, Bounds>>, val topwear: List<Bounds>, val config: PipelineConfig,
+		/** The part of the skeleton the deformers read ([deformerSkeleton]); the config carries none of it. */
+		val skeleton: List<Any?>?, val language: String,
 	)
 
 	private fun deformerKey(
@@ -530,7 +532,16 @@ object RigBuilder {
 		analysis.layers.filter { it.semantic.side == Side.LEFT || it.semantic.side == Side.RIGHT }
 			.map { it.meta() to rigLayerById.getValue(it.source.id.raw).bounds },
 		analysis.layers.filter { it.semantic.tag == SemanticTag.TOPWEAR && it.opaquePixels > 0 }.map { it.bounds },
-		stageConfig(config, skeleton = true), io.github.psd2live.i18n.I18n.currentLanguage.tag)
+		stageConfig(config), deformerSkeleton(config.rigEdits.skeleton), io.github.psd2live.i18n.I18n.currentLanguage.tag)
+
+	/**
+	 * What [buildDeformers] reads of the skeleton: whether it is on and, through [torsoFrame], the joints of its
+	 * first usable upper body bone. The stance, which reads more of it, keys by its own content. Any other bone,
+	 * a binding, a pose or a weight keeps the deformers.
+	 */
+	private fun deformerSkeleton(skeleton: SkeletonSpec?): List<Any?>? = skeleton?.takeIf { it.enabled }?.let { spec ->
+		listOf(spec.bones.firstOrNull { it.role == BoneRole.UPPER_BODY && it.length >= 1f }?.let { listOf(it.headX, it.headY, it.tailX, it.tailY) })
+	}
 
 	/** Use the same generated triangles that will render the texture to place automatic deformers. */
 	private fun meshFramedAnalysis(
@@ -1011,7 +1022,7 @@ object RigBuilder {
 		}
 
 		val builtDeformPaths = mutableListOf<DeformPath>()
-		val meshConfig = stageConfig(config, skeleton = false)
+		val meshConfig = stageConfig(config)
 		val reservedDrawableIds = stableDrawableIds.values.toMutableSet()
 		val orderedLayers = orderMouthLayers(baseLayers.sortedBy { it.source.order })
 		// A passenger keys a toggle or switch only while the resolved layers still need its parameter.

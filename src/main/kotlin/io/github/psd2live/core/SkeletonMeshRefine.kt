@@ -45,15 +45,47 @@ internal object SkeletonMeshRefine {
 	fun refine(model: PuppetModel, drawableId: DrawableId, canvas: FloatArray, bands: List<JointBand>, segments: Int = 16): Pair<PuppetModel, FloatArray> {
 		val mesh = model.drawables.firstOrNull { it.id == drawableId }?.mesh ?: return model to canvas
 		if (canvas.size != mesh.positions.size || bands.isEmpty()) return model to canvas
+		val refined = refinedTopology(mesh, canvas, bands, segments) ?: return model to canvas
+		return model.withMeshTopologyEdit(drawableId, refined.edit) to refined.frame.copyOf()
+	}
+
+	/** A refinement: the topology edit and the refined rest vertices in canvas pixels. */
+	private class Refined(val edit: MeshTopologyEdit, val frame: FloatArray)
+
+	private const val CACHE_CAPACITY = 128
+	private val cache = object : LinkedHashMap<String, java.lang.ref.SoftReference<Refined>>(16, 0.75f, true) {
+		override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, java.lang.ref.SoftReference<Refined>>?): Boolean = size > CACHE_CAPACITY
+	}
+	/** Marks a cached "nothing to add", which a soft reference cannot hold. */
+	private val unchanged = Refined(MeshTopologyEdit(DrawableMesh(FloatArray(0), FloatArray(0), IntArray(0)), emptyList()), FloatArray(0))
+
+	internal fun clearCache() = synchronized(cache) { cache.clear() }
+
+	/**
+	 * The vertices [bands] add to [mesh], or null when none: a pure function of the mesh's arrays, its rest
+	 * vertices, the bands and [segments], so it is kept by exactly those (a skeleton edit refines again only the
+	 * meshes whose limb bands moved).
+	 */
+	private fun refinedTopology(mesh: DrawableMesh, canvas: FloatArray, bands: List<JointBand>, segments: Int): Refined? {
+		val key = io.github.psd2live.format.compile.document.ContentHash.of("refine-1", mesh.positions.contentToString(), mesh.uvs.contentToString(),
+			mesh.indices.contentToString(), canvas.contentToString(), bands.map { listOf(it.x, it.y, it.nx, it.ny, it.half) }, segments)
+		val hit = synchronized(cache) { cache[key]?.get() }
+		if (hit != null) return hit.takeIf { it !== unchanged }
+		val result = compute(mesh, canvas, bands, segments)
+		synchronized(cache) { cache[key] = java.lang.ref.SoftReference(result ?: unchanged) }
+		return result
+	}
+
+	private fun compute(mesh: DrawableMesh, canvas: FloatArray, bands: List<JointBand>, segments: Int): Refined? {
 		val points = bands.flatMap { rowPoints(canvas, mesh.indices, it, segments) }
-		if (points.isEmpty()) return model to canvas
-		val inserted = MeshRefinementOps.insertPoints(mesh, canvas, points, extend = false, edgeSnap = 0.5f) ?: return model to canvas
+		if (points.isEmpty()) return null
+		val inserted = MeshRefinementOps.insertPoints(mesh, canvas, points, extend = false, edgeSnap = 0.5f) ?: return null
 		val edit = inserted.result.edit
 		val created = (mesh.vertexCount until edit.newMesh.vertexCount).toSet()
-		if (created.isEmpty()) return model to canvas
+		if (created.isEmpty()) return null
 		val flipped = MeshRefinementOps.flipTowardDelaunay(edit.newMesh, inserted.frame, created, uvTolerance = OFFSET_UV_TOLERANCE)
 		val tidy = MeshTopologyEdit(DrawableMesh(edit.newMesh.positions, edit.newMesh.uvs, flipped), edit.vertexSources)
-		return model.withMeshTopologyEdit(drawableId, tidy) to inserted.frame
+		return Refined(tidy, inserted.frame.copyOf())
 	}
 
 	/**

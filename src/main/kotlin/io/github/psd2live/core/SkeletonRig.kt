@@ -236,18 +236,18 @@ internal object SkeletonRig {
 	): PuppetModel {
 		if (!spec.enabled || base.deformers.none { it.id == bodyId } || limbBones(spec).isEmpty()) return base
 		val inputs = bakeInputs(base, spec)
-		val key = cacheKey(base, spec, frame, lockedTopology, stance, inputs, canvasSkinned)
+		val key = RigBuildProfile.stage("skeleton: key") { keyOf(base, spec, frame, lockedTopology, stance, inputs, canvasSkinned) }
 		lastKey.set(key)
 		synchronized(bakes) {
 			val cached = bakes[key]
-			if (cached != null && (cached.exact == null || cached.exact == fullHash(base))) {
+			if (cached != null && (cached.exact == null || cached.exact == RigBuildProfile.stage("skeleton: exact hash") { fullHash(base) })) {
 				hits++
 				return if (cached.base === base) cached.output else rebased(cached, base)
 			}
 			misses++
 		}
-		val output = apply(base, spec, frame, lockedTopology, stance, canvasSkinned)
-		val bake = recordBake(base, output, inputs, spec.toJson().toString())
+		val output = RigBuildProfile.stage("skeleton: bake") { apply(base, spec, frame, lockedTopology, stance, canvasSkinned) }
+		val bake = RigBuildProfile.stage("skeleton: record") { recordBake(base, output, inputs, spec.toJson().toString()) }
 		synchronized(bakes) { bakes[key] = bake }
 		return output
 	}
@@ -265,6 +265,31 @@ internal object SkeletonRig {
 			while (next != null && deformers.add(next)) next = byId[next]?.parent
 		}
 		return BakeInputs(drawables, deformers)
+	}
+
+	/** A computed [cacheKey]: [base] by identity, every other input by value. Models are immutable. */
+	private class KeyMemo(val base: java.lang.ref.WeakReference<PuppetModel>, val inputs: List<Any?>, val key: String)
+	private const val KEY_MEMOS = 8
+	private val keys = ArrayList<KeyMemo>()
+
+	/**
+	 * [cacheKey], computed once per base instance and inputs: hashing the base's IR is most of a cache hit's cost,
+	 * and a rebuild that reuses its base rig (the rig builder's stage cache) or a second build of one commit asks again.
+	 */
+	private fun keyOf(base: PuppetModel, spec: SkeletonSpec, frame: Bounds, lockedTopology: Set<String>, stance: BodyStance?,
+					  inputs: BakeInputs, canvasSkinned: Set<String>): String {
+		val values = listOf(spec, frame, lockedTopology, stance?.contentKey, canvasSkinned, io.github.psd2live.i18n.I18n.currentLanguage.tag)
+		synchronized(keys) {
+			val index = keys.indexOfFirst { it.base.get() === base && it.inputs == values }
+			if (index >= 0) return keys.removeAt(index).also { keys.add(0, it) }.key
+		}
+		val key = cacheKey(base, spec, frame, lockedTopology, stance, inputs, canvasSkinned)
+		synchronized(keys) {
+			keys.add(0, KeyMemo(java.lang.ref.WeakReference(base), values, key))
+			keys.removeAll { it.base.get() == null }
+			while (keys.size > KEY_MEMOS) keys.removeAt(keys.size - 1)
+		}
+		return key
 	}
 
 	private fun cacheKey(base: PuppetModel, spec: SkeletonSpec, frame: Bounds, lockedTopology: Set<String>, stance: BodyStance?,
@@ -350,7 +375,12 @@ internal object SkeletonRig {
 	/** Hits and misses of the skeleton cache, for tests and measurements. */
 	internal val cacheHits: Int get() = synchronized(bakes) { hits }
 	internal val cacheMisses: Int get() = synchronized(bakes) { misses }
-	internal fun clearCache() = synchronized(bakes) { bakes.clear(); clears++ }
+	internal fun clearCache() {
+		synchronized(bakes) { bakes.clear(); clears++ }
+		synchronized(skins) { skins.clear() }
+		synchronized(keys) { keys.clear() }
+		SkeletonMeshRefine.clearCache()
+	}
 
 	/** How often the cache was cleared: a cache of rigs holding bakes keys by it, so clearing reaches them too. */
 	@Volatile internal var clears = 0
@@ -436,7 +466,9 @@ internal object SkeletonRig {
 				JointBand(c.headX, c.headY, n[0], n[1], c.blend)
 			}
 			val drawableId = DrawableId(id)
-			val (refined, frameAfter) = SkeletonMeshRefine.refine(model, drawableId, canvas.getValue(drawableId), bands, spec.sampling.jointMeshSegments)
+			val (refined, frameAfter) = RigBuildProfile.stage("skeleton: refine") {
+				SkeletonMeshRefine.refine(model, drawableId, canvas.getValue(drawableId), bands, spec.sampling.jointMeshSegments)
+			}
 			model = refined
 			canvas = canvas + (drawableId to frameAfter)
 		}
@@ -461,7 +493,7 @@ internal object SkeletonRig {
 		// 4. The preset poses, hips that move while the feet stay put among them.
 		val poses = SkeletonPoses.available(spec).filter { it.rig }
 		val standing = stance ?: BodyStance.of(spec, frame)
-		model = addPoses(model, spec, bones, poses, bends, standing)
+		model = RigBuildProfile.stage("skeleton: poses") { addPoses(model, spec, bones, poses, bends, standing) }
 
 		// 4b. A leg bone that skinned meshes hang under carries them through a warp of its own on Body X and
 		// Body Y, since its rotation passes on none of the legs warp's bend.
@@ -481,7 +513,7 @@ internal object SkeletonRig {
 			val drawableId = DrawableId(id)
 			val tree = treeBones.getValue(root)
 			val home = plan.homes.getValue(id)
-			model = skinDrawable(model, drawableId, canvas.getValue(drawableId), tree, parentOf, poses,
+			model = skinCached(model, drawableId, canvas.getValue(drawableId), tree, parentOf, poses,
 				home, plan.blend, spec.sampling, spec.manualWeights[id], hosts[tree[home].id])
 		}
 
@@ -493,9 +525,9 @@ internal object SkeletonRig {
 			DeformerId(treeBones.getValue(root)[plan.homes.getValue(id)].deformerId)
 		}
 		model = pruneEmptyBones(model, joints, held)
-		model = foldLinkBones(model, joints, spec.sampling, held)
-		stance?.let { model = withLean(model, joints, it) }
-		model = withArmSwing(model, joints, standing)
+		model = RigBuildProfile.stage("skeleton: fold links") { foldLinkBones(model, joints, spec.sampling, held) }
+		stance?.let { model = RigBuildProfile.stage("skeleton: lean") { withLean(model, joints, it) } }
+		model = RigBuildProfile.stage("skeleton: arm swing") { withArmSwing(model, joints, standing) }
 		model = withSkeletonGroup(model, bones, poses)
 		return model.withDerivedRenderRoot()
 	}
@@ -1507,6 +1539,89 @@ internal object SkeletonRig {
 		}
 		val faces = (0 until indices.size / 3).sortedBy { face -> (0..2).sumOf { material[indices[face * 3 + it]] } }
 		return IntArray(indices.size) { indices[faces[it / 3] * 3 + it % 3] }
+	}
+
+	/** What [skinDrawable] changes on a mesh: the skin, kept by [skinCached]. */
+	private class Skin(val parent: DeformerId?, val mesh: DrawableMesh?, val grid: KeyformGrid<MeshDeltaForm>?,
+					   val blendShapes: List<BlendShapeBinding<MeshForm>>)
+
+	/** Version of [skinKey]; raise it whenever [skinDrawable] or what the key covers changes. */
+	private const val SKIN_VERSION = "skin-1"
+	private const val SKIN_CAPACITY = 128
+	private val skins = object : LinkedHashMap<String, java.lang.ref.SoftReference<Skin>>(16, 0.75f, true) {
+		override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, java.lang.ref.SoftReference<Skin>>?): Boolean = size > SKIN_CAPACITY
+	}
+	@Volatile private var skinHits = 0
+	@Volatile private var skinMisses = 0
+
+	/** Hits and misses of the per-mesh skin cache, for tests and measurements. */
+	internal val skinCacheHits: Int get() = synchronized(skins) { skinHits }
+	internal val skinCacheMisses: Int get() = synchronized(skins) { skinMisses }
+
+	/**
+	 * [skinDrawable] through a cache of single-mesh skins, keyed by everything it reads ([skinKey]). A skeleton edit
+	 * that leaves a limb tree, its meshes and their deformer chains alone - a new bone elsewhere, a moved joint
+	 * on another limb, a renamed bone - rebakes only the trees it touched; every other mesh takes its skin back.
+	 */
+	private fun skinCached(
+		base: PuppetModel, drawableId: DrawableId, canvas: FloatArray, tree: List<SkeletonBone>, parentOf: Map<String, SkeletonBone?>,
+		poses: List<SkeletonPose>, home: Int, blend: Set<ParameterId>, sampling: SkeletonSampling, manual: SkeletonWeightMap?, host: DeformerId?,
+	): PuppetModel {
+		fun bake() = RigBuildProfile.stage("skeleton: skin mesh (baked)") {
+			skinDrawable(base, drawableId, canvas, tree, parentOf, poses, home, blend, sampling, manual, host)
+		}
+		val drawable = base.drawables.firstOrNull { it.id == drawableId } ?: return base
+		val mesh = drawable.mesh ?: return base
+		if (canvas.size != mesh.positions.size) return base
+		val key = RigBuildProfile.stage("skeleton: skin key") { skinKey(base, drawable, canvas, tree, parentOf, poses, home, blend, sampling, manual, host) }
+		val cached = synchronized(skins) { skins[key]?.get().also { if (it != null) skinHits++ else skinMisses++ } }
+		if (cached != null) return base.copy(drawables = base.drawables.map {
+			if (it.id == drawableId) it.copy(parentDeformerId = cached.parent, mesh = cached.mesh, geometryGrid = cached.grid, blendShapes = cached.blendShapes)
+			else it
+		})
+		val output = bake()
+		val skinned = output.drawables.first { it.id == drawableId }
+		synchronized(skins) { skins[key] = java.lang.ref.SoftReference(Skin(skinned.parentDeformerId, skinned.mesh, skinned.geometryGrid, skinned.blendShapes)) }
+		return output
+	}
+
+	/**
+	 * Everything [skinDrawable] reads, as one hash: the mesh itself and the deformers its transforms go through
+	 * (its tree's bones, its parent, its host and all their ancestors - what [worlds] evaluates) in their lossless
+	 * IR, the defaults of every parameter that IR names (the transforms and the pose shapes read them), the rest
+	 * canvas positions, the tree's bones and their parents, the poses, the home, the blend-shape bones among
+	 * the tree's, the sampling, the manual weights and the host. Nothing else of [base] reaches the skin, so a
+	 * skeleton edit elsewhere keeps the key.
+	 */
+	private fun skinKey(
+		base: PuppetModel, drawable: Drawable, canvas: FloatArray, tree: List<SkeletonBone>, parentOf: Map<String, SkeletonBone?>,
+		poses: List<SkeletonPose>, home: Int, blend: Set<ParameterId>, sampling: SkeletonSampling, manual: SkeletonWeightMap?, host: DeformerId?,
+	): String {
+		val homeId = host ?: DeformerId(tree[home].deformerId)
+		val relevant = tree.map { DeformerId(it.deformerId) } + listOfNotNull(drawable.parentDeformerId, homeId)
+		val byId = base.deformers.associateBy { it.id }
+		val chain = HashSet<DeformerId>()
+		for (id in relevant) {
+			var next: DeformerId? = id
+			while (next != null && chain.add(next)) next = byId[next]?.parent
+		}
+		val read = base.copy(
+			parameters = emptyList(), parts = emptyList(), rootChildren = emptyList(), rootPartId = null, glues = emptyList(),
+			drawables = listOf(drawable), deformers = base.deformers.filter { it.id in chain },
+			parameterLinks = emptyList(), parameterTree = emptyList(),
+			atlas = org.umamo.runtime.model.PuppetAtlas.Empty, sources = emptyList(), deformPaths = emptyList(), vertexGroups = emptyList(),
+			renderRoot = org.umamo.runtime.model.RenderGroup(null, org.umamo.runtime.model.DEFAULT_DRAW_ORDER, emptyList()),
+		)
+		val ir = io.github.psd2live.targets.cubism.PuppetIr.toIr(read).toString()
+		val treeParameters = tree.mapTo(HashSet()) { ParameterId(it.parameterId) }
+		val poseIds = poses.mapTo(HashSet()) { it.id }
+		// A parameter the IR names anywhere, or one the skin turns: a name that merely contains another's only adds to the key.
+		val defaults = base.parameters.filter { it.id in treeParameters || it.id in poseIds || ir.contains(it.id.raw) }
+			.map { listOf(it.id.raw, it.min, it.max, it.default) }
+		return io.github.psd2live.format.compile.document.ContentHash.of(SKIN_VERSION, ir, defaults, canvas.contentToString(),
+			tree.map { it.toJson() }, tree.map { parentOf[it.id]?.toJson() }, home,
+			poses.map { listOf(it.id.raw, it.nameKey, it.min, it.max, it.keys.contentToString(), it.legs, it.airborne, it.rig) },
+			blend.filter { it in treeParameters }.map { it.raw }.sorted(), sampling, manual, host?.raw)
 	}
 
 	/**
