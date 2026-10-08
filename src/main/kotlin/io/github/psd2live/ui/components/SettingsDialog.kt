@@ -757,7 +757,7 @@ private fun ShortcutRow(
 	// The cell being recorded also takes the mouse: a wheel notch or a button press over it is recorded
 	// as a key press anywhere is.
 	val mouseCapture: ((KeyBinding) -> Unit)? = if (isRecording) onCaptureBinding else null
-	val jump = action.jumpIndex
+	val jump = action.labelIndex
 	val label = if (jump == null) tr(action.labelKey) else tr(action.labelKey, jump)
 
 	Column(modifier = Modifier.fillMaxWidth()) {

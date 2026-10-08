@@ -119,6 +119,7 @@ import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.state.ShortcutAction
 import io.github.psd2live.ui.state.ShortcutScope
 import io.github.psd2live.ui.tooloptions.OptionRole
+import io.github.psd2live.ui.tooloptions.pickVariant
 import io.github.psd2live.ui.tooloptions.stepOption
 import io.github.psd2live.ui.state.MouseInput
 import io.github.psd2live.ui.state.buttonBindingOf
@@ -670,6 +671,8 @@ fun CanvasViewportComposable(
 			ShortcutAction.SELECTION_STYLE_BOX -> { editor.selectionStyle = SelectionStyle.BOX; true }
 			ShortcutAction.SELECTION_STYLE_LASSO -> { editor.selectionStyle = SelectionStyle.LASSO; true }
 			ShortcutAction.SELECT_LINKED -> { editor.selectLinked(); true }
+			ShortcutAction.PICK_OPTION_1, ShortcutAction.PICK_OPTION_2, ShortcutAction.PICK_OPTION_3,
+			ShortcutAction.PICK_OPTION_4, ShortcutAction.PICK_OPTION_5 -> editor.pickVariant(action.pickIndex!!)
 			ShortcutAction.CANCEL -> {
 				if (showContextMenu) {
 					showContextMenu = false

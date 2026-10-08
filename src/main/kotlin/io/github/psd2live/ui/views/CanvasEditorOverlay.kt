@@ -1666,7 +1666,7 @@ internal fun PlacementSettingsPanel(
             CompactIconButton(
                 onClick = { if (!isClosing) { editor.cancelPlacement(); focus() } },
                 size = 18.dp,
-                tooltip = "${tr("editor.placementCancel")} (Esc)",
+                tooltip = keymap.labelFor(ShortcutAction.CANCEL)?.let { "${tr("editor.placementCancel")} ($it)" } ?: tr("editor.placementCancel"),
             ) {
                 IconClose(tint = colors.textMuted, modifier = Modifier.size(10.dp))
             }
@@ -2026,7 +2026,7 @@ internal fun PlacementSettingsPanel(
             modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
         ) {
             CompactButton(
-                text = "${tr("editor.placementCancel")} (Esc)",
+                text = keymap.labelFor(ShortcutAction.CANCEL)?.let { "${tr("editor.placementCancel")} ($it)" } ?: tr("editor.placementCancel"),
                 onClick = { if (!isClosing) { editor.cancelPlacement(); focus() } },
                 modifier = Modifier.weight(1f),
                 height = 24.dp,
@@ -2298,11 +2298,12 @@ private fun BoxScope.CanvasToolBar(
         RailRows(editor.tool == CanvasTool.GLUE) {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 RailDivider(strong = true)
-                GLUE_SUB_TOOL_LABELS.forEach { (sub, key) ->
+                GLUE_SUB_TOOL_LABELS.forEachIndexed { i, (sub, key) ->
                     RailItem(
                         label = tr(key),
                         selected = editor.glueSubTool == sub,
                         enabled = !editor.busy,
+                        keyLabel = pickKey(keymap, i),
                         icon = { color -> GlueSubToolIcon(subTool = sub, color = color) },
                         onClick = {
                             editor.glueSubTool = sub
@@ -2322,6 +2323,7 @@ private fun BoxScope.CanvasToolBar(
                         label = tr(sub.labelKey),
                         selected = editor.skeletonEditSubTool == sub,
                         enabled = !editor.busy,
+                        keyLabel = pickKey(keymap, sub.ordinal),
                         icon = { color -> SkeletonEditSubToolIcon(subTool = sub, color = color) },
                         onClick = { editor.skeletonEditSubTool = sub; focus() },
                     )
@@ -2337,6 +2339,7 @@ private fun BoxScope.CanvasToolBar(
                         label = tr(sub.labelKey),
                         selected = editor.skeletonPoseSubTool == sub,
                         enabled = !editor.busy,
+                        keyLabel = pickKey(keymap, sub.ordinal),
                         icon = { color -> SkeletonPoseSubToolIcon(sub, color) },
                         onClick = { editor.skeletonPoseSubTool = sub; focus() },
                     )
@@ -2352,6 +2355,8 @@ private fun BoxScope.CanvasToolBar(
                         label = tr(shape.labelKey),
                         selected = editor.brushShape == shape,
                         enabled = !editor.busy,
+                        // Deform's number keys pick its levels, so there they do not reach the tips.
+                        keyLabel = if (editor.hierarchyMode == EditHierarchyMode.DEFORM) "" else pickKey(keymap, shape.ordinal),
                         icon = { color -> BrushShapeIcon(shape = shape, color = color) },
                         onClick = {
                             editor.brushShape = shape
@@ -2389,11 +2394,12 @@ private fun BoxScope.CanvasToolBar(
         RailRows(editor.hierarchyMode == EditHierarchyMode.SIMULATE) {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 RailDivider(strong = true)
-                io.github.psd2live.ui.PAINTED_GROUP_KINDS.forEach { kind ->
+                io.github.psd2live.ui.PAINTED_GROUP_KINDS.forEachIndexed { i, kind ->
                     RailItem(
                         label = tr("sim.group.${kind.jsonName}"),
                         selected = editor.weightGroupKind == kind,
                         enabled = !editor.busy,
+                        keyLabel = pickKey(keymap, i),
                         icon = { _ -> VertexGroupKindIcon(kind = kind, color = vertexGroupKindColor(kind)) },
                         onClick = {
                             editor.weightGroupKind = kind
@@ -2406,6 +2412,10 @@ private fun BoxScope.CanvasToolBar(
         }
     }
 }
+
+/** The chord of the number key that picks choice [index] (0-based), or nothing when it is unbound. */
+private fun pickKey(keymap: Keymap, index: Int): String =
+    ShortcutAction.pickActions.getOrNull(index)?.let(keymap::labelFor).orEmpty()
 
 /** Rows of the tool palette that slide in and out as the mode or the tool in hand changes. */
 @Composable
@@ -2473,11 +2483,10 @@ private fun BoxScope.HierarchyModeBar(
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 BarDivider()
-                listOf(
-                    1 to (tr("editor.level.1") + " · " + tr("editor.level.1.desc")),
-                    2 to (tr("editor.level.2") + " · " + tr("editor.level.2.desc")),
-                    3 to (tr("editor.level.3") + " · " + tr("editor.level.3.desc")),
-                ).forEach { (lvl, tooltip) ->
+                (1..3).map { lvl ->
+                    val key = pickKey(editor.state.keymap, lvl - 1)
+                    lvl to (tr("editor.level.$lvl") + " · " + tr("editor.level.$lvl.desc") + if (key.isEmpty()) "" else "  ($key)")
+                }.forEach { (lvl, tooltip) ->
                     BarChip(
                         label = "$lvl",
                         selected = editor.editLevel == lvl,

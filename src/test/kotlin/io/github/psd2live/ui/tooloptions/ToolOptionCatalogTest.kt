@@ -126,6 +126,30 @@ class ToolOptionCatalogTest {
         assertFalse(editor.stepOption(OptionRole.SIZE, up = true))
     }
 
+    @Test fun numberKeysPickTheChoicesOfTheModeOrToolInHand() = editor { editor ->
+        editor.hierarchyMode = EditHierarchyMode.DEFORM
+        editor.tool = CanvasTool.BRUSH
+        assertTrue(editor.pickVariant(3))
+        assertEquals(3, editor.editLevel)
+        assertFalse(editor.pickVariant(4))
+
+        editor.hierarchyMode = EditHierarchyMode.EDIT
+        assertTrue(editor.pickVariant(2))
+        assertEquals(BrushShape.LINE, editor.brushShape)
+        editor.tool = CanvasTool.SELECT
+        assertTrue(editor.pickVariant(3))
+        assertEquals(2, editor.elementMode)
+
+        editor.hierarchyMode = EditHierarchyMode.SKELETON
+        editor.tool = CanvasTool.SKELETON_EDIT
+        assertTrue(editor.pickVariant(5))
+        assertEquals(SkeletonEditSubTool.WEIGHTS, editor.skeletonEditSubTool)
+
+        editor.hierarchyMode = EditHierarchyMode.SELECT
+        editor.tool = CanvasTool.SELECT
+        assertFalse(editor.pickVariant(1))
+    }
+
     @Test fun everyEditingToolHasAContextMenu() = editor { editor ->
         for ((mode, tool) in listOf(
             EditHierarchyMode.SELECT to CanvasTool.TRANSFORM,

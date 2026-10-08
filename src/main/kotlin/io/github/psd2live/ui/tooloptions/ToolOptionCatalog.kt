@@ -148,6 +148,27 @@ internal fun CanvasEditor.stepOption(role: OptionRole, up: Boolean): Boolean {
     return true
 }
 
+/**
+ * Picks choice [n] (1-based) of the mode or tool in hand - the number keys: Deform's levels, Edit's vertex, edge and
+ * face; otherwise the variants the toolbar lists under the tool: the brush tips, the glue and skeleton sub-tools, the vertex group kinds and the
+ * paint shapes. Says whether there was a choice [n] to pick.
+ */
+internal fun CanvasEditor.pickVariant(n: Int): Boolean {
+    fun <T> pick(choices: List<T>, take: (T) -> Unit): Boolean = choices.getOrNull(n - 1)?.let { take(it); true } ?: false
+    return when {
+        hierarchyMode == EditHierarchyMode.DEFORM -> pick(listOf(1, 2, 3)) { setEditLevel(it) }
+        hierarchyMode == EditHierarchyMode.SIMULATE -> pick(io.github.psd2live.ui.PAINTED_GROUP_KINDS) { weightGroupKind = it }
+        // Edit's point tools take Blender's 1 2 3: vertex, edge and face.
+        hierarchyMode == EditHierarchyMode.EDIT && (tool in SELECTION_TOOLS || tool == CanvasTool.TRANSFORM) -> pick(listOf(0, 1, 2)) { elementMode = it }
+        tool in DEFORM_BRUSH_TOOLS -> pick(BrushShape.entries) { brushShape = it }
+        tool == CanvasTool.GLUE -> pick(GlueSubTool.entries) { glueSubTool = it }
+        tool == CanvasTool.SKELETON_EDIT -> pick(SkeletonEditSubTool.entries) { skeletonEditSubTool = it }
+        tool == CanvasTool.SKELETON_POSE -> pick(SkeletonPoseSubTool.entries) { skeletonPoseSubTool = it }
+        tool == CanvasTool.PAINT_SHAPE -> pick(io.github.psd2live.ui.PaintShape.entries) { selectPaintShape(it) }
+        else -> false
+    }
+}
+
 private val SEQUENTIAL_CREATE = ToggleOption("create.sequential", "editor.sequentialCreate", { it.sequentialCreate }, { e, on -> e.sequentialCreate = on })
 
 private fun MutableList<ToolOption>.addPlacement(editor: CanvasEditor, kind: CreatePlacementKind) {

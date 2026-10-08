@@ -95,6 +95,8 @@ These are the default (Photoshop-style) bindings. **Settings** can switch to Ble
 | Adjust the brush: size·hardness / opacity·angle | Drag with `Alt+MouseRight` / `Shift+Alt+MouseRight` |
 | Turn the brush | `Alt+WheelUp` / `Alt+WheelDown`, 45° steps with Shift |
 | Frame selection / reset camera | `F` / `Home` or `0` |
+| Brush size / hardness / opacity | `[` `]` / `Shift+[` `Shift+]` / `Alt+Shift+[` `Alt+Shift+]`, on the current tool's value in the options bar |
+| Choice 1–5 of the mode or tool | `1`–`5`: Deform picks levels 1–3; Edit's selection tools pick vertex / edge / face; otherwise the variants the toolbar lists under the tool (brush tips, glue and skeleton sub-tools, weight group kinds, paint shapes) |
 | Temporary selection / toggle quick preview | Hold `Z`, release to restore / grave accent key (below Esc) |
 | Confirm / cancel | `Enter` / `Esc`; the current tool shows its own gestures |
 | Motion timeline: play / key the pose / step a frame | `Space` / `K` / `Left` `Right` (while the timeline has focus) |

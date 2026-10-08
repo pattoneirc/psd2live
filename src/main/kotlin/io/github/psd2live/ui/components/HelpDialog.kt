@@ -332,8 +332,8 @@ private fun DccShortcutsContent(keymap: Keymap) {
 			shortcuts = ShortcutAction.entries
 				.filter { it.category == category }
 				.map { action ->
-					// The nine tab-jump actions share one label pattern, keyed by their digit.
-					val jump = action.jumpIndex
+					// The numbered families (tab jumps, option picks) share one label pattern, keyed by their digit.
+					val jump = action.labelIndex
 					val label = if (jump == null) tr(action.labelKey) else tr(action.labelKey, jump)
 					val binding = keymap.labelsFor(action).joinToString(" / ")
 						.ifEmpty { tr("help.shortcuts.unbound") }

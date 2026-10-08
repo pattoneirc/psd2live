@@ -53,6 +53,18 @@ class KeymapMouseBindingTest {
         }
     }
 
+    @Test fun theNumberKeysPickOptionsInEveryPreset() {
+        assertEquals(5, ShortcutAction.pickActions.size)
+        for (preset in KeymapPreset.entries) {
+            val keymap = Keymap.of(preset)
+            ShortcutAction.pickActions.forEachIndexed { i, action ->
+                assertEquals(i + 1, action.labelIndex)
+                assertEquals("${i + 1}", keymap.labelFor(action), "$preset $action")
+                assertEquals(action, keymap.match(b("NumPad${i + 1}"), ShortcutScope.CANVAS))
+            }
+        }
+    }
+
     @Test fun gesturesAndCommandsAreMatchedApart() {
         val keymap = Keymap.DEFAULT
         assertEquals(ShortcutAction.PAN_VIEW, keymap.gesture(b("MouseMiddle")))

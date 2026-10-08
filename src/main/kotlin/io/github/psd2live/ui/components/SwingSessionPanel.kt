@@ -75,7 +75,7 @@ internal fun SwingSessionPanel(
             CompactIconButton(onClick = { collapsed = !collapsed }, size = 18.dp, tooltip = tr(if (collapsed) "swing.expand" else "swing.collapse")) {
                 IconChevron(expanded = !collapsed, tint = colors.textMuted, modifier = Modifier.size(10.dp))
             }
-            CompactIconButton(onClick = { if (!session.busy) { viewModel.endSwing(); focus() } }, size = 18.dp, tooltip = "${tr("swing.cancel")} (Esc)") {
+            CompactIconButton(onClick = { if (!session.busy) { viewModel.endSwing(); focus() } }, size = 18.dp, tooltip = viewModel.state.value.keymap.labelFor(io.github.psd2live.ui.state.ShortcutAction.CANCEL)?.let { "${tr("swing.cancel")} ($it)" } ?: tr("swing.cancel")) {
                 IconClose(tint = colors.textMuted, modifier = Modifier.size(10.dp))
             }
         }

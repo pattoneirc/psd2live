@@ -133,6 +133,13 @@ enum class ShortcutAction(
     TOOL_PAINT_LINE(ShortcutCategory.CANVAS_TOOLS, "editor.tool.paint_line"),
     TOOL_PAINT_RECT(ShortcutCategory.CANVAS_TOOLS, "editor.tool.paint_rect"),
     TOOL_PAINT_ELLIPSE(ShortcutCategory.CANVAS_TOOLS, "editor.tool.paint_ellipse"),
+    // The numbered choices of the mode or tool in hand: Deform's levels, otherwise the variants the toolbar
+    // lists under the tool (brush tips, glue and skeleton sub-tools, the vertex group kinds, paint shapes).
+    PICK_OPTION_1(ShortcutCategory.CANVAS_TOOLS, "shortcut.pickOption"),
+    PICK_OPTION_2(ShortcutCategory.CANVAS_TOOLS, "shortcut.pickOption"),
+    PICK_OPTION_3(ShortcutCategory.CANVAS_TOOLS, "shortcut.pickOption"),
+    PICK_OPTION_4(ShortcutCategory.CANVAS_TOOLS, "shortcut.pickOption"),
+    PICK_OPTION_5(ShortcutCategory.CANVAS_TOOLS, "shortcut.pickOption"),
 
     // Canvas editing
     SELECT_ALL(ShortcutCategory.CANVAS_EDIT, "shortcut.selectAll"),
@@ -189,9 +196,19 @@ enum class ShortcutAction(
             return name.removePrefix("JUMP_TAB_").toIntOrNull()
         }
 
+    /** 1-based choice for the `PICK_OPTION_n` family, null for every other action. */
+    val pickIndex: Int?
+        get() = if (name.startsWith("PICK_OPTION_")) name.removePrefix("PICK_OPTION_").toIntOrNull() else null
+
+    /** The number a numbered family's shared label is filled with, null for an action with a label of its own. */
+    val labelIndex: Int? get() = jumpIndex ?: pickIndex
+
     companion object {
         /** `JUMP_TAB_1`..`JUMP_TAB_9`, used to lay the tab-jump rows out in order. */
         val jumpActions: List<ShortcutAction> = entries.filter { it.jumpIndex != null }
+
+        /** `PICK_OPTION_1`..`PICK_OPTION_5`, in order: the n-th picks choice n. */
+        val pickActions: List<ShortcutAction> = entries.filter { it.pickIndex != null }
     }
 }
 
@@ -291,6 +308,11 @@ private val PS_DEFAULTS: Map<ShortcutAction, List<KeyBinding>> = mapOf(
     ShortcutAction.TOOL_PAINT_LINE to keys("U"),
     ShortcutAction.TOOL_PAINT_RECT to keys("Shift+R"),
     ShortcutAction.TOOL_PAINT_ELLIPSE to keys("Shift+O"),
+    ShortcutAction.PICK_OPTION_1 to keys("1", "NumPad1"),
+    ShortcutAction.PICK_OPTION_2 to keys("2", "NumPad2"),
+    ShortcutAction.PICK_OPTION_3 to keys("3", "NumPad3"),
+    ShortcutAction.PICK_OPTION_4 to keys("4", "NumPad4"),
+    ShortcutAction.PICK_OPTION_5 to keys("5", "NumPad5"),
 
     ShortcutAction.SELECT_ALL to keys("Ctrl+A"),
     ShortcutAction.INVERT_SELECTION to keys("Ctrl+I"),
@@ -369,8 +391,6 @@ private val BLENDER_OVERRIDES: Map<ShortcutAction, List<KeyBinding>> = mapOf(
 private val CUBISM_OVERRIDES: Map<ShortcutAction, List<KeyBinding>> = mapOf(
     // Arrow/select tool. `V` has no Cubism default, so it survives as a spare.
     ShortcutAction.TOOL_SELECT to keys("A", "V"),
-    // Deform path tool.
-    ShortcutAction.TOOL_CREATE_DEFORM_PATH to keys("P", "D"),
     // Show the whole work area.
     ShortcutAction.RESET_CAMERA to keys("Shift+F", "Home", "0"),
 )
