@@ -44,6 +44,9 @@ import kotlin.test.Test
  * - PSD2LIVE_TRACE=1: compositions per second of each composable, the hottest first
  * - PSD2LIVE_JFR=1: a flight recording (`{backend}.jfr`) and the event thread's hottest methods
  * - PSD2LIVE_SVG=1: the window's last frame as SVG (`{backend}.svg`), every draw the GPU replays, to count them
+ * - PSD2LIVE_INVALIDATIONS=1: where the draw and layout requests that make the window compositor replay come from
+ * - PSD2LIVE_CAPTURE=1: after playback, pauses and writes the window as it draws (`{backend}-paused.png`), read from
+ *   the GPU; PSD2LIVE_COMPOSITOR=0 (`psd2live.compositor=false`) draws without the window compositor, to compare
  *
  * Measured in the window's own frames and draws, never the screen.
  *
@@ -59,6 +62,7 @@ class PreviewFpsTool {
 		if (setting("PSD2LIVE_VSYNC", "1") == "0") System.setProperty("skiko.vsync.enabled", "false")
 		if (setting("PSD2LIVE_ADAPTIVE", "0") == "1") System.setProperty("psd2live.adaptiveVsync", "true")
 		System.getenv("PSD2LIVE_MSAA")?.let { System.setProperty("psd2live.msaa", it) }
+		if (setting("PSD2LIVE_COMPOSITOR", "1") == "0") System.setProperty("psd2live.compositor", "false")
 		val sample = Sample.fromEnvironment()
 		val seconds = setting("PSD2LIVE_SECONDS", "5").toInt()
 		val out = output("preview-fps")
@@ -133,6 +137,17 @@ class PreviewFpsTool {
 				})
 				timing.reset()
 				events.reset()
+				val composedBefore = SkiaGpu.primary?.compositorFrames ?: (0L to 0L)
+				val invalidations = ConcurrentHashMap<String, Int>()
+				if (setting("PSD2LIVE_INVALIDATIONS", "0") == "1") io.github.psd2live.render.WindowCompositor.onInvalidate = {
+					val site = Thread.currentThread().stackTrace.drop(3)
+						.filter { !it.className.startsWith("java.") && !it.className.startsWith("kotlin.") && !it.className.contains("WindowCompositor") }
+						.map { "${it.className.substringAfterLast('.')}.${it.methodName}" }
+						.fold(ArrayList<String>()) { acc, name -> if (acc.lastOrNull() != name) acc += name; acc }
+						.filter { !it.startsWith("NodeCoordinator.") && !it.startsWith("RootNodeOwner") && !it.startsWith("SnapshotInvalidationTracker") && !it.startsWith("GraphicsLayerOwnerLayer") }
+						.take(16).joinToString(" < ")
+					invalidations.merge(site, 1, Int::plus)
+				}
 				// Spinning rather than sleeping: a frame every 4 ms needs finer stamps than Thread.sleep(1) gives on Windows.
 				val stamps = ArrayList<Long>()
 				var lastFrame: Any? = null
@@ -157,6 +172,12 @@ class PreviewFpsTool {
 				report.appendLine("  " + timing.summary())
 				if (setting("PSD2LIVE_REPLAY", "0") == "1") report.append(timing.replay())
 				report.appendLine("  document state changes %.1f/s".format(states / seconds.toDouble()))
+				val composed = SkiaGpu.primary?.compositorFrames ?: (0L to 0L)
+				report.appendLine("  window compositor: %d frames, Compose picture replayed in %d".format(
+					composed.first - composedBefore.first, composed.second - composedBefore.second))
+				io.github.psd2live.render.WindowCompositor.onInvalidate = null
+				invalidations.entries.sortedByDescending { it.value }.take(12)
+					.forEach { report.appendLine("    %6.1f/s  %s".format(it.value / seconds.toDouble(), it.key)) }
 				report.append(events.summary(seconds))
 				if (compositions.isNotEmpty()) {
 					report.appendLine("  compositions per second:")
@@ -164,6 +185,13 @@ class PreviewFpsTool {
 						.forEach { report.appendLine("    %8.1f  %s".format(it.value / seconds.toDouble(), it.key)) }
 				}
 				if (recording != null) report.append(hotMethods(jfrFile))
+				if (setting("PSD2LIVE_CAPTURE", "0") == "1") {
+					SwingUtilities.invokeAndWait { vm.setAnimationEnabled(false) }
+					Thread.sleep(2500)
+					report.appendLine("  " + capture(window.get()!!, File(out, "${backend.name.lowercase()}-paused.png")))
+					SwingUtilities.invokeAndWait { vm.setAnimationEnabled(true) }
+					Thread.sleep(1000)
+				}
 				if (setting("PSD2LIVE_SVG", "0") == "1") SwingUtilities.invokeAndWait {
 					report.appendLine("  " + dumpSvg(window.get()!!, File(out, "${backend.name.lowercase()}.svg")))
 				}
@@ -315,6 +343,36 @@ class PreviewFpsTool {
 			}
 			return text.toString()
 		}
+	}
+
+	/**
+	 * The window's last frame as it draws: Skiko's recording of it (with the compositor's cached picture and preview
+	 * textures in it) replayed into a texture in the window's context and read back. Never the screen.
+	 */
+	private fun capture(window: java.awt.Window, file: File): String {
+		val gpu = SkiaGpu.primary ?: return "no GPU"
+		val layer = layerOf(window) ?: return "no layer"
+		val done = java.util.concurrent.CompletableFuture<String>()
+		gpu.post { resources ->
+			done.complete(runCatching {
+				val holder = SkiaLayer::class.java.getDeclaredField("picture").apply { isAccessible = true }.get(layer) ?: error("no frame")
+				val picture = holder.javaClass.getMethod("getInstance").invoke(holder) as org.jetbrains.skia.Picture
+				val w = picture.cullRect.width.toInt()
+				val h = picture.cullRect.height.toInt()
+				// A task runs in a turn, which changed GL state behind Skia's back.
+				resources.skia.resetGLAll()
+				val surface = org.jetbrains.skia.Surface.makeRenderTarget(resources.skia, false, org.jetbrains.skia.ImageInfo.makeN32Premul(w, h))!!
+				surface.canvas.clear(0xFF000000.toInt())
+				surface.canvas.drawPicture(picture)
+				val bitmap = org.jetbrains.skia.Bitmap().apply { allocN32Pixels(w, h) }
+				check(surface.readPixels(bitmap, 0, 0)) { "readPixels failed" }
+				val png = org.jetbrains.skia.Image.makeFromBitmap(bitmap).encodeToData(org.jetbrains.skia.EncodedImageFormat.PNG) ?: error("no PNG")
+				file.writeBytes(png.bytes)
+				surface.close()
+				"captured ${w}x$h to ${file.name}"
+			}.getOrElse { "capture failed: $it" })
+		}
+		return runCatching { done.get(10, java.util.concurrent.TimeUnit.SECONDS) }.getOrElse { "capture timed out" }
 	}
 
 	/** The window's last recorded frame played into Skia's SVG canvas; returns its element counts. */

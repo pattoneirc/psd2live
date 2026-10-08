@@ -1,25 +1,30 @@
 package io.github.psd2live.ui.components
 
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
 import kotlin.math.PI
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.sin
@@ -43,6 +48,8 @@ internal const val ICON_GRID = 18f
 internal const val ICON_LINE = 1.4f
 internal const val ICON_FINE = 1f
 private const val MIN_LINE_DP = 1f
+/** Pixels drawn around a [GridIcon]'s box. */
+private const val ICON_BLEED_PX = 2
 
 /** Grid-unit drawing helpers bound to one icon's scope and tint. */
 internal class IconPen(val scope: DrawScope, val color: Color) {
@@ -159,10 +166,24 @@ internal class GridPath(private val s: Float, private val ox: Float = 0f, privat
     fun z() = path.close()
 }
 
-/** An icon drawn with [IconPen] in [tint], scaled to [modifier]'s size. */
+/**
+ * An icon drawn with [IconPen] in [tint], scaled to [modifier]'s size. It is drawn once into a bitmap of its
+ * size, and again only when its size, tint or drawing changes: the window draws every frame while a preview
+ * plays, and an icon's handful of antialiased strokes per frame, over every icon in the panels, is a large
+ * part of that frame.
+ */
 @Composable
 internal fun GridIcon(modifier: Modifier, tint: Color, draw: IconPen.() -> Unit) {
-    Canvas(modifier) { IconPen(this, tint).draw() }
+    Spacer(modifier.drawWithCache {
+        if (size.width <= 0f || size.height <= 0f) return@drawWithCache onDrawBehind {}
+        // A round cap may reach past the box, which the canvas this replaces did not clip.
+        val bleed = ICON_BLEED_PX
+        val bitmap = ImageBitmap(ceil(size.width).toInt() + 2 * bleed, ceil(size.height).toInt() + 2 * bleed)
+        CanvasDrawScope().draw(this, layoutDirection, androidx.compose.ui.graphics.Canvas(bitmap), size) {
+            translate(bleed.toFloat(), bleed.toFloat()) { IconPen(this, tint).draw() }
+        }
+        onDrawBehind { drawImage(bitmap, topLeft = Offset(-bleed.toFloat(), -bleed.toFloat())) }
+    })
 }
 
 internal fun DrawScope.drawGridIcon(tint: Color, draw: IconPen.() -> Unit) = IconPen(this, tint).draw()

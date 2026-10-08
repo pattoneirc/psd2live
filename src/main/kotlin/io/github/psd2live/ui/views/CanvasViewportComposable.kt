@@ -116,7 +116,12 @@ import io.github.psd2live.ui.state.forCanvas
 import io.github.psd2live.ui.state.FramePacer
 import io.github.psd2live.ui.state.previewPanelState
 import io.github.psd2live.ui.state.previewValues
+import androidx.compose.ui.graphics.asComposeCanvas
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import io.github.psd2live.ui.state.frameIntervalNanos
 import io.github.psd2live.ui.state.CanvasBackgroundKind
 import io.github.psd2live.ui.state.CanvasMode
@@ -329,9 +334,9 @@ fun CanvasViewportComposable(
     }
 	val paintSession = if (mode == CanvasMode.EDIT && editor.hierarchyMode == EditHierarchyMode.PAINT)
 		editor.paintSession else null
-	// The edit canvas follows the same pose the sliders show, frame by frame while a motion plays. A preview canvas
+	// The edit canvas follows the same pose the sliders show, at their rate while a motion plays. A preview canvas
 	// renders its own frames and does not recompose for this.
-	val livePose = if (mode == CanvasMode.EDIT) viewModel.livePose.collectAsState().value else emptyMap()
+	val livePose = if (mode == CanvasMode.EDIT) viewModel.livePoseShown.collectAsState().value else emptyMap()
 	val geometryPose = if (paintSession != null) emptyMap<org.umamo.runtime.model.ParameterId, Float>()
 		else viewModel.canvasPose(canvasState, livePose)
 	val editGeometry = remember(previewModel, geometryPose, mode) {
@@ -395,7 +400,13 @@ fun CanvasViewportComposable(
 	LaunchedEffect(editor, documentLongSide) { editor.fitBrushesToDocument() }
 	val guideLabelMeasurer = rememberTextMeasurer(cacheSize = 128)
 	val guideLabels = remember { GuideLabelMemo() }
-	val sdkFrame by frameFlow.collectAsState()
+	// A playing preview gets a frame every display refresh, and nothing here holds it as snapshot state: the window
+	// shows the frame itself ([CompositedView]), so a frame neither composes nor draws the canvas. Composition reads
+	// what of it changes rarely; a canvas drawing the frame itself reads it again on [previewTick].
+	val sdkFrameBackend by remember(frameFlow) { frameFlow.map { it?.backend }.distinctUntilChanged() }
+		.collectAsState(frameFlow.value?.backend)
+	val sdkFrameAdvanced by remember(frameFlow) { frameFlow.map { it?.advanced == true }.distinctUntilChanged() }
+		.collectAsState(frameFlow.value?.advanced == true)
 	val simulatedFrame by viewModel.simulationFrames.collectAsState()
 	// The live simulation replaces its meshes' vertices, which only the software painter can draw.
 	val simulated = simulatedFrame?.takeIf { mode == CanvasMode.PREVIEW && it.simulationId == canvasState.simulationPreviewId }
@@ -411,13 +422,11 @@ fun CanvasViewportComposable(
 	val solidBackground = background.solidColor?.let(::opaqueColor) ?: colors.checkerDark
 	// One pose for the whole tab: artwork, diagnostic geometry and hit-testing. A paused preview
 	// is still live here, because the follow keeps moving the pose after the motion stops.
-	val informationPose = informationPreviewPose(
-		canvasState.parameterValues,
-		canvasState.previewParameterValues,
-		sdkFrame,
-		canvasState.animationEnabled || (mode == CanvasMode.PREVIEW && canvasState.mouseTrackingEnabled),
-	)
-	val warpPose = if (mode == CanvasMode.PREVIEW) informationPose else canvasState.parameterValues
+	val informationLive = canvasState.animationEnabled || (mode == CanvasMode.PREVIEW && canvasState.mouseTrackingEnabled)
+	fun informationPose(frame: io.github.psd2live.core.PreviewFrame?) =
+		informationPreviewPose(canvasState.parameterValues, canvasState.previewParameterValues, frame, informationLive)
+	val warpPose = if (mode == CanvasMode.PREVIEW)
+		informationPose(if (warpIds.isNotEmpty()) frameFlow.collectAsState().value else null) else canvasState.parameterValues
 	val warpPoints = remember(previewModel?.rig?.puppet, warpPose, warpIds) {
 		runCatching {
 			if (previewModel != null && warpIds.isNotEmpty())
@@ -545,8 +554,11 @@ fun CanvasViewportComposable(
 	val pumpInterval = frameIntervalNanos(previewFrameRate)
 	// The window whose Skia context this preview draws in; the frame's texture lives there.
 	val previewGpu = remember(gpuPrimary, awtWindow) { SkiaGpu.of(awtWindow) }
-	// Read where the canvas draws: each requested frame redraws it, and the draw runs the GPU work first.
+	// Read where the canvas draws: each requested frame redraws it, and the draw runs the GPU work first. Not while
+	// the window composites the canvas's frame under its picture ([previewHole]): a frame then draws nothing here.
 	val previewTick = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+	val previewHole = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+	DisposableEffect(renderKey, previewGpu) { onDispose { previewHole.set(false); previewGpu?.hideView(renderKey) } }
 	val runtimeSimulates = previewBackend == io.github.psd2live.core.PreviewBackend.P2LRT && previewAdvanced &&
 		canvasState.generatePhysics && !canvasState.meshOnly
 	LaunchedEffect(renderKey, mode, previewModel, canvasState.animationEnabled, canvasState.mouseTrackingEnabled, viewSize, pausedCameraKey, pausedPoseKey, pumpInterval, physicsLive, parameterScrubActive, previewBackend, previewAdvanced, previewGpu, runtimeSimulates) {
@@ -572,13 +584,17 @@ fun CanvasViewportComposable(
                         viewId = renderKey,
 						gpu = previewGpu,
 					)
-					previewTick.intValue++
+					if (!previewHole.get()) previewTick.intValue++
 				}
+				// The window's own frames, not Compose's: a waiter on Compose's clock has it draw the whole window
+				// every frame. On the immediate EDT dispatcher, the frame request runs at the start of that frame.
+				suspend fun frame(): Long = previewGpu?.awaitFrame() ?: withFrameNanos { it }
+				withContext(Dispatchers.Main.immediate) {
 				if (canvasState.animationEnabled || (parameterScrubActive && !physicsLive)) {
 					var previousFrameNanos = 0L
 					val pacer = FramePacer(pumpInterval)
 					while (isActive) {
-						val frameNanos = withFrameNanos { it }
+						val frameNanos = frame()
 						if (!pacer.due(frameNanos)) continue
 						val deltaTime = if (previousFrameNanos == 0L) {
 							1f / 60f
@@ -603,7 +619,7 @@ fun CanvasViewportComposable(
 							if (pose != lastPose) { lastPose = pose; break }
 							delay(PAUSED_PHYSICS_POLL_MILLIS)
 						}
-						val frameNanos = withFrameNanos { it }
+						val frameNanos = frame()
 						if (!pacer.due(frameNanos)) continue
 						requestFrame(0f, frameNanos)
 					}
@@ -620,11 +636,12 @@ fun CanvasViewportComposable(
 						while (isActive &&
 							System.nanoTime() - lastPointerActivityNanos.get() <= PAUSED_TRACKING_SETTLE_NANOS
 						) {
-							val frameNanos = withFrameNanos { it }
+							val frameNanos = frame()
 							if (!pacer.due(frameNanos)) continue
 							requestFrame(0f, frameNanos)
 						}
 					}
+				}
 				}
 			}
 		}
@@ -1158,7 +1175,8 @@ fun CanvasViewportComposable(
 			}
 			val hoverTintColor = (hoveredLayerId ?: hoveredDeformerId)?.let { ComponentPalette.strong(it).rgb } ?: 0
 
-			val nativeFrame = sdkFrame
+			val nativeFrame = frameFlow.value
+			val informationPose = informationPose(nativeFrame)
 			// The preview runtimes' GPU work for this frame runs here, in the window's Skia context, so the
 			// texture drawn below is the frame just requested.
 			previewTick.intValue
@@ -1176,10 +1194,35 @@ fun CanvasViewportComposable(
 				previewDrawn.width == w && previewDrawn.height == h
 
 			// A snapshot hover temporarily replaces the current model, including its guides and paint tiles.
-			if (canUseNativeSdk && snapshotGeometry == null && previewDrawn != null) {
+			val composited = previewGpu?.takeIf { it.composited.value && it.compositing }
+			if (canUseNativeSdk && snapshotGeometry == null && composited != null) {
+				// The window draws this view's frames under its picture, each frame, through a hole cut here; what
+				// was drawn above is the hole's too. Background and boundary go with the frame.
+				previewHole.set(true)
+				val drawDensity = androidx.compose.ui.unit.Density(density, fontScale)
+				val drawDirection = layoutDirection
+				val holeSize = size
+				val boundaryOffset = Offset(viewport.offsetX.toFloat(), viewport.offsetY.toFloat())
+				val boundarySize = Size((viewport.canvasWidth * viewport.scale).toFloat(), (viewport.canvasHeight * viewport.scale).toFloat())
+				composited.showView(renderKey, io.github.psd2live.render.CompositedView(canvasOrigin.x, canvasOrigin.y, holeSize.width, holeSize.height) { target, frame ->
+					androidx.compose.ui.graphics.drawscope.CanvasDrawScope().draw(drawDensity, drawDirection, target.asComposeCanvas(), holeSize) {
+						when (background.kind) {
+							CanvasBackgroundKind.CHECKER -> drawRect(brush = checkerboardBrush)
+							CanvasBackgroundKind.SOLID -> drawRect(color = solidBackground)
+							CanvasBackgroundKind.TRANSPARENT -> drawRect(color = TransparentCanvasFill, blendMode = BlendMode.Src)
+						}
+						drawRect(color = Color(198, 205, 216, 105), topLeft = boundaryOffset, size = boundarySize, style = Stroke(width = 1f))
+						frame?.let { drawGpuFrame(it) }
+					}
+				})
+				drawRect(Color.Transparent, blendMode = BlendMode.Clear)
+			} else if (canUseNativeSdk && snapshotGeometry == null && previewDrawn != null) {
+				previewHole.set(false)
+				previewGpu?.hideView(renderKey)
 				// Drawn in this draw, for this frame's request: the texture already matches the camera.
 				drawGpuFrame(previewDrawn)
 			} else if (snapshotGeometry == null) {
+				if (previewHole.getAndSet(false)) previewGpu?.hideView(renderKey)
 				// Paint is an isolated document-canvas session: its live tiles belong only on the Edit
 				// tab, and only until Apply writes them into RigPreviewModel. The Preview tab always
 				// keeps showing the last committed atlas, never an in-progress stroke.
@@ -1656,11 +1699,11 @@ fun CanvasViewportComposable(
 			val badgeText = when (mode) {
 				CanvasMode.PREVIEW -> when {
 					referenceSimulation -> "${fpsStr}${tr("canvas.preview.simReference", zoomPct)}"
-					sdkFrame?.backend == io.github.psd2live.core.PreviewBackend.P2LRT -> "${fpsStr}${tr(
+					sdkFrameBackend == io.github.psd2live.core.PreviewBackend.P2LRT -> "${fpsStr}${tr(
 						if (previewModel.hasRuntimePhysics) "canvas.preview.p2lrtPhysicsOn" else "canvas.preview.p2lrtPhysicsOff",
 						zoomPct,
-					)}" + if (sdkFrame?.advanced == true) tr("canvas.preview.advancedOn") else ""
-					sdkFrame != null -> "${fpsStr}${tr(
+					)}" + if (sdkFrameAdvanced) tr("canvas.preview.advancedOn") else ""
+					sdkFrameBackend != null -> "${fpsStr}${tr(
 						if (previewModel.hasRuntimePhysics) "canvas.preview.cubismPhysicsOn" else "canvas.preview.cubismPhysicsOff",
 						zoomPct,
 					)}"

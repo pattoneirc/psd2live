@@ -19,6 +19,8 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -59,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -1379,16 +1382,56 @@ private fun ParameterName(param: Parameter, locked: Boolean = false, modifier: M
 	)
 }
 
+/**
+ * The value box of a parameter row. It follows the live pose while a motion plays, so until it is clicked or
+ * focused it is plain text in the field's frame: a text field composed again on every frame costs more than the
+ * rest of the row. Focus (a click or Tab) swaps in the editable field with the exact value.
+ */
 @Composable
-private fun ParameterValueInput(param: Parameter, value: Float, onValueChange: (Float) -> Unit) {
+private fun ParameterValueInput(param: Parameter, value: () -> Float, onValueChange: (Float) -> Unit) {
 	val enabled = param.id.raw !in LocalParameterPhysicsStatus.current.controlled
+	var editing by remember(param.id) { mutableStateOf(false) }
+	if (editing) {
+		ParameterValueEditor(param, value, enabled, onValueChange) { editing = false }
+		return
+	}
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val currentValue by rememberUpdatedState(value)
+	val shown by remember(param.id) { derivedStateOf { formatParamValue(currentValue()) } }
+	val interaction = remember { MutableInteractionSource() }
+	val hovered by interaction.collectIsHoveredAsState()
+	Box(
+		modifier = Modifier.width(44.dp).height(18.dp)
+			.semantics { contentDescription = param.name + " (" + param.id.raw + ")" }
+			.background(colors.inputBackground, RoundedCornerShape(2.dp))
+			.border(BorderStroke(1.dp, if (hovered && enabled) colors.borderHover else colors.border), RoundedCornerShape(2.dp))
+			.hoverable(interaction, enabled)
+			.onFocusChanged { if (it.isFocused && enabled) editing = true }
+			.focusable(enabled, interaction)
+			.pointerHoverIcon(if (enabled) PointerIcon.Text else PointerIcon.Default)
+			.pointerInput(enabled) { if (enabled) detectTapGestures(onPress = { editing = true }) }
+			.padding(horizontal = 6.dp),
+		contentAlignment = Alignment.CenterStart,
+	) {
+		Text(
+			text = shown,
+			style = typography.mono.copy(color = if (enabled) colors.textPrimary else colors.textDisabled, fontSize = 11.5.sp),
+			maxLines = 1,
+			softWrap = false,
+		)
+	}
+}
+
+/** The value box being edited: focused as it appears, it commits on Enter or when focus leaves, then closes. */
+@Composable
+private fun ParameterValueEditor(param: Parameter, value: () -> Float, enabled: Boolean, onValueChange: (Float) -> Unit, onClose: () -> Unit) {
 	val enabledState by rememberUpdatedState(enabled)
 	val focusManager = LocalFocusManager.current
+	val focusRequester = remember { FocusRequester() }
 	var focused by remember(param.id) { mutableStateOf(false) }
-	var draft by remember(param.id) { mutableStateOf(formatParamValue(value)) }
-	LaunchedEffect(value, focused) {
-		if (!focused) draft = formatParamValue(value)
-	}
+	var draft by remember(param.id) { mutableStateOf(value().toString()) }
+	LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() }.onFailure { onClose() } }
 	CompactTextField(
 		value = draft,
 		enabled = enabled,
@@ -1397,14 +1440,13 @@ private fun ParameterValueInput(param: Parameter, value: Float, onValueChange: (
 		onCommit = { focusManager.clearFocus() },
 		modifier = Modifier.width(44.dp)
 			.semantics { contentDescription = param.name + " (" + param.id.raw + ")" }
+			.focusRequester(focusRequester)
 			.onFocusChanged { focus ->
-				if (focused && !focus.isFocused && enabledState) {
-					draft.replace(',', '.').toFloatOrNull()?.takeIf { it.isFinite() }?.let {
+				if (focused && !focus.isFocused) {
+					if (enabledState) draft.replace(',', '.').toFloatOrNull()?.takeIf { it.isFinite() }?.let {
 						onValueChange(it.coerceIn(param.min, param.max))
 					}
-					draft = formatParamValue(value)
-				} else if (!focused && focus.isFocused) {
-					draft = value.toString()
+					onClose()
 				}
 				focused = focus.isFocused
 			},
@@ -1437,7 +1479,8 @@ private val ParamThumbRadius = 5.2.dp
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun ParameterTrack(
-	value: Float,
+	/** Read where the track draws: a live value moves the thumb without composing the row again. */
+	value: () -> Float,
 	onValueChange: (Float) -> Unit,
 	valueRange: ClosedFloatingPointRange<Float>,
 	keyMarks: List<SliderKeyMark>,
@@ -1552,6 +1595,7 @@ private fun ParameterTrack(
 		val cy = size.height - thumbR - 1.dp.toPx()
 		val trackColor = colors.textMuted.copy(alpha = 0.55f)
 		val keyStroke = colors.textMuted.copy(alpha = 0.85f)
+		val value = value().coerceIn(valueRange.start, valueRange.endInclusive)
 		val onKey = marks.any { abs(it.value - value) < EPS_KEY }
 
 		// Horizontal track line
@@ -1727,7 +1771,9 @@ private fun ParameterRowItem(
 	val colors = LocalToolColors.current
 	val isLocked = param.id in state.lockedParameters
 	val controlled = param.id.raw in LocalParameterPhysicsStatus.current.controlled
-	val currentValue = liveValue(param, state, viewModel)
+	val currentValue = { liveValue(param, state, viewModel) }
+	val currentState by rememberUpdatedState(state)
+	val changed by remember(param) { derivedStateOf { abs(liveValue(param, currentState, viewModel) - param.default) > 0.001f } }
 	val sliderMarks = remember(keyMarks) { keyMarks.toSliderMarks() }
 	var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 	val canLink = nextSiblingParam != null
@@ -1753,7 +1799,7 @@ private fun ParameterRowItem(
 		EditableParameterName(param, depth, isLocked, currentValue, state, viewModel, related)
 		ParameterNameDivider()
 		ParameterTrack(
-			value = currentValue.coerceIn(param.min, param.max),
+			value = currentValue,
 			enabled = !controlled,
 			onValueChange = { viewModel.setParameterValueFromPanel(param.id, it) },
 			valueRange = param.min..param.max,
@@ -1769,7 +1815,7 @@ private fun ParameterRowItem(
 		Spacer(Modifier.width(ParamRowInputSpacer))
 		CompactIconButton(
 			onClick = { viewModel.resetParameter(param.id) },
-			enabled = !controlled && (isLocked || abs(currentValue - param.default) > 0.001f),
+			enabled = !controlled && (isLocked || changed),
 			size = ParamRowResetWidth,
 			tooltip = tr("parameters.resetTooltip"),
 		) {
@@ -1803,8 +1849,11 @@ private fun LinkedParameterPad(
 	val yLocked = vertical.id in state.lockedParameters
 	val xControlled = horizontal.id.raw in LocalParameterPhysicsStatus.current.controlled
 	val yControlled = vertical.id.raw in LocalParameterPhysicsStatus.current.controlled
-	val xValue = liveValue(horizontal, state, viewModel)
-	val yValue = liveValue(vertical, state, viewModel)
+	val xValue = { liveValue(horizontal, state, viewModel) }
+	val yValue = { liveValue(vertical, state, viewModel) }
+	val currentState by rememberUpdatedState(state)
+	val xChanged by remember(horizontal) { derivedStateOf { abs(liveValue(horizontal, currentState, viewModel) - horizontal.default) > 0.001f } }
+	val yChanged by remember(vertical) { derivedStateOf { abs(liveValue(vertical, currentState, viewModel) - vertical.default) > 0.001f } }
 	var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 	val density = LocalDensity.current
 	val currentPadHeight by rememberUpdatedState(padHeight)
@@ -1917,7 +1966,7 @@ private fun LinkedParameterPad(
 		) {
 			CompactIconButton(
 				onClick = { viewModel.resetParameter(horizontal.id) },
-				enabled = !xControlled && (xLocked || abs(xValue - horizontal.default) > 0.001f),
+				enabled = !xControlled && (xLocked || xChanged),
 				size = ParamRowResetWidth,
 				tooltip = tr("parameters.resetTooltip"),
 			) {
@@ -1925,7 +1974,7 @@ private fun LinkedParameterPad(
 			}
 			CompactIconButton(
 				onClick = { viewModel.resetParameter(vertical.id) },
-				enabled = !yControlled && (yLocked || abs(yValue - vertical.default) > 0.001f),
+				enabled = !yControlled && (yLocked || yChanged),
 				size = ParamRowResetWidth,
 				tooltip = tr("parameters.resetTooltip"),
 			) {
@@ -1945,8 +1994,9 @@ private fun LinkedParameterPad(
 private fun ParameterPad2D(
 	horizontal: Parameter,
 	vertical: Parameter,
-	xValue: Float,
-	yValue: Float,
+	/** Read where the pad draws and when a gesture needs them, like [ParameterTrack]'s value. */
+	xValue: () -> Float,
+	yValue: () -> Float,
 	xLocked: Boolean,
 	yLocked: Boolean,
 	horizontalKeys: ParameterKeyMarks?,
@@ -1977,8 +2027,8 @@ private fun ParameterPad2D(
 	val hoverKeyCb by rememberUpdatedState(onHoverKey)
 	val xLockedState by rememberUpdatedState(xLocked)
 	val yLockedState by rememberUpdatedState(yLocked)
-	val xValueState by rememberUpdatedState(xValue)
-	val yValueState by rememberUpdatedState(yValue)
+	val xValueNow by rememberUpdatedState(xValue)
+	val yValueNow by rememberUpdatedState(yValue)
 	val xKeysState by rememberUpdatedState(xKeyList)
 	val yKeysState by rememberUpdatedState(yKeyList)
 	val hMin by rememberUpdatedState(horizontal.min)
@@ -2037,8 +2087,8 @@ private fun ParameterPad2D(
 				if ((xLockedState && yLockedState) || event.button != PointerButton.Secondary) return@onPointerEvent
 				val hit = hoverKey ?: return@onPointerEvent
 				onChangeState(
-					if (!xLockedState) hit.first else xValueState,
-					if (!yLockedState) hit.second else yValueState,
+					if (!xLockedState) hit.first else xValueNow(),
+					if (!yLockedState) hit.second else yValueNow(),
 				)
 				event.changes.forEach { it.consume() }
 			}
@@ -2062,8 +2112,8 @@ private fun ParameterPad2D(
 						val nx = ((pos.x - insetX) / w).coerceIn(0f, 1f)
 						val ny = ((pos.y - insetY) / h).coerceIn(0f, 1f)
 						onChangeState(
-							if (!xLockedState) hMin + nx * (hMax - hMin) else xValueState,
-							if (!yLockedState) vMax - ny * (vMax - vMin) else yValueState,
+							if (!xLockedState) hMin + nx * (hMax - hMin) else xValueNow(),
+							if (!yLockedState) vMax - ny * (vMax - vMin) else yValueNow(),
 						)
 					}
 					try {
@@ -2127,6 +2177,8 @@ private fun ParameterPad2D(
 			drawText(labelMeasurer, label, topLeft = Offset(insetX + ParamKeyRadius.toPx() + 2.dp.toPx(), yPx(ky) - layout.size.height / 2f), style = labelStyle)
 		}
 
+		val xValue = xValue()
+		val yValue = yValue()
 		val hx = xPx(xValue)
 		val hy = yPx(yValue)
 		val keyStroke = colors.textMuted.copy(alpha = 0.85f)
@@ -2181,10 +2233,9 @@ private fun ParameterKeyMarks?.toSliderMarks(): List<SliderKeyMark> {
 /**
  * What the canvases show for [param]: the slider being dragged, else the evaluated frame (animation, the pointer's
  * look, paused physics, or the open motion at the playhead), else the authored pose. Whichever canvas has focus,
- * the sliders move with the model at the project rate. Reads [PSD2LiveViewModel.livePoseOf] so only this row
- * invalidates when its live value changes — not every parameter row on every frame.
+ * the sliders move with the model. Reads [PSD2LiveViewModel.livePoseOf]; a row reads it where it shows it (the
+ * track's and pad's draw, the value box's text, whether reset applies), so a live value redraws those parts only.
  */
-@Composable
 private fun liveValue(param: Parameter, state: PSD2LiveState, viewModel: PSD2LiveViewModel): Float {
 	viewModel.parameterScrubValueOf(param.id)?.let { return it }
 	val document = state.parameterValues[param.id] ?: param.default
@@ -2200,7 +2251,7 @@ private fun EditableParameterName(
     param: Parameter,
     depth: Int,
     locked: Boolean,
-    value: Float,
+    value: () -> Float,
     state: PSD2LiveState,
     viewModel: PSD2LiveViewModel,
     related: Boolean,
@@ -2241,7 +2292,7 @@ private fun EditableParameterName(
     )
     }
     }
-    if (editing) ParameterDefinitionDialog(param, state, viewModel, lockValue = value) { editing = false }
+    if (editing) ParameterDefinitionDialog(param, state, viewModel, lockValue = value()) { editing = false }
 }
 
 private fun ParameterNode.Group.containsParameter(ids: Set<ParameterId>): Boolean = children.any {
