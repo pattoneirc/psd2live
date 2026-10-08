@@ -1,0 +1,336 @@
+# `.p2lrt` 2.0 格式（草案）
+
+[运行时](RUNTIME.md) · [工程、运行时与导出边界](RUNTIME_EXPORT_ARCHITECTURE_AND_GAPS.md)
+
+状态：草案，尚未实现。当前写出和读取的仍是版本 1（布局见 `P2lrt.kt` 文档注释）。
+
+## 目标
+
+- **一次性定下演进规则**：2.0 之后新增功能只加块，不改已有记录布局，不再提升主版本。
+- **核心层与 Cubism 等价**：只读核心块即可完整播放，结果与 v1 逐位一致，语义与 moc3 一一对应。
+- **扩展层可选**：运行时蒙皮、顶点模拟、碰撞等高级数据放在可选块中，不认识它们的运行时退回 Cubism 效果（同文件双模式）。
+- **便于加载**：随机访问、按需加载、数组零拷贝；单文件可携带现有边车内容。
+- **可复现**：同一 IR 写出字节完全相同，不含时间戳等易变数据。
+
+非目标：通用场景格式、可编辑工程格式（工程仍是 `.psd2live`）、加密或混淆。
+
+## 容器
+
+小端。文件由文件头、块目录（TOC）和块数据组成：
+
+```
+Header  (32 字节)
+  u8[8]  magic        "P2LRT\0\0\0"
+  u16    major        = 2
+  u16    minor        写出器所知的最高次版本，仅作信息
+  u32    flags        bit0 名称已剥离；其余保留，写 0
+  u32    chunk_count
+  u32    toc_offset   = 32
+  u32    reserved[3]  写 0
+TOC     chunk_count × 40 字节
+  u8[4]  tag          四字符 ASCII，大写为规范块，小写为厂商/私有块
+  u16    version      块版本（布局与求值语义）
+  u16    flags        bit0 必需；bit1 有 CRC；bit2–3 压缩方式（见下）；其余写 0
+  u64    offset       块数据相对文件头的偏移，16 字节对齐
+  u64    length       块在文件中存储的字节数（不含填充；压缩时为压缩后长度）
+  u64    raw_length   解压后的字节数；未压缩时等于 length
+  u32    crc32        对存储字节（压缩后）计算的 IEEE CRC32（bit1 为 0 时写 0）
+  u32    reserved     写 0
+Chunks  各块数据，块间用 0 填充到 16 字节对齐
+```
+
+- 文件头的 `magic` 前 5 字节与 v1 相同；v1 在 `magic` 之后是 `u32 version = 1`，v2 在同一位置是 `u16 major = 2, u16 minor`。读取器读出 u32 后，值为 1 按 v1 解析，低 16 位为 2 按 v2 解析，其余拒绝。
+- 同一个规范标签在一个文件中最多出现一次；块在文件中的顺序不限，写出器按本文“核心块”表的顺序写出。
+- 块之间不允许重叠，所有块必须位于文件内；块之后、文件末尾之外不允许有多余数据（填充除外）。
+- 偏移和长度为 u64，读取器在超出自身地址宽度（如 WASM32）时拒绝该文件，而不是截断。
+
+### 块压缩
+
+| flags bit2–3 | 方式 | 存储内容 |
+| --- | --- | --- |
+| 0 | 无 | 原始块数据 |
+| 1 | deflate | zlib 流（RFC 1950） |
+| 2 | zstd | 单个 zstd 帧（RFC 8878），不使用外部字典 |
+| 3 | 保留 | 读取器拒绝 |
+
+- 读取器必须支持 deflate 和 zstd。解压后长度必须等于 `raw_length`，否则拒绝；解压结果放入 16 字节对齐的缓冲区，之后按未压缩块解析。
+- 压缩只改变存储，不改变块内容；块内的偏移、对齐与 `pad4` 都相对解压后的数据。
+- 压缩块无法零拷贝；需要内存映射或流式加载的宿主应选择不压缩的文件。
+- 写出器默认不压缩。导出选项开启压缩时，只压缩能变小的块；已压缩的贴图负载（PNG、KTX2）所在的 `TEXR` 不压缩。若压缩后不小于原数据，该块按未压缩写出。
+- 字节稳定只要求同一写出器版本、同一压缩设置下成立；一致性比较以解压后的块内容为准。
+
+### 兼容规则
+
+| 情况 | 读取器行为 |
+| --- | --- |
+| `major` 不是 1 或 2 | 拒绝 |
+| 认识的标签，`version` ≤ 支持的版本 | 按对应版本解析，必须正好读完 `length` 字节 |
+| 认识的标签，`version` 更高 | 视为不认识的块 |
+| 不认识的块，非必需 | 跳过 |
+| 不认识的块，必需 | 拒绝，错误信息列出该标签（“需要特性 XXXX”） |
+| 缺少必需的核心块 | 拒绝 |
+| CRC 不符（仅在宿主要求校验时检查） | 拒绝 |
+| 压缩方式为保留值，或解压失败、解压长度不等于 `raw_length` | 拒绝 |
+
+`minor` 不参与判断，只用于诊断。
+
+### 演进规则
+
+1. 同一主版本内，已发布的块版本布局和求值语义永不改变。
+2. 给已有对象增加属性：新增一个“平行块”，按对象下标存这一列，而不是改原记录。例如给网格加蒙皮写 `SKIN` 块（网格下标 → 蒙皮数据），`MESH` 不变。
+3. 块内不允许“某个标志为 1 时多读若干字节”这类条件字段；可选内容一律用独立块或显式长度包裹。
+4. 改变某块的求值语义必须提升该块版本，且旧版本仍按旧语义求值。
+5. 核心块永远不依赖扩展块；扩展块只能引用核心块和更早定义的扩展块。
+6. 厂商或实验块使用小写标签，必须为非必需块，规范块使用大写标签。
+
+## 基础编码
+
+| 名称 | 编码 |
+| --- | --- |
+| `u8/u16/u32/i32/f32` | 小端；f32 必须为有限值 |
+| `ref` | u32 下标；可空引用用 i32，-1 为空 |
+| `sref` | u32 字符串表下标（`STRS`），`0xFFFFFFFF` 为空 |
+| `rgb` | 3 × f32 |
+| `pad4` | 0 填充到块内 4 字节对齐 |
+| `array<T>` | `u8 codec, u8 reserved[3], u32 count`，随后 `count` 个元素，再 `pad4` |
+| `grid<F>` | 同 v1：`u16 axes`（`0xFFFF` 表示无网格）× `{ ref parameter, array<f32> keys }`，`u32 cells` × `{ u16 coordinate[axes], F }`，`pad4` |
+| `channels` | 同 v1：`u8 n` × `{ u8 channel, u8 kind, grid<value> }`；channel 依次为 DrawOrder、Opacity、MultiplyColor、ScreenColor、FlipX、FlipY、GlueIntensity；kind 0 标量、1 颜色、2 标志 |
+| `bindings<S>` | 同 v1：`u16 n` × `{ ref parameter, array<f32> keys, u32 neutral, u8 present + S 每个关键点, u16 n × { ref limit_parameter, u16 n × { f32 value, f32 weight } } }` |
+
+数组编码（`codec`）：
+
+| 值 | 元素 | 用途 |
+| --- | --- | --- |
+| 0 | f32 | 默认；所有一致性测试使用 |
+| 1 | f16 | 可选的体积优化（位置、偏移） |
+| 2 | unorm16 | 可选的体积优化（UV，范围 [0,1]） |
+| 16 | u16 | 索引，顶点数 ≤ 65535 时 |
+| 17 | u32 | 索引 |
+
+浮点数组的 codec 1、2 只在宿主显式选择“发布体积优化”时写出；读取器必须支持全部编码，解码后与 f32 同等对待。块内数组从 4 字节对齐处开始，且块本身 16 字节对齐，因此 codec 0/16/17 的数组可直接按切片读取。
+
+## 核心块
+
+全部为必需块（标记 bit0），块版本均为 1，求值语义即 [运行时](RUNTIME.md) “求值规则”“物理”“动作片段”各节。字段与 v1 相同，差别只有：字符串改为 `sref`，数组改为 `array<T>` 并对齐，计数统一为 u32。
+
+| 标签 | 内容 | 必须存在 |
+| --- | --- | --- |
+| `STRS` | 字符串表 | 是 |
+| `CANV` | 画布：f32 width, height, originX, originY, pixelsPerUnit（-1 无） | 是 |
+| `PARM` | 参数 | 是（可为 0 个） |
+| `DEFM` | 变形器，父级在前 | 是（可为 0 个） |
+| `PART` | 部件 | 是 |
+| `MESH` | 网格 | 是 |
+| `GLUE` | Glue | 否（缺省为 0 个） |
+| `DRAW` | 绘制树 | 是 |
+| `TEXR` | 贴图页 | 否（缺省为无贴图） |
+| `PHYS` | 物理组 | 否 |
+| `CLIP` | 动作片段 | 否 |
+| `ROLE` | 参数角色 | 否 |
+
+“必须存在”为否的块缺失时按空集处理；存在时仍标记为必需，因为它们参与核心求值。
+
+### `STRS`
+
+```
+u32 count
+u32 offsets[count + 1]   每个字符串在 blob 中的起止偏移
+u8  blob[...]            UTF-8，不以 0 结尾
+```
+
+写出器去重。文件头 flags bit0（名称已剥离）为 1 时，所有 `name` 字段为空 `sref`，`id` 仍保留，宿主按 id 查找参数和网格。
+
+### `PARM`
+
+`u32 n` × `{ sref id, sref name, f32 min, max, default, u8 flags (1 blend, 2 repeat), pad4 }`
+
+### `DEFM`
+
+`u32 n` × 变形器，父级必须在子级之前：
+
+```
+u8 kind (0 Warp, 1 Rotation), sref id, i32 parent, i32 part,
+u8 flags (1 visible, 2 enabled, 4 flipX, 8 flipY, 16 bilinear), pad4,
+f32 opacity, rgb multiply, rgb screen
+Warp:     u32 columns, rows, grid<array<f32> points>, channels,
+          bindings<{ array<f32> points, f32 opacity, rgb multiply, rgb screen }>
+Rotation: f32 baseAngle, grid<{ f32 x, y, angle, scale }>, channels,
+          bindings<{ f32 x, y, angle, scale, u8 flipX, u8 flipY, pad4, f32 opacity, rgb multiply, rgb screen }>
+```
+
+### `PART`
+
+```
+u32 n × { sref id, sref name, u8 flags (1 visible, 2 sketch), u8 groupMode, pad4, i32 drawOrder,
+          u32 n × { u8 kind (0 part, 1 mesh), pad4, ref target },
+          channels, composite,
+          bindings<{ f32 drawOrder, f32 opacity, rgb multiply, rgb screen }> }
+composite = { u8 blend, u8 alphaBlend, pad4, u32 n × ref maskMesh, u32 n × ref maskPart,
+              u8 invertMask, pad4, f32 opacity, rgb multiply, rgb screen }
+```
+
+### `MESH`
+
+```
+u32 n × { sref id, sref name, i32 parent, u8 blend, u8 alphaBlend, pad4, u32 n × ref maskMesh,
+          u8 flags (1 invertMask, 2 culling, 4 visible, 8 geometry), pad4, i32 texturePage,
+          [geometry] array<f32> positions, array<f32> uvs, array<u16|u32> indices,
+          grid<array<f32> deltas>, channels,
+          f32 drawOrder, f32 opacity, rgb multiply, rgb screen,
+          bindings<{ array<f32> deltas, f32 drawOrder, f32 opacity, rgb multiply, rgb screen }> }
+```
+
+`[geometry]` 仅在 flags bit3 为 1 时出现。这是 v1 遗留的条件字段，为保持与 v1 一一对应而保留，是规则 3 的唯一例外。
+
+### `GLUE`
+
+`u32 n × { sref id, ref meshA, ref meshB, f32 intensity, u32 n × { u32 a, u32 b, f32 weightA, f32 weightB }, channels }`
+
+### `DRAW`
+
+绘制树根组，递归：`{ i32 part, i32 drawOrder, channels, u8 hasComposite, pad4, [composite], u32 n × { u8 kind (0 group, 1 mesh), pad4, group | ref mesh } }`
+
+### `TEXR`
+
+```
+u32 n × { u8 kind, pad4, u32 width, height, payload }
+kind 0  PNG       payload = array<u8> png      所有运行时必须支持
+kind 1  KTX2      payload = array<u8> ktx2     可选；不支持的运行时报告该页不可用
+kind 2  外部文件  payload = sref uri           相对模型文件的路径，由宿主加载
+```
+
+`p2l_texture_png` 对非 PNG 页返回空；新增 `p2l_texture_info(i)` 返回 kind、宽高与 uri。
+
+### `PHYS`
+
+`f32 fps (0 运行时默认), u32 n × { sref id, sref name, inputs, outputs, segments, normalization }`，各字段同 v1。
+
+### `CLIP`
+
+同 v1，字符串改为 `sref`。
+
+### `ROLE`
+
+`u32 n × { sref role, u32 n × ref parameter }`
+
+## 参数界面块 `PGUI`（非必需）
+
+供宿主展示参数面板的元数据，不参与求值；不认识或不需要它的运行时直接跳过。块版本 1：
+
+```
+u32 n × { ref parameter, array<f32> keys }        吸附值：只列有吸附值的参数，keys 升序
+u32 n × { ref horizontal, ref vertical }          二维摇杆：两个参数组成一个平面控件
+u32 n × node                                      参数分组树，先序展开
+node = { u8 kind (0 参数, 1 分组), u8 open, u8 label (0 无, 1 预设, 2 自定义), u8 reserved,
+         i32 parameter (分组为 -1), sref id, sref name, sref preset, u32 argb, u32 children }
+```
+
+- 节点为定长记录，所有字段总是写出：参数节点的 `id`、`name`、`preset` 为空，分组节点的 `parameter` 为 -1；`label` 不是 1 时 `preset` 为空，不是 2 时 `argb` 为 0。`children` 是紧随其后的直接子节点数。
+- 文件头 flags bit0（名称已剥离）为 1 时，分组 `name` 为空。
+- 未列入分组树的参数由宿主按 `PARM` 顺序放在末尾。
+- `RigIR.restPose` 只用于以画布空间基础网格存储的格式（如 Spine），p2lrt 由参数直接求值，不写出。
+
+## 信息块 `META`（非必需）
+
+`u32 n × { sref key, sref value }`。规范键：`generator`、`generator_version`、`source_hash`（工程源数据哈希，用于缓存和诊断）、`capabilities`（以空格分隔的文件内扩展标签，供宿主在加载前展示）。不写时间戳，保证可复现。
+
+## 求值阶段与扩展挂点
+
+核心求值固定为以下阶段；扩展块只能在标明的挂点生效，块的规范必须写明它挂在哪个点、替换哪项贡献。
+
+| 序号 | 阶段 | 核心内容 | 扩展挂点 |
+| --- | --- | --- | --- |
+| 1 | 参数 | 动作片段 → 程序化行为 → Cubism 摆锤 → 钳制 / 回绕 | **H1 参数覆盖**：被替换的参数在本次求值中取默认值，被替换的摆锤组跳过 |
+| 2 | 变形器 | 父级在前，Warp / 旋转框架 | **H2 框架替换**：用精确合成的框架替换指定变形器（如折叠链接） |
+| 3 | 骨骼帧 | 无（核心层没有骨骼） | **H3 骨骼帧**：从变形器框架或虚拟帧得到每根骨骼的画布变换，供 H4、碰撞体和宿主挂件使用 |
+| 4 | 网格 | 静止位置 + 关键形偏移 + 混合形 → 父变换 | **H4 网格贡献替换**：指定网格的指定贡献（蒙皮轴关键形、指定混合形）被替换为扩展计算结果，其余照常 |
+| 5 | Glue | 顶点对互拉 | 无 |
+| 6 | 时间步后处理 | 无 | **H6 顶点模拟**：需要 dt，以本次求值的顶点为目标做定步长模拟，覆盖目标网格顶点；碰撞在此阶段内求解 |
+| 7 | 绘制顺序 | 绘制树排序 | 无 |
+
+挂点的共同规则：
+
+- 未开启扩展时，所有挂点为空操作，代码路径与核心求值相同。
+- H1 的覆盖只作用于几何；透明度、颜色、绘制顺序等通道仍使用真实参数值。
+- `p2l_evaluate`（无 dt）不推进 H6，模拟网格显示上一次模拟状态，从未推进时显示目标。
+
+### 扩展块的公共头
+
+每个扩展块的负载以统一的覆盖声明开头，读取器可以在不理解块内容的情况下知道它会替换什么（用于诊断与 `META` 展示）：
+
+```
+u16 feature_bit           对应 p2l_set_advanced 的特性位
+u16 hooks                 位集：H1=1, H2=2, H3=4, H4=8, H6=32
+u32 n × ref parameter     H1 被覆盖为默认值的参数
+u32 n × ref physicsGroup  H1 被跳过的摆锤组
+u32 n × ref deformer      H2 被替换框架的变形器
+u32 n × { ref mesh, u8 offsets (1 = 替换关键形偏移中的指定轴), pad4,
+          u32 n × ref axisParameter, u32 n × u32 binding }   H4 被替换的贡献
+u32 n × u32 depends_on    依赖的其他扩展块标签（四字符按 u32 存）
+```
+
+之后是块自己的内容。依赖块缺失或未开启时，该扩展自动停用。
+
+### 特性位与模式开关
+
+| 位 | 块 | 说明 |
+| --- | --- | --- |
+| 1 | `SKIN`（需 `BONE`） | 运行时蒙皮 |
+| 2 | `BONE` 的虚拟帧 | 精确链接（替换折叠链接框架） |
+| 4 | `SIMS` | 顶点级实时模拟 |
+| 8 | `COLL`（需 `SIMS`） | 碰撞 |
+
+- `p2l_advanced_available()` 返回文件携带且运行时支持的位；`p2l_set_advanced(bits)` 返回实际开启的位，0 为 Cubism 模式（默认）。切换时重置模拟状态。
+- `p2l_bone_count / p2l_bone_id / p2l_bone_transform` 输出 H3 的骨骼帧。
+- 时间步扩展必须定步长（步长写在块内）、单线程、固定遍历顺序，每次更新步数有上限并丢弃超出的时间，输出在最后两步之间插值，与 `PHYS` 的做法一致。
+
+## 已登记的后续块
+
+以下标签已保留，布局在各自实现时另立文档，遵守演进规则和上面的公共头。
+
+| 标签 | 层 | 内容 | 必需 |
+| --- | --- | --- | --- |
+| `BONE` | 扩展 | 骨骼表：关节参数、父骨骼、帧来源（已有旋转变形器或被裁剪/折叠骨骼的虚拟帧） | 否 |
+| `SKIN` | 扩展 | 每网格两骨权重、home 骨骼、被替换的混合形、关键点残差网格 | 否 |
+| `SIMS` | 扩展 | 顶点级 XPBD 模拟场景及其替换的 `ParamSim*` 参数与摆锤组 | 否 |
+| `COLL` | 扩展 | 碰撞体（圆、胶囊），挂在画布、变形器、骨骼或网格顶点上 | 否 |
+| `EXPR` | 附带 | 表情（参数 Add / Multiply / Overwrite 与淡入淡出） | 否 |
+| `POSE` | 附带 | 部件互斥组与切换淡化 | 否 |
+| `HITA` | 附带 | 点击区域（id、名称、网格） | 否 |
+| `UDAT` | 附带 | 用户数据（目标类型、目标 id、字符串） | 否 |
+
+扩展块的共同约束：
+
+- 只替换或补充核心求值中的特定贡献（如修正关键形、`ParamSim*` 驱动的形状），参数、动作、行为与 Cubism 摆锤照常驱动。
+- 默认关闭；宿主通过 `p2l_set_advanced(features)` 开启，关闭时求值结果与只有核心块的文件逐位一致。
+- 写出器在核心块中始终保留对应的 Cubism 烘焙结果。
+
+## 运行时与写出器
+
+- **读取**：同时支持 v1 与 v2，两者解析为同一个内存结构 `Rig`，求值代码只有一份。
+- **写出**：`P2lrtTarget` 默认写 v2；导出选项“兼容 v1”只写核心内容的 v1 布局，此时若有扩展数据，`CapabilityScan` 报告其以烘焙形式保留。
+- **能力查询**：新增 `p2l_format_support()`，返回支持的主版本和块标签及版本列表；`p2l_rig_load_ex(bytes, len, flags)` 的 flags bit0 要求校验 CRC。
+- **压缩依赖**：Rust 读取端用纯 Rust 的 `miniz_oxide`（deflate）与 `ruzstd`（zstd 解码），可编译到 WASM，运行时只需解码；Kotlin 写出端 deflate 用 JDK `Deflater`，zstd 选纯 Java 实现，避免引入本地库。
+- **字节稳定**：同一 IR 两次写出字节相同；名称剥离和数组编码由导出选项决定，不受环境影响。
+
+## 验证
+
+- **v1/v2 逐位一致**：`RuntimeConformanceTool` 的全部随机模型、样例与物理轨迹，同时写出 v1 和 v2，运行时求值结果按 `to_bits()` 比较，顶点、透明度、颜色与绘制顺序必须完全相同。
+- **读取器**：v1 接受；v2 最小文件接受；未知可选块跳过；未知必需块拒绝且报出标签；块越界、重叠、过读、欠读、重复规范标签、缺少必需核心块、错误对齐、CRC 不符（开启校验时）全部拒绝。Rust（`runtime/src/tests.rs`）与 Kotlin（`P2lrtTest.kt`）各一套。
+- **可复现**：同一 IR、同一设置写两次字节相同；`STRS` 去重后与写出顺序无关的内容一致。
+- **压缩**：同一模型以无压缩、deflate、zstd 写出，解压后各块内容逐字节相同，求值逐位一致；`raw_length` 不符、截断的压缩流、保留压缩方式均被拒绝；Kotlin 写、Rust 和 WASM 读三种方式都覆盖。
+- **`PGUI`**：分组树、二维摇杆、吸附值写出后读回与 `RigIR` 一致；去掉 `PGUI` 后求值不变。
+- **数组编码**：f16 / unorm16 模型与 f32 模型的顶点误差在编码精度内，并单独报告，不进入逐位一致语料。
+- **跨语言**：Kotlin 写、Rust 读；WASM 构建通过同一组读取器测试。
+- **扩展存在时 Cubism 模式不变**：带扩展块的文件在特性位为 0 时，与去掉扩展块的同一文件求值逐位一致；开启后再关闭也一致（无残留状态）。
+- **扩展的参考实现**：每个扩展块都有 Kotlin 参考实现，纳入 `RuntimeConformanceTool` 的随机语料，与运行时对拍。
+
+## 与高级模式路线的关系
+
+本格式是运行时高级模式（运行时蒙皮、精确链接、顶点模拟、碰撞，同一文件双模式）的容器基础，对应其“阶段 0 格式管道”，并替代该路线最初设想的“v1 主体后追加分块”方案：核心内容也重新分块，所有内容遵守同一套演进规则。后续阶段各自定义 `BONE`/`SKIN`、`SIMS`、`COLL` 的块内布局，挂点、公共头和特性位以本文为准。
+
+## 已定事项
+
+- 块压缩：定义 deflate 与 zstd 两种，读取器都必须支持，写出器默认不压缩。
+- 偏移与长度宽度：u64。
+- 参数分组、二维摇杆与吸附值放入非必需的 `PGUI` 块，`PARM` 与 v1 一一对应；`restPose` 不写出。
