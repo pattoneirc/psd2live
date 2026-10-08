@@ -318,8 +318,6 @@ internal fun AccentButton(label: String?, onClick: () -> Unit, enabled: Boolean 
 /**
  * A menu dropping from a bar control, in the mode menu's style: frosted, scaling in from its anchor's corner.
  * Put it in the anchor's Box; [alignment] TopStart drops it under the anchor's left edge, TopEnd under its right.
- * [beside] opens it to the right of the anchor instead, top edges aligned - a tool palette's flyout - moving up
- * as far as the window needs.
  */
 @Composable
 internal fun FloatingMenu(
@@ -327,7 +325,6 @@ internal fun FloatingMenu(
 	onDismiss: () -> Unit,
 	width: Dp = 220.dp,
 	alignment: Alignment = Alignment.TopStart,
-	beside: Boolean = false,
 	content: @Composable ColumnScope.() -> Unit,
 ) {
 	val visibility = remember { MutableTransitionState(false) }
@@ -352,9 +349,8 @@ internal fun FloatingMenu(
 				Modifier
 					.graphicsLayer {
 						this.alpha = alpha; scaleX = scale; scaleY = scale
-						if (beside) translationX = lift * density.density else translationY = lift * density.density
-						transformOrigin = if (beside) TransformOrigin(0f, 0.1f)
-							else TransformOrigin(if (alignment == Alignment.TopEnd) 0.88f else 0.12f, 0f)
+						translationY = lift * density.density
+						transformOrigin = TransformOrigin(if (alignment == Alignment.TopEnd) 0.88f else 0.12f, 0f)
 					}
 					.width(width)
 					.frostedGlass(RoundedCornerShape(7.dp), isHovered = true, elevation = 12.dp, baseColor = colors.panelElevated, alpha = 0.9f)
@@ -365,31 +361,13 @@ internal fun FloatingMenu(
 			)
 		}
 	}
-	if (beside) {
-		val provider = remember(density) { BesidePositionProvider(with(density) { 6.dp.roundToPx() }) }
-		Popup(popupPositionProvider = provider, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true), content = body)
-	} else {
-		Popup(
-			alignment = alignment,
-			offset = with(density) { IntOffset(0, 28.dp.roundToPx()) },
-			onDismissRequest = onDismiss,
-			properties = PopupProperties(focusable = true),
-			content = body,
-		)
-	}
-}
-
-/** Places a popup to the right of its anchor, top edges aligned, kept inside the window. */
-private class BesidePositionProvider(private val gap: Int) : androidx.compose.ui.window.PopupPositionProvider {
-	override fun calculatePosition(
-		anchorBounds: androidx.compose.ui.unit.IntRect,
-		windowSize: androidx.compose.ui.unit.IntSize,
-		layoutDirection: androidx.compose.ui.unit.LayoutDirection,
-		popupContentSize: androidx.compose.ui.unit.IntSize,
-	): IntOffset {
-		val y = anchorBounds.top.coerceAtMost(windowSize.height - popupContentSize.height - gap).coerceAtLeast(gap)
-		return IntOffset(anchorBounds.right + gap, y)
-	}
+	Popup(
+		alignment = alignment,
+		offset = with(density) { IntOffset(0, 28.dp.roundToPx()) },
+		onDismissRequest = onDismiss,
+		properties = PopupProperties(focusable = true),
+		content = body,
+	)
 }
 
 /** A caption over a group of [FloatingMenu] rows. */

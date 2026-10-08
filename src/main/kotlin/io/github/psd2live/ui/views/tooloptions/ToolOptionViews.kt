@@ -76,6 +76,7 @@ import io.github.psd2live.ui.tooloptions.SliderOption
 import io.github.psd2live.ui.tooloptions.ToggleOption
 import io.github.psd2live.ui.tooloptions.ToolOption
 import io.github.psd2live.ui.tooloptions.barOptions
+import io.github.psd2live.ui.tooloptions.foldedGroups
 import io.github.psd2live.ui.tooloptions.menuOptions
 import io.github.psd2live.ui.tutorial.TutorialTargetId
 import io.github.psd2live.ui.tutorial.tutorialTarget
@@ -235,18 +236,19 @@ private sealed interface MenuEntry {
                      val choice: ChoiceOption<*>? = null) : MenuEntry
 }
 
-/** Folds [options] into menu entries: a submenu section takes the options up to the next section. */
+/** Lays [options] out as menu entries, folding the groups [foldedGroups] picks into rows that open a second level. */
 private fun menuEntries(editor: CanvasEditor, options: List<ToolOption>): List<MenuEntry> = buildList {
+    val folded = foldedGroups(editor, options)
     var i = 0
     while (i < options.size) {
         val option = options[i]
-        if (option is SectionOption && option.submenu) {
+        if (option is SectionOption && option.id in folded) {
             val members = options.drop(i + 1).takeWhile { it !is SectionOption }
             add(MenuEntry.Level(option.id, tr(option.labelKey), option.icon, null, members))
             i += 1 + members.size
             continue
         }
-        if (option is ChoiceOption<*> && !option.inline && !option.variant) {
+        if (option is ChoiceOption<*> && option.id in folded) {
             // A long list of choices opens beside the menu, the one in force named on its row.
             add(MenuEntry.Level(option.id, tr(option.labelKey), null, choiceLabel(editor, option), emptyList(), option))
         } else add(MenuEntry.Single(option))
@@ -258,8 +260,9 @@ private fun <T> choiceLabel(editor: CanvasEditor, option: ChoiceOption<T>): Stri
 
 /**
  * The context menu's share of the tool's options ([menuOptions]), dense enough to need no scrolling: values on one
- * line each, a choice as one row of chips, actions as rows with their icons, and the longer groups - the selection,
- * topology, creating, a vertex group's commands - folded into rows that open a second level beside the menu.
+ * line each, a choice as one row of chips, actions as rows with their icons. Only when that runs past
+ * [io.github.psd2live.ui.tooloptions.MENU_ROW_BUDGET] rows do the largest groups fold into rows that open a second
+ * level beside the menu ([foldedGroups]).
  * [onAction] returns focus to the canvas; an action closes the menu through [onDismiss] unless it is one taken
  * several times in a row.
  */
@@ -321,7 +324,11 @@ private fun MenuOption(editor: CanvasEditor, option: ToolOption, onDismiss: () -
             display = option.display(option.get(editor)),
             logarithmic = option.logarithmic,
         )
-        is ChoiceOption<*> -> MenuChoiceRow(editor, option)
+        is ChoiceOption<*> -> if (option.inline || option.variant) MenuChoiceRow(editor, option) else {
+            // A long choice the menu has room for: its name, then a row per choice.
+            FloatingMenuSection(tr(option.labelKey))
+            MenuChoiceRadios(editor, option)
+        }
         is ToggleOption -> FloatingMenuSwitch(tr(option.labelKey), option.get(editor), { option.set(editor, it) })
         is ActionOption -> FloatingMenuRow(
             label = tr(option.labelKey, *option.labelArgs(editor).toTypedArray()),

@@ -161,9 +161,8 @@ internal fun CanvasRailScope.RailToggle(label: String, isChecked: Boolean, icon:
 	RailItem(label, isChecked, icon = icon, onClick = onClick)
 
 /**
- * One row of a [CanvasOptionsRail]: a tool slot or a display toggle. [keyLabel] is the chord that reaches it, boxed
- * as a key cap when [keyCap] (a tool) or plain. [tooltip] says why a row is disabled; [flyout] marks the icon's corner
- * of a slot that holds more tools than the one it shows.
+ * One row of a [CanvasOptionsRail]: a tool or a display toggle. [keyLabel] is the chord that reaches it, boxed as a
+ * key cap when [keyCap] (a tool) or plain. [tooltip] says why a row is disabled.
  */
 @Composable
 internal fun CanvasRailScope.RailItem(
@@ -173,8 +172,6 @@ internal fun CanvasRailScope.RailItem(
 	keyLabel: String = "",
 	keyCap: Boolean = false,
 	tooltip: String? = null,
-	flyout: Boolean = false,
-	modifier: Modifier = Modifier,
 	icon: @Composable (Color) -> Unit,
 	onClick: () -> Unit,
 ) {
@@ -195,7 +192,7 @@ internal fun CanvasRailScope.RailItem(
 	}
 	BarTooltip(tooltip) {
 		Row(
-			modifier = modifier
+			modifier = Modifier
 				.fillMaxWidth()
 				.height(28.dp)
 				.clip(RoundedCornerShape(3.dp))
@@ -211,7 +208,7 @@ internal fun CanvasRailScope.RailItem(
 			verticalAlignment = Alignment.CenterVertically,
 			horizontalArrangement = if (leading) Arrangement.Start else Arrangement.End,
 		) {
-			if (leading) RailIcon(tint, flyout, icon)
+			if (leading) RailIcon(tint, icon)
 			if (expanded) {
 				Row(
 					modifier = Modifier
@@ -237,22 +234,15 @@ internal fun CanvasRailScope.RailItem(
 					if (keyLabel.isNotEmpty()) RailKeyLabel(keyLabel, keyCap, selected)
 				}
 			}
-			if (!leading) RailIcon(tint, flyout, icon)
+			if (!leading) RailIcon(tint, icon)
 		}
 	}
 }
 
-/** A rail row's icon, with the small corner triangle of a slot that opens a flyout. */
+/** A rail row's icon. */
 @Composable
-private fun RailIcon(tint: Color, flyout: Boolean, icon: @Composable (Color) -> Unit) {
-	Box(modifier = Modifier.size(28.dp), contentAlignment = Alignment.Center) {
-		icon(tint)
-		if (flyout) androidx.compose.foundation.Canvas(Modifier.align(Alignment.BottomEnd).padding(end = 3.dp, bottom = 3.dp).size(4.dp)) {
-			drawPath(androidx.compose.ui.graphics.Path().apply {
-				moveTo(size.width, 0f); lineTo(size.width, size.height); lineTo(0f, size.height); close()
-			}, tint.copy(alpha = 0.75f))
-		}
-	}
+private fun RailIcon(tint: Color, icon: @Composable (Color) -> Unit) {
+	Box(modifier = Modifier.size(28.dp), contentAlignment = Alignment.Center) { icon(tint) }
 }
 
 /** The chord of a rail row: a key cap for a tool, plain text for a tool's variant. */

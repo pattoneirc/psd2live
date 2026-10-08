@@ -151,6 +151,49 @@ internal fun menuOptions(editor: CanvasEditor): List<ToolOption> = toolOptions(e
 /** The options of [toolOptions] the options bar shows. */
 internal fun barOptions(editor: CanvasEditor): List<ToolOption> = toolOptions(editor).filter { it.place.bar }.trimSections()
 
+/** The rows the context menu shows before it folds a group into a second level. */
+internal const val MENU_ROW_BUDGET = 10
+
+/** A group folds only when it saves rows worth a second level: three entries or more. */
+private const val MIN_FOLDED_GROUP = 3
+
+/**
+ * The ids of the groups of [options] the context menu folds into a second level. Folding hides what it folds, so a
+ * group stays open unless the menu needs the room: while every row fits [MENU_ROW_BUDGET] nothing folds; otherwise
+ * the largest groups fold first (the later of two the same size), only until the rest fits. A group is a submenu
+ * section with the options up to the next section, or a choice too long to lay out on one row; open, it takes a
+ * caption and a row per entry, folded a single row.
+ */
+internal fun foldedGroups(editor: CanvasEditor, options: List<ToolOption>): Set<String> {
+    val groups = mutableListOf<Pair<String, Int>>()
+    var rows = 0
+    var i = 0
+    while (i < options.size) {
+        val option = options[i]
+        val members = when {
+            option is SectionOption && option.submenu -> options.drop(i + 1).takeWhile { it !is SectionOption }.size
+            option is ChoiceOption<*> && !option.inline && !option.variant -> option.choices(editor).size
+            else -> -1
+        }
+        if (members >= 0) {
+            rows += 1 + members
+            if (members >= MIN_FOLDED_GROUP) groups += option.id to members
+            i += 1 + if (option is SectionOption) members else 0
+        } else {
+            rows++
+            i++
+        }
+    }
+    val folded = mutableSetOf<String>()
+    for ((id, members) in groups.withIndex().sortedWith(compareByDescending<IndexedValue<Pair<String, Int>>> { it.value.second }
+        .thenByDescending { it.index }).map { it.value }) {
+        if (rows <= MENU_ROW_BUDGET) break
+        folded += id
+        rows -= members
+    }
+    return folded
+}
+
 /** Drops the section captions left with nothing under them, and a leading one in the bar. */
 private fun List<ToolOption>.trimSections(): List<ToolOption> = filterIndexed { i, option ->
     option !is SectionOption || (i + 1 < size && this[i + 1] !is SectionOption)

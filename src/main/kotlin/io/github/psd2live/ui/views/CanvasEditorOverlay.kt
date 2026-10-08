@@ -95,9 +95,6 @@ import io.github.psd2live.ui.views.texture.AccentButton
 import io.github.psd2live.ui.views.texture.BarChip
 import io.github.psd2live.ui.views.texture.BarDivider
 import io.github.psd2live.ui.views.texture.FloatingBar
-import io.github.psd2live.ui.views.texture.FloatingMenu
-import io.github.psd2live.ui.views.texture.FloatingMenuRow
-import io.github.psd2live.ui.views.texture.FloatingMenuSection
 import io.github.psd2live.ui.views.tooloptions.ToolOptionsBar
 import kotlin.math.PI
 import kotlin.math.abs
@@ -2198,15 +2195,18 @@ private fun BoxScope.CanvasToolBar(
     focus: () -> Unit,
     top: Dp,
 ) {
-    // The tool each slot shows when another slot's tool is in hand: the last one picked from it.
-    val lastInSlot = remember { mutableStateMapOf<String, CanvasTool>() }
-    var flyoutSlot by remember { mutableStateOf<String?>(null) }
-    val slots = toolbarSlots(editor.hierarchyMode).associateBy { it.id }
-    // A rule goes where the mode's palette starts a new group, and before Create.
-    val groupStarts = toolbarGroups(editor.hierarchyMode).map { it.first() }.drop(1).toSet()
-    SideEffect {
-        slots.values.firstOrNull { editor.tool in it.tools }?.let { lastInSlot[it.id] = editor.tool }
+    val rows = toolbarRows(editor.hierarchyMode)
+    val shown = rows.flatten().toSet()
+    // A rule opens every group after the first.
+    val groupStarts = rows.drop(1).map { it.first() }.toSet()
+    val placingTool = when (editor.placement?.kind) {
+        CreatePlacementKind.WARP -> CanvasTool.CREATE_WARP
+        CreatePlacementKind.ROTATION -> CanvasTool.CREATE_ROTATION
+        CreatePlacementKind.PATH -> CanvasTool.CREATE_DEFORM_PATH
+        else -> null
     }
+    // Glue joins exactly two meshes: with any other count it stays in place, disabled, and says why.
+    val glueWaiting = editor.glueMeshCount() != 2 && editor.tool != CanvasTool.GLUE
     CanvasOptionsRail(
         modifier = Modifier
             .align(Alignment.TopStart)
@@ -2214,94 +2214,37 @@ private fun BoxScope.CanvasToolBar(
             .tutorialTarget(TutorialTargetId.CANVAS_TOOLBAR),
         leading = true,
         expandedWidth = 156.dp,
-        pinned = flyoutSlot != null,
         scrollable = true,
     ) {
-        // Every slot is walked in one fixed order, each row's visibility following the mode. Walking the mode's own
+        // Every tool is walked in one fixed order, each row's visibility following the mode. Walking the mode's own
         // list instead would be shorter, but a row that left the composition has nothing left to animate out of -
         // the rows a mode change adds or removes would pop while the rest slid.
-        var first = true
-        TOOL_SLOTS.forEach { all ->
-            val slot = slots[all.id]
-            val visible = slot != null
-            RailRows(visible && !first && (slot!!.id == CREATE_SLOT || slot.tools.first() in groupStarts)) { RailDivider() }
-            if (visible) first = false
-            RailRows(visible) {
-                if (slot != null) ToolSlotRow(editor, keymap, slot, lastInSlot[slot.id], open = flyoutSlot == slot.id,
-                    onOpen = { flyoutSlot = if (it) slot.id else null }, focus = focus)
-            }
-        }
-    }
-}
-
-/**
- * One slot of the tool palette: the tool it shows - the one in hand, or the last one picked from it - and, for a
- * slot of several, a flyout beside it with all of them. A click arms the shown tool; a click on the armed one, a
- * right click or the corner mark's promise opens the flyout.
- */
-@OptIn(ExperimentalComposeUiApi::class)
-@Composable
-private fun CanvasRailScope.ToolSlotRow(
-    editor: CanvasEditor,
-    keymap: Keymap,
-    slot: ToolSlot,
-    last: CanvasTool?,
-    open: Boolean,
-    onOpen: (Boolean) -> Unit,
-    focus: () -> Unit,
-) {
-    val creating = slot.id == CREATE_SLOT
-    val placingKind = editor.placement?.kind?.takeIf { it != CreatePlacementKind.LAYER }
-    val placingTool = when (placingKind) {
-        CreatePlacementKind.WARP -> CanvasTool.CREATE_WARP
-        CreatePlacementKind.ROTATION -> CanvasTool.CREATE_ROTATION
-        CreatePlacementKind.PATH -> CanvasTool.CREATE_DEFORM_PATH
-        else -> null
-    }
-    val inHand = (if (creating) placingTool ?: editor.tool else editor.tool).takeIf { it in slot.tools }
-    val shown = inHand ?: last?.takeIf { it in slot.tools } ?: slot.tools.first()
-    val several = slot.tools.size > 1
-    // Glue joins exactly two meshes: with any other count it stays in place, disabled, and says why.
-    val glueWaiting = shown == CanvasTool.GLUE && editor.glueMeshCount() != 2 && editor.tool != CanvasTool.GLUE
-    fun arm(tool: CanvasTool) {
-        onOpen(false)
-        editor.activateTool(tool)
-        focus()
-    }
-    Box {
-        RailItem(
-            label = tr("editor.tool.${shown.name.lowercase()}"),
-            selected = inHand != null,
-            enabled = (if (creating) editor.editable else !editor.busy) && !glueWaiting,
-            tooltip = if (glueWaiting) tr("editor.glueNeedTwo", editor.glueMeshCount()) else null,
-            // The shape slot answers to its shapes' chords, so its row shows the one that is in hand.
-            keyLabel = keymap.labelFor(if (shown == CanvasTool.PAINT_SHAPE) editor.paintShape.action else shown.action).orEmpty(),
-            keyCap = true,
-            flyout = several,
-            modifier = Modifier.onPointerEvent(PointerEventType.Press) { event ->
-                if (several && event.button == androidx.compose.ui.input.pointer.PointerButton.Secondary) onOpen(true)
-            },
-            icon = { color ->
-                ToolIcon(
-                    tool = shown,
-                    color = color,
-                    brushShape = if (shown == CanvasTool.BRUSH) editor.brushShape else null,
-                    paintShape = if (shown == CanvasTool.PAINT_SHAPE) editor.paintShape else null,
-                    skeletonEditSubTool = if (shown == CanvasTool.SKELETON_EDIT) editor.skeletonEditSubTool else null,
-                )
-            },
-            onClick = { if (several && inHand == shown) onOpen(!open) else arm(shown) },
-        )
-        FloatingMenu(open, { onOpen(false) }, width = 196.dp, beside = true) {
-            if (creating) FloatingMenuSection(tr("editor.toolbar.create"))
-            slot.tools.forEach { tool ->
-                FloatingMenuRow(
+        TOOLBAR_TOOL_ORDER.forEach { tool ->
+            RailRows(tool in groupStarts) { RailDivider() }
+            RailRows(tool in shown) {
+                val creating = tool in CREATE_GROUP_TOOLS
+                val waiting = tool == CanvasTool.GLUE && glueWaiting
+                RailItem(
                     label = tr("editor.tool.${tool.name.lowercase()}"),
-                    onClick = { arm(tool) },
-                    selected = tool == inHand,
-                    enabled = if (creating) editor.editable else !editor.busy,
-                    trailing = keymap.labelFor(tool.action),
-                    icon = { color -> Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { ToolIcon(tool = tool, color = color) } },
+                    selected = if (creating) placingTool == tool || editor.tool == tool else editor.tool == tool,
+                    enabled = (if (creating) editor.editable else !editor.busy) && !waiting,
+                    tooltip = if (waiting) tr("editor.glueNeedTwo", editor.glueMeshCount()) else null,
+                    // The shape tool answers to its shapes' chords, so its row shows the one that is in hand.
+                    keyLabel = keymap.labelFor(if (tool == CanvasTool.PAINT_SHAPE) editor.paintShape.action else tool.action).orEmpty(),
+                    keyCap = true,
+                    icon = { color ->
+                        ToolIcon(
+                            tool = tool,
+                            color = color,
+                            brushShape = if (tool == CanvasTool.BRUSH) editor.brushShape else null,
+                            paintShape = if (tool == CanvasTool.PAINT_SHAPE) editor.paintShape else null,
+                            skeletonEditSubTool = if (tool == CanvasTool.SKELETON_EDIT) editor.skeletonEditSubTool else null,
+                        )
+                    },
+                    onClick = {
+                        editor.activateTool(tool)
+                        focus()
+                    },
                 )
             }
         }

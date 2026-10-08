@@ -12,8 +12,8 @@ import io.github.psd2live.ui.CanvasEditor
 import io.github.psd2live.ui.CanvasTool
 import io.github.psd2live.ui.EditHierarchyMode
 import io.github.psd2live.ui.SkeletonEditSubTool
-import io.github.psd2live.ui.CREATE_SLOT
-import io.github.psd2live.ui.toolbarSlots
+import io.github.psd2live.ui.TOOLBAR_TOOL_ORDER
+import io.github.psd2live.ui.toolbarRows
 import io.github.psd2live.ui.createGroupOffered
 import io.github.psd2live.ui.state.PSD2LiveViewModel
 import io.github.psd2live.ui.toolbarGroups
@@ -166,21 +166,34 @@ class ToolOptionCatalogTest {
         }
     }
 
-    @Test fun slotsHoldEachToolOfTheModeOnceAndCreateOnlyInObjectMode() = editor { editor ->
+    @Test fun toolbarRowsListEachToolOnceAndCreateOnlyInObjectMode() = editor { editor ->
         for (mode in EditHierarchyMode.entries) {
             val palette = toolbarGroups(mode).flatten()
             assertEquals(palette.size, palette.toSet().size, "$mode lists a tool twice")
             assertTrue(palette.none { it in CREATE_GROUP_TOOLS }, "$mode lists a create tool in its palette")
-            val slots = toolbarSlots(mode)
-            val slotted = slots.filter { it.id != CREATE_SLOT }.flatMap { it.tools }
-            assertEquals(palette.sorted(), slotted.sorted(), "$mode: every tool of the palette sits in exactly one slot")
-            assertEquals(mode == EditHierarchyMode.SELECT, slots.any { it.id == CREATE_SLOT }, "$mode Create slot")
+            val rows = toolbarRows(mode).flatten()
+            assertTrue(rows.all { it in TOOLBAR_TOOL_ORDER }, "$mode shows a tool the toolbar does not draw")
+            assertEquals(mode == EditHierarchyMode.SELECT, CREATE_GROUP_TOOLS.all { it in rows }, "$mode create tools")
         }
         // Every tool that is not a create tool is reached from the palette of the mode it switches to.
         for (tool in CanvasTool.entries - CREATION_TOOLS) {
             assertTrue(tool in toolbarGroups(editor.modeForTool(tool)).flatten(), "$tool is in no palette of its mode")
         }
         assertEquals(setOf(EditHierarchyMode.SELECT), EditHierarchyMode.entries.filter(::createGroupOffered).toSet())
+    }
+
+    @Test fun theMenuFoldsGroupsOnlyWhenItRunsLong() = editor { editor ->
+        // Deform's selection tools hold one short group: it stays open.
+        editor.hierarchyMode = EditHierarchyMode.DEFORM
+        editor.tool = CanvasTool.SELECT
+        assertEquals(emptySet(), foldedGroups(editor, menuOptions(editor)))
+        // Edit's add topology: the larger group folds and the rest fits.
+        editor.hierarchyMode = EditHierarchyMode.EDIT
+        assertEquals(setOf("topology"), foldedGroups(editor, menuOptions(editor)))
+        // A brush's eight falloffs fold rather than lengthen the menu.
+        editor.hierarchyMode = EditHierarchyMode.DEFORM
+        editor.tool = CanvasTool.BRUSH
+        assertEquals(setOf(BRUSH_FALLOFF.id), foldedGroups(editor, menuOptions(editor)))
     }
 
     @Test fun everyActionHasAnIconAndVariantsLeadTheBar() = editor { editor ->
