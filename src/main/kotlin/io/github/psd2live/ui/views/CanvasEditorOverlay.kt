@@ -620,7 +620,7 @@ internal fun BoxScope.CanvasEditorOverlay(
         // 3c. Paint mode: live stroke & shape preview while dragging
         if (editor.hierarchyMode == EditHierarchyMode.PAINT && editor.isPainting) {
             val col = editor.paintColor.copy(alpha = editor.paintOpacity)
-            val strokeWidth = (editor.paintSize * viewport.scale.toFloat()).coerceAtLeast(1f)
+            val strokeWidth = ((editor.paintSize / editor.paintPixelsPerUnit).coerceIn(1f, 512f) * viewport.scale.toFloat()).coerceAtLeast(1f)
 
             // The tips draw nothing of their own: the pixels are already on the layer, with exactly the
             // hardness and opacity that were asked for, and anything laid over them would misreport

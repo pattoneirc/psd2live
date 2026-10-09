@@ -9,8 +9,8 @@ import java.awt.image.BufferedImage
 
 /** Compose color and shortcut adapters; all raster behavior lives in the shared engine. */
 internal object LayerPaintEngine {
-    class Tip(radius: Float, hardness: Float = 1f, antialias: Boolean = true) :
-        RasterPaintEngine.Tip(radius, hardness, antialias)
+    class Tip(radius: Float, hardness: Float = 1f, antialias: Boolean = true, minRadius: Float = 0.5f) :
+        RasterPaintEngine.Tip(radius, hardness, antialias, minRadius)
 
     class Stroke(width: Int, height: Int) : RasterPaintEngine.Stroke(width, height) {
         fun land(target: BufferedImage, color: Color, opacity: Float, erase: Boolean, region: Rectangle) =

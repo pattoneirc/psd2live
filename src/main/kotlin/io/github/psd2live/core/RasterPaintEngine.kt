@@ -27,9 +27,12 @@ internal object RasterPaintEngine {
      *
      * One definition serves the stroke the engine rasterizes and the preview the overlay paints.
      */
-    open class Tip(radius: Float, hardness: Float = 1f, val antialias: Boolean = true) {
-        /** The radius the tip reaches, in canvas pixels: what the cursor ring marks out. */
-        val radius: Float = radius.coerceAtLeast(0.5f)
+    open class Tip(radius: Float, hardness: Float = 1f, val antialias: Boolean = true, minRadius: Float = 0.5f) {
+        /**
+         * The radius the tip reaches, in canvas pixels: what the cursor ring marks out. It is at least [minRadius]:
+         * half a pixel of the grid it paints on, which on a layer denser than the canvas is less than half a canvas pixel.
+         */
+        val radius: Float = radius.coerceAtLeast(minRadius)
 
         /** Fraction of the radius that stays solid; 1 is a pen. */
         val hardness: Float = hardness.coerceIn(0f, 1f)

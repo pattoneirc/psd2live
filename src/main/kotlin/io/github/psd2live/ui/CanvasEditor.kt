@@ -12,6 +12,7 @@ import androidx.compose.ui.geometry.Rect
 import io.github.psd2live.application.CanvasDraftScope
 import io.github.psd2live.application.CanvasDraftSubmit
 import io.github.psd2live.application.WorkspaceCanvasInputDraft
+import io.github.psd2live.application.operation
 import io.github.psd2live.core.*
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.tutorial.expandShortcutMarkup
@@ -41,6 +42,37 @@ enum class EditHierarchyMode {
     SKELETON,
     /** 绘画: raster repainting of one layer slice. */
     PAINT,
+}
+
+/**
+ * Where a box drag that moved [before] to [after] takes [rect], or null when the drag did more than move and scale
+ * along the canvas axes (a turn, a flip, a skew, or points dragged apart).
+ *
+ * Both point lists are world coordinates (canvas pixels, y up); [rect] and the result are canvas pixels, y down.
+ */
+internal fun movedLayerRect(before: FloatArray, after: FloatArray, rect: io.github.psd2live.project.LayerCanvasRect): io.github.psd2live.project.LayerCanvasRect? {
+    if (before.size != after.size || before.size < 6) return null
+    fun span(points: FloatArray, axis: Int): Pair<Float, Float> {
+        var lo = Float.POSITIVE_INFINITY; var hi = Float.NEGATIVE_INFINITY
+        for (i in axis until points.size step 2) { lo = min(lo, points[i]); hi = max(hi, points[i]) }
+        return lo to hi
+    }
+    val (x0, x1) = span(before, 0); val (y0, y1) = span(before, 1)
+    val (u0, u1) = span(after, 0); val (v0, v1) = span(after, 1)
+    if (x1 - x0 < 1e-3f || y1 - y0 < 1e-3f || u1 - u0 < 1e-3f || v1 - v0 < 1e-3f) return null
+    val sx = (u1 - u0) / (x1 - x0); val sy = (v1 - v0) / (y1 - y0)
+    val tolerance = 0.05f + 1e-4f * max(u1 - u0, v1 - v0)
+    for (i in 0 until before.size / 2) {
+        if (abs(u0 + (before[i * 2] - x0) * sx - after[i * 2]) > tolerance) return null
+        if (abs(v0 + (before[i * 2 + 1] - y0) * sy - after[i * 2 + 1]) > tolerance) return null
+    }
+    val left = u0 + (rect.left - x0) * sx
+    val right = u0 + (rect.left + rect.width - x0) * sx
+    // Canvas y is world -y, so the rectangle's top edge is its highest world y.
+    val top = -(v0 + (-rect.top - y0) * sy)
+    val bottom = -(v0 + (-(rect.top + rect.height) - y0) * sy)
+    if (!(right - left > 0f && bottom - top > 0f)) return null
+    return io.github.psd2live.project.LayerCanvasRect(left, top, right - left, bottom - top)
 }
 
 /** Persist the mode's intent so preview and history replay use identical UV semantics. */
@@ -1159,6 +1191,13 @@ internal class CanvasEditor(
             }
         }
 
+    /**
+     * The painted part's own pixels per canvas unit. Paint sizes count those pixels, so a brush of 16 px paints
+     * 16 of the layer's pixels however large or small the layer is shown; 1 with no paint session.
+     */
+    val paintPixelsPerUnit: Float
+        get() = paintSession?.let { sqrt(it.scaleX * it.scaleY) }?.takeIf { it.isFinite() && it > 0f } ?: 1f
+
     /** Whether the active tool stamps the paint tip, which is what the brush keys and HUD act on. */
     val paintBrushActive: Boolean
         get() = hierarchyMode == EditHierarchyMode.PAINT && tool in PAINT_BRUSH_TOOLS
@@ -1176,9 +1215,10 @@ internal class CanvasEditor(
      * stroke is rasterized with.
      */
     fun paintTip(): LayerPaintEngine.Tip = LayerPaintEngine.Tip(
-        radius = (paintSize / 2f).coerceAtLeast(0.5f),
+        radius = paintSize / paintPixelsPerUnit / 2f,
         hardness = if (tool == CanvasTool.PAINT_PENCIL) 1f else paintHardness,
         antialias = tool != CanvasTool.PAINT_PENCIL,
+        minRadius = 0.5f / paintPixelsPerUnit,
     )
     var paintOpacity by mutableStateOf(1f)
     var paintTolerance by mutableStateOf(32)
@@ -1525,6 +1565,8 @@ internal class CanvasEditor(
     private var initialScreenPoints = emptyList<List<Offset>>()
     private var objectTargets = emptyList<CanvasTarget>()
     private var pendingObjects = emptyList<JsonObject>()
+    /** The rectangle an object-mode box drag moves a file-imported layer to, when the drag only moves and scales it. */
+    private var pendingBounds: io.github.psd2live.project.WorkspaceImageBounds? = null
     private var start = Offset.Zero
     private var previous = Offset.Zero
     private var targetAtPress: CanvasTarget? = null
@@ -3698,6 +3740,47 @@ internal class CanvasEditor(
         } catch (failure: Exception) { error = failure.message }
     }
 
+    /**
+     * The rectangle a box drag moves an imported layer to, or null when the drag is not a plain move or
+     * scale of one such layer at rest.
+     *
+     * A file-imported layer keeps its pixels and places them by its canvas rectangle, so moving or scaling it
+     * in object mode changes that rectangle (layer_set_bounds) rather than bending its mesh away from it:
+     * the layer, its mesh and the paint view then agree on where the art is. A turn, a flip, a layer bound to
+     * motion or one shown at a pose keeps the mesh edit.
+     */
+    private fun importedBounds(targets: List<CanvasTarget>, worlds: List<FloatArray>, movedSets: List<Set<Int>>): io.github.psd2live.project.WorkspaceImageBounds? {
+        val item = targets.singleOrNull()?.takeIf { it.kind == "mesh" } ?: return null
+        if (movedSets.single().size != item.count || item.count < 3) return null
+        val model = state.previewModel ?: return null
+        val layerId = model.rig.layerIdByDrawableId[item.id] ?: return null
+        if (model.rig.layerIdByDrawableId.count { it.value == layerId } != 1) return null
+        val layer = model.analysis.source.layers.singleOrNull { it.id.raw == layerId } ?: return null
+        val metadata = layer as? io.github.psd2live.project.WorkspaceSourceMetadata ?: return null
+        if (!metadata.derived || metadata.sourceAssetId != null) return null
+        val atRest = model.rig.puppet.parameters.all { p -> abs((pose[p.id.raw] ?: p.default) - p.default) < 1e-4f }
+        if (!atRest) return null
+        val space = LayerSpace.of(layer)
+        val rect = movedLayerRect(item.mapping.localToWorld(item.geometry.points), worlds.single(),
+            io.github.psd2live.project.LayerCanvasRect(space.left, space.top, space.width, space.height)) ?: return null
+        return io.github.psd2live.project.WorkspaceImageBounds(layerId, rect.left, rect.top, rect.width, rect.height)
+    }
+
+    /** Commits an imported layer's new rectangle, or the mesh edit the drag also made when the layer refuses it. */
+    private fun commitImportedBounds(bounds: io.github.psd2live.project.WorkspaceImageBounds, fallback: List<JsonObject>) {
+        if (!editable) { preview = null; endTransformBox(); return }
+        val expected = gestureState ?: viewModel.currentWorkspaceState() ?: run { preview = null; endTransformBox(); return }
+        val name = state.previewModel?.analysis?.source?.layers?.singleOrNull { it.id.raw == bounds.layerId }?.name ?: bounds.layerId
+        busy = true; error = null
+        viewModel.saveDocumentEdits(expected, tr("editor.importLayer.placed", name), listOf(bounds.operation())) { failure ->
+            busy = false
+            if (failure == null) { preview = null; pending = null; gestureState = null; endTransformBox(); return@saveDocumentEdits }
+            // Bound motion, edited pixels or an earlier mesh edit: the layer keeps its rectangle and the mesh moves.
+            gestureState = expected
+            if (!commitBatch(fallback)) preview = null
+        }
+    }
+
     /** Returns false when the edit never reached history, so the caller can drop its preview. */
     private fun commitBatch(commands: List<JsonObject>, onSuccess: (() -> Unit)? = null): Boolean {
         // The provisional fill describes faces of the mesh as it stands; after any commit those indices
@@ -5669,6 +5752,7 @@ internal class CanvasEditor(
                 pendingObjects = targets.mapIndexed { itemIndex, item ->
                     geometryCommand(item, item.mapping.worldToLocalLinearized(worlds[itemIndex], item.geometry.points, item.geometry.points, movedSets[itemIndex]), effectiveCtrl)
                 }
+                pendingBounds = if (objectMode && !editing) importedBounds(targets, worlds, movedSets) else null
                 preview = pendingObjects.fold(source) { m, command -> RigAuthoringJournal.apply(m, command) }
                 return
             }
@@ -5831,7 +5915,7 @@ internal class CanvasEditor(
                             val y0 = floor(p0.second).toInt()
                             val x1 = floor(p1.first).toInt()
                             val y1 = floor(p1.second).toInt()
-                            val shapeStrokeWidth = paintBrushSize.coerceAtLeast(1f)
+                            val shapeStrokeWidth = (paintSize / paintPixelsPerUnit).coerceIn(1f, 512f)
                             session.shape(x0, y0, x1, y1, shape, paintColor, paintOpacity,
                                 shapeStrokeWidth, paintShapeFilled && shape.canFill, tr(shape.strokeLabelKey))
                         }
@@ -5923,7 +6007,9 @@ internal class CanvasEditor(
         if (marquee.isNotEmpty()) { endTransformBox(); return }
 
         val cmd = pending
-        if (moved && pendingObjects.isNotEmpty()) { if (!commitBatch(pendingObjects)) preview = null }
+        val bounds = pendingBounds; pendingBounds = null
+        if (moved && bounds != null && pendingObjects.size == 1) commitImportedBounds(bounds, pendingObjects)
+        else if (moved && pendingObjects.isNotEmpty()) { if (!commitBatch(pendingObjects)) preview = null }
         else if (moved && cmd != null) { if (!commitBatch(listOf(cmd))) preview = null }
         else { preview = null; gestureState = null; endTransformBox() }
         pendingObjects = emptyList(); objectTargets = emptyList()
