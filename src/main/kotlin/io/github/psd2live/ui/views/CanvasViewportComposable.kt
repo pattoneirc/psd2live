@@ -84,6 +84,7 @@ import androidx.compose.ui.input.key.key
 import io.github.psd2live.ui.theme.frostedGlass
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.areAnyPressed
 import androidx.compose.ui.input.pointer.PointerButton
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -823,6 +824,7 @@ fun CanvasViewportComposable(
                     editor.endTemporarySelection()
                     temporarySelectKey = null
                     temporarySelectButton = null
+                    brushAdjustButton = null
                     isDragging = false
                     zoomDragAnchor = null
                     persistCamera()
@@ -912,6 +914,12 @@ fun CanvasViewportComposable(
                 // down/up hardens/softens, and the Shift variant takes the tip's third parameter. The modifiers
                 // are latched by the editor, so releasing them mid-drag neither aborts the gesture nor changes
                 // what it is doing.
+                // A press of the button already latched means its release never reached us; the stale gesture
+                // would otherwise refuse the new one and keep steering the old axis from the old anchor.
+                if (mode == CanvasMode.EDIT && editor.adjustingBrush && (event.button == brushAdjustButton || brushAdjustButton == null)) {
+                    brushAdjustButton = null
+                    editor.endBrushAdjust(cancel = false)
+                }
                 if (mode == CanvasMode.EDIT && previewModel != null &&
                     (gesture == ShortcutAction.BRUSH_ADJUST_DRAG || gesture == ShortcutAction.BRUSH_ADJUST_ALT_DRAG) &&
                     !isDragging && !editor.inGesture &&
@@ -982,7 +990,11 @@ fun CanvasViewportComposable(
                 // Must be tested before the consumed check below, and the button test is load-bearing: a release of
                 // another button during an adjustment has to fall through to the pan-end block, otherwise
                 // isDragging stays true and the canvas pans forever.
-                if (mode == CanvasMode.EDIT && editor.adjustingBrush && event.button == brushAdjustButton) {
+                // Alt-modified releases can arrive without the button that was pressed, so a release that leaves no
+                // button held ends the adjustment as well.
+                if (mode == CanvasMode.EDIT && editor.adjustingBrush &&
+                    (event.button == brushAdjustButton || !event.buttons.areAnyPressed)
+                ) {
                     brushAdjustButton = null
                     editor.endBrushAdjust(cancel = false)
                     return@onPointerEvent
@@ -1027,6 +1039,12 @@ fun CanvasViewportComposable(
                 if (mode == CanvasMode.EDIT && previewModel != null && !isDragging) {
                     // The brush gesture takes over the pointer: skipping move() here is what keeps the outline
                     // parked at the press point, so the viewport stops feeding hover updates for the duration.
+                    // A move with no button held after a missed release closes the gesture instead of
+                    // retuning the brush from a stale anchor.
+                    if (editor.adjustingBrush && !event.buttons.areAnyPressed) {
+                        brushAdjustButton = null
+                        editor.endBrushAdjust(cancel = false)
+                    }
                     editorGuard {
                         if (editor.adjustingBrush) editor.updateBrushAdjust(change.position)
                         else editor.move(
