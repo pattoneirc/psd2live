@@ -138,6 +138,8 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `SavePerfTool.profile` | 保存现实规模的生成工程的耗时（`PSD2LIVE_SAVE_LAYERS`、`PSD2LIVE_SAVE_SIZE`、`PSD2LIVE_SAVE_REVISIONS`）：同一捕获保存 3 次，重开后保存 2 次，再打开 1 次 | `save-perf/report.txt` |
 | `RigSourcePerfTool.profile` | 大图（示例放大 `PSD2LIVE_SCALE` 倍，默认 3）带生成输入时重建中按像素计的阶段：每第 3 层裁小几像素（需补齐到固定矩形）、每第 5 层为 2 倍密度；冷构建、热重建、绘制后重建的分阶段耗时，以及冷合成图集页与预览 PNG 编码 | `rig-source-perf/report.txt` |
 | `MeshTraceTool.compare` / `.wrap` | `compare` 把合成图层（1024² 贴图上带睫毛的眼睛、头发细束、画布分辨率图层、6000 与 2048 文档中的图层）分别以画布描轮廓与贴图描轮廓生成网格，并排渲染（灰为贴图 alpha、蓝为网格、红为网格外的不透明贴图像素），报告顶点数、耗时、`detail`、网格外像素与网格面积；`wrap` 以贴图描轮廓在包裹 0–32 下为睫毛、头发细束与手生成网格，报告顶点数、轮廓环数、耗时与网格外像素 | `mesh-trace/<用例>.png`、`report.txt`；`mesh-wrap/<用例>.png`、`report.txt` |
+| `ReadmeShotsTool` | 打开真实编辑器窗口，导入 `PSD2LIVE_SAMPLE` 后在开始界面选「完整」预设并接受网格拆分，等模拟烘焙完，提交自动骨架，再截取各工作区与画布各模式的窗口帧（不截屏），并把工程存为 `project.psd2live`；`PSD2LIVE_SHOT_REUSE=1` 重开已存的工程，`PSD2LIVE_SHOT_W` / `_H` 设窗口大小。用于首页截图 | `readme-shots/<示例>/*.png`、`project.psd2live` |
+| `ReadmeShowcaseTool` | 首页测试图：`meshStress`、`meshParams`、`meshWrap` 为合成图层的网格（孔洞与细桥、边缘层数 × 填充算法、包络宽度）；`rigHead`、`rigFace`、`rigBody` 为两个示例的头部、五官与骨架预设姿态；`rigKnee` 为 `PSD2LIVE_KNEE_SAMPLE`（工程或 PSD）的膝盖弯折；`bodyOrbit` 给 `PSD2LIVE_ORBIT_PROJECTS` 中各工程临时加一段身体 X / Y 上下、左右、椭圆运动的动作，按物理开、关各导出 PNG 帧（`PSD2LIVE_ORBIT` 设幅度，`PSD2LIVE_ORBIT_PERIOD` 设每轮秒数） | `readme-plates/*.png`、`readme-orbit/<工程>-{on,off}/` |
 
 | 环境变量 | 作用 |
 | --- | --- |

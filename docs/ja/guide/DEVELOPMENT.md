@@ -138,6 +138,8 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `SavePerfTool.profile` | 現実的な規模の生成プロジェクト（`PSD2LIVE_SAVE_LAYERS`、`PSD2LIVE_SAVE_SIZE`、`PSD2LIVE_SAVE_REVISIONS`）の保存時間。同じキャプチャを 3 回、開き直した後に 2 回保存し、1 回開く | `save-perf/report.txt` |
 | `RigSourcePerfTool.profile` | 生成入力を持つ大きな文書（サンプルを `PSD2LIVE_SCALE` 倍、既定 3 倍に拡大）での再構築のうち画素数に比例する段階。3 層ごとに数ピクセル切り詰め（固定矩形まで補われる）、5 層ごとに 2 倍密度とし、コールド構築・ウォーム再構築・描画後の再構築の段階別時間と、アトラスページのコールド合成とプレビュー PNG エンコードを計測 | `rig-source-perf/report.txt` |
 | `MeshTraceTool.compare` / `.wrap` | `compare` は合成レイヤー（1024² テクスチャ上のまつ毛付きの目、細い髪束、キャンバス解像度のレイヤー、6000 px と 2048 px ドキュメントのレイヤー）をキャンバストレースとテクスチャトレースでメッシュ化して並べて描画（灰色がテクスチャ alpha、青がメッシュ、赤がメッシュ外の不透明テクスチャピクセル）し、頂点数、時間、`detail`、メッシュ外のピクセル数とメッシュ面積を出力。`wrap` はまつ毛、細い髪束、手をテクスチャトレースで包み込み 0〜32 でメッシュ化し、頂点数、輪郭ループ数、時間、メッシュ外のピクセル数を出力 | `mesh-trace/<ケース>.png`、`report.txt`；`mesh-wrap/<ケース>.png`、`report.txt` |
+| `ReadmeShotsTool` | 実際のエディタウィンドウを開き、`PSD2LIVE_SAMPLE` をスタート画面から「フル」プリセットと提示されたメッシュ分割で読み込み、シミュレーションのベイクを待って自動スケルトンを確定し、各ワークスペースとキャンバスモードのウィンドウ自身のフレーム（画面キャプチャではない）を保存、プロジェクトを `project.psd2live` に保存します。`PSD2LIVE_SHOT_REUSE=1` で保存済みプロジェクトを開き直し、`PSD2LIVE_SHOT_W` / `_H` でウィンドウサイズを指定。トップページのスクリーンショット用 | `readme-shots/<サンプル>/*.png`、`project.psd2live` |
+| `ReadmeShowcaseTool` | トップページのテスト画像：`meshStress`、`meshParams`、`meshWrap` は合成レイヤーのメッシュ（穴と細いブリッジ、縁の層数 × 充填、ラップ幅）、`rigHead`、`rigFace`、`rigBody` は 2 サンプルの頭部・顔・スケルトンのプリセットポーズ、`rigKnee` は `PSD2LIVE_KNEE_SAMPLE`（プロジェクトまたは PSD）の膝の曲げ、`bodyOrbit` は `PSD2LIVE_ORBIT_PROJECTS` の各プロジェクトに体 X / Y の動き（上下、左右、楕円）を一時的に加え、物理あり・なしで PNG フレームを書き出します（`PSD2LIVE_ORBIT` で振幅、`PSD2LIVE_ORBIT_PERIOD` で 1 周の秒数） | `readme-plates/*.png`、`readme-orbit/<プロジェクト>-{on,off}/` |
 
 | 環境変数 | 効果 |
 | --- | --- |
