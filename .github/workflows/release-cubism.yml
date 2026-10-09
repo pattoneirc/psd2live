@@ -193,6 +193,10 @@ jobs:
           fi
           ls -la src/main/resources/cubism/windows-x86_64/
 
+      # packageExe builds the installer with Inno Setup 6 (packaging/windows/psd2live.iss).
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
       - name: Package with Cubism
         shell: cmd
         run: |
@@ -440,8 +444,6 @@ jobs:
           files: |
             release-assets/PSD2Live-${{ env.VERSION }}-windows-x86_64-portable.zip
             release-assets/PSD2Live-${{ env.VERSION }}.exe
-            release-assets/PSD2Live-${{ env.VERSION }}.msi
             release-assets/PSD2Live-${{ env.VERSION }}-windows-x86_64-portable-ffmpeg.zip
             release-assets/PSD2Live-${{ env.VERSION }}-ffmpeg.exe
-            release-assets/PSD2Live-${{ env.VERSION }}-ffmpeg.msi
             release-assets/PSD2Live-${{ env.VERSION }}-linux-amd64.deb

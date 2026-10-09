@@ -1,5 +1,5 @@
 # Copies the Windows packages of the last Gradle packaging run into dist-artifacts/, named for the release:
-# PSD2Live-<version><suffix>.exe / .msi and PSD2Live-<version>-windows-x86_64-portable<suffix>.zip.
+# PSD2Live-<version><suffix>.exe and PSD2Live-<version>-windows-x86_64-portable<suffix>.zip.
 param(
 	[Parameter(Mandatory = $true)][string]$Version,
 	[string]$Suffix = ""
@@ -15,7 +15,7 @@ $portable = Join-Path (Resolve-Path $out) "PSD2Live-$Version-windows-x86_64-port
 if (Test-Path $portable) { Remove-Item $portable -Force }
 Compress-Archive -Path (Join-Path $app "*") -DestinationPath $portable -Force
 
-foreach ($type in "exe", "msi") {
+foreach ($type in "exe") {
 	$installer = Join-Path $binaries "$type/PSD2Live-$Version.$type"
 	if (-not (Test-Path $installer)) {
 		Get-ChildItem $binaries -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 50 FullName

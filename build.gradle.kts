@@ -256,53 +256,34 @@ compose.desktop {
 	}
 }
 
-// Windows installers (packageExe, packageMsi): jpackage packs the app image with the WiX project in
-// packaging/windows, whose main.wxs adds to the JDK's template that an install remembers its folder (an
-// upgrade or reinstall goes back there), that a reinstall of the same version replaces it, and that removing it
-// from the maintenance dialog can delete the user's data too. Compose's own
-// Exe/Msi tasks always hand jpackage an emptied resource directory, so they cannot carry it.
+// Windows installer (packageExe): Inno Setup packs the app image with packaging/windows/psd2live.iss, which installs
+// in place, goes back to the installed folder on an upgrade and replaces the MSI packages of 3.1.x and earlier.
+// ISCC.exe is found from -Ppsd2live.iscc, the ISCC environment variable or Inno Setup 6's default install folders.
 if (hostOs == "windows") afterEvaluate {
 	val distributions = compose.desktop.application.nativeDistributions
 	val createDistributable = tasks.named<org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask>("createDistributable")
-	val unzipWix = tasks.named<Copy>("unzipWix")
-	val installers = listOf("exe", "msi").map { type ->
-		tasks.register<Exec>("package${type.replaceFirstChar(Char::uppercase)}") {
-			group = "compose desktop"
-			description = "Builds the Windows .$type installer from the app image."
-			dependsOn(createDistributable, unzipWix)
-			val appImage = createDistributable.get().destinationDir.dir(distributions.packageName!!)
-			val resources = file("packaging/windows")
-			val dest = layout.buildDirectory.dir("compose/binaries/main/$type")
-			val temp = layout.buildDirectory.dir("tmp/jpackage-$type").get().asFile
-			inputs.dir(appImage); inputs.dir(resources)
-			outputs.dir(dest)
-			executable = File(createDistributable.get().javaHome.get(), "bin/jpackage.exe").path
-			// jpackage builds the installer in its own locale's language; English everywhere, the language of the
-			// strings packaging/windows adds (PSD2LiveStrings.wxl), so a build looks the same on any machine.
-			args("-J-Duser.language=en", "-J-Duser.country=US")
-			args("--type", type, "--app-image", appImage.get().asFile, "--resource-dir", resources, "--dest", dest.get().asFile, "--temp", temp,
-				"--name", distributions.packageName!!, "--app-version", distributions.packageVersion!!,
-				"--vendor", distributions.vendor!!, "--description", distributions.description!!, "--copyright", distributions.copyright!!,
-				"--win-dir-chooser", "--win-menu", "--win-menu-group", distributions.windows.menuGroup!!,
-				"--win-upgrade-uuid", distributions.windows.upgradeUuid!!)
-			doFirst {
-				dest.get().asFile.deleteRecursively()
-				temp.deleteRecursively()
-				environment("PATH", unzipWix.get().destinationDir.path + File.pathSeparator + System.getenv("PATH"))
-			}
-			// main.wxs names a property and a component GUID that jpackage generates; a JDK that names them
-			// otherwise must fail the build rather than leave the installer emptying the install folder again.
-			doLast {
-				val main = resources.resolve("main.wxs").readText()
-				val bundle = temp.resolve("config/bundle.wxf").readText()
-				val expected = Regex("""Id="(RM_RF\w+)"""").findAll(main).map { "Property Id=\"${it.groupValues[1]}\"" } +
-					Regex("""<ComponentSearch[^>]*Guid="(\{[^}]+\})"""").findAll(main).map { "Guid=\"${it.groupValues[1]}\"" }
-				val missing = expected.filterNot(bundle::contains).toList()
-				check(missing.isEmpty()) { "jpackage's generated WiX sources lack ${missing.joinToString()}; update packaging/windows/main.wxs" }
-			}
-		}
+	val packageExe = tasks.register<Exec>("packageExe") {
+		group = "compose desktop"
+		description = "Builds the Windows .exe installer from the app image with Inno Setup."
+		dependsOn(createDistributable)
+		val appImage = createDistributable.get().destinationDir.dir(distributions.packageName!!)
+		val script = file("packaging/windows/psd2live.iss")
+		val dest = layout.buildDirectory.dir("compose/binaries/main/exe")
+		inputs.dir(appImage); inputs.file(script)
+		outputs.dir(dest)
+		val iscc = sequenceOf(
+			findProperty("psd2live.iscc")?.toString(),
+			System.getenv("ISCC"),
+			System.getenv("ProgramFiles(x86)")?.let { "$it/Inno Setup 6/ISCC.exe" },
+			System.getenv("ProgramFiles")?.let { "$it/Inno Setup 6/ISCC.exe" },
+			System.getenv("LOCALAPPDATA")?.let { "$it/Programs/Inno Setup 6/ISCC.exe" },
+		).filterNotNull().map(::File).firstOrNull(File::isFile)
+		executable = iscc?.path ?: "ISCC.exe"
+		args("/Qp", "/DAppVersion=${distributions.packageVersion}", "/DAppImage=${appImage.get().asFile}",
+			"/DOutputDir=${dest.get().asFile}", "/DIconFile=${distributions.windows.iconFile.get().asFile}", script)
+		doFirst { dest.get().asFile.deleteRecursively() }
 	}
-	tasks.named("packageDistributionForCurrentOS") { dependsOn(installers) }
+	tasks.named("packageDistributionForCurrentOS") { dependsOn(packageExe) }
 }
 
 afterEvaluate {

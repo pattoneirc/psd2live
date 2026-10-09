@@ -27,7 +27,7 @@ Windows 也可以直接运行根目录的 `run-gui.bat`。不带参数启动 GUI
 | `--input <path>` | 必填 | 输入的分层 PSD |
 | `--output <path>` | PSD 同目录下的 `psd2live-output` | 导出目录 |
 | `--lang <zh\|en\|ja\|ko>` | 系统语言 | 日志语言 |
-| `--clear-user-data` | — | 单独使用：删除当前用户的设置、工作区存储与 `~/.psd2live` 下的运行时和缓存后退出；编辑器运行时不删除并返回 1。Windows 卸载向导勾选删除数据时调用 |
+| `--clear-user-data` | — | 单独使用：删除当前用户的设置、工作区存储与 `~/.psd2live` 下的运行时和缓存后退出；编辑器运行时不删除并返回 1。Windows 卸载时选择同时删除数据时调用 |
 | `--atlas <size>` | 4096 | 纹理图集尺寸 |
 | `--mesh-spacing <px>` | 64 | 网格间距 |
 | `--mesh-pixels` | 关闭 | 按源像素而非长边缩放到 2048 px 的文档像素计算网格长度 |

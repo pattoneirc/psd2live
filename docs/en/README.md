@@ -47,11 +47,11 @@ Get the latest version from [Releases](https://github.com/tsunehimatoi/psd2live/
 
 | Platform | Package | Notes |
 | --- | --- | --- |
-| Windows 10 / 11 x64 | Portable ZIP, EXE, MSI | Bundles a Java runtime; extract or install and run. Each also comes as a `-ffmpeg` build with ffmpeg included. An upgrade installs into the installed folder without asking again |
+| Windows 10 / 11 x64 | Portable ZIP, EXE | Bundles a Java runtime; extract or install and run. Each also comes as a `-ffmpeg` build with ffmpeg included. An upgrade installs into the installed folder without asking again; an EXE / MSI install of 3.1.x or earlier is removed and its folder kept |
 | Linux x86_64 | Deb | Bundles the runtime and Cubism native preview; requires X11 / GLX (XWayland works) |
 | macOS and others | No package yet | Install JDK 21 and [run from source](#build-from-source) |
 
-Uninstalling on Windows keeps your settings and workspace data; to delete them too, choose Remove in the uninstall wizard and tick "Also delete my PSD2Live data". Saved project files are always kept.
+Uninstalling on Windows keeps your settings and workspace data; the uninstaller asks whether to delete your PSD2Live data too, and Yes deletes them. Saved project files and files you put in the installation folder are always kept.
 
 The Linux native preview does not support pure Wayland without XWayland, aarch64 or musl (e.g. Alpine); those environments fall back to the built-in renderer. See [Cubism native preview](guide/CUBISM_SDK_SETUP.md).
 

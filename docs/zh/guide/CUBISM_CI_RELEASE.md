@@ -49,8 +49,7 @@ macOS 打包暂缓，本工作流不构建。
 5. 开启发布时，工作流会创建或更新标签 `v<version>` 的**正式**（非预发布）GitHub Release，附件为：
    - `PSD2Live-<version>-windows-x86_64-portable.zip`
    - `PSD2Live-<version>.exe`
-   - `PSD2Live-<version>.msi`
-   - 以上三项另各有内置 ffmpeg 的版本：`PSD2Live-<version>-windows-x86_64-portable-ffmpeg.zip`、`PSD2Live-<version>-ffmpeg.exe`、`PSD2Live-<version>-ffmpeg.msi`
+   - 以上两项另各有内置 ffmpeg 的版本：`PSD2Live-<version>-windows-x86_64-portable-ffmpeg.zip`、`PSD2Live-<version>-ffmpeg.exe`
    - `PSD2Live-<version>-linux-amd64.deb`
 
 也可以直接推送标签 `v<version>` 触发同一工作流。两种入口选其一，避免重复运行完整的构建矩阵。
@@ -60,7 +59,7 @@ macOS 打包暂缓，本工作流不构建。
 - Linux 预览需要 X11/GLX（含 XWayland / `xvfb-run`）。纯 Wayland、aarch64、musl/Alpine 不支持。详见 [CUBISM_SDK_SETUP](CUBISM_SDK_SETUP.md)。
 - v1 不做脆弱的 GUI 冒烟；Linux 侧以 `.deb` 存在且非空为准。
 - Windows 包打两遍：第二遍加 `-Ppsd2live.ffmpegDir=<目录>`，把固定版本的 Gyan.dev ffmpeg essentials 构建（GPLv3，下载后校验 SHA-256，并检查视频与动图导出用到的编码器）连同其 `LICENSE.txt`、`README.txt` 放进应用的 `resources/ffmpeg/`。升级 ffmpeg 时同时修改工作流中的 `FFMPEG_URL` 与 `FFMPEG_SHA256`。Linux 包不内置 ffmpeg。
-- Windows 安装包由 `packageExe` / `packageMsi` 从应用镜像构建，使用 `packaging/windows/main.wxs`（JDK 21 jpackage 模板加 PSD2Live 改动）：已安装时默认装回原目录并跳过"目录非空"提示，同版本的包（重新构建或带/不带 ffmpeg）也会替换已安装的版本；卸载与升级只移除安装的文件，不再像 jpackage 默认那样清空整个安装目录（3.0.0 及更早版本的安装会在新版装好后才移除，并先清掉它们记录的待清空目录）。维护向导中选择 Remove 时可勾选同时删除用户数据（以当前用户运行应用的 `--clear-user-data`；命令行卸载可传 `PSD2LIVE_CLEAR_DATA=1`），为此产品登记时保留「修改」入口。安装程序界面固定为英文（新增字符串在 `PSD2LiveStrings.wxl`，资源目录中每种语言的 .wxl 都会加入安装程序的语言列表）。打包时会核对 jpackage 生成的 WiX 源文件仍含该文件引用的属性与组件 GUID，否则构建失败。换用其他大版本的 JDK 打包时需按其模板同步该文件。
+- Windows 安装包由 `packageExe` 用 Inno Setup 6 从应用镜像构建，脚本为 `packaging/windows/psd2live.iss`；`ISCC.exe` 依次取 `-Ppsd2live.iscc`、环境变量 `ISCC`、Inno Setup 6 的默认安装目录，工作流用 Chocolatey 安装 Inno Setup。文件就地复制，不像 MSI 那样先把旧文件移到 `Config.Msi`。默认为所有用户安装（需管理员），也可在启动时的对话框或用 `/CURRENTUSER` 只为当前用户安装；升级时装回已安装的目录并沿用当时的安装方式，先删除上一版的 `app`、`runtime` 目录再复制，安装目录中用户自己的文件保留。带与不带 ffmpeg 的包共用同一 AppId，互相替换。安装前若有 PSD2Live 从安装目录运行，会提示关闭后重试（静默安装直接中止）。3.1.x 及更早版本是 jpackage 生成的 MSI：安装程序按其升级码找到它们，默认装到它们的目录，并在复制文件前先清掉它们记录的安装目录（3.0.0 及更早版本卸载时会清空该目录）并删掉它们安装的文件，再用 `msiexec /x` 静默卸载，这时 MSI 只做反注册，不必再把文件移进 `Config.Msi`；卸载日志写在 Setup 日志旁（`PSD2Live MSI removal.log`）；只为当前用户安装而旧版为所有用户安装时，会请求管理员权限。卸载时询问是否同时删除用户数据（默认否；运行应用的 `--clear-user-data`，以运行卸载程序的账户执行；命令行卸载可传 `/CLEARUSERDATA=1`）。每次安装与卸载都会在 `%TEMP%` 写日志（`Setup Log *.txt`）。
 - 含 Cubism 的包仅供许可允许范围内的用途；**不要**把专有二进制再分发到公开渠道。
 
 ## 许可提醒

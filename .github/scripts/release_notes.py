@@ -92,7 +92,11 @@ def downloads(tag, repo, assets):
 	if ffmpeg:
 		notes.append(("带 ffmpeg 的包可直接导出 MP4、WebM、ProRes 4444、APNG 和 WebP 动图；其余包导出视频和动图需自行安装 ffmpeg。",
 		              "Packages with ffmpeg export MP4, WebM, ProRes 4444, APNG and animated WebP directly; the others need ffmpeg installed for video and animation export."))
-	if any(kind(a[0]) in ("exe", "msi") for a in win) and version_tuple(tag) >= (3, 0, 1):
+	# Releases without an MSI have the Inno Setup installer, which also replaces the MSI installs of 3.1.x and earlier.
+	if any(kind(a[0]) == "exe" for a in win) and not any(kind(a[0]) == "msi" for a in win):
+		notes.append(("EXE 在已安装时装回原来的目录并替换旧版本，3.1.x 及更早的 EXE / MSI 安装会被自动移除。",
+		              "The EXE installs into the existing folder and replaces the installed version; EXE / MSI installs of 3.1.x and earlier are removed."))
+	elif any(kind(a[0]) in ("exe", "msi") for a in win) and version_tuple(tag) >= (3, 0, 1):
 		notes.append(("EXE / MSI 在已安装时装回原来的目录并替换旧版本。",
 		              "EXE / MSI install into the existing folder and replace the installed version."))
 	if debs:
