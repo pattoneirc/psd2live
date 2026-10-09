@@ -34,7 +34,7 @@ object SimAuthoring {
         val previous = overlay.simEdits.firstOrNull { it.id == edit.id }
         val before = previous?.inputs.orEmpty().toSet()
         val inputs = edit.inputs.filter { it.parameter in parameters || it !in before }
-        val kept = edit.copy(inputs = inputs, inputRanges = edit.inputRanges.filterKeys { p -> inputs.any { it.parameter == p } })
+        val kept = edit.withInputs(inputs)
         validate(model, kept)
         // The model at hand carries the previous bake's parameters; those are this body's to rename.
         val own = previous?.outputParameters.orEmpty().toSet() + kept.bake?.parameters.orEmpty()
@@ -221,8 +221,21 @@ object SimAuthoring {
         skins: PrimitiveSkins = PrimitiveSkins.None,
     ): SimBakeResult {
         val edit = requireNotNull(overlay.simEdits.firstOrNull { it.id == id }) { "Simulation not found: $id" }
-        return SimBaker.bake(unbakedModel(overlay, base, id, skins), edit,
-            SimBaker.Options(physicsFps = overlay.physicsFps, progress = progress, cancelled = cancelled))
+        val model = unbakedModel(overlay, base, id, skins)
+        return SimBaker.bake(model, edit,
+            SimBaker.Options(physicsFps = overlay.physicsFps, progress = progress, cancelled = cancelled, trainingMotions = trainingMotions(overlay, edit, model)))
+    }
+
+    /**
+     * [edit]'s training motions ([RigSimEdit.trainingClips]) found in [overlay] and sampled at the bake's rate; a
+     * motion no longer there is left out (its name stays listed until the user removes it).
+     */
+    fun trainingMotions(overlay: RigEditOverlay, edit: RigSimEdit, model: PuppetModel): List<SimBaker.TrainingMotion> {
+        val defaults = model.parameters.associate { it.id.raw to it.default }
+        return edit.trainingClips.mapNotNull { (name, weight) ->
+            val clip = SimMotions.resolve(overlay, name) ?: return@mapNotNull null
+            SimBaker.TrainingMotion(name, SimMotions.sample(clip, SimBaker.Options().fps) { defaults[it] ?: 0f }, weight)
+        }
     }
 
     /**
@@ -245,7 +258,7 @@ object SimAuthoring {
         if (edit.bake != null && edit.bake.fingerprint == SimBake.fingerprint(model, edit)) return overlay to null
         return try {
             withBake(overlay, id, SimBaker.bake(model, edit, SimBaker.Options(physicsFps = overlay.physicsFps, previous = edit.bake?.physics, previousExtra = edit.bake?.extraPhysics.orEmpty(),
-                progress = progress, cancelled = cancelled))) to null
+                progress = progress, cancelled = cancelled, trainingMotions = trainingMotions(overlay, edit, model)))) to null
         } catch (failure: java.util.concurrent.CancellationException) {
             overlay to "Bake cancelled"
         } catch (failure: IllegalArgumentException) {

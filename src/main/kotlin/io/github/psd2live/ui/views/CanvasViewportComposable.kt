@@ -114,6 +114,7 @@ import io.github.psd2live.ui.SkiaRigPainter
 import io.github.psd2live.ui.SourcePixelImages
 import io.github.psd2live.ui.visibleCanvasGuideIds
 import io.github.psd2live.ui.state.forCanvas
+import io.github.psd2live.ui.state.SimulationView
 import io.github.psd2live.ui.state.FramePacer
 import io.github.psd2live.ui.state.previewPanelState
 import io.github.psd2live.ui.state.previewValues
@@ -390,9 +391,11 @@ fun CanvasViewportComposable(
 	// One GPU view per canvas whatever its mode: a switch keeps its meshes and page textures on the GPU.
 	val gpuKey = viewModel.canvasRenderKey(canvasId, CanvasMode.EDIT)
 	val ghostKey = "$gpuKey#snapshot"
+	val simulationKey = "$gpuKey#simulation"
+	val simulationGhost = remember { SimulationGhostMemo() }
 	// The paint session this view's GPU texture holds in full; another session, or a new view, uploads all of it.
 	val paintUploaded = remember(gpuKey) { arrayOfNulls<Any>(1) }
-	DisposableEffect(gpuKey) { onDispose { CanvasGpu.release(gpuKey); CanvasGpu.release(ghostKey) } }
+	DisposableEffect(gpuKey) { onDispose { CanvasGpu.release(gpuKey); CanvasGpu.release(ghostKey); CanvasGpu.release(simulationKey) } }
 	val drawnGeometry = remember { DrawnGeometryMemo() }
 	// A session shown by the GPU hands it changed areas instead of painting preview tiles.
 	LaunchedEffect(paintSession, gpuReady) { paintSession?.gpuPreview = gpuReady }
@@ -409,8 +412,11 @@ fun CanvasViewportComposable(
 	val sdkFrameAdvanced by remember(frameFlow) { frameFlow.map { it?.advanced == true }.distinctUntilChanged() }
 		.collectAsState(frameFlow.value?.advanced == true)
 	val simulatedFrame by viewModel.simulationFrames.collectAsState()
-	// The live simulation replaces its meshes' vertices, which only the software painter can draw.
-	val simulated = simulatedFrame?.takeIf { mode == CanvasMode.PREVIEW && it.simulationId == canvasState.simulationPreviewId }
+	val runningSimulation = simulatedFrame?.takeIf { mode == CanvasMode.PREVIEW && it.simulationId == canvasState.simulationPreviewId }
+	// The live simulation replaces its meshes' vertices, which only the software painter can draw; or, laid over the
+	// export, is drawn faded on top of it; or this canvas shows the export alone, beside one showing the reference.
+	val simulated = runningSimulation?.takeIf { viewOptions.simulationView == SimulationView.REFERENCE }
+	val simulationOverlay = runningSimulation?.takeIf { viewOptions.simulationView == SimulationView.OVERLAY }
 	val previewBackend by viewModel.previewBackend.collectAsState()
 	val previewAdvanced by AppSettings.previewAdvancedFlow.collectAsState()
 	val previewFrameRate by AppSettings.previewFrameRateFlow.collectAsState()
@@ -1207,7 +1213,7 @@ fun CanvasViewportComposable(
 				!isDimmingActive &&
 				hoveredLayerId == null && hoveredDeformerId == null &&
 				(!showSelectionBounds || !hasActiveSelection) &&
-				canvasState.drawOrderOverrides.isEmpty() && simulated == null &&
+				canvasState.drawOrderOverrides.isEmpty() && simulated == null && simulationOverlay == null &&
 				nativeFrame != null && previewDrawn != null &&
 				previewDrawn.width == w && previewDrawn.height == h
 
@@ -1621,6 +1627,30 @@ fun CanvasViewportComposable(
 					}
 				}
 			}
+			// The reference simulation over the export: its meshes alone, faded, in one layer so they do not darken
+			// where they overlap.
+			if (simulationOverlay != null && snapshotGeometry == null) {
+				val exported = drawnGeometry.geometry(model, editGeometry, informationPose, null)
+				val ghost = simulationGhost.geometry(exported, simulationOverlay)
+				val simulatedLayers = simulationOverlay.positions.keys.mapTo(HashSet()) { model.rig.layerIdByDrawableId[it.raw] ?: it.raw }
+				val options = ArtworkOptions(visibleLayerIds = targetVisibleLayerIds.filterTo(HashSet()) { it in simulatedLayers },
+					drawOrderOverrides = canvasState.drawOrderOverrides)
+				if (gpuReady) {
+					CanvasGpu.draw(awtWindow, simulationKey, listOf(model.rig.puppet, model.atlas, ghost, viewport, w, h, options)) {
+						CanvasScene(w, h, viewport, model, ghost, ArtworkDrawList.build(model, ghost, options))
+					}?.let { drawGpuFrame(it, alpha = SIMULATION_GHOST_ALPHA) }
+				} else if (editingPainter != null) drawIntoCanvas { target ->
+					org.jetbrains.skia.Paint().use { fade ->
+						fade.setAlphaf(SIMULATION_GHOST_ALPHA)
+						val canvas = target.skiaCanvas
+						val saved = canvas.saveLayer(org.jetbrains.skia.Rect.makeWH(w.toFloat(), h.toFloat()), fade)
+						try {
+							editingPainter.paint(canvas, model, ghost, viewport, visibleLayerIds = options.visibleLayerIds,
+								drawOrderOverrides = canvasState.drawOrderOverrides)
+						} finally { canvas.restoreToCount(saved) }
+					}
+				}
+			}
 			// One faded layer for the whole saved pose, sharing the canvas camera and visibility.
 			// Composite after rendering its parts so overlapping meshes do not darken the ghost.
 			if (snapshotGeometry != null && gpuReady) {
@@ -1832,6 +1862,25 @@ private class DrawnGeometryMemo {
         this.pose = pose
         simulation = simulated
         geometry = next
+        return next
+    }
+}
+
+/** How strongly the reference simulation shows over the export. */
+private const val SIMULATION_GHOST_ALPHA = 0.55f
+
+/** The export's geometry with a simulation frame's vertices in place of its meshes', kept while both stay the same. */
+private class SimulationGhostMemo {
+    private var exported: org.umamo.render.eval.DeformedGeometry? = null
+    private var frame: io.github.psd2live.core.sim.SimulatedFrame? = null
+    private var geometry: org.umamo.render.eval.DeformedGeometry? = null
+
+    fun geometry(exported: org.umamo.render.eval.DeformedGeometry, frame: io.github.psd2live.core.sim.SimulatedFrame): org.umamo.render.eval.DeformedGeometry {
+        val cached = geometry
+        if (cached != null && this.exported === exported && this.frame === frame) return cached
+        val next = org.umamo.render.eval.DeformedGeometry(exported.worldPositions + frame.positions.filterKeys { it in exported.worldPositions },
+            exported.drawOrder, exported.opacity)
+        this.exported = exported; this.frame = frame; geometry = next
         return next
     }
 }

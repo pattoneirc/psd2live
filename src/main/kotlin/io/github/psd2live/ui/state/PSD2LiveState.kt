@@ -124,12 +124,34 @@ data class TabViewOptions(
 	 * source resolution rather than at the packed density. The native preview always shows atlas pixels.
 	 */
 	val sourcePixels: Boolean = false,
+	/** How a preview canvas shows a running reference simulation against the baked export. */
+	val simulationView: SimulationView = SimulationView.REFERENCE,
 ) {
 	/** Point indices are only painted together with the warp overlay they annotate. */
 	fun normalized(): TabViewOptions = copy(showWarp = showWarp || warpShowIndices)
 
 	companion object {
 		val Default = TabViewOptions()
+	}
+}
+
+/** How a baked simulation followed its reference over [motions]: per motion its check, or why it could not be made. */
+data class SimulationCheck(
+	val motions: List<String>,
+	val results: List<io.github.psd2live.core.sim.SimMotionCheck>,
+	val running: Boolean = false,
+	val error: String? = null,
+)
+
+/**
+ * What a preview canvas shows while a simulation's reference runs: the reference in place of the export, the
+ * export alone (beside a canvas showing the reference), or the export with the reference drawn faded over it.
+ */
+enum class SimulationView(val jsonName: String) {
+	REFERENCE("reference"), EXPORT("export"), OVERLAY("overlay");
+
+	companion object {
+		fun parse(text: String?) = entries.firstOrNull { it.jsonName == text } ?: REFERENCE
 	}
 }
 

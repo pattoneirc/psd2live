@@ -256,6 +256,13 @@ data class RigSimEdit(
     val bake: SimBakeResult? = null,
     /** Bodies the particles keep out of; the bake learns the motion they shape. */
     val colliders: List<SimCollider> = emptyList(),
+    /** Inputs the bake keeps even when the rig shows them moving the body too little to bake. */
+    val forcedInputs: List<String> = emptyList(),
+    /**
+     * Motions (clip IDs or built-in names) the bake also trains on, each with how much it counts against the
+     * designed motion, within [TRAINING_WEIGHTS]: for a model played mostly through a few motions of its own.
+     */
+    val trainingClips: Map<String, Float> = emptyMap(),
 ) {
     init {
         require(listOf(id, name).all { it.isNotBlank() && it.none(Char::isISOControl) }) { "Simulation ID and name are required" }
@@ -271,7 +278,16 @@ data class RigSimEdit(
         require(outputs.values.none { it.isDefault }) { "An output setting must change something" }
         require(outputs.keys.map(::outputId).let { it.distinct().size == it.size }) { "Each output needs its own ID" }
         require(colliders.none { it.mesh in targets }) { "A collider rides a mesh the simulation does not move" }
+        require(forcedInputs.distinct().size == forcedInputs.size && forcedInputs.all { forced -> inputs.any { it.parameter == forced } }) {
+            "Only listed inputs can be kept"
+        }
+        require(trainingClips.all { (clip, weight) -> clip.isNotBlank() && weight in TRAINING_WEIGHTS }) { "A training motion counts within $TRAINING_WEIGHTS" }
     }
+
+    /** This edit reading [inputs] instead: the training ranges and kept inputs of those left out go with them. */
+    fun withInputs(inputs: List<PhysicsInput>): RigSimEdit = copy(inputs = inputs,
+        inputRanges = inputRanges.filterKeys { p -> inputs.any { it.parameter == p } },
+        forcedInputs = forcedInputs.filter { p -> inputs.any { it.parameter == p } })
 
     /** The ID mode parameter [baked] (as the bake names it) is written under. */
     fun outputId(baked: String): String = outputs[baked]?.id ?: baked
@@ -308,6 +324,8 @@ data class RigSimEdit(
         if (outputs.isNotEmpty()) putJsonObject("outputs") { outputs.forEach { (k, v) -> put(k, v.toJson()) } }
         // "colliders" held the retired margin-based collision and is ignored on load.
         if (colliders.isNotEmpty()) putJsonArray("obstacles") { colliders.forEach { add(it.toJson()) } }
+        if (forcedInputs.isNotEmpty()) putJsonArray("force_inputs") { forcedInputs.forEach { add(it) } }
+        if (trainingClips.isNotEmpty()) putJsonObject("training_clips") { trainingClips.forEach { (k, v) -> put(k, v) } }
         bake?.let { put("bake", it.toJson()) }
     }
 
@@ -318,6 +336,7 @@ data class RigSimEdit(
      */
     fun patched(o: JsonObject): RigSimEdit {
         val nextKind = o.string("kind")?.let(SimKind::parse) ?: kind
+        val nextInputs = o["inputs"]?.jsonArray?.map { PhysicsInput.fromJson(it.jsonObject) } ?: inputs
         val baseMaterial = o.string("material_preset")?.let(SimMaterialPreset::parse)?.material
             ?: if (nextKind != kind) SimMaterial.preset(nextKind) else material
         return copy(
@@ -328,7 +347,7 @@ data class RigSimEdit(
             groups = o["groups"]?.jsonObject?.filterKeys { it.lowercase() !in VertexGroupKind.RETIRED }
                 ?.map { (k, v) -> VertexGroupKind.parse(k) to v.jsonPrimitive.content }?.toMap() ?: groups,
             glueRoles = o["glue_roles"]?.jsonObject?.map { (k, v) -> k to GlueRole.parse(v.jsonPrimitive.content) }?.toMap() ?: glueRoles,
-            inputs = o["inputs"]?.jsonArray?.map { PhysicsInput.fromJson(it.jsonObject) } ?: inputs,
+            inputs = nextInputs,
             inputRanges = o["input_ranges"]?.jsonObject?.mapValues { (_, v) -> SimInputRange.fromJson(v) } ?: inputRanges,
             enabled = o["enabled"]?.jsonPrimitive?.booleanOrNull ?: enabled,
             modes = o["modes"]?.jsonPrimitive?.intOrNull ?: modes,
@@ -359,6 +378,10 @@ data class RigSimEdit(
                 else -> SimBakeResult.fromJson(value.jsonObject)
             },
             colliders = o["obstacles"]?.jsonArray?.map { SimCollider.fromJson(it.jsonObject) } ?: colliders,
+            // An input taken off the list is no longer kept.
+            forcedInputs = (o["force_inputs"]?.jsonArray?.map { it.jsonPrimitive.content }?.distinct() ?: forcedInputs)
+                .filter { forced -> nextInputs.any { it.parameter == forced } },
+            trainingClips = o["training_clips"]?.jsonObject?.mapValues { (_, v) -> v.jsonPrimitive.float } ?: trainingClips,
         )
     }
 
@@ -371,6 +394,7 @@ data class RigSimEdit(
         /** The ±range a mode parameter may span, and how much farther than simulated one may swing. */
         val OUTPUT_RANGES = 1f..100f
         val OUTPUT_GAINS = 0f..3f
+        val TRAINING_WEIGHTS = 0.05f..1f
 
         /**
          * The inputs a new body starts from: the head and body turning and tilting, then nodding and the body

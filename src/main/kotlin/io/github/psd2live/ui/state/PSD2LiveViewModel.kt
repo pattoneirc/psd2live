@@ -417,6 +417,10 @@ class PSD2LiveViewModel : AutoCloseable {
 
     private val _simulationBaking = MutableStateFlow<SimulationBaking?>(null)
     val simulationBaking: StateFlow<SimulationBaking?> = _simulationBaking.asStateFlow()
+    /** Per simulation, how its bake follows the reference over the motions last checked; a running check is absent. */
+    private val _simulationChecks = MutableStateFlow<Map<String, SimulationCheck>>(emptyMap())
+    val simulationChecks: StateFlow<Map<String, SimulationCheck>> = _simulationChecks.asStateFlow()
+    private var simChecking: kotlinx.coroutines.Job? = null
     private val _modelDownloadState = MutableStateFlow<io.github.psd2live.core.DownloadState>(io.github.psd2live.core.DownloadState.Idle)
     internal val modelDownloadState = _modelDownloadState.asStateFlow()
     internal fun reportModelDownload(state: io.github.psd2live.core.DownloadState) {
@@ -647,6 +651,60 @@ class PSD2LiveViewModel : AutoCloseable {
             catch (_: Exception) { /* A switched project/workspace owns its own preview. */ }
         }
         if (id != null) startSimulationPreview(id)
+    }
+
+    /** The preview canvases on screen, in docking order. */
+    private fun previewCanvases(): List<CanvasWindowState> {
+        val workspace = _state.value.activeWorkspace
+        return workspace.canvases.filter { it.mode == CanvasMode.PREVIEW && it.id !in workspace.hiddenModules }
+    }
+
+    /** How the first preview canvas on screen shows the running reference simulation. */
+    internal fun simulationView(): SimulationView =
+        previewCanvases().firstOrNull()?.session(CanvasMode.PREVIEW)?.view?.simulationView ?: SimulationView.REFERENCE
+
+    /** Shows the running reference simulation as [view] on the first preview canvas on screen. */
+    internal fun setSimulationView(view: SimulationView) {
+        val canvas = previewCanvases().firstOrNull() ?: return
+        setCanvasViewOptions(canvas.id, canvas.session(CanvasMode.PREVIEW).view.copy(simulationView = view), CanvasMode.PREVIEW)
+    }
+
+    /** Simulation [id]'s reference running beside its export: two preview canvases, the export on the first, the reference on the second. */
+    internal fun showSimulationSideBySide(id: String) {
+        if (_state.value.simulationPreviewId != id) setSimulationPreview(id)
+        ensurePreviewCanvas()
+        repeat((2 - previewCanvases().size).coerceAtLeast(0)) { addCanvas(CanvasMode.PREVIEW, focus = false) }
+        val canvases = previewCanvases().takeIf { it.size >= 2 } ?: return
+        val (export, reference) = canvases
+        setCanvasViewOptions(export.id, export.session(CanvasMode.PREVIEW).view.copy(simulationView = SimulationView.EXPORT), CanvasMode.PREVIEW)
+        setCanvasViewOptions(reference.id, reference.session(CanvasMode.PREVIEW).view.copy(simulationView = SimulationView.REFERENCE), CanvasMode.PREVIEW)
+        ensureSdkSessionLoaded()
+    }
+
+    /** Plays motion [name] from rest through the reference simulation and the export's pendulums together, to compare them on it. */
+    internal fun playSimulationMotion(name: String) {
+        restartSimulationPreview()
+        resetPreviewPhysics()
+        triggerMotion(name)
+    }
+
+    /** Plays [motions] through baked simulation [id] and its reference, off the frame thread, and keeps how the bake follows. */
+    internal fun checkSimulation(id: String, motions: List<String>) {
+        val current = _state.value
+        val model = current.previewModel ?: return
+        val overlay = current.rigEdits
+        simChecking?.cancel()
+        _simulationChecks.update { it + (id to SimulationCheck(motions, emptyList(), running = true)) }
+        simChecking = scope.launch(Dispatchers.Default) {
+            val job = coroutineContext[kotlinx.coroutines.Job]
+            val result = try {
+                val results = io.github.psd2live.core.sim.SimCompare.compare(overlay, model.baseRig.puppet, id, motions, model.baseRig.primitiveSkins,
+                    cancelled = { job?.isCancelled == true })
+                SimulationCheck(motions, results.map { io.github.psd2live.core.sim.SimMotionCheck(it.motion, it.check) })
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (failure: Exception) { SimulationCheck(motions, emptyList(), error = failure.message ?: failure.toString()) }
+            _simulationChecks.update { it + (id to result) }
+        }
     }
 
     /** Puts the live simulation back at rest. */

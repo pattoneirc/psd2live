@@ -249,9 +249,8 @@ internal object RigGenerationMigration {
                 val transform = transforms[id] ?: return@mapValues values
                 values.map { offset -> checkpoint(); transform(offset) }
             })
-            sim.copy(bake = SimBakeResult.fromJson(SimBakeResult(bake.fingerprint, bake.vertexCounts,
-                bake.statics.map(::axis), bake.modes.map { SimBakedMode(axis(it.axis), it.amplitude, it.energy) },
-                bake.physics, bake.fit, bake.maxErrorPx, bake.peak, bake.clipped, bake.jerk, bake.extraPhysics).toJson()))
+            sim.copy(bake = SimBakeResult.fromJson(bake.withGeometry(bake.vertexCounts,
+                bake.statics.map(::axis), bake.modes.map { SimBakedMode(axis(it.axis), it.amplitude, it.energy) }).toJson()))
         })
     }
 

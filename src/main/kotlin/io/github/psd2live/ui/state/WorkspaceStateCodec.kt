@@ -75,6 +75,7 @@ internal object WorkspaceStateCodec {
             showSelectionBounds = if (legacySelectionBounds) defaults.showSelectionBounds
                                   else booleanOr(obj, "showSelectionBounds", defaults.showSelectionBounds),
             sourcePixels = booleanOr(obj, "sourcePixels", defaults.sourcePixels),
+            simulationView = obj["simulationView"]?.jsonPrimitive?.contentOrNull?.let(SimulationView::parse) ?: defaults.simulationView,
         )
     }
 
@@ -104,6 +105,7 @@ internal object WorkspaceStateCodec {
         put("showSelectionBounds", options.showSelectionBounds)
         // Written only when on, so workspaces saved before the option keep their bytes.
         if (options.sourcePixels) put("sourcePixels", true)
+        if (options.simulationView != SimulationView.REFERENCE) put("simulationView", options.simulationView.jsonName)
     }
 
     private fun encodeCamera(camera: TabCamera): JsonObject = buildJsonObject {

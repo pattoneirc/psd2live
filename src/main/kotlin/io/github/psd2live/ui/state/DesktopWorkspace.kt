@@ -1370,6 +1370,9 @@ class DesktopWorkspace(
             WorkspaceSimulationEdits.withBakes(document, bakes)
         }
 
+    override fun compareSimulation(id: String, motions: List<String>, progress: (Float) -> Unit, cancelled: () -> Boolean): kotlinx.serialization.json.JsonObject =
+        captureQueries().compareSimulation(id, motions, progress, cancelled)
+
     override fun reportSimulation(id: String, hold: Float, release: Float, wind: Pair<Float, Float>?, progress: (Float) -> Unit,
                                   cancelled: () -> Boolean): kotlinx.serialization.json.JsonObject = captureQueries().reportSimulation(id, hold, release, wind, progress, cancelled)
 

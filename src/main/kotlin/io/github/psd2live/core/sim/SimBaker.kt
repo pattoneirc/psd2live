@@ -2,9 +2,6 @@ package io.github.psd2live.core.sim
 
 import io.github.psd2live.core.PhysicsEngine
 import io.github.psd2live.core.RigEditOverlay
-import org.umamo.render.eval.drawableLocalPosed
-import org.umamo.render.eval.drawableSpaceMapping
-import org.umamo.runtime.model.DrawableId
 import org.umamo.runtime.model.Parameter
 import org.umamo.runtime.model.ParameterId
 import org.umamo.runtime.model.ParameterKind
@@ -57,7 +54,21 @@ object SimBaker {
         val previousExtra: List<io.github.psd2live.core.RigPhysicsEdit> = emptyList(),
         val progress: (Float) -> Unit = {},
         val cancelled: () -> Boolean = { false },
+        /** How the motion the pendulum is fitted on is made. */
+        val method: Method = Method.DOF,
+        /** The model's own motions to train on as well ([RigSimEdit.trainingClips]), sampled at [fps]; [Method.DOF] only. */
+        val trainingMotions: List<TrainingMotion> = emptyList(),
     )
+
+    /** A motion of the model's to train on: per parameter its value each frame, and how much it counts. */
+    class TrainingMotion(val name: String, val values: Map<String, FloatArray>, val weight: Float)
+
+    enum class Method {
+        /** Every input played through [SimMotionLibrary]'s motion, on its own and all together. */
+        LEGACY,
+        /** Each input that moves the body driven on its own through short designed motion ([SimDofTraining]). */
+        DOF,
+    }
 
     /** Below this much motion (px) at the default pose a mode or static axis is not worth keys. */
     private const val MIN_MOTION_PX = 0.5f
@@ -78,12 +89,11 @@ object SimBaker {
     /** As in the pendulum fit: how much jerkier than the simulation the baked motion may be before it costs. */
     private const val JERK_ALLOWANCE = 1.2
     private const val JERK_COST = 0.5
-    private const val SETTLE_SECONDS = 2.5f
 
     fun bake(model: PuppetModel, edit: RigSimEdit, options: Options = Options()): SimBakeResult {
         val calibrated = SimScene.build(model, edit)
         calibrated.calibrate(model)
-        val space = Space(model, calibrated)
+        val space = SimSpace(model, calibrated)
         val dt = 1f / options.fps
         val parameters = model.parameters.associateBy { it.id.raw }
         fun check() { if (options.cancelled()) throw CancellationException("Bake cancelled") }
@@ -125,20 +135,58 @@ object SimBaker {
         val fingerprint = SimBake.fingerprint(model, edit)
         val bounceId = SimGenerator.verticalPhysicsId(edit)
         val split = sideways.isNotEmpty() && vertical.isNotEmpty()
-        val main = if (sideways.isEmpty() && vertical.isEmpty()) null else dynamic(model, edit, space, statics, ::body, ::check, dt, options,
-            inputs = sideways.ifEmpty { vertical }, outputs = (1..edit.modes).map { SimGenerator.parameterId(edit, it) },
-            id = SimGenerator.physicsId(edit), translations = sideways.isEmpty(), segments = edit.modes + options.extraSegments,
-            previous = options.previous, previousExtra = options.previousExtra.filter { it.id != bounceId },
-            minimum = if (sideways.isEmpty() && edit.vertical == true) 0f else MIN_MOTION_PX,
-            progress = { options.progress(0.1f + it * (if (split) 0.6f else 0.85f)) })
-        val bounce = if (!split) null else dynamic(model, edit, space, statics, ::body, ::check, dt, options,
-            inputs = vertical, outputs = listOf(SimGenerator.verticalParameterId(edit)), id = bounceId, translations = true,
-            segments = 1 + options.extraSegments, previous = options.previousExtra.firstOrNull { it.id == bounceId }, previousExtra = emptyList(),
-            minimum = if (edit.vertical == true) 0f else MIN_BOUNCE_PX, progress = { options.progress(0.7f + it * 0.25f) })
-        val groups = listOfNotNull(main, bounce)
+        // The two groups share nothing until their results are put together, so they bake side by side; the
+        // progress is their sum, the sideways one weighing more as it has more to fit.
+        val done = floatArrayOf(0f, 0f)
+        val shares = if (split) floatArrayOf(0.6f, 0.25f) else floatArrayOf(0.85f, 0f)
+        fun progress(group: Int) = { value: Float ->
+            val sum = synchronized(done) { done[group] = maxOf(done[group], value); done[0] * shares[0] + done[1] * shares[1] }
+            options.progress(0.1f + sum)
+        }
+        val dof = options.method == Method.DOF
+        // Input by input: which inputs move the body, and in which group, read off the rig.
+        val analysis = if (!dof) null else SimKinematics.analyze(model, edit, ::body, inputs.map { parameters.getValue(it) }, options.parallel)
+        val (side, up) = if (analysis == null) emptyList<SimKinematics.Input>() to emptyList()
+            else SimDofTraining.groups(analysis, edit.vertical, edit.forcedInputs.toSet())
+        val checks = analysis?.inputs.orEmpty().map { input ->
+            SimInputCheck(input.id, input.motion, input.rigid, when (input) {
+                in side -> SimInputCheck.SIDEWAYS
+                in up -> SimInputCheck.VERTICAL
+                else -> null
+            }, forced = input.id in edit.forcedInputs)
+        }
+        if (dof) require(side.isNotEmpty() || up.isNotEmpty() || statics.isNotEmpty()) {
+            "No input moves ${edit.id} by ${SimKinematics.MIN_MOTION_PX} px or more; add inputs to bake it"
+        }
+        val mainSideways = if (dof) side.isNotEmpty() else sideways.isNotEmpty()
+        val hasMain = if (dof) side.isNotEmpty() || up.isNotEmpty() else sideways.isNotEmpty() || vertical.isNotEmpty()
+        val hasBounce = if (dof) side.isNotEmpty() && up.isNotEmpty() else split
+        if (dof) { shares[0] = if (hasBounce) 0.6f else 0.85f; shares[1] = if (hasBounce) 0.25f else 0f }
+        // Both groups' pieces at once: an input drives the body the same whichever group reads it.
+        val dofTrainings = if (!dof) null else SimDofTraining.train(model, listOf(side.ifEmpty { up }, if (side.isNotEmpty()) up else emptyList()),
+            space, statics, ::body, ::check, dt, options, progress = { progress(0)(it * 0.6f); progress(1)(it * 0.6f) })
+        fun training(group: Int, main: Boolean, progress: (Float) -> Unit): Training =
+            if (dof) requireNotNull(dofTrainings!![group])
+            else libraryTraining(model, edit, space, statics, ::body, ::check, dt, options, if (main) sideways.ifEmpty { vertical } else vertical)
+        val main: () -> Dynamic? = {
+            if (!hasMain) null else dynamic(model, edit, space, ::check, dt, options,
+                training(0, true, progress(0)), outputs = (1..edit.modes).map { SimGenerator.parameterId(edit, it) },
+                id = SimGenerator.physicsId(edit), translations = !mainSideways && !dof, segments = edit.modes + options.extraSegments,
+                previous = options.previous, previousExtra = options.previousExtra.filter { it.id != bounceId },
+                minimum = if (!mainSideways && edit.vertical == true) 0f else MIN_MOTION_PX, progress = progress(0))
+        }
+        val bounce: () -> Dynamic? = {
+            if (!hasBounce) null else dynamic(model, edit, space, ::check, dt, options,
+                // Each input on its own lets the fit tell a carried body (a translation) from one held in another shape (a tilt).
+                training(1, false, progress(1)), outputs = listOf(SimGenerator.verticalParameterId(edit)), id = bounceId, translations = !dof,
+                segments = 1 + options.extraSegments, previous = options.previousExtra.firstOrNull { it.id == bounceId }, previousExtra = emptyList(),
+                minimum = if (edit.vertical == true) 0f else MIN_BOUNCE_PX, progress = progress(1))
+        }
+        val groups = each(listOf(main, bounce)) { it() }.filterNotNull()
         require(groups.isNotEmpty() || statics.isNotEmpty()) { "${edit.id} barely moves under its inputs; nothing to bake" }
         options.progress(1f)
-        if (groups.isEmpty()) return SimBakeResult(fingerprint, space.counts, statics, emptyList())
+        val method = options.method.name.lowercase()
+        if (groups.isEmpty()) return SimBakeResult(fingerprint, space.counts, statics, emptyList(), inputs = checks, method = method)
 
         // Out to the parameters' own span: a keyform axis snaps a value within 0.001 of a key onto it, which
         // over -1..1 would jolt a large body every time a mode swings through rest.
@@ -160,8 +208,14 @@ object SimBaker {
         return SimBakeResult(fingerprint, space.counts, statics, modes, spanned(first.setting),
             (1.0 - groups.sumOf { it.missed } / moved).toFloat(), percentile(groups.flatMap { it.errors }, 0.95f), groups.maxOf { it.peak },
             groups.sumOf { it.clipped }.toFloat() / groups.sumOf { it.frames }.coerceAtLeast(1),
-            sqrt(groups.sumOf { it.bakedJerk } / groups.sumOf { it.simulatedJerk }.coerceAtLeast(1e-12)).toFloat(), extraPhysics)
+            sqrt(groups.sumOf { it.bakedJerk } / groups.sumOf { it.simulatedJerk }.coerceAtLeast(1e-12)).toFloat(), extraPhysics,
+            checks, groups.mapIndexedNotNull { g, group -> group.visual?.let { SimMotionCheck(if (g == 0 && mainSideways) HELD_OUT else HELD_OUT_VERTICAL, it) } },
+            method)
     }
+
+    /** What the visual checks of a bake's held-out motion are called: the sideways group's, and the up-and-down one's. */
+    const val HELD_OUT = "held_out"
+    const val HELD_OUT_VERTICAL = "held_out_vertical"
 
     /**
      * What one group of inputs bakes to: its modes over -1..1, the pendulum driving them and those of their
@@ -182,33 +236,33 @@ object SimBaker {
         val frames: Int,
         val bakedJerk: Double,
         val simulatedJerk: Double,
+        /** What a viewer sees of it on the held-out motion; null when that motion hardly moves the body. */
+        val visual: SimVisualCheck?,
     )
 
     /**
-     * Steps 2 to 5 for one group of [inputs], the others held at their defaults: the training run, the
-     * principal directions, the pendulum [id] driving [outputs] - fed by translations only when
-     * [translations] - and the keys. Null when the group moves the body less than [minimum] px.
+     * What one group's training recorded: per piece, the body's residual each frame; per input its value each frame
+     * over all the pieces; the held-out piece the same way.
      */
-    private fun dynamic(
-        model: PuppetModel,
-        edit: RigSimEdit,
-        space: Space,
-        statics: List<SimBakedAxis>,
-        body: () -> SimScene,
-        check: () -> Unit,
-        dt: Float,
-        options: Options,
-        inputs: List<String>,
-        outputs: List<String>,
-        id: String,
-        translations: Boolean,
-        segments: Int,
-        previous: io.github.psd2live.core.RigPhysicsEdit?,
-        previousExtra: List<io.github.psd2live.core.RigPhysicsEdit>,
-        minimum: Float,
-        progress: (Float) -> Unit,
-    ): Dynamic? {
-        // 2. Training run: each piece from rest on its own body.
+    internal class Training(
+        val inputs: List<String>,
+        val ranges: Map<String, PhysicsEngine.Range>,
+        val recorded: List<List<FloatArray>>,
+        val track: List<FloatArray>,
+        val heldOutTrack: List<FloatArray>,
+        val heldOutResiduals: List<FloatArray>,
+        /** How much more or less than the others one piece may count, however much it moves the body. */
+        val balance: Double = 10.0,
+        /** Per piece, how much it counts on top of that (a training motion the user weighed); null counts each alike. */
+        val pieceWeights: List<Double>? = null,
+    )
+
+    /**
+     * Step 2 as [SimMotionLibrary] plays it for one group of [inputs], the others held at their defaults: each
+     * piece from rest on its own body, and the held-out piece.
+     */
+    private fun libraryTraining(model: PuppetModel, edit: RigSimEdit, space: SimSpace, statics: List<SimBakedAxis>, body: () -> SimScene,
+                                check: () -> Unit, dt: Float, options: Options, inputs: List<String>): Training {
         val parameters = model.parameters.associateBy { it.id.raw }
         val spans = inputs.map { trainingSpan(parameters.getValue(it), edit.inputRanges[it]) }
         /** Library values (-1..1 about the default) as parameter values within each input's training span. */
@@ -233,10 +287,36 @@ object SimBaker {
                 r
             }
         }.toList()
-        val recorded = all.dropLast(1)
+        return Training(inputs, PhysicsEngine.ranges(model.parameters), all.dropLast(1),
+            inputs.indices.map { i -> pieces.flatMap { it[i].asList() }.toFloatArray() }, heldOutPiece, all.last())
+    }
+
+    /**
+     * Steps 3 to 5 for one group's [training]: the principal directions, the pendulum [id] driving [outputs] - fed
+     * by translations only when [translations] - and the keys. Null when the group moves the body less than
+     * [minimum] px.
+     */
+    private fun dynamic(
+        model: PuppetModel,
+        edit: RigSimEdit,
+        space: SimSpace,
+        check: () -> Unit,
+        dt: Float,
+        options: Options,
+        training: Training,
+        outputs: List<String>,
+        id: String,
+        translations: Boolean,
+        segments: Int,
+        previous: io.github.psd2live.core.RigPhysicsEdit?,
+        previousExtra: List<io.github.psd2live.core.RigPhysicsEdit>,
+        minimum: Float,
+        progress: (Float) -> Unit,
+    ): Dynamic? {
+        val recorded = training.recorded
         val residuals = recorded.flatten()
-        val heldOutResiduals = all.last()
-        val track = inputs.indices.map { i -> pieces.flatMap { it[i].asList() }.toFloatArray() }
+        val heldOutResiduals = training.heldOutResiduals
+        val track = training.track
         val starts = HashSet<Int>().also { set -> var at = 0; for (piece in recorded) { set += at; at += piece.size } }
 
         // 3. The few principal directions (px at the default pose) that span nearly all of the motion.
@@ -248,7 +328,7 @@ object SimBaker {
         val sampled = metric.filterIndexed { f, _ -> f % 2 == 0 }
         val sampledTotal = sampled.sumOf { row -> row.sumOf { (it * it).toDouble() } }.coerceAtLeast(1e-12)
         val directions = if (sampled.isEmpty()) emptyList() else principal(sampled, SUBSPACE).filter { it.second / sampledTotal >= MIN_ENERGY }.map { it.first }
-        val moves = metric.isNotEmpty() && percentile(residuals.map(space::motionPx), 0.98f) >= minimum
+        val moves = metric.isNotEmpty() && percentile(metric.map(::maxDistance), 0.98f) >= minimum
         if (!moves || directions.isEmpty()) return null
         val motion = metric.map { row -> FloatArray(directions.size) { dot(row, directions[it]) } }
         // Each piece counts alike: shaking the body through its resonance moves it far more than a drag, and
@@ -264,7 +344,8 @@ object SimBaker {
             val overall = total / residuals.size
             at = 0
             for ((p, piece) in recorded.withIndex()) {
-                val w = if (means[p] > 1e-12) (overall / means[p]).coerceIn(0.1, 10.0).toFloat() else 1f
+                val w = (if (means[p] > 1e-12) (overall / means[p]).coerceIn(1.0 / training.balance, training.balance).toFloat() else 1f) *
+                    (training.pieceWeights?.get(p)?.toFloat() ?: 1f)
                 for (f in at until at + piece.size) weights[f] = w
                 at += piece.size
             }
@@ -274,9 +355,9 @@ object SimBaker {
 
         // 4. The pendulum.
         progress(0.65f)
-        val fit = SimPendulumFit.fit(id, edit.name, outputs, inputs, PhysicsEngine.ranges(model.parameters),
+        val fit = SimPendulumFit.fit(id, edit.name, outputs, training.inputs, training.ranges,
             track, motion, metric, dt, options.physicsFps.toFloat(), segments = segments, starts = starts,
-            heldOutTrack = heldOutPiece, heldOutMotion = heldOutMotion, heldOutMetric = heldOutMetric, previous = previous,
+            heldOutTrack = training.heldOutTrack, heldOutMotion = heldOutMotion, heldOutMetric = heldOutMetric, previous = previous,
             previousExtra = previousExtra, check = check, weights = weights, translations = translations)
 
         // 5. Key shapes for every mode at once; a mode that ends up moving nothing is dropped and the rest solved again.
@@ -354,10 +435,18 @@ object SimBaker {
         }
         val peak = kept.maxOf { k -> checkPlayed[k].maxOf(::abs) }
         val clipped = checkPlayed.first().indices.count { f -> kept.any { k -> abs(checkPlayed[k][f]) >= 0.999f } }
+        // What a viewer sees of it there: the offsets at the default pose, on the body at rest.
+        val visual = if (!judged) null else {
+            val held = training.heldOutTrack
+            val moving = BooleanArray(simulated.size) { f -> f > 0 && held.any { abs(it[f] - it[f - 1]) > 1e-6f } }
+            fun world(px: FloatArray) = FloatArray(px.size) { space.rest[it] + px[it] }
+            SimVisualCheck.measure(SimVisualRun(simulated, baked, simulated.map(::world), baked.map(::world),
+                simulated.indices.map { f -> FloatArray(kept.size) { checkPlayed[kept[it]][f] } }, moving), space.grain, space.grainRest, options.fps)
+        }
         val keptParameters = kept.map { outputs[it] }.toSet()
         fun owned(setting: io.github.psd2live.core.RigPhysicsEdit) = setting.copy(outputs = setting.outputs.filter { it.parameter in keptParameters })
         return Dynamic(modes, owned(fit.setting), fit.extra.map(::owned).filter { it.outputs.isNotEmpty() }, total,
-            missed, checkTotal, errors, peak, clipped, checkPlayed.first().size, jerkEnergy(baked), jerkEnergy(simulated))
+            missed, checkTotal, errors, peak, clipped, checkPlayed.first().size, jerkEnergy(baked), jerkEnergy(simulated), visual)
     }
 
     /**
@@ -497,110 +586,6 @@ object SimBaker {
         return List(n) { k -> keys[k].indices.map { key -> if (key == zeros[k]) FloatArray(size) else FloatArray(size) { solved[column(k, key)][it].toFloat() } } }
     }
 
-    /**
-     * The targets' keyform spaces: residuals in local coordinates, and the default-pose Jacobian that
-     * turns them into px so modes are measured the same way everywhere on the body.
-     */
-    private class Space(val model: PuppetModel, scene: SimScene) {
-        val offsets: Map<DrawableId, Int> = scene.offsets
-        val vertexCounts: Map<DrawableId, Int> = scene.vertexCounts
-        val meshes: List<DrawableId> = offsets.keys.toList()
-        val size = scene.state.count * 2
-        val counts: Map<String, Int> = meshes.associate { it.raw to vertexCounts.getValue(it) }
-        /** Per particle: d world / d local at the default pose, column-major (xx, yx, xy, yy). */
-        private val jacobian = FloatArray(scene.state.count * 4)
-        private val inverse = FloatArray(scene.state.count * 4)
-
-        init {
-            for (id in meshes) {
-                val offset = offsets.getValue(id)
-                val mapping = drawableSpaceMapping(model, emptyMap(), id)
-                val local = drawableLocalPosed(model, emptyMap(), id)
-                val count = vertexCounts.getValue(id)
-                for (v in 0 until count) { val i = (offset + v) * 4; jacobian[i] = 1f; jacobian[i + 3] = 1f }
-                if (mapping == null || local == null) continue
-                var extent = 0f
-                for (k in local.indices step 2) extent = maxOf(extent, abs(local[k] - local[0]), abs(local[k + 1] - local[1]))
-                val eps = (extent * 1e-3f).coerceAtLeast(1e-6f)
-                val base = mapping.localToWorld(local)
-                val dx = mapping.localToWorld(FloatArray(local.size) { if (it % 2 == 0) local[it] + eps else local[it] })
-                val dy = mapping.localToWorld(FloatArray(local.size) { if (it % 2 == 1) local[it] + eps else local[it] })
-                for (v in 0 until count) {
-                    val i = (offset + v) * 4
-                    jacobian[i] = (dx[v * 2] - base[v * 2]) / eps; jacobian[i + 1] = (dx[v * 2 + 1] - base[v * 2 + 1]) / eps
-                    jacobian[i + 2] = (dy[v * 2] - base[v * 2]) / eps; jacobian[i + 3] = (dy[v * 2 + 1] - base[v * 2 + 1]) / eps
-                }
-            }
-            for (p in 0 until scene.state.count) {
-                val i = p * 4
-                val det = jacobian[i] * jacobian[i + 3] - jacobian[i + 2] * jacobian[i + 1]
-                if (abs(det) < 1e-12f) { inverse[i] = 1f; inverse[i + 3] = 1f; continue }
-                inverse[i] = jacobian[i + 3] / det; inverse[i + 1] = -jacobian[i + 1] / det
-                inverse[i + 2] = -jacobian[i + 2] / det; inverse[i + 3] = jacobian[i] / det
-            }
-        }
-
-        /** Local deltas in px at the default pose. */
-        fun toPx(local: FloatArray) = FloatArray(size) { k ->
-            val p = k / 2; val i = p * 4; val x = local[p * 2]; val y = local[p * 2 + 1]
-            if (k % 2 == 0) jacobian[i] * x + jacobian[i + 2] * y else jacobian[i + 1] * x + jacobian[i + 3] * y
-        }
-
-        /** The largest single-vertex distance of [local] in px. */
-        fun motionPx(local: FloatArray): Float = maxDistance(toPx(local))
-
-        /** Where [scene] has the body at [pose], minus where the rig has it, in local coordinates. */
-        fun residual(scene: SimScene, pose: Map<ParameterId, Float>): FloatArray? {
-            val out = FloatArray(size)
-            val s = scene.state
-            for (id in meshes) {
-                val offset = offsets.getValue(id)
-                val count = vertexCounts.getValue(id)
-                val mapping = drawableSpaceMapping(model, pose, id) ?: return null
-                val seed = drawableLocalPosed(model, pose, id) ?: return null
-                val all = (0 until count).toSet()
-                val simulated = FloatArray(count * 2) { if (it % 2 == 0) s.x[offset + it / 2] else s.y[offset + it / 2] }
-                val rigged = FloatArray(count * 2) { if (it % 2 == 0) s.goalX[offset + it / 2] else s.goalY[offset + it / 2] }
-                val a = mapping.worldToLocal(simulated, seed, all)
-                val b = mapping.worldToLocal(rigged, seed, all)
-                for (k in 0 until count * 2) out[offset * 2 + k] = a[k] - b[k]
-            }
-            return out
-        }
-
-        /** Poses the rig, lets [scene] settle there and returns what is left against the rig. */
-        fun settle(scene: SimScene, pose: Map<ParameterId, Float>, dt: Float): FloatArray {
-            val s = scene.state
-            for (i in 0 until s.count) s.damping[i] = maxOf(s.damping[i], 8f)
-            scene.reset(model, pose)
-            repeat((SETTLE_SECONDS / dt).toInt()) { scene.drive(model, pose, dt) }
-            return residual(scene, pose) ?: FloatArray(size)
-        }
-
-        /** [r] minus [axis]'s offsets at [value]. */
-        fun subtract(r: FloatArray, axis: SimBakedAxis, value: Float) {
-            for (id in meshes) {
-                val offsets = axis.at(id.raw, value) ?: continue
-                val offset = this.offsets.getValue(id) * 2
-                for (k in offsets.indices) r[offset + k] -= offsets[k]
-            }
-        }
-
-        /** Per-key arrays over every particle split into per-mesh arrays. */
-        fun split(perKey: List<FloatArray>): Map<String, List<FloatArray>> = meshes.associate { id ->
-            val offset = offsets.getValue(id) * 2
-            val count = vertexCounts.getValue(id) * 2
-            id.raw to perKey.map { it.copyOfRange(offset, offset + count) }
-        }
-
-        /** [axis]'s offsets at [value] over every particle. */
-        fun join(axis: SimBakedAxis, value: Float): FloatArray {
-            val out = FloatArray(size)
-            for (id in meshes) axis.at(id.raw, value)?.copyInto(out, offsets.getValue(id) * 2)
-            return out
-        }
-    }
-
     /** The energy of the third differences of [frames]: how much the motion's acceleration jumps. */
     private fun jerkEnergy(frames: List<FloatArray>): Double {
         var sum = 0.0
@@ -611,7 +596,7 @@ object SimBaker {
         return sum
     }
 
-    private fun maxDistance(px: FloatArray): Float {
+    internal fun maxDistance(px: FloatArray): Float {
         var most = 0f
         for (p in 0 until px.size / 2) most = maxOf(most, hypot(px[p * 2], px[p * 2 + 1]))
         return most

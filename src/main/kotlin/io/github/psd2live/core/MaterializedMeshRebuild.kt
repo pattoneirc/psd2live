@@ -104,10 +104,8 @@ internal object MaterializedMeshRebuild {
                     }
                 }))
             }
-            sim.copy(bake = SimBakeResult.fromJson(SimBakeResult(bake.fingerprint,
-                bake.vertexCounts + (id to sources.size), bake.statics.map(::migrate),
-                bake.modes.map { SimBakedMode(migrate(it.axis), it.amplitude, it.energy) },
-                bake.physics, bake.fit, bake.maxErrorPx, bake.peak, bake.clipped, bake.jerk, bake.extraPhysics).toJson()))
+            sim.copy(bake = SimBakeResult.fromJson(bake.withGeometry(bake.vertexCounts + (id to sources.size), bake.statics.map(::migrate),
+                bake.modes.map { SimBakedMode(migrate(it.axis), it.amplitude, it.energy) }).toJson()))
         }
     })
 }

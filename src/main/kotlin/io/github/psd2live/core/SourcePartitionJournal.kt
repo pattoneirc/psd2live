@@ -199,10 +199,9 @@ internal object SourcePartitionJournal {
                 }
                 val bake = sim.bake?.let { previous ->
                     require(previous.vertexCounts[source] == plan.ownerByVertex.size) { "Simulation bake has a stale partition topology" }
-                    SimBakeResult.fromJson(SimBakeResult(previous.fingerprint,
+                    SimBakeResult.fromJson(previous.withGeometry(
                         previous.vertexCounts - source + ids.mapIndexed { index, id -> id to plan.pieces[index].mesh.vertexCount },
-                        previous.statics.map(::migrate), previous.modes.map { SimBakedMode(migrate(it.axis), it.amplitude, it.energy) },
-                        previous.physics, previous.fit, previous.maxErrorPx, previous.peak, previous.clipped, previous.jerk, previous.extraPhysics).toJson())
+                        previous.statics.map(::migrate), previous.modes.map { SimBakedMode(migrate(it.axis), it.amplitude, it.energy) }).toJson())
                 }
                 sim.copy(targets = sim.targets.flatMap { if (it == source) ids else listOf(it) }, bake = bake, glueRoles = roles)
             }

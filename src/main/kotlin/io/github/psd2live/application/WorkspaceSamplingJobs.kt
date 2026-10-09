@@ -6,7 +6,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
 internal object WorkspaceSamplingJobs {
-    val supported = setOf("simulation_simulate", "physics_simulate")
+    val supported = setOf("simulation_simulate", "simulation_compare", "physics_simulate")
 
     /** The detached queries and their identity are captured before scheduling, never recaptured by the job. */
     suspend fun start(port: WorkspaceReadPort, jobs: WorkspaceJobs, operation: String, request: JsonObject): WorkspaceOperationOutput {
@@ -26,6 +26,8 @@ internal object WorkspaceSamplingJobs {
                 checkpoint()
                 val result = when (operation) {
                     "physics_simulate" -> queries.simulatePhysics(request, reportProgress, cancelled)
+                    "simulation_compare" -> queries.compareSimulation(request.getValue("id").jsonPrimitive.content,
+                        request.getValue("motions").jsonArray.map { it.jsonPrimitive.content }, reportProgress, cancelled)
                     else -> queries.reportSimulation(request.getValue("id").jsonPrimitive.content,
                         request["hold"]?.jsonPrimitive?.float ?: 0.5f, request["release"]?.jsonPrimitive?.float ?: 1.5f,
                         request["wind"]?.jsonArray?.let { it[0].jsonPrimitive.float to it[1].jsonPrimitive.float }, reportProgress, cancelled)

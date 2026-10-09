@@ -13,6 +13,12 @@ internal object WorkspaceSimulationResultSchemas {
         "keys" to s.integer(2), "pendulum" to s.handle(), "segments" to s.integer(1),
         "own_pendulums" to s.array(s.handle(), 1, Int.MAX_VALUE), "static_inputs" to s.array(s.handle(), 1, Int.MAX_VALUE),
     ) + listOf("fit_r2", "error_p95_px", "parameter_peak", "clipped_frames", "jerk_ratio").associateWith { s.number() }
+        .plus(linkedMapOf(
+            "inputs" to s.array(s.obj(mapOf("parameter" to s.handle(), "motion_px" to s.number(), "rigid" to s.boolean(),
+                "group" to s.choices(SimInputCheck.SIDEWAYS, SimInputCheck.VERTICAL), "dropped" to s.constant(true), "forced" to s.constant(true)),
+                setOf("parameter", "motion_px", "rigid")), 1, Int.MAX_VALUE),
+            "visual" to s.array(WorkspaceSimulationChecks.motion, 1, Int.MAX_VALUE),
+            "method" to s.choices(*SimBaker.Method.entries.map { it.name.lowercase() }.toTypedArray())))
     private val summaryRequired = setOf("modes", "fit_r2", "error_p95_px", "parameter_peak", "clipped_frames", "jerk_ratio")
     val bakeSummary = s.obj(summaryFields, summaryRequired)
     private val compactFields = WorkspaceAuthoringResultSchemas.compactFields
@@ -49,7 +55,8 @@ internal object WorkspaceSimulationResultSchemas {
         "enabled" to s.constant(false), "modes" to s.integer(1, RigSimEdit.MAX_MODES), "vertical" to s.boolean(),
         "static_inputs" to s.array(s.handle(), 0, RigSimEdit.MAX_STATIC_INPUTS), "keys" to s.integer(3, 9),
         "blend_shapes" to s.boolean(), "auto_bake" to s.constant(false), "exaggeration" to s.number(1, 2),
-        "output_names" to s.dictionary(s.handle()), "outputs" to s.dictionary(output))
+        "output_names" to s.dictionary(s.handle()), "outputs" to s.dictionary(output),
+        "force_inputs" to s.array(s.handle(), 1, Int.MAX_VALUE), "training_clips" to s.dictionary(s.number(0, 1)))
     private val simulationRequired = setOf("id", "name", "kind", "targets", "material", "inputs")
     val inspectedSimulation = s.union(listOf(s.obj(simulationFields, simulationRequired),
         s.obj(simulationFields + mapOf("bake" to bakeSummary, "bake_stale" to s.boolean()), simulationRequired + "bake")))
@@ -58,9 +65,18 @@ internal object WorkspaceSimulationResultSchemas {
         "simulation_put" -> put
         "simulation_bake" -> bake
         "simulation_simulate" -> report
+        "simulation_compare" -> s.obj(mapOf("id" to s.handle(), "motions" to s.array(WorkspaceSimulationChecks.motion, 1, Int.MAX_VALUE)))
         "model_apply_preset" -> preset
         else -> null
     }
+}
+
+/** What a viewer sees of a baked simulation against its reference over one motion ([SimVisualCheck]). */
+internal object WorkspaceSimulationChecks {
+    private val s = WorkspaceResultSchema
+    val metrics = s.obj(listOf("dir", "sign", "amp", "reach", "lag_ms", "settle", "overshoot", "jitter", "rough", "clipped", "stalled",
+        "shorten", "static_px", "static_share", "r2", "p95_px", "sim_px").associateWith { s.number() }, emptySet())
+    val motion = s.obj(mapOf("motion" to s.string(), "metrics" to metrics))
 }
 
 internal object WorkspacePhysicsResultTypes {

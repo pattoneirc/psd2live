@@ -103,6 +103,10 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `ModelProfileTool.cmo3` | A `.cmo3`'s parameters, deformer tree (grid axes and bounds), drawables, band motion profile and per-drawable motion under the body parameters, silhouettes over body X × body Y, and its physics groups | `model-profile/<name>.txt`, `.png`, `-physics.txt` |
 | `ModelProfileTool.sample` | The band motion profile of a generated model (without a skeleton and on the auto skeleton), its body layers and auto bones | `model-profile/<sample>.txt` |
 | `SimBakeBenchmark` | Bakes the `tml` back hair at a few settings and compares the simulation with the export on motion the fit never saw | standard output |
+| `SimBakeSuite` | Sets up the back hair, front hair and clothing as the model presets do (plus the back hair pinned along its top tenth), bakes each with the old and the input-by-input method, and compares the reference simulation and the export on motion the fit never saw (tracking-like pointer, head rolls, built-in motions, each input stepped, turns, drags, shaking) by visual measures | `build/tools/sim-bake/<sample>/`: `summary.md`, a JSON per setting, tip trajectory plots |
+| `SimRootDofExperiment` | Whether a body answers only how its root is carried and turned: how far each input moves the root and how much it reshapes the body besides; real against rigid driving, amplitudes, and inputs moving the root alike | `build/tools/sim-root-dof/<sample>.md` |
+| `SimBakeProfileTool` | Bakes the `tml` back hair on one thread and on all, times the stages between progress marks and samples every thread | standard output |
+| `PendulumKernelTool` | The array pendulum kernel (exact and fast) against `PhysicsEngine`: time per frame and deviation | standard output |
 | `CanvasPerfTool` | Opens a real window under Xvfb and runs idle, hover, wheel zoom, middle-button pan and a deform-mode drag of every face point on the edit canvas, once with GPU and once with software rendering; reports frame gaps, UI-thread latency and UI-thread hotspots; needs `xvfb-run -a -s "-screen 0 1920x1080x24"` | `canvas-perf/report.txt`, a capture per phase and `.jfr` |
 | `DragonBonesFidelityTool` | Exports `tml` and `ds` (plain and on the auto skeleton) to DragonBones and plays them with `tools/dragonbones-check` (the official DragonBones 5.7 runtime core, needs node): parameter animations at every key frame are compared with the editor's evaluator (within the tolerance the export reports) and clips are measured | `dragonbones-fidelity/report.txt` |
 | `RuntimeConformanceTool.generate` / `.physics` | Reference data for the Rust runtime: `generate` evaluates random rigs (warps, rotations, nesting, sparse grids, blend shapes, glue, channels, parts), the samples and the project `PSD2LIVE_RUNTIME_PROJECT` names at random poses with the editor (the skeleton samples also as the finest bake, `rig.fine.p2lrt`); `physics` writes frame-by-frame traces of random pendulum groups and the samples' physics. Compare with `p2lrt-conformance` in `runtime/` | `runtime-conformance/<case>/`, `runtime-physics/<case>/` |
@@ -145,7 +149,11 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `PSD2LIVE_BIND_LEGS` | `1` binds the leg and shoe meshes to the first thigh bone |
 | `PSD2LIVE_ZOOM` | Frame of the leg close-up, `left,top,right,bottom` as shares of the canvas |
 | `PSD2LIVE_VERBOSE` | `1` makes `motions` also print every curve |
-| `PSD2LIVE_BAKE_CONFIGS` | Settings of `SimBakeBenchmark`, `modes:keys,...`; `2:5,2:7,1:5` by default |
+| `PSD2LIVE_BAKE_CONFIGS` | Settings of `SimBakeBenchmark` / `SimBakeSuite`, `modes:keys,...`; `2:5,2:7,1:5` by default for the first, `preset` (each part's own) for the second |
+| `PSD2LIVE_SIM_PARTS` | Parts for `SimBakeSuite` / `SimRootDofExperiment`, comma-separated; all by default |
+| `PSD2LIVE_BAKE_METHODS` | Bake methods for `SimBakeSuite`, `legacy,dof` |
+| `PSD2LIVE_SIM_INPUTS` | `SimBakeSuite` keeps only these inputs |
+| `PSD2LIVE_SIM_CSV` | Motions whose tip trajectory, mode values and inputs `SimBakeSuite` writes as CSV |
 | `PSD2LIVE_RUNTIME_PROJECT` | A project (`.psd2live` or PSD) `RuntimeConformanceTool.generate` also writes, as the case `project` |
 | `PSD2LIVE_GEOMETRY_EDITS` | Geometry commits `SkeletonCommitTool.profile` makes before the skeleton commits; 24 by default |
 | `PSD2LIVE_RIG_MODES` | `staged` or `unstaged` limits the generation commits of `CommitPerfTool.baseline` / `.rigStages` to that mode; `both` by default |

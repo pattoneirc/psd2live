@@ -103,6 +103,10 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `ModelProfileTool.cmo3` | `.cmo3` のパラメータ、デフォーマツリー（グリッド軸と範囲）、メッシュ、帯ごとの動きのプロファイル、体パラメータでの各メッシュの移動、体 X × 体 Y のシルエット、物理グループ | `model-profile/<名前>.txt`、`.png`、`-physics.txt` |
 | `ModelProfileTool.sample` | 生成モデル（スケルトンなしと自動スケルトン）の帯ごとの動きのプロファイル、体レイヤーと自動ボーン | `model-profile/<サンプル>.txt` |
 | `SimBakeBenchmark` | `tml` の後ろ髪をいくつかの設定で焼き込み、フィットに使わなかった動きでシミュレーションと書き出し結果を比較 | 標準出力 |
+| `SimBakeSuite` | モデルプリセットと同じ手順で後ろ髪・前髪・衣服などの物理体を作り（上端 10% 固定の後ろ髪も）、従来の方法と入力ごとの方法で焼き込み、フィットに使わなかった動き（フェイストラッキング風の追従、首かしげ、組み込みモーション、入力ごとのステップ、振り向き、ドラッグ、揺さぶり）で参照シミュレーションと書き出し結果を見た目の指標で比較 | `build/tools/sim-bake/<サンプル>/`：`summary.md`、設定ごとの JSON、先端の軌跡図 |
+| `SimRootDofExperiment` | 物体が根元の平行移動と回転だけに応答するかの検証：各入力が根元をどれだけ動かし、それ以外にどれだけ形を変えるか、実際の駆動と剛体駆動・振幅・同じ根元の動きをする別の入力の違い | `build/tools/sim-root-dof/<サンプル>.md` |
+| `SimBakeProfileTool` | `tml` の後ろ髪を単一スレッドと全スレッドで焼き込み、進捗ごとの所要時間と全スレッドのサンプリング | 標準出力 |
+| `PendulumKernelTool` | 振り子の配列カーネル（厳密・高速）と `PhysicsEngine` のフレームあたりの時間と差 | 標準出力 |
 | `CanvasPerfTool` | Xvfb 上で実際のウィンドウを開き、編集キャンバスで待機、ホバー、ホイールズーム、中ボタンのパン、変形モードで顔の全点のドラッグを順に行う。GPU 描画とソフトウェア描画で各 1 回、フレーム間隔、UI スレッドの遅延とホットスポットを報告。`xvfb-run -a -s "-screen 0 1920x1080x24"` が必要 | `canvas-perf/report.txt`、各段階のキャプチャと `.jfr` |
 | `DragonBonesFidelityTool` | `tml` と `ds`（スケルトンなしと自動スケルトン）を DragonBones に書き出し、`tools/dragonbones-check`（公式 DragonBones 5.7 ランタイムのコア、node が必要）で再生する。パラメータアニメーションを各キーフレームでエディタの評価と比較し（書き出しが報告した許容差以内）、クリップの誤差を測る | `dragonbones-fidelity/report.txt` |
 | `RuntimeConformanceTool.generate` / `.physics` | Rust ランタイムの参照データ。`generate` はランダムなモデル（ワープ、回転、入れ子、疎なキーフォーム、ブレンドシェイプ、グルー、チャンネル、パーツ）、サンプル、`PSD2LIVE_RUNTIME_PROJECT` で指定したプロジェクトをランダムなポーズでエディタが評価した結果（スケルトンのサンプルは最も細かくベイクした `rig.fine.p2lrt` も）。`physics` はランダムな振り子グループとサンプルの物理のフレームごとの軌跡。`runtime/` の `p2lrt-conformance` で比較する | `runtime-conformance/<ケース>/`、`runtime-physics/<ケース>/` |
@@ -145,7 +149,11 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `PSD2LIVE_BIND_LEGS` | `1` で脚と靴のメッシュを最初の太ももボーンにバインド |
 | `PSD2LIVE_ZOOM` | 脚の拡大範囲。`左,上,右,下` をキャンバスに対する比率で指定 |
 | `PSD2LIVE_VERBOSE` | `1` で `motions` が各カーブも出力 |
-| `PSD2LIVE_BAKE_CONFIGS` | `SimBakeBenchmark` の設定。`モード数:キー数,...`。既定は `2:5,2:7,1:5` |
+| `PSD2LIVE_BAKE_CONFIGS` | `SimBakeBenchmark` / `SimBakeSuite` の設定。`モード数:キー数,...`。前者の既定は `2:5,2:7,1:5`、後者は `preset`（部位ごとの設定） |
+| `PSD2LIVE_SIM_PARTS` | `SimBakeSuite` / `SimRootDofExperiment` の部位。カンマ区切り、既定はすべて |
+| `PSD2LIVE_BAKE_METHODS` | `SimBakeSuite` の焼き込み方法。`legacy,dof` |
+| `PSD2LIVE_SIM_INPUTS` | `SimBakeSuite` で残す入力 |
+| `PSD2LIVE_SIM_CSV` | `SimBakeSuite` が先端の軌跡・モード値・入力を CSV に書く動き |
 | `PSD2LIVE_RUNTIME_PROJECT` | `RuntimeConformanceTool.generate` が追加で書き出すプロジェクト（`.psd2live` または PSD）。ケース名は `project` |
 | `PSD2LIVE_GEOMETRY_EDITS` | `SkeletonCommitTool.profile` がスケルトンのコミットの前に行うジオメトリコミットの回数。既定は 24 |
 | `PSD2LIVE_RIG_MODES` | `CommitPerfTool.baseline` / `.rigStages` の生成系コミットを `staged` か `unstaged` だけにする。既定は `both` |

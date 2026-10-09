@@ -55,6 +55,8 @@ import io.github.psd2live.core.sim.SimMaterial
 import io.github.psd2live.core.sim.SimMaterialPreset
 import io.github.psd2live.core.sim.SimOutput
 import io.github.psd2live.core.sim.glueKey
+import io.github.psd2live.ui.state.CanvasMode
+import io.github.psd2live.ui.state.SimulationView
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.components.CompactButton
 import io.github.psd2live.ui.components.CompactCheckbox
@@ -100,7 +102,7 @@ import io.github.psd2live.ui.components.CompactTextField
 import java.awt.Cursor
 
 /** The panel's foldable sections: the body list and the selected body's editor sections. */
-private val SECTIONS = setOf("bodies", "bake", "material", "inputs", "outputs", "glue", "groups")
+private val SECTIONS = setOf("bodies", "bake", "compare", "material", "inputs", "outputs", "glue", "groups")
 
 /** Whether a simulation exports, and as its current setup. */
 private enum class BakeState { BAKED, STALE, UNBAKED, DISABLED }
@@ -126,7 +128,7 @@ internal fun SimulationPanelView(
 	val status by viewModel.simulationStatus.collectAsState()
 	val puppet = state.previewModel?.rig?.puppet
 	// Which sections are open survives switching bodies; the toolbar opens or closes them all.
-	var open by remember { mutableStateOf(SECTIONS - "groups") }
+	var open by remember { mutableStateOf(SECTIONS - "groups" - "compare") }
 	val listOpen = "bodies" in open
 	// Staleness hashes the targets' keyforms: once per rig and edit, not per frame.
 	val bakeStates = remember(puppet, sims) {
@@ -400,6 +402,9 @@ private fun SimulationEditor(
 	PhysicsSection(tr("sim.bake"), section("bake"), { toggle("bake") }, icon = icon(SimSectionIcon.BAKE)) {
 		BakeEditor(viewModel, state, puppet, sim, bakeState, ::commit)
 	}
+	PhysicsSection(tr("sim.compare"), section("compare"), { toggle("compare") }, icon = icon(SimSectionIcon.BAKE)) {
+		CompareEditor(viewModel, state, sim)
+	}
 
 	val preset = SimMaterial.preset(sim.kind)
 	val resetMaterial: @Composable RowScope.() -> Unit = {
@@ -415,7 +420,7 @@ private fun SimulationEditor(
 	val parameterNames = remember(puppet) { puppet.parameters.associate { it.id.raw to it.name } }
 	val defaultInputs = remember(parameterNames, sim.kind) { RigSimEdit.defaultInputs(parameterNames.keys, sim.kind) }
 	val resetInputs: @Composable RowScope.() -> Unit = {
-		CompactIconButton(onClick = { commit(sim.copy(inputs = defaultInputs)) }, tooltip = tr("sim.inputsReset"), size = 18.dp) {
+		CompactIconButton(onClick = { commit(sim.withInputs(defaultInputs)) }, tooltip = tr("sim.inputsReset"), size = 18.dp) {
 			IconReset(modifier = Modifier.size(11.dp), tint = colors.textMuted)
 		}
 	}
@@ -429,7 +434,19 @@ private fun SimulationEditor(
 					maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
 				Text(if (name == null) tr("sim.inputMissing") else input.parameter, style = caption, color = colors.textMuted,
 					maxLines = 1, overflow = TextOverflow.Ellipsis)
-				RemoveButton { commit(sim.copy(inputs = sim.inputs - input, inputRanges = sim.inputRanges - input.parameter)) }
+				RemoveButton { commit(sim.withInputs(sim.inputs - input)) }
+			}
+			// What the last bake read of it off the rig: how far it moves the body, or that it was left out for moving it too little.
+			val read = sim.bake?.inputs?.firstOrNull { it.parameter == input.parameter }
+			val kept = input.parameter in sim.forcedInputs
+			if (read != null || kept) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+				if (read != null) Text(tr(if (read.dropped) "sim.inputDropped" else "sim.inputMoves", String.format(Locale.US, "%.1f", read.motionPx)),
+					style = caption, color = if (read.dropped) colors.warning else colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+					modifier = Modifier.weight(1f))
+				else Spacer(Modifier.weight(1f))
+				if (kept || read?.dropped == true) CompactCheckbox(kept, { keep ->
+					commit(sim.copy(forcedInputs = if (keep) sim.forcedInputs + input.parameter else sim.forcedInputs - input.parameter))
+				}, label = tr("sim.inputKeep"))
 			}
 			puppet.parameters.firstOrNull { it.id.raw == input.parameter }?.let { parameter ->
 				TrainingRangeRow(parameter, sim.inputRanges[input.parameter]) { range ->
@@ -627,8 +644,11 @@ private fun BakeEditor(
 		bake == null -> Text(tr("sim.notBaked"), style = caption, color = colors.textMuted)
 		else -> {
 			if (bakeState == BakeState.STALE) Text(tr("sim.bakeStale"), style = caption, color = colors.warning)
+			// What a viewer sees on motion the fit never saw comes first; R² follows for comparison.
+			for (check in bake.visual) VisualCheckLine(tr(if (check.motion == io.github.psd2live.core.sim.SimBaker.HELD_OUT_VERTICAL) "sim.visualHeldOutVertical"
+				else "sim.visualHeldOut"), check.check)
 			Text(tr("sim.bakedQuality", String.format(Locale.US, "%.2f", bake.fit), String.format(Locale.US, "%.1f", bake.maxErrorPx)),
-				style = caption, color = if (bake.fit < 0.8f) colors.warning else colors.textMuted)
+				style = caption, color = if (bake.fit < 0.8f && bake.visual.isEmpty()) colors.warning else colors.textMuted)
 			if (bake.clipped > 0f || bake.jerk > 1.5f) Text(tr("sim.bakedMotion", (bake.peak * 100f).toInt(),
 				String.format(Locale.US, "%.1f", bake.clipped * 100f), String.format(Locale.US, "%.2f", bake.jerk)), style = caption, color = colors.warning)
 			remember(puppet, sim) { SimGenerator.issues(puppet, sim) }.forEach { Hint(it) }
@@ -672,6 +692,19 @@ private fun BakeEditor(
 	}
 	if (sim.blendShapes == true && !puppet.runtimeTarget.supports(RuntimeFeature.MeshWarpBlendShapes))
 		Text(tr("sim.blendShapesUnavailable"), style = caption, color = colors.textMuted)
+	FieldLabel(tr("sim.trainingClips"), tooltip = tr("sim.trainingClipsTip"))
+	val motions = motionChoices(state)
+	for ((motion, weight) in sim.trainingClips) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+		Text(motions[motion] ?: motion, style = caption, color = if (motion in motions) colors.textPrimary else colors.warning,
+			maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+		CompactDropdown((listOf(0.25f, 0.5f, 1f) + weight).distinct().sorted(), weight, { commit(sim.copy(trainingClips = sim.trainingClips + (motion to it))) },
+			Modifier.width(64.dp), itemLabel = { "×" + String.format(Locale.US, "%.2f", it).trimEnd('0').trimEnd('.') }, height = 22.dp)
+		RemoveButton { commit(sim.copy(trainingClips = sim.trainingClips - motion)) }
+	}
+	val trainable = motions.keys.filter { it !in sim.trainingClips }
+	if (trainable.isNotEmpty()) CompactDropdown(listOf<String?>(null) + trainable, null, { motion ->
+		if (motion != null) commit(sim.copy(trainingClips = sim.trainingClips + (motion to 0.5f)))
+	}, Modifier.fillMaxWidth(), itemLabel = { it?.let { motion -> motions[motion] ?: motion } ?: tr("sim.addTrainingClip") }, height = 22.dp)
 	FieldLabel(tr("sim.staticInputs"), tooltip = tr("sim.staticInputsTip"))
 	val statics = sim.staticInputs.orEmpty()
 	for (parameter in statics) RemovableRow(parameter) { commit(sim.copy(staticInputs = (statics - parameter).ifEmpty { null })) }
@@ -682,6 +715,67 @@ private fun BakeEditor(
 	if (bake != null) {
 		for (mode in bake.modes) Text(tr("sim.bakedMode", mode.axis.parameter, String.format(Locale.US, "%.1f", mode.amplitude)), style = caption, color = colors.textMuted)
 		if (bake.statics.isNotEmpty()) Text(tr("sim.bakedStatics", bake.statics.joinToString { it.parameter }), style = caption, color = colors.textMuted)
+	}
+}
+
+/**
+ * The model's motions that move a body, by name - the head's built-in ones, the skeleton's when it has one, then the
+ * user's own clips by ID - with the label each shows under.
+ */
+private fun motionChoices(state: PSD2LiveState): Map<String, String> =
+	(listOf("Idle", "Nod", "Shake") + if (state.rigEdits.skeleton != null) io.github.psd2live.core.SkeletonMotions.presets.map { it.name } else emptyList())
+		.associateWith { it } + state.rigEdits.motionClips.filter { it.enabled && it.builtin == null }.associate { it.id to it.name }
+
+/**
+ * One motion's check: how far the baked body swings against the simulated one, how late, how it settles and how
+ * much jerkier it is; warned when a viewer would see the difference.
+ */
+@Composable
+private fun VisualCheckLine(label: String, check: io.github.psd2live.core.sim.SimVisualCheck) {
+	val colors = LocalToolColors.current
+	fun ratio(value: Float) = if (value.isNaN()) "–" else String.format(Locale.US, "%.2f", value)
+	val off = check.amplitude !in 0.75f..1.3f || kotlin.math.abs(check.lagMs) > 80f || (!check.settle.isNaN() && check.settle !in 0.6f..1.6f) ||
+		check.jitter > 1.5f || !check.sameSign
+	Text(tr("sim.visualCheck", label, ratio(check.amplitude), check.lagMs.toInt(), ratio(check.settle), ratio(check.jitter)),
+		style = LocalToolTypography.current.caption.copy(fontSize = 9.5.sp), color = if (off) colors.warning else colors.textPrimary)
+}
+
+/**
+ * The bake against the reference simulation: how the preview canvas shows the running reference (in place of the
+ * export, beside it, or over it), a motion of the model's to play through both from rest, and the check of the
+ * bake on that motion.
+ */
+@Composable
+private fun CompareEditor(viewModel: PSD2LiveViewModel, state: PSD2LiveState, sim: RigSimEdit) {
+	val colors = LocalToolColors.current
+	val caption = LocalToolTypography.current.caption.copy(fontSize = 9.5.sp)
+	val live = state.simulationPreviewId == sim.id
+	val workspace = state.activeWorkspace
+	val view = workspace.canvases.firstOrNull { it.mode == CanvasMode.PREVIEW && it.id !in workspace.hiddenModules }
+		?.session(CanvasMode.PREVIEW)?.view?.simulationView ?: SimulationView.REFERENCE
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+		FieldLabel(tr("sim.compareView"), tooltip = tr("sim.compareViewTip"))
+		CompactDropdown(SimulationView.entries, view, { viewModel.setSimulationView(it) }, Modifier.weight(1f),
+			itemLabel = { tr("sim.view.${it.jsonName}") }, enabled = live, height = 22.dp)
+		CompactButton(tr("sim.sideBySide"), { viewModel.showSimulationSideBySide(sim.id) }, enabled = sim.bake != null, height = 22.dp)
+	}
+	if (!live) Text(tr("sim.compareNeedsReference"), style = caption, color = colors.textMuted)
+	val motions = motionChoices(state)
+	var motion by remember(sim.id) { mutableStateOf<String?>(null) }
+	val checks by viewModel.simulationChecks.collectAsState()
+	val check = checks[sim.id]
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+		CompactDropdown(listOf<String?>(null) + motions.keys, motion, { motion = it }, Modifier.weight(1f),
+			itemLabel = { it?.let { name -> motions[name] ?: name } ?: tr("sim.motionPick") }, height = 22.dp)
+		CompactButton(tr("sim.playMotion"), { motion?.let(viewModel::playSimulationMotion) }, enabled = live && motion != null, height = 22.dp)
+		CompactButton(tr("sim.checkMotion"), { motion?.let { viewModel.checkSimulation(sim.id, listOf(it)) } },
+			enabled = sim.bake != null && motion != null && check?.running != true, height = 22.dp)
+	}
+	when {
+		check == null -> Unit
+		check.running -> Text(tr("sim.checking"), style = caption, color = colors.textMuted)
+		check.error != null -> Hint(check.error)
+		else -> for (result in check.results) VisualCheckLine(motions[result.motion] ?: result.motion, result.check)
 	}
 }
 

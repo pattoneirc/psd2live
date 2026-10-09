@@ -2,6 +2,7 @@ package io.github.psd2live.core.sim
 
 import io.github.psd2live.core.PhysicsEngine
 import io.github.psd2live.core.PhysicsInput
+import io.github.psd2live.core.PhysicsKernel
 import io.github.psd2live.core.PhysicsNormalization
 import io.github.psd2live.core.PhysicsOutput
 import io.github.psd2live.core.PhysicsSegment
@@ -152,16 +153,20 @@ internal object SimPendulumFit {
             val count = chain.size - from + 1
             val probe = RigPhysicsEdit(id, name, inputs = links, outputs = List(count) { PhysicsOutput(PROBES[it], from + it, 1f) },
                 segments = chain, normalization = NORMALIZATION)
-            val engine = PhysicsEngine(listOf(probe), open, fps)
-            val pose = HashMap<String, Float>()
+            // The kernel plays as the engine does, each angle with one quick atan2: thousands of frames per candidate.
+            val kernel = PhysicsKernel(listOf(probe), open, fps, exact = false)
             val length = values.first().size
             val out = Array(count) { FloatArray(length) }
             val used = links.map { link -> inputs.indexOf(link.parameter) }
+            val slots = links.map { kernel.indexOf(it.parameter) }
+            val read = IntArray(count) { kernel.outputs.indexOf(PROBES[it]) }
+            val pose = kernel.defaults.copyOf()
+            val driven = FloatArray(kernel.outputs.size)
             for (f in 0 until length) {
-                if (f in restarts) engine.reset()
-                for ((i, link) in links.withIndex()) pose[link.parameter] = values[used[i]][f]
-                val driven = engine.step(pose, dt)
-                for (k in 0 until count) out[k][f] = driven[PROBES[k]] ?: 0f
+                if (f in restarts) kernel.reset()
+                for (i in links.indices) if (slots[i] >= 0) pose[slots[i]] = values[used[i]][f]
+                if (!kernel.step(pose, dt, driven)) continue
+                for (k in 0 until count) if (read[k] >= 0) out[k][f] = driven[read[k]]
             }
             return out
         }

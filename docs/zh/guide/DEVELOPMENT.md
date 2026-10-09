@@ -103,6 +103,10 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `ModelProfileTool.cmo3` | `.cmo3` 的参数、变形器树（网格轴与范围）、图形网格、分段运动剖面、身体参数下各网格的位移，身体 X × 身体 Y 的剪影，以及物理组 | `model-profile/<名称>.txt`、`.png`、`-physics.txt` |
 | `ModelProfileTool.sample` | 生成模型（无骨架和自动骨架）的分段运动剖面、身体图层与自动骨骼 | `model-profile/<示例>.txt` |
 | `SimBakeBenchmark` | 在 `tml` 后发上按几组设置烘焙模拟，在未参与拟合的动作上对比模拟与导出结果，见[模拟与烘焙](SIMULATION.md) | 标准输出 |
+| `SimBakeSuite` | 按模型预设生成后发、前发、服装等物理体（另加顶部 10% 固定的后发），用旧方法和逐输入方法烘焙，在没参与拟合的动作（类面捕跟随、歪头、内置动作、逐输入阶跃、转头、拖动、摇晃）上对比参考模拟与导出模型的视觉指标，见[模拟与烘焙](SIMULATION.md) | `build/tools/sim-bake/<样例>/`：`summary.md`、每个设置的 JSON、尖端轨迹图 |
+| `SimRootDofExperiment` | 检验物体是否只响应根部的平移与旋转：每个输入带动根部多少、额外改变多少形状，真实驱动与刚体驱动、不同幅度、同样根部运动的不同输入之间的差别 | `build/tools/sim-root-dof/<样例>.md` |
+| `SimBakeProfileTool` | `tml` 后发单线程与多线程烘焙各一次，按进度标记分段计时并对所有线程采样 | 标准输出 |
+| `PendulumKernelTool` | 摆锤数组内核（精确与快速模式）与 `PhysicsEngine` 每帧耗时及偏差 | 标准输出 |
 | `CanvasPerfTool` | 在 Xvfb 下打开真实窗口，对编辑画布依次做静止、悬停、滚轮缩放、中键平移、变形模式拖动脸部全部点，GPU 渲染与软件渲染各一轮，报告帧间隔、界面线程延迟与界面线程热点；需 `xvfb-run -a -s "-screen 0 1920x1080x24"` | `canvas-perf/report.txt`、各阶段截图与 `.jfr` |
 | `DragonBonesFidelityTool` | 把 `tml`、`ds`（无骨架和自动骨架）导出为 DragonBones，用 `tools/dragonbones-check`（官方 DragonBones 5.7 运行时核心，需要 node）播放：参数动画在每个关键帧上与编辑器求值器比较（误差不超过导出报告的容差），并测量片段误差 | `dragonbones-fidelity/report.txt` |
 | `RuntimeConformanceTool.generate` / `.physics` | Rust 运行时的参考数据：`generate` 为随机模型（Warp、旋转、嵌套、稀疏网格、混合形、Glue、通道、部件）、样例与 `PSD2LIVE_RUNTIME_PROJECT` 指定的工程在随机姿势下的编辑器求值结果（骨架样例另有最细采样的 `rig.fine.p2lrt`）；`physics` 为随机摆锤组和样例物理的逐帧轨迹。用 `runtime/` 中的 `p2lrt-conformance` 比较 | `runtime-conformance/<用例>/`、`runtime-physics/<用例>/` |
@@ -145,7 +149,11 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `PSD2LIVE_BIND_LEGS` | 设为 `1` 时把腿和鞋的网格绑定到第一根大腿骨 |
 | `PSD2LIVE_ZOOM` | 腿部特写的范围，`左,上,右,下`，按画布比例 |
 | `PSD2LIVE_VERBOSE` | 设为 `1` 时 `motions` 另外打印每条曲线 |
-| `PSD2LIVE_BAKE_CONFIGS` | `SimBakeBenchmark` 的设置，`模态数:键数,...`，默认 `2:5,2:7,1:5` |
+| `PSD2LIVE_BAKE_CONFIGS` | `SimBakeBenchmark` / `SimBakeSuite` 的设置，`模态数:键数,...`；前者默认 `2:5,2:7,1:5`，后者默认 `preset`（各部件自己的设置） |
+| `PSD2LIVE_SIM_PARTS` | `SimBakeSuite` / `SimRootDofExperiment` 的部件，逗号分隔，默认全部 |
+| `PSD2LIVE_BAKE_METHODS` | `SimBakeSuite` 的烘焙方法，`legacy,dof` |
+| `PSD2LIVE_SIM_INPUTS` | `SimBakeSuite` 只保留这些输入 |
+| `PSD2LIVE_SIM_CSV` | `SimBakeSuite` 把这些动作的尖端轨迹、模态值和输入写成 CSV |
 | `PSD2LIVE_RUNTIME_PROJECT` | `RuntimeConformanceTool.generate` 另外写出的工程（`.psd2live` 或 PSD），用例名为 `project` |
 | `PSD2LIVE_GEOMETRY_EDITS` | `SkeletonCommitTool.profile` 在骨架提交前做的几何提交次数，默认 24 |
 | `PSD2LIVE_RIG_MODES` | `CommitPerfTool.baseline` / `.rigStages` 的生成类提交只测 `staged` 或 `unstaged`，默认 `both` |

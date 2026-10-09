@@ -59,6 +59,9 @@ interface WorkspaceQueries : WorkspaceStatePort {
     /** Runs simulation [id] on the current rig and reports how it moves; read-only. */
     fun reportSimulation(id: String, hold: Float, release: Float, wind: Pair<Float, Float>?,
                          progress: (Float) -> Unit = noSamplingProgress, cancelled: () -> Boolean = noSamplingCancellation): JsonObject
+    /** Plays [motions] through baked simulation [id] and its reference and reports how the bake follows; read-only. */
+    fun compareSimulation(id: String, motions: List<String>, progress: (Float) -> Unit = noSamplingProgress,
+                          cancelled: () -> Boolean = noSamplingCancellation): JsonObject
     fun listSwings(): List<RigSwingEdit>
     /** Generated overrides of the captured model that did not apply as recorded, in journal order. */
     fun generatedOverrideIssues(): List<io.github.psd2live.core.GeneratedOverrideIssue>

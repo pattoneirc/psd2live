@@ -61,6 +61,39 @@ class SimBakedMode(val axis: SimBakedAxis, val amplitude: Float, val energy: Flo
 }
 
 /**
+ * What the bake read off the rig about one of a simulation's inputs: how far it moves the body ([motionPx], the
+ * farthest any vertex goes over its span), whether it only carries and turns it ([rigid]) or reshapes it too, and
+ * which group it baked in - [SIDEWAYS] or [VERTICAL] - or null when it was left out for moving the body too little.
+ * [forced] marks one kept in because the user asked.
+ */
+class SimInputCheck(val parameter: String, val motionPx: Float, val rigid: Boolean, val group: String?, val forced: Boolean = false) {
+    val dropped: Boolean get() = group == null
+
+    fun toJson() = buildJsonObject {
+        put("parameter", parameter); put("motion_px", Math.round(motionPx * 10.0) / 10.0); put("rigid", rigid)
+        if (group != null) put("group", group) else put("dropped", true)
+        if (forced) put("forced", true)
+    }
+
+    companion object {
+        const val SIDEWAYS = "sideways"
+        const val VERTICAL = "vertical"
+
+        fun fromJson(o: JsonObject) = SimInputCheck(o.getValue("parameter").jsonPrimitive.content, o["motion_px"]?.jsonPrimitive?.floatOrNull ?: 0f,
+            o["rigid"]?.jsonPrimitive?.booleanOrNull ?: true, o["group"]?.jsonPrimitive?.contentOrNull, o["forced"]?.jsonPrimitive?.booleanOrNull ?: false)
+    }
+}
+
+/** How the baked model follows the simulation over one motion ([SimVisualCheck]), by the motion's name. */
+class SimMotionCheck(val motion: String, val check: SimVisualCheck) {
+    fun toJson() = buildJsonObject { put("motion", motion); put("metrics", check.toJson()) }
+
+    companion object {
+        fun fromJson(o: JsonObject) = SimMotionCheck(o.getValue("motion").jsonPrimitive.content, SimVisualCheck.fromJson(o.getValue("metrics").jsonObject))
+    }
+}
+
+/**
  * A simulation reduced to what Cubism can play: static corrections on the parameters that push the body
  * ([statics]; a leg lifting the skirt), and dynamic [modes], each a parameter of keyforms driven by one
  * vertex of the fitted [physics] pendulum. Materialized when baked and only written back on rebuild, never
@@ -88,11 +121,21 @@ class SimBakeResult(
     val jerk: Float = 0f,
     /** Pendulums of their own for later modes that react apart from the swing; [physics] drives the rest. */
     val extraPhysics: List<RigPhysicsEdit> = emptyList(),
+    /** What the bake read of each input; empty for a bake from before it did. */
+    val inputs: List<SimInputCheck> = emptyList(),
+    /** How the baked model follows the simulation over the held-out motion, per group: what a viewer would see. */
+    val visual: List<SimMotionCheck> = emptyList(),
+    /** How the motion was made ([SimBaker.Method]), lower case. */
+    val method: String = "legacy",
 ) {
     /** Every pendulum the bake writes. */
     val pendulums: List<RigPhysicsEdit> get() = listOfNotNull(physics) + extraPhysics
 
     val parameters: List<String> get() = modes.map { it.axis.parameter }
+
+    /** This bake with its geometry remapped onto changed meshes, everything else kept. */
+    fun withGeometry(vertexCounts: Map<String, Int>, statics: List<SimBakedAxis>, modes: List<SimBakedMode>) =
+        SimBakeResult(fingerprint, vertexCounts, statics, modes, physics, fit, maxErrorPx, peak, clipped, jerk, extraPhysics, inputs, visual, method)
 
     fun toJson() = buildJsonObject {
         put("fingerprint", fingerprint)
@@ -103,6 +146,9 @@ class SimBakeResult(
         if (extraPhysics.isNotEmpty()) putJsonArray("extra_physics") { extraPhysics.forEach { add(it.toJson()) } }
         put("fit", fit); put("max_error_px", maxErrorPx)
         put("peak", peak); put("clipped", clipped); put("jerk", jerk)
+        if (inputs.isNotEmpty()) putJsonArray("inputs") { inputs.forEach { add(it.toJson()) } }
+        if (visual.isNotEmpty()) putJsonArray("visual") { visual.forEach { add(it.toJson()) } }
+        if (method != "legacy") put("method", method)
     }
 
     /** What the panel and MCP show: no arrays. */
@@ -117,6 +163,9 @@ class SimBakeResult(
         // All measured on held-out motion the fit never saw.
         put("fit_r2", fit); put("error_p95_px", maxErrorPx)
         put("parameter_peak", peak); put("clipped_frames", clipped); put("jerk_ratio", jerk)
+        if (inputs.isNotEmpty()) putJsonArray("inputs") { inputs.forEach { add(it.toJson()) } }
+        if (visual.isNotEmpty()) putJsonArray("visual") { visual.forEach { add(it.toJson()) } }
+        put("method", method)
     }
 
     private val canonical: String by lazy { toJson().toString() }
@@ -139,6 +188,9 @@ class SimBakeResult(
             o["clipped"]?.jsonPrimitive?.floatOrNull ?: 0f,
             o["jerk"]?.jsonPrimitive?.floatOrNull ?: 0f,
             o["extra_physics"]?.jsonArray?.map { RigPhysicsEdit.fromJson(it.jsonObject) } ?: emptyList(),
+            o["inputs"]?.jsonArray?.map { SimInputCheck.fromJson(it.jsonObject) } ?: emptyList(),
+            o["visual"]?.jsonArray?.map { SimMotionCheck.fromJson(it.jsonObject) } ?: emptyList(),
+            o["method"]?.jsonPrimitive?.contentOrNull ?: "legacy",
         )
     }
 }
