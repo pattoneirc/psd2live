@@ -267,7 +267,7 @@ public class SoftwareRasterizer(
 		val s = FloatArray(4)
 		val mr = color.multiply.red; val mg = color.multiply.green; val mb = color.multiply.blue
 		val sr = color.screen.red; val sg = color.screen.green; val sb = color.screen.blue
-		triangles(mesh, pose, view) { pixel, u, v ->
+		triangles(mesh, pose, view, cull = mesh.culling) { pixel, u, v ->
 			sampleTexture(texture, u, v, s)
 			var a = s[3]
 			if (a <= 0f) return@triangles
@@ -304,8 +304,11 @@ public class SoftwareRasterizer(
 		}
 	}
 
-	/** Calls [fragment] for every pixel center inside [mesh]'s triangles with its texture coordinates. */
-	private inline fun triangles(mesh: Mesh, pose: PoseGeometry, view: View, fragment: (Int, Float, Float) -> Unit) {
+	/**
+	 * Calls [fragment] for every pixel center inside [mesh]'s triangles with its texture coordinates; with [cull], only
+	 * for Cubism's front faces, those turning counter-clockwise as the picture shows them (negative area, y down).
+	 */
+	private inline fun triangles(mesh: Mesh, pose: PoseGeometry, view: View, cull: Boolean = false, fragment: (Int, Float, Float) -> Unit) {
 		val g = mesh.geometry ?: return
 		val p = pose.positions[mesh.id] ?: return
 		val uv = g.uvs.shared()
@@ -316,7 +319,7 @@ public class SoftwareRasterizer(
 			val bx = view.x(p[ib * 2]); val by = view.y(p[ib * 2 + 1])
 			val cx = view.x(p[ic * 2]); val cy = view.y(p[ic * 2 + 1])
 			val area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
-			if (abs(area) < 1e-12f) continue
+			if (abs(area) < 1e-12f || (cull && area > 0f)) continue
 			val x0 = max(view.x0, floor(min(ax, min(bx, cx)) - 0.5f).toInt()); val x1 = min(view.x1, ceil(max(ax, max(bx, cx)) - 0.5f).toInt())
 			val y0 = max(view.y0, floor(min(ay, min(by, cy)) - 0.5f).toInt()); val y1 = min(view.y1, ceil(max(ay, max(by, cy)) - 0.5f).toInt())
 			if (x0 > x1 || y0 > y1) continue

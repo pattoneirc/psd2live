@@ -61,6 +61,17 @@ class SoftwareRasterizerTest {
 		assertEquals(0, inverted[5 * 10 + 2]); near(0xffff0000.toInt(), inverted[5 * 10 + 7])
 	}
 
+	@Test fun cullingDrawsOnlyTheFacesTurningCounterClockwiseOnThePicture() {
+		val pages = listOf(page(0xffff0000.toInt(), 0xff0000ff.toInt()))
+		// The quad's triangles turn clockwise as the picture shows them (positive area, y down): back faces.
+		val back = quad("q", 0.25f, 0).copy(culling = true)
+		assertEquals(0, render(listOf(back), pages)[5 * 10 + 5])
+		val front = back.copy(geometry = back.geometry!!.copy(indices = Ints.values(0, 2, 1, 1, 2, 3)))
+		near(0xffff0000.toInt(), render(listOf(front), pages)[5 * 10 + 5])
+		// Without culling both draw.
+		near(0xffff0000.toInt(), render(listOf(back.copy(culling = false)), pages)[5 * 10 + 5])
+	}
+
 	@Test fun blendModesCombineWithWhatIsBelow() {
 		val pages = listOf(page(0xff808080.toInt(), 0xff4080c0.toInt()))
 		fun over(mode: ColorBlend) = render(listOf(quad("under", 0.25f, 0, drawOrder = 100f), quad("top", 0.75f, 0, blend = mode)), pages)[55]

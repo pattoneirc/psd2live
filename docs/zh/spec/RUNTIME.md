@@ -100,12 +100,11 @@ ABI 版本：头文件的 `P2L_ABI_VERSION_MAJOR` / `P2L_ABI_VERSION_MINOR` 与�
 ## 尚未完成
 
 - 网格渲染（遮罩、混合模式）由宿主完成，运行时只提供几何与属性。
-- 隔离组的分层合成与 over 以外的透明度合成模式：接口已提供所需数据，网页播放器、Godot 节点与编辑器预览尚按普通绘制。
 - Godot 节点中反相遮罩按无遮罩绘制（Godot 的画布组无法移除覆盖）。
 
 ## 网页播放器
 
-导出目标 `web` 写出可直接部署的文件夹：`index.html`、`p2l.js`（ES 模块 `P2LPlayer`）、`p2l_runtime.wasm` 与模型。播放器用 WebGL 绘制：遮罩经模板缓冲（按纹理 alpha 0.5 裁剪，支持反相），叠加与乘算用混合函数，乘算/屏幕色在着色器中计算；页面提供动作与表情选择、口型滑块，视线跟随指针，点击显示所在的点击区域；文件带有高级模式数据时，页面提供开关。WebAssembly 构建作为资源随仓库提交，修改运行时后用 `./gradlew :targets:web:updateWasm` 刷新（需要 `rustup target add wasm32-unknown-unknown`）；单元测试核对播放器调用的每个函数都由该构建导出。tml 样例在 Edge（无界面）中显示正确。
+导出目标 `web` 写出可直接部署的文件夹：`index.html`、`p2l.js`（ES 模块 `P2LPlayer`）、`p2l_runtime.wasm` 与模型。播放器用 WebGL 绘制，按头文件的合成规则画出全部颜色与透明度混合组合和隔离组：普通（over）与 Cubism 的叠加、乘算用混合函数，其余组合先把网格包围盒内的下层复制到纹理、在着色器中合成；隔离组按 `p2l_render_commands` 画入图层，闭合时按组的模式、不透明度、乘算/屏幕色与遮罩合成；遮罩经模板缓冲（按纹理 alpha 0.5 裁剪，支持反相）；开启剔除的网格只画正面。`WebPlayerCheckTool`（`PSD2LIVE_TOOLS=1`）生成覆盖 90 种组合与 16 种隔离组的模型和逐像素参考图，Edge（无界面）中与参考相差至多 1/255；页面提供动作与表情选择、口型滑块，视线跟随指针，点击显示所在的点击区域；文件带有高级模式数据时，页面提供开关。WebAssembly 构建作为资源随仓库提交，修改运行时后用 `./gradlew :targets:web:updateWasm` 刷新（需要 `rustup target add wasm32-unknown-unknown`）；单元测试核对播放器调用的每个函数都由该构建导出。tml 样例在 Edge（无界面）中显示正确。
 
 ## Godot
 
