@@ -88,6 +88,7 @@ class SimScene private constructor(
         s.goalOffsetX.fill(0f); s.goalOffsetY.fill(0f)
         val calm = s.damping.copyOf()
         var residual = 0f
+        var lastEnergy = 0.0
         try {
             for (i in 0 until s.count) s.damping[i] = maxOf(calm[i], 8f)
             repeat(passes) { pass ->
@@ -101,12 +102,27 @@ class SimScene private constructor(
                     }
                     progress((pass.toLong() * frames + frame + 1).toFloat() / (passes.toLong() * frames).coerceAtLeast(1))
                 }
+                // A pass corrects only part of what is left (the body has not quite settled), the same part each
+                // time, so what is left shrinks geometrically: the step takes the whole series at that ratio.
+                var energy = 0.0
+                for (i in 0 until s.count) {
+                    if (!solver.goalCompliance[i].isFinite()) continue
+                    val dx = (rest[i * 2] - s.x[i]).toDouble(); val dy = (rest[i * 2 + 1] - s.y[i]).toDouble()
+                    energy += dx * dx + dy * dy
+                }
+                // The ratio is read off two plain passes in a row, and only while what is left is more than the body's
+                // own unrest, which no step removes.
+                var farthest = 0f
+                for (i in 0 until s.count) if (solver.goalCompliance[i].isFinite()) farthest = maxOf(farthest, hypot(rest[i * 2] - s.x[i], rest[i * 2 + 1] - s.y[i]))
+                val ratio = if (lastEnergy > 0.0) kotlin.math.sqrt(energy / lastEnergy) else 0.0
+                val gain = if (ratio in 0.05..MAX_RATIO && farthest > CALIBRATION_NOISE_PX) minOf(MAX_GAIN, 1.0 / (1.0 - ratio)).toFloat() else 1f
+                lastEnergy = if (gain == 1f) energy else 0.0
                 residual = 0f
                 for (i in 0 until s.count) {
                     if (!solver.goalCompliance[i].isFinite()) continue
                     val dx = rest[i * 2] - s.x[i]
                     val dy = rest[i * 2 + 1] - s.y[i]
-                    s.goalOffsetX[i] += dx; s.goalOffsetY[i] += dy
+                    s.goalOffsetX[i] += dx * gain; s.goalOffsetY[i] += dy * gain
                     residual = maxOf(residual, hypot(dx, dy))
                 }
             }
@@ -181,6 +197,12 @@ class SimScene private constructor(
     companion object {
         /** Pin weights at or above this hold the particle outright, and root the long-range limits. */
         private const val ROOT_PIN = 0.5f
+        /** Past this ratio between passes the calibration is not shrinking steadily and takes its plain step. */
+        private const val MAX_RATIO = 0.95
+        /** The most one calibration step is stretched by. */
+        private const val MAX_GAIN = 4.0
+        /** Below this (px) what calibration leaves is the body's own unrest, not worth extrapolating. */
+        private const val CALIBRATION_NOISE_PX = 1f
         /** The mesh scale the material values are tuned at: the default mesh spacing, and the area one vertex carries there. */
         internal const val REFERENCE_LENGTH = 40f
         internal const val REFERENCE_AREA = REFERENCE_LENGTH * REFERENCE_LENGTH

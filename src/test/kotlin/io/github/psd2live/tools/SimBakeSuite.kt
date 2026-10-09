@@ -38,6 +38,9 @@ import kotlin.test.Test
  * the settings as modes:keys,... ("preset" keeps each part's own), PSD2LIVE_BAKE_METHODS the bake methods (legacy,dof).
  */
 class SimBakeSuite {
+	/** Below this tip travel (px) in the simulation a motion counts as not moving the body. */
+	private val SEEN_PX = 10f
+
 	private class Played(val motion: String, val metrics: SimVisualCheck, val simulated: FloatArray, val baked: FloatArray, val seconds: Float)
 
 	@Test fun run() {
@@ -140,6 +143,12 @@ class SimBakeSuite {
 		val keys = played.first().metrics.toMap().keys
 		report.append("| motion | ${keys.joinToString(" | ")} |\n|---|${keys.joinToString("") { "---|" }}\n")
 		for (run in played) report.append("| ${run.motion} | ${run.metrics.toMap().values.joinToString(" | ") { format(it) }} |\n")
+		// Over the motions the simulation visibly moves the body in: the others only show it settling from rest.
+		val seen = played.filter { it.metrics.motionPx >= SEEN_PX }
+		if (seen.isNotEmpty()) report.append("\nover the %d motions moving it %.0f px or more: direction right in %d, mean R² %.2f, swing ×%.2f off (median), static %.1f px\n".format(
+			seen.size, SEEN_PX, seen.count { it.metrics.direction >= 0.9f && it.metrics.sameSign }, seen.map { it.metrics.r2.coerceAtLeast(-1f) }.average(),
+			kotlin.math.exp(-seen.map { kotlin.math.abs(kotlin.math.ln(it.metrics.amplitude.coerceAtLeast(1e-3f).toDouble())) }.sorted().let { (it[(it.size - 1) / 2] + it[it.size / 2]) / 2 }),
+			seen.mapNotNull { it.metrics.staticPx.takeIf { s -> !s.isNaN() } }.average()))
 		report.append("\n")
 		File(out, "$label.json").writeText(buildJsonObject {
 			put("part", p.name); put("modes", p.edit.modes); put("keys", p.edit.keys); put("bake_seconds", seconds)
