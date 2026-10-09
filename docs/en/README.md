@@ -35,7 +35,7 @@ PSD2Live is a complete 2D character rigging toolchain: it generates meshes, defo
 | **Experienced and tired of repetitive work** | Meshes, deformer chains, facial parameters and physics in one click, then refine on the canvas; hand edits are stored as replayable records and survive regeneration |
 | **Looking for an open-source alternative** | Editor, engine and project format are all open source; edit, preview and export `.moc3` / `.cmo3` without the official SDK |
 | **Held back by what Cubism offers** | Skeletons and IK, 2D cloth and hair simulation and automatic armatures, tools Cubism does not have, baked into native structures on export |
-| **Putting characters into your own program** | The open-source Rust runtime p2lrt with a C interface, a web player and a Godot node; also video, frame sequences, and Spine and glTF (experimental) |
+| **Putting characters into your own program** | The open-source Rust runtime p2lrt plugs into C / C++, .NET, Android, the web and Godot, with its own software renderer; also video, frame sequences, and Spine and glTF (experimental) |
 
 ## Core capabilities
 
@@ -47,7 +47,7 @@ PSD2Live is a complete 2D character rigging toolchain: it generates meshes, defo
 | **Animation and physics** | Timeline, keyframes and curves; visual pendulum editing evaluated to match the Cubism Native Framework |
 | **Textures** | Atlas layout, per-layer texture density, optional 2× / 4× upscaling |
 | **Compile and export** | Every target compiles from one neutral rig IR, each export with a loss report |
-| **p2lrt runtime** | Open-source Rust runtime: C interface, WebAssembly web player, Godot 4 node; matches the editor's evaluation pose for pose |
+| **p2lrt runtime** | Open-source Rust runtime: C ABI, software renderer, WebAssembly web player, Godot 4 node, .NET and Android builds; matches the editor's evaluation pose for pose |
 | **Agents** | Local MCP server with more than 180 public operations, sharing commands and history with the editor; atomic batches and dry runs |
 
 ## Results
@@ -114,7 +114,7 @@ The Rust runtime replays the editor's reference poses and trajectories; geometry
 
 ![Runtime against the editor evaluator: maximum vertex error of 84 rigs on a log scale, all under the 0.02 px limit or within their own sensitivity; physics 16/16 and simulation 12/12 pass](../imgs/readme/runtime-conformance.webp)
 
-![Blend mode conformance: 18 color blend modes, multiply / screen colors, masks and inverted masks, an isolated group and 5 alpha blend modes, software rasterizer reference against the web player and their difference](../imgs/readme/runtime-blend.webp)
+![Blend modes across hosts: 18 color blend modes, multiply / screen colors, masks and inverted masks, an isolated group and 5 alpha blend modes, rendered by the reference rasterizer, the software renderer, the web player and the Godot node, with each difference from the reference](../imgs/readme/runtime-blend.webp)
 
 ## Relationship to Cubism
 
@@ -175,7 +175,7 @@ The full naming table is in [PSD preparation](spec/PSD_LAYER_SPEC.md). Unrecogni
 | **Cubism Editor** | A `.cmo3` model project to check and refine in the official editor |
 | **Cubism runtime** | `.model3.json` + `.moc3` with textures, physics, motions and more; load from `.model3.json` |
 | **VTube Studio** | The `.moc3` bundle plus `.vtube.json`, face tracking mapped to standard parameters and a hotkey per motion |
-| **Your program / the web / Godot** | A `.p2lrt` rig, or a WebGL player page that opens in a browser |
+| **Your program / engine / the web** | A `.p2lrt` rig for C / C++, .NET, Unity, Godot and Android, or a WebGL player page that opens in a browser |
 | **Images and video** | PNG sequences, sprite sheets, GIF; APNG, animated WebP, MP4, WebM, ProRes 4444 (through ffmpeg) |
 | **PSD** | A layered PSD at the current pose, or the source PSD with generated layers |
 | **Experimental** | Spine 4.2, DragonBones 5.5, glTF 2.0, from the command line only |
@@ -194,11 +194,13 @@ The built-in renderer needs no official SDK. [Cubism native preview](guide/CUBIS
 | Item | Description |
 | --- | --- |
 | **Core evaluation** | Cubism-equivalent Warp / Rotation deformation, blend shapes, Glue, parts and draw order, opacity and color channels; matches the editor's evaluation pose for pose |
-| **Physics and motions** | Pendulum physics with physics3.json semantics; layered motions with priorities and events, fades as in Cubism; several expressions at once |
-| **Procedural behavior** | Blinking, breathing, gaze and lip sync, with host parameters (such as face tracking) layered over motions |
+| **Physics and motions** | Pendulum physics with physics3.json semantics, wind and stabilization; up to 16 motion layers by priority, with events and part / rig opacity curves, fades as in Cubism; several expressions at once |
+| **Procedural behavior** | Blinking, breathing, gaze and lip sync (audio-driven if wanted); a host layer adds outside parameters (such as face tracking) over motions |
 | **Advanced extensions** | Optional: runtime joint skinning, exact links, live XPBD cloth and hair with collision; when off, results are bit-identical to core evaluation |
+| **Rendering** | Draw by the header's drawing rules, or let the built-in software renderer `p2l_render` draw into an RGBA image: every color and alpha blend mode, masks, isolated groups and culling, as the editor's reference rasterizer; per-mesh change flags let the host upload only what changed |
+| **Host integration** | One read-only model shared by many instances; staged updates, part opacity and color overrides, hit areas, a log and a host allocator; an internal error fails that handle without aborting the host |
 | **File format** | `.p2lrt` 2.0: a chunked container whose core chunks map one to one to moc3, with optional extension chunks; deflate / zstd compression, byte-identical output from the same IR |
-| **Integration** | C interface ([`p2l_runtime.h`](../../runtime/include/p2l_runtime.h)), WebAssembly web player, Godot 4 node `P2LCharacter` ([`runtime/godot/`](../../runtime/godot/)) |
+| **Integration** | C / C++ header [`p2l_runtime.h`](../../runtime/include/p2l_runtime.h) with a dynamic or static library (usable from Unreal), .NET P/Invoke bindings and a Unity component example, Android (arm64-v8a, armeabi-v7a, x86_64), WebAssembly web player, Godot 4 node `P2LCharacter` ([`runtime/godot/`](../../runtime/godot/)); see [other languages and platforms](../../runtime/bindings/README.md) |
 
 <table>
 <tr>
