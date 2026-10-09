@@ -6,8 +6,9 @@ import io.github.psd2live.targets.runtime.P2lrt
 
 /**
  * A folder that plays the rig in a browser: `index.html`, the player script `p2l.js`, the PSD2Live runtime
- * as WebAssembly and the compiled `.p2lrt`. Served over http, it draws with WebGL, plays clips, blinks,
- * breathes, follows the pointer and opens the mouth with a slider. Setting `title` names the page.
+ * as WebAssembly and the compiled `.p2lrt`. Served over http, it draws with WebGL (every color and alpha blend
+ * mode, masks and isolated groups), plays clips, blinks, breathes, follows the pointer and opens the mouth with a
+ * slider. Setting `title` names the page.
  */
 public object WebTarget : ExportTarget {
 	override val id: String = "web"
@@ -15,7 +16,7 @@ public object WebTarget : ExportTarget {
 	override val description: String = "Web player (HTML, WebAssembly runtime, WebGL)"
 	override val capabilities: CapabilityProfile = CapabilityProfile(
 		warpLattice = true, parameterGrid = 8, blendShapes = true, timeline = true, physics = PhysicsSupport.PARAMETER_PENDULUM,
-		blendModes = setOf(ColorBlend.NORMAL, ColorBlend.ADD_PREMULTIPLIED, ColorBlend.MULTIPLY_PREMULTIPLIED, ColorBlend.ADD, ColorBlend.ADD_GLOW, ColorBlend.MULTIPLY),
+		blendModes = ColorBlend.entries.toSet(),
 		masks = MaskSupport.TEXTURE_ALPHA, keyedDrawOrder = true, glue = true,
 	)
 

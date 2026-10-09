@@ -27,8 +27,8 @@ class WebTargetTest {
 		// A WebAssembly module, and the rig the runtime reads.
 		assertContentEquals(byteArrayOf(0, 'a'.code.toByte(), 's'.code.toByte(), 'm'.code.toByte()), files.getValue("p2l_runtime.wasm").copyOf(4))
 		assertContentEquals(P2lrt.write(rig), files.getValue("hero.p2lrt"))
-		// Overlay is one of the blend modes the player draws as normal.
-		assertEquals(Feature.BLEND_MODE, report.losses.single().feature)
+		// The player draws every blend mode, overlay included.
+		assertTrue(report.losses.none { it.feature == Feature.BLEND_MODE })
 	}
 
 	@Test fun thePlayerUsesEveryRuntimeFunctionItCalls() {
