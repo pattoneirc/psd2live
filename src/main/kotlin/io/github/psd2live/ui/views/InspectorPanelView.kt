@@ -464,7 +464,7 @@ private fun ArtMeshInspector(
                 selectedItem = selectedItem,
                 onItemSelected = { selected ->
                     val nextDeformer = selected.first.takeIf { it.isNotEmpty() }?.let(::DeformerId)
-                    viewModel.applyRigStructure("bind", "mesh", drawable.id.raw, buildJsonObject { put("space", JsonPrimitive("local")); put("parent_id", nextDeformer?.raw?.let(::JsonPrimitive) ?: JsonNull) })
+                    viewModel.applyRigStructure("bind", "mesh", drawable.id.raw, buildJsonObject { put("space", JsonPrimitive("canvas")); put("parent_id", nextDeformer?.raw?.let(::JsonPrimitive) ?: JsonNull) })
                 },
                 itemLabel = { it.second },
                 modifier = Modifier.fillMaxWidth(),

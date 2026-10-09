@@ -73,7 +73,7 @@
 | `rig_deform` | `request` 内 `state`、`changes` | 在明确参数键上编辑 Mesh / Warp 连续形状 |
 | `keyform_apply` | `request` 内 `state`、`changes` | `op: seed/copy/set/delete`，编辑关键形集合、标量 / 颜色通道与旋转形状 |
 | `rig_create_warp` | `name`、`targets`；可选 `id`、`rows/columns`、`fit_local` | 后台创建共用父 Warp 的 Mesh 的独立 Warp，也支持原子批量；终态返回 `target` |
-| `object_edit_appearance` | `request` 内 `state`、`edits` | 名称、显隐、结构等有序编辑 |
+| `object_edit_appearance` | `request` 内 `state`、`edits` | 名称、显隐、结构等有序编辑；网格 `bind` 的 `space=local` 保留局部坐标与关键形（继承的运动与位置随新父级改变），`space=canvas` 把静止网格、关键形与混合形经新父级换算，使网格在默认姿态下留在画布原位（层级树拖放与检查器改父级即用此项）；变形器 `move` 只接受 `space=local` |
 | `rig_edit_structure` | `request` 内 `state`、`edits` | 静态对象属性、变形器删除与 Part 归属、参数文件夹和 XY 关联 |
 | `canvas_warp / canvas_rotation / canvas_glue / canvas_topology` | `request` | `warp/rotation/glue/topology`。`glue` 必须同时给出两个不同的画元 `mesh_a` 与 `mesh_b` |
 | `view_render_model / view_render_layer / view_render_context / view_render_poses / view_check_coverage / view_compare_history / view_sample_motion` | `request` | `model/layer/context/poses/coverage/compare/motion`；动作采样返回只读任务句柄，终态包含采样拼图与参数范围 |

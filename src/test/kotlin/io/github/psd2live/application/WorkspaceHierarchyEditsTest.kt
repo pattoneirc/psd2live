@@ -42,10 +42,15 @@ class WorkspaceHierarchyEditsTest {
         val mesh = before.model.rig.puppet.drawables.single().id.raw
         val overrides = before.document.parentOverrides
         assertEquals("child", before.model.rig.puppet.drawables.single().parentDeformerId?.raw)
-        assertEquals(buildJsonObject { put("action", "bind"); put("kind", "mesh"); put("id", mesh); put("parent_id", "parent"); put("space", "local") },
+        assertEquals(buildJsonObject { put("action", "bind"); put("kind", "mesh"); put("id", mesh); put("parent_id", "parent"); put("space", "canvas") },
             WorkspaceHierarchyEdits.reparent(before.model.rig.puppet, mesh, "parent"))
         val bound = assertNotNull(reparent(runtime, mesh, "parent")).capture
         assertEquals("parent", bound.model.rig.puppet.drawables.single().parentDeformerId?.raw)
+        // The dragged mesh keeps its place on the canvas, carried into the new parent's lattice.
+        val evaluator = org.umamo.render.eval.CpuDeformationEvaluator()
+        val shown = evaluator.evaluate(before.model.rig.puppet, emptyMap()).worldPositions.values.single()
+        val kept = evaluator.evaluate(bound.model.rig.puppet, emptyMap()).worldPositions.values.single()
+        assertTrue(shown.indices.all { kotlin.math.abs(shown[it] - kept[it]) < 0.05f }, "${kept.take(4)} against ${shown.take(4)}")
         val moved = assertNotNull(reparent(runtime, "child", null)).capture
         assertNull(moved.model.rig.puppet.deformers.single { it.id.raw == "child" }.parent)
         assertEquals("move", moved.document.rigEdits.authoringJournal.last().getValue("edits").jsonArray.single()

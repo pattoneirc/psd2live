@@ -1,6 +1,7 @@
 package io.github.psd2live.core
 
 import kotlinx.serialization.json.*
+import kotlin.math.abs
 import org.umamo.edit.withParameterCreated
 import org.umamo.edit.withParameterDeleted
 import org.umamo.edit.withParameterRange
@@ -183,10 +184,14 @@ internal object RigStructureEdits {
             }
             "bind" -> {
                 require(kind == "mesh") { "bind changes a mesh's deformer; use move for deformers" }
-                require(edit["space"]?.jsonPrimitive?.content == "local") { "Specify space=local: retains local geometry and keys, changes inherited appearance" }
+                val space = edit["space"]?.jsonPrimitive?.contentOrNull
+                require(space == "local" || space == "canvas") {
+                    "Specify space=local (retains local geometry and keys, changes inherited appearance) or space=canvas (keeps the mesh where it shows at the default pose)"
+                }
                 val p = parent()?.let(::DeformerId)
                 require(p == null || model.deformers.any { it.id == p }) { "Parent deformer not found" }
-                model.copy(drawables = model.drawables.map { if(it.id == mesh!!.id) it.copy(parentDeformerId = p) else it }).withDerivedRenderRoot()
+                val rebound = model.copy(drawables = model.drawables.map { if(it.id == mesh!!.id) it.copy(parentDeformerId = p) else it }).withDerivedRenderRoot()
+                if (space == "canvas" && mesh!!.parentDeformerId != p) carriedToParent(model, rebound, mesh.id) else rebound
             }
             else -> {
                 val p = parent()
@@ -217,6 +222,45 @@ internal object RigStructureEdits {
                 }
             }
         }
+    }
+
+    /**
+     * [after] - [before] with mesh [id] hung under another deformer - with the mesh's rest positions, keyforms and
+     * blend shapes carried into the new parent's space, so it shows where it did at the default pose. Each shape is
+     * moved through the old parent onto the canvas and back through the new one; a keyform keeps the canvas offset it
+     * had from the rest shape there. A parent that cannot reproduce the rest shape (a hidden ancestor, a folded
+     * lattice) refuses the bind rather than place the mesh somewhere else.
+     */
+    private fun carriedToParent(before: PuppetModel, after: PuppetModel, id: DrawableId): PuppetModel {
+        val drawable = after.drawables.single { it.id == id }
+        val mesh = requireNotNull(drawable.mesh) { "Mesh has no geometry: ${id.raw}" }
+        val from = requireNotNull(org.umamo.render.eval.drawableSpaceMapping(before, emptyMap(), id)) { "The current parent cannot place the mesh" }
+        val to = requireNotNull(org.umamo.render.eval.drawableSpaceMapping(after, emptyMap(), id)) { "The new parent cannot place the mesh" }
+        val all = (0 until mesh.vertexCount).toSet()
+        fun carried(local: FloatArray, seed: FloatArray): FloatArray {
+            val world = from.localToWorld(local)
+            return to.worldToLocalLinearized(world, seed, world, all).also { result ->
+                require(result.all(Float::isFinite)) { "The new parent cannot place the mesh" }
+            }
+        }
+        val rest = carried(mesh.positions, FloatArray(mesh.positions.size) { 0.5f })
+        val reached = to.localToWorld(rest); val shown = from.localToWorld(mesh.positions)
+        require(reached.indices.all { abs(reached[it] - shown[it]) < 0.05f }) { "The new parent cannot hold the mesh where it shows" }
+        fun delta(deltas: FloatArray): FloatArray {
+            if (deltas.all { it == 0f }) return FloatArray(deltas.size)
+            val moved = carried(FloatArray(deltas.size) { mesh.positions[it] + deltas[it] }, rest)
+            return FloatArray(deltas.size) { moved[it] - rest[it] }
+        }
+        val carriedDrawable = drawable.copy(
+            mesh = DrawableMesh(rest, mesh.uvs, mesh.indices),
+            geometryGrid = drawable.geometryGrid?.let { grid ->
+                KeyformGrid(grid.axes, grid.cells.map { cell -> KeyformCell(cell.coordinate, MeshDeltaForm(delta(cell.form.positionDeltas))) })
+            },
+            blendShapes = drawable.blendShapes.map { binding -> binding.copy(forms = binding.forms.map { form ->
+                form?.let { MeshForm(delta(it.positionDeltas), it.drawOrder, it.opacity, it.multiplyColor, it.screenColor) }
+            }) },
+        )
+        return after.copy(drawables = after.drawables.map { if (it.id == id) carriedDrawable else it })
     }
 
     /**

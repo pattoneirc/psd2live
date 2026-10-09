@@ -5,7 +5,8 @@ import org.umamo.runtime.model.Deformer
 import org.umamo.runtime.model.PuppetModel
 
 /**
- * The hierarchy drag as one ordered structure journal edit. Old v1 parentOverrides stay in the document
+ * The hierarchy drag as one ordered structure journal edit: a mesh binds with space=canvas and keeps its place, a
+ * deformer moves with space=local. Old v1 parentOverrides stay in the document
  * and keep applying while the rig is built, before any journal edit replays; new drags never write them.
  */
 object WorkspaceHierarchyEdits {
@@ -17,10 +18,12 @@ object WorkspaceHierarchyEdits {
         if (deformer == null && drawable == null) throw IllegalArgumentException("Object not found: $childId")
         if (current == parentId) return null
         return buildJsonObject {
-            // A mesh binds to another deformer; a deformer moves within the deformer tree.
+            // A mesh binds to another deformer; a deformer moves within the deformer tree. A dragged mesh stays
+            // where it shows: its local positions mean pixels under the root or a rotation and lattice fractions
+            // under a warp, so keeping them would throw it off the canvas or shrink it to a speck.
             put("action", if (deformer != null) "move" else "bind")
             put("kind", when (deformer) { null -> "mesh"; is Deformer.Warp -> "warp"; else -> "rotation" })
-            put("id", childId); put("parent_id", parentId); put("space", "local")
+            put("id", childId); put("parent_id", parentId); put("space", if (deformer != null) "local" else "canvas")
         }
     }
 
