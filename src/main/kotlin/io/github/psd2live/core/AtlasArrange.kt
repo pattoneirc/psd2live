@@ -2,6 +2,7 @@ package io.github.psd2live.core
 
 import io.github.psd2live.project.ArrangedTile
 import io.github.psd2live.project.TextureFootprint
+import org.umamo.format.art.LayerRaster
 import kotlin.math.ceil
 import kotlin.math.floor
 
@@ -414,6 +415,34 @@ internal object AtlasArrange {
 			}
 		}
 		return if (bits.isEmpty) null else TextureFootprint(cell, columns, rows, bits)
+	}
+
+	/** Alpha from which a pixel is art a mesh covers: the mesh tracer's default threshold. */
+	const val COVER_ALPHA = 8
+
+	/**
+	 * [footprint] as it holds for [raster] now: null when its cell grid no longer fits the raster (the raster was
+	 * resized or re-cropped since, so its cells name other pixels), else with every cell that holds art added. A
+	 * footprint comes from the meshes, which cover the art; art outside it was painted later and its mesh grows
+	 * with it, so the tile must claim those cells before it writes them or lets a neighbour nest there.
+	 */
+	fun covering(footprint: TextureFootprint, raster: LayerRaster): TextureFootprint? {
+		val cell = footprint.cell; val columns = footprint.columns
+		if (columns != ceilDiv(raster.width, cell) || footprint.rows != ceilDiv(raster.height, cell)) return null
+		val rgba = raster.rgba
+		var grown: java.util.BitSet? = null
+		for (y in 0 until raster.height) {
+			val row = y / cell * columns
+			var x = 0
+			while (x < raster.width) {
+				val index = row + x / cell
+				val owned = footprint.bits[index] || grown?.get(index) == true
+				if (!owned && (rgba[(y * raster.width + x) * 4 + 3].toInt() and 0xff) < COVER_ALPHA) { x++; continue }
+				if (!owned) (grown ?: (footprint.bits.clone() as java.util.BitSet).also { grown = it }).set(index)
+				x = (x / cell + 1) * cell
+			}
+		}
+		return grown?.let { TextureFootprint(cell, columns, footprint.rows, it) } ?: footprint
 	}
 
 	/**

@@ -18,8 +18,11 @@ import kotlin.test.assertTrue
 
 /** A stored atlas arrangement: kept spots, free space for the rest, and the compact arrangement by mesh footprints. */
 class AtlasArrangeTest {
-	private fun layer(id: String, width: Int, height: Int, order: Int, color: Int = 0x40 + order * 16): ClassifiedLayer {
-		val rgba = ByteArray(width * height * 4) { if (it % 4 == 3) -1 else color.toByte() }
+	private fun layer(id: String, width: Int, height: Int, order: Int, color: Int = 0x40 + order * 16,
+	                  opaque: (Int, Int) -> Boolean = { _, _ -> true }): ClassifiedLayer {
+		val rgba = ByteArray(width * height * 4) {
+			if (it % 4 != 3) color.toByte() else if (opaque(it / 4 % width, it / 4 / width)) -1 else 0
+		}
 		val source = WorkspaceSourceLayer(LayerId(id), id, "", SourceLayerKind.Raster, true, order, LayerBounds(order * 3, order * 2, width, height),
 			1f, false, LayerBlend.Normal, ChannelMask.ALL, LayerRaster(width, height, rgba), null, null, false)
 		return CharacterAnalyzer.classify(source, PipelineConfig())
@@ -68,9 +71,28 @@ class AtlasArrangeTest {
 	private fun triangle(size: Int, lower: Boolean) = if (lower) floatArrayOf(0f, 0f, 0f, size.toFloat(), size.toFloat(), size.toFloat())
 		else floatArrayOf(0f, 0f, size.toFloat(), 0f, size.toFloat(), size.toFloat())
 
+	/** Art over the half of a square raster that [triangle] covers. */
+	private fun half(lower: Boolean): (Int, Int) -> Boolean = { x, y -> if (lower) x <= y else x >= y }
+
+	/** Asserts every opaque pixel of each of [layers] shows on its tile in [atlas] with its own colour. */
+	private fun assertTilesIntact(atlas: PackedAtlas, layers: List<ClassifiedLayer>) {
+		for (layer in layers) {
+			val at = atlas.placementByLayerId.getValue(layer.source.id.raw)
+			val raster = layer.source.raster
+			val page = atlas.pages[at.page].image
+			for (y in 0 until raster.height) for (x in 0 until raster.width) {
+				val i = (y * raster.width + x) * 4
+				if (raster.rgba[i + 3].toInt() == 0) continue
+				assertEquals(raster.rgba[i].toInt() and 0xff, page.getRGB(at.x + x, at.y + y) and 0xff,
+					"${layer.source.id.raw} pixel ($x, $y) at $at")
+			}
+		}
+	}
+
 	@Test fun meshFootprintsNestTilesAndEachWritesOnlyItsOwnCells() {
 		val size = 120
-		val a = layer("a", size, size, 0, color = 0x11); val b = layer("b", size, size, 1, color = 0x77)
+		val a = layer("a", size, size, 0, color = 0x11, opaque = half(lower = true))
+		val b = layer("b", size, size, 1, color = 0x77, opaque = half(lower = false))
 		val footprints = mapOf(
 			"a" to assertNotNull(AtlasArrange.footprint(size, size, 4, listOf(triangle(size, lower = true)))),
 			"b" to assertNotNull(AtlasArrange.footprint(size, size, 4, listOf(triangle(size, lower = false)))),
@@ -118,5 +140,34 @@ class AtlasArrangeTest {
 		assertEquals(1, atlas.pages.size)
 		assertTrue(atlas.notices.none { "free space" in it })
 		assertEquals(arranged.fit.toFloat(), atlas.fit)
+	}
+
+	@Test fun aTilePaintedPastItsFootprintClaimsTheCellsItsNestedNeighbourHeld() {
+		val size = 120
+		val a = layer("a", size, size, 0, color = 0x11, opaque = half(lower = true))
+		val b = layer("b", size, size, 1, color = 0x77, opaque = half(lower = false))
+		val footprints = mapOf(
+			"a" to assertNotNull(AtlasArrange.footprint(size, size, 4, listOf(triangle(size, lower = true)))),
+			"b" to assertNotNull(AtlasArrange.footprint(size, size, 4, listOf(triangle(size, lower = false)))),
+		)
+		val config = PipelineConfig(atlasBudget = AtlasBudget(256, 1, 2))
+		val arranged = assertNotNull(AtlasLayout.arrange(listOf(a, b), config, footprints, null))
+		assertTilesIntact(AtlasLayout.pack(listOf(a, b), config.copy(atlasArrangement = arranged)), listOf(a, b))
+		// b painted over its whole square, within the same raster, and grown past it: its stored footprint
+		// covers only its old half, where a now nests.
+		val painted = layer("b", size, size, 1, color = 0x77)
+		val grown = layer("b", size + 10, size + 10, 1, color = 0x77)
+		for (repainted in listOf(painted, grown)) {
+			val atlas = AtlasLayout.pack(listOf(a, repainted), config.copy(atlasArrangement = arranged))
+			assertTilesIntact(atlas, listOf(a, repainted))
+			// Deterministic: the next build keeps the very same pages.
+			val again = AtlasLayout.pack(listOf(a, repainted), config.copy(atlasArrangement = arranged))
+			assertEquals(atlas.placementByLayerId, again.placementByLayerId)
+			pixels(atlas).zip(pixels(again)).forEach { (x, y) -> assertContentEquals(x, y) }
+		}
+		// The footprint the painted tile is kept by covers its new art, and none is kept for the resized raster.
+		val atlas = AtlasLayout.pack(listOf(a, painted), config.copy(atlasArrangement = arranged))
+		atlas.footprints["b"]?.let { assertEquals(it.columns * it.rows, it.area) }
+		assertTrue("b" !in AtlasLayout.pack(listOf(a, grown), config.copy(atlasArrangement = arranged)).footprints)
 	}
 }

@@ -667,9 +667,19 @@ internal object WorkspaceAtlasFootprints {
 
     private fun cell(width: Int, height: Int) = maxOf(AtlasArrange.CELL, (maxOf(width, height) + MAX_CELLS - 1) / MAX_CELLS)
 
-    fun of(model: RigPreviewModel): Map<String, TextureFootprint> = covered(model).mapNotNull { (id, covered) ->
-        AtlasArrange.footprint(covered.rasterWidth, covered.rasterHeight, cell(covered.rasterWidth, covered.rasterHeight), covered.triangles)?.let { id to it }
-    }.toMap()
+    /**
+     * Each tile's footprint: the cells its meshes cover, with any art outside them added as a stored arrangement
+     * adds it on every build ([AtlasArrange.covering]), so what is arranged and dragged here is what is kept.
+     */
+    fun of(model: RigPreviewModel): Map<String, TextureFootprint> {
+        val rasters = model.analysis.layers.associate { it.source.id.raw to it.source.textureLayer.raster }
+        return covered(model).mapNotNull { (id, covered) ->
+            val meshes = AtlasArrange.footprint(covered.rasterWidth, covered.rasterHeight, cell(covered.rasterWidth, covered.rasterHeight), covered.triangles)
+                ?: return@mapNotNull null
+            val raster = rasters[id] ?: return@mapNotNull id to meshes
+            AtlasArrange.covering(meshes, raster)?.let { id to it }
+        }.toMap()
+    }
 
     /** Names of layers whose meshes now cover cells outside the footprint their tile was arranged by. */
     fun overflowing(model: RigPreviewModel): List<String> {

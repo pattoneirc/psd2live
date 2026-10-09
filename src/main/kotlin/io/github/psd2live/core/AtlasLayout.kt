@@ -168,15 +168,20 @@ internal object AtlasLayout {
         AtlasArrange.Request(item.id, item.layer.source.name, item.width(fit, honour), item.height(fit, honour),
             item.texture.raster.width, item.texture.raster.height, stored, footprint)
 
+    /** [item]'s footprint as it holds for its raster now ([AtlasArrange.covering]); null when it no longer does. */
+    private fun covering(item: Item, footprint: TextureFootprint?): TextureFootprint? =
+        footprint?.let { AtlasArrange.covering(it, item.texture.raster) }
+
     /**
      * [item]'s request at a stored arrangement's [fit] - or, when a page cannot hold it there (a dense raster
      * placed or imported after the arrangement was stored, say), at the largest step that it can, lock or not.
      */
     private fun keptRequest(item: Item, fit: Double, stored: ArrangedTile?, pageSize: Int, padding: Int): AtlasArrange.Request {
         val room = pageSize - padding * 2
-        if (maxOf(item.width(fit, true), item.height(fit, true)) <= room) return request(item, fit, stored, stored?.footprint)
+        val footprint = covering(item, stored?.footprint)
+        if (maxOf(item.width(fit, true), item.height(fit, true)) <= room) return request(item, fit, stored, footprint)
         val step = Math.floor(room / maxOf(item.baseWidth, item.baseHeight) * AtlasArrangement.FIT_STEPS).toInt().coerceIn(1, AtlasArrangement.FIT_STEPS)
-        return request(item, minOf(fit, step.toDouble() / AtlasArrangement.FIT_STEPS), stored, stored?.footprint, honour = false)
+        return request(item, minOf(fit, step.toDouble() / AtlasArrangement.FIT_STEPS), stored, footprint, honour = false)
     }
 
     private fun placement(item: Item, request: AtlasArrange.Request, spot: AtlasArrange.Spot) = AtlasPlacement(spot.page, spot.x, spot.y,
@@ -185,7 +190,10 @@ internal object AtlasLayout {
 
     /**
      * A stored arrangement's layout: its fit for every unlocked tile, its spots for the tiles that still hold
-     * there, free space for the rest ([AtlasArrange.keep]). A footprint holds only at the spot it was found for.
+     * there, free space for the rest ([AtlasArrange.keep]), each by its footprint where it has one. A footprint holds
+     * with the art painted outside it since added, and not at all once its raster was resized
+     * ([AtlasArrange.covering]): a tile painted past its footprint claims those cells, so a neighbour nested
+     * there moves instead of the two writing the same cells.
      */
     private fun kept(items: List<Item>, arrangement: AtlasArrangement, pageSize: Int, padding: Int, maxPages: Int): Solved {
         val fit = arrangement.fit
@@ -197,10 +205,9 @@ internal object AtlasLayout {
         for ((item, request) in items.zip(requests)) {
             val spot = kept.spots.getValue(item.id)
             placements[item.id] = placement(item, request, spot)
-            val stored = request.stored
-            if (request.footprint != null && stored != null && stored.page == spot.page && stored.x == spot.x && stored.y == spot.y) {
-                masks[item.id] = kept.shapes.getValue(item.id); footprints[item.id] = request.footprint
-            }
+            // A tile that lost its spot was searched a new one by the same footprint, so it may nest there too and
+            // must write only its cells there as well, never its whole rectangle over the neighbour it nests by.
+            if (request.footprint != null) { masks[item.id] = kept.shapes.getValue(item.id); footprints[item.id] = request.footprint }
         }
         val notices = ArrayList<String>()
         // Tiles new to the arrangement or that lost their stored spot fill free space quietly.
@@ -224,6 +231,7 @@ internal object AtlasLayout {
         val pageSize = pageSize(items, budget.pageSize, padding)
         val fixedItems = if (only == null || current == null) emptyList() else items.filter { it.id !in only && it.id in current.placementByLayerId }
         val moving = items.filter { it !in fixedItems }
+        val footprintOf = moving.associate { it.id to covering(it, footprints[it.id]) }
         fun attempt(step: Int): AtlasArrangement? {
             val fit = step.toDouble() / AtlasArrangement.FIT_STEPS
             val fixed = fixedItems.map { item ->
@@ -231,7 +239,7 @@ internal object AtlasLayout {
                 Triple(item, AtlasArrange.Spot(at.page, at.x, at.y, at.rotation),
                     AtlasArrange.shape(at.x, at.y, at.width, at.height, item.texture.raster.width, item.texture.raster.height, current.footprints[item.id], at.rotation))
             }
-            val requests = moving.map { request(it, fit, null, footprints[it.id]) }
+            val requests = moving.map { request(it, fit, null, footprintOf[it.id]) }
             val spots = AtlasArrange.arrange(requests, fixed.map { it.second to it.third }, pageSize, padding, budget.maxPages) ?: return null
             val tiles = HashMap<String, ArrangedTile>()
             for ((item, spot, _) in fixed) tiles[item.id] = ArrangedTile(spot.page, spot.x, spot.y, current!!.footprints[item.id], spot.rotation)
@@ -242,7 +250,7 @@ internal object AtlasLayout {
             val step = Math.round(current!!.fit * AtlasArrangement.FIT_STEPS).coerceIn(1, AtlasArrangement.FIT_STEPS)
             return attempt(step)
         }
-        if (moving.none { it.id in footprints }) rectangles(items, pageSize, padding, budget.maxPages)?.let { return it }
+        if (moving.none { footprintOf[it.id] != null }) rectangles(items, pageSize, padding, budget.maxPages)?.let { return it }
         attempt(AtlasArrangement.FIT_STEPS)?.let { return it }
         // Coarse steps of 64 first, then the step between the best and the next is narrowed down to 8.
         var low = 1; var high = AtlasArrangement.FIT_STEPS / 64 - 1
