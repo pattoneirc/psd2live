@@ -6,4 +6,5 @@
   <String Id="PSD2LiveRemoveDataDlgDescription">Choose whether your data goes too.</String>
   <String Id="PSD2LiveRemoveDataDlgCheckBox">Also delete my [ProductName] data</String>
   <String Id="PSD2LiveRemoveDataDlgDetails">Settings, the workspace store (working copies and edit history of opened projects) and downloaded runtimes and models of the current Windows user. Saved projects (.psd2live) and files you put in the installation folder are kept. Nothing is deleted while [ProductName] is running.</String>
+  <String Id="PSD2LiveCloseAppPrompt">PSD2Live is still running. Save your work and close it, then click Retry. Ignore continues anyway, but files in use cannot be replaced.</String>
 </WixLocalization>

@@ -190,6 +190,13 @@
       Execute="deferred" Impersonate="yes" Return="ignore"/>
     <SetProperty Action="PSD2LiveAllowModify" Id="ARPNOMODIFY" Value="[PSD2LIVE_NO_VALUE]" Before="CostInitialize" Sequence="execute"/>
 
+    <!-- PSD2Live: a running PSD2Live holds the jars in app\ open, which Windows Installer can neither replace
+         nor move aside ("Error writing to file ...\app\*.rbf"). Before any file is written or removed, its
+         windows are asked to close, as the close button does, so unsaved changes are still offered for saving;
+         while it runs on, the installer asks for it to be closed and retries. -->
+    <util:CloseApplication Id="PSD2LiveRunning" Target="PSD2Live.exe" CloseMessage="yes" Timeout="20"
+      PromptToContinue="yes" Description="!(loc.PSD2LiveCloseAppPrompt)" RebootPrompt="no"/>
+
     <InstallExecuteSequence>
       <Custom Action="JpSetARPINSTALLLOCATION" After="CostFinalize">Not Installed</Custom>
       <Custom Action="JpSetARPCOMMENTS" After="CostFinalize">Not Installed</Custom>
@@ -211,6 +218,9 @@
       <?ifndef JpAllowDowngrades ?>
       <Custom Action="JpDisallowDowngrade" After="JpFindRelatedProducts">JP_DOWNGRADABLE_FOUND</Custom>
       <?endif?>
+      <!-- PSD2Live: Before="InstallFiles" in the util extension, which is after RemoveFiles; also before the data is
+           cleared, which leaves a store an editor holds alone. -->
+      <Custom Action="WixCloseApplications" Before="PSD2LiveClearUserData">VersionNT > 400</Custom>
       <Custom Action="PSD2LiveClearUserData" Before="RemoveFiles">REMOVE~="ALL" AND PSD2LIVE_CLEAR_DATA="1" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <RemoveExistingProducts After="InstallExecute"/><!-- PSD2Live: Before="CostInitialize" in jpackage -->
       <Custom Action="JpFindRelatedProducts" After="FindRelatedProducts"/>
