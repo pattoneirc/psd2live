@@ -315,7 +315,7 @@ object ModelPresets {
                 val id = if (front) FRONT_HAIR_SIM else BACK_HAIR_SIM
                 for (drawable in targets) writer.weights(drawable, id, hairWeights(drawable, canvas, front))
                 writer.simulation(id, tr(if (front) "presets.sim.frontHair" else "presets.sim.backHair"), SimKind.HAIR,
-                    targets.map { it.id.raw }, SimMaterial.preset(SimKind.HAIR), keepOthers = layers.isNotEmpty())
+                    targets.map { it.id.raw }, hairMaterial(front), keepOthers = layers.isNotEmpty())
             }
             Preset.CLOTHING -> {
                 val targets = candidates.filter { worn(it.second) }
@@ -372,6 +372,12 @@ object ModelPresets {
         }
     }
 
+    /**
+     * Front hair rests on the forehead and back hair hangs: as hanging hair, bangs swing about twice as far
+     * as the head moves them and bounce with every nod (see [SimMaterialPreset.BANGS]).
+     */
+    private fun hairMaterial(front: Boolean) = (if (front) SimMaterialPreset.BANGS else SimMaterialPreset.HAIR).material
+
     private fun hairWeights(drawable: Drawable, canvas: Map<String, FloatArray>, front: Boolean) =
         // Back hair lies on the head further down before it hangs free.
         if (front) strandWeights(drawable.mesh!!, canvas.getValue(drawable.id.raw), 0.06f, 0.12f)
@@ -420,9 +426,11 @@ object ModelPresets {
             val groups = previous?.groups.orEmpty() + written[id].orEmpty()
             val available = model.parameters.mapTo(HashSet()) { it.id.raw }
             val defaults = RigSimEdit.defaultInputs(available, kind)
-            // Inputs left at the defaults every kind once shared move to this kind's own.
+            // Inputs left at the defaults every kind once shared move to this kind's own, and a material left at
+            // the kind's default (front hair before it had one of its own) to this preset's.
             val edit = previous?.copy(targets = allTargets, groups = groups, enabled = true,
-                inputs = if (previous.inputs == RigSimEdit.defaultInputs(available)) defaults else previous.inputs)
+                inputs = if (previous.inputs == RigSimEdit.defaultInputs(available)) defaults else previous.inputs,
+                material = if (previous.material == SimMaterial.preset(kind)) material else previous.material)
                 ?: RigSimEdit(id, name, kind, allTargets, material, groups = groups, inputs = defaults)
             overlay = SimAuthoring.put(overlay, model, edit)
             simulationIds += id

@@ -107,7 +107,13 @@ enum class SimMaterialPreset(val jsonName: String, val kind: SimKind, val materi
     /** Fine strands: light, they curl and part easily and keep swinging. */
     FINE_HAIR("fine_hair", SimKind.HAIR, SimMaterial(mass = 0.7f, stretch = 1f, bend = 0.3f, damping = 1.6f, goal = 0.1f, slack = 0.015f, area = 0.4f, anisotropy = 0.8f)),
     /** Thick or set hair: heavier locks that swing as one and hold their shape. */
-    THICK_HAIR("thick_hair", SimKind.HAIR, SimMaterial(mass = 1.3f, stretch = 1f, bend = 0.6f, damping = 2.4f, goal = 0.22f, slack = 0.008f, area = 0.6f, anisotropy = 0.6f));
+    THICK_HAIR("thick_hair", SimKind.HAIR, SimMaterial(mass = 1.3f, stretch = 1f, bend = 0.6f, damping = 2.4f, goal = 0.22f, slack = 0.008f, area = 0.6f, anisotropy = 0.6f)),
+    /**
+     * Bangs lying on the forehead: drawn sweeping across it rather than hanging, so gravity is not carried
+     * along the strands and a goal as weak as hanging hair's sags them into a slack spring that resonates
+     * with a head shake. A firm goal and more damping keep them resting on the head, the tips trailing.
+     */
+    BANGS("bangs", SimKind.HAIR, SimMaterial(stretch = 1f, bend = 0.45f, damping = 4f, goal = 0.4f, slack = 0.01f, area = 0.5f, anisotropy = 0.7f));
 
     companion object {
         fun default(kind: SimKind) = when (kind) {

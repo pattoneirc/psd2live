@@ -322,6 +322,37 @@ class SimulationTest {
         assertTrue(silk > leather * 1.2f, "silk hem moved $silk px, leather $leather px")
     }
 
+    @Test fun bangsDrawnAcrossTheForeheadFollowAHeadShakeWhereHangingHairWouldSwing() {
+        // A lock drawn sweeping sideways from its root, as bangs lie on the forehead: gravity is not carried
+        // along it, so the goal holds it. The head shakes it side to side and nods it up and down.
+        val mesh = grid(12, 1, 20f)
+        val x = ParameterId("ParamX")
+        val y = ParameterId("ParamY")
+        fun moved(dx: Float, dy: Float) = MeshDeltaForm(FloatArray(mesh.positions.size) { if (it % 2 == 0) dx else dy })
+        val keyed = Drawable(DrawableId("cloth"), "cloth", null, BlendMode.Normal, emptyList(), mesh,
+            KeyformGrid(listOf(KeyformAxis(x, floatArrayOf(-1f, 1f)), KeyformAxis(y, floatArrayOf(-1f, 1f))), listOf(
+                KeyformCell(intArrayOf(0, 0), moved(-30f, -30f)), KeyformCell(intArrayOf(1, 0), moved(30f, -30f)),
+                KeyformCell(intArrayOf(0, 1), moved(-30f, 30f)), KeyformCell(intArrayOf(1, 1), moved(30f, 30f)))))
+        val pin = VertexGroup("pin", DrawableId("cloth"), VertexGroupKind.PIN, FloatArray(mesh.vertexCount) { if (it % 13 == 0) 1f else 0f })
+        val source = PuppetModel(listOf(Parameter(x, "X", -1f, 1f, 0f), Parameter(y, "Y", -1f, 1f, 0f)), emptyList(), emptyList(), listOf(keyed),
+            listOf(OrgChild.Drawable(keyed.id)), null, vertexGroups = listOf(pin))
+        fun lag(preset: SimMaterialPreset, axis: ParameterId): Float {
+            val scene = hangingScene(source, SimKind.HAIR) { it.copy(material = preset.material) }
+            scene.calibrate(source)
+            var worst = 0f
+            for (f in 0 until 240) {
+                scene.drive(source, mapOf(axis to kotlin.math.sin(2 * Math.PI * 1.2 * f / 60).toFloat()), 1f / 60f)
+                worst = maxOf(worst, (0 until mesh.vertexCount).maxOf { hypot(scene.state.x[it] - scene.state.goalX[it], scene.state.y[it] - scene.state.goalY[it]) })
+            }
+            return worst
+        }
+        for (axis in listOf(x, y)) {
+            val hair = lag(SimMaterialPreset.HAIR, axis)
+            val bangs = lag(SimMaterialPreset.BANGS, axis)
+            assertTrue(bangs < hair * 0.6f, "${axis.raw}: bangs lag $bangs px, hanging hair $hair px")
+        }
+    }
+
     // Glue roles
 
     private fun gluedPair(role: GlueRole): Pair<PuppetModel, SimScene> {
