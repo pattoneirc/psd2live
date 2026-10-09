@@ -19,8 +19,8 @@
  * never unwinds into the host: the call returns as for a null handle, the handle fails, p2l_rig_failure
  * tells why, and from then on it acts as a null handle until p2l_rig_free.
  *
- * Drawing. The reference is the software rasterizer in PSD2Live (format-compile, SoftwareRasterizer); the web
- * player, the Godot node and the editor draw the same way in real time, with the differences noted below.
+ * Drawing. The reference is the software rasterizer in PSD2Live (format-compile, SoftwareRasterizer), which
+ * follows the editor's compositing; the web player, the Godot node and the editor's preview draw the same way.
  * - Textures hold straight (not premultiplied) alpha. Sample them bilinearly; the rules below work on
  *   premultiplied color (rgb*a, a).
  * - A mesh's fragment: c = texel; c.rgb *= multiply; c.rgb += screen*c.a - c.rgb*screen; then c *= opacity*k,
@@ -29,17 +29,21 @@
  *   without their colors or opacity; an inverted mask takes 1 - coverage. Real-time players may use a stencil
  *   that counts texels at least half opaque as covering (the web player, Godot and the editor do).
  * - Culling: with culling on, only faces that wind clockwise in canvas coordinates (x right, y down) draw.
- * - Blending c over the destination d (premultiplied):
- *   P2L_BLEND_NORMAL           c + d*(1 - c.a)
- *   P2L_BLEND_CUBISM_ADD       d.rgb + c.rgb, the destination alpha kept; P2L_BLEND_ADD_GLOW draws the same
- *   P2L_BLEND_CUBISM_MULTIPLY  c.rgb*d.rgb + d.rgb*(1 - c.a), the destination alpha kept
- *   the others                 W3C compositing: rgb = (1 - d.a)*c.rgb + (1 - c.a)*d.rgb + c.a*d.a*B(Cs, Cd) on
- *                              unpremultiplied Cs, Cd, a = c.a + d.a - c.a*d.a, with B the mode's W3C function
- *                              (P2L_BLEND_ADD: min(1, Cs + Cd)). Players without them draw them as the nearest
- *                              basic mode (add as 1, multiply as 2, the rest as normal).
- *   The alpha blend modes other than P2L_ALPHA_OVER are Cubism 5.3's; every bundled player draws them as over.
- * - Isolated groups (p2l_render_commands): draw the group's commands into a cleared layer, then draw the layer
- *   as a mesh would be drawn, with the group's colors, opacity, masks and blend modes (p2l_part_composite,
+ * - Compositing a source s over the destination d, both premultiplied, by a color blend mode and an alpha
+ *   blend mode:
+ *   P2L_BLEND_CUBISM_ADD (any alpha mode)       rgb = s.rgb + d.rgb, a = d.a
+ *   P2L_BLEND_CUBISM_MULTIPLY (any alpha mode)  rgb = s.rgb*d.rgb + d.rgb*(1 - s.a), a = d.a
+ *   P2L_BLEND_NORMAL with P2L_ALPHA_OVER        s + d*(1 - s.a)
+ *   every other pair                            with Cs, Cb the unpremultiplied colors and B(Cb, Cs) the
+ *     mode's W3C blend function (NORMAL: Cs; CUBISM_ADD, ADD and ADD_GLOW: min(1, Cb + Cs); the multiplies:
+ *     Cb*Cs; the rest as named): overlap p = s.a*d.a, or min(s.a, d.a) for CONJOINT_OVER, or
+ *     max(s.a + d.a - 1, 0) for DISJOINT_OVER; w = p/s.a; m = (1 - w)*Cs + w*B; the alpha mode's factors
+ *     OVER Fa = 1, Fb = 1 - s.a; ATOP Fa = d.a, Fb = 1 - s.a; OUT Fa = 0, Fb = 1 - s.a (the source erases);
+ *     CONJOINT_OVER Fa = 1, Fb = s.a >= d.a ? 0 : 1 - s.a/d.a; DISJOINT_OVER Fa = 1, Fb = min(1, (1 - s.a)/d.a);
+ *     rgb = s.a*Fa*m + d.a*Fb*Cb, a = s.a*Fa + d.a*Fb, everything clamped to 0..1.
+ * - Isolated groups (p2l_render_commands): draw the group's commands into a cleared layer; then the layer's
+ *   pixel, unpremultiplied, takes the group's multiply and screen colors as a mesh's texel does, its alpha is
+ *   scaled by the group's opacity and mask coverage, and it composites by the group's modes (p2l_part_composite,
  *   p2l_part_masks, p2l_part_group). Players that do not isolate draw p2l_render_order instead.
  */
 #ifndef P2L_RUNTIME_H
