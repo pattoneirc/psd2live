@@ -5977,8 +5977,18 @@ internal class CanvasEditor(
         val dx = pos.x - brushAnchor.x
         val dy = pos.y - brushAnchor.y
         if (brushAxis == null) {
-            if (max(abs(dx), abs(dy)) < BRUSH_AXIS_LOCK_PX) return
-            brushAxis = if (abs(dx) >= abs(dy)) BrushAdjustAxis.RADIUS else BrushAdjustAxis.HARDNESS
+            val ax = abs(dx); val ay = abs(dy)
+            val travel = max(ax, ay)
+            if (travel < BRUSH_AXIS_LOCK_PX) return
+            // A diagonal start waits until one direction clearly dominates; only a long diagonal drag is
+            // settled by the larger component.
+            val clear = ax >= ay * BRUSH_AXIS_DOMINANCE || ay >= ax * BRUSH_AXIS_DOMINANCE
+            if (!clear && travel < BRUSH_AXIS_FORCE_PX) return
+            brushAxis = if (ax >= ay) BrushAdjustAxis.RADIUS else BrushAdjustAxis.HARDNESS
+            // The adjustment starts from where the axis was decided, so the travel spent deciding does not
+            // land as a jump.
+            brushAnchor = pos
+            return
         }
         if (paintBrushActive) {
             when (brushAxis) {
@@ -6069,7 +6079,13 @@ private const val MIN_BRUSH_SIZE_LIMIT = 512f
 private const val BRUSH_HARDNESS_SPAN_PX = 200f
 
 /** Drag distance before the gesture commits to radius or hardness; below it nothing is adjusted. */
-private const val BRUSH_AXIS_LOCK_PX = 4f
+private const val BRUSH_AXIS_LOCK_PX = 12f
+
+/** How many times larger one component of the drag must be than the other before it decides the axis. */
+private const val BRUSH_AXIS_DOMINANCE = 2f
+
+/** Drag distance past which an ambiguous diagonal is settled by its larger component anyway. */
+private const val BRUSH_AXIS_FORCE_PX = 40f
 
 /** How far from a vertex the weight readout still names it, in screen pixels. */
 private const val WEIGHT_READOUT_REACH_PX = 24f
