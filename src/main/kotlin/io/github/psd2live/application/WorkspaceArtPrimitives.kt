@@ -209,13 +209,28 @@ internal object WorkspaceArtPrimitives {
         if (lost.isNotEmpty()) throw Fallback(REASON_REFERENCE, "The resolved base no longer generates ${lost.sorted().joinToString()}")
         checkpoint()
         try {
-            document.rigEdits.applyTo(base.puppet, base.primitiveSkins)
+            replayed(model, document).applyTo(base.puppet, base.primitiveSkins)
         } catch (failure: java.util.concurrent.CancellationException) {
             throw failure
         } catch (failure: RuntimeException) {
             throw Fallback(REASON_REPLAY, failure.message ?: failure.javaClass.simpleName)
         }
         return document
+    }
+
+    /**
+     * The edits [document] replays once committed over [model]. Past a checkpoint the journal no longer replays on the
+     * base: where the split changes what the generators make under it (a side split adds a pair warp its parts hang
+     * on), the build checkpoints the merged rig before the record ([RigRegenerationCheckpoint]) and replays the record
+     * from there, so the guard does the same.
+     */
+    private fun replayed(model: RigPreviewModel, document: WorkspaceDocument): RigEditOverlay {
+        val config = document.config()
+        val previous = model.config.rigEdits
+        if (previous.checkpointIndex < 0 || !config.rigEdits.continues(previous)) return config.rigEdits
+        val pipeline = PSD2LivePipeline()
+        if (!pipeline.materializable(model.config) || !pipeline.materializable(config)) return config.rigEdits
+        return RigRegenerationCheckpoint.checkpointed(pipeline, model, config, document.source)?.rigEdits ?: config.rigEdits
     }
 
     /** What an upgrade of one version 1 record gave: the version 2 document, or why the record stays version 1. */

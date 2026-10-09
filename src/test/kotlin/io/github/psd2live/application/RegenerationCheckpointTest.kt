@@ -93,6 +93,25 @@ class RegenerationCheckpointTest {
 	}
 
 	/**
+	 * Past a checkpoint that nothing needing the base follows, a setting that changes the generation without an entry
+	 * of its own still regenerates: the checkpoint's rig was merged from the previous generation, so the switch merges
+	 * and checkpoints again instead of building from it.
+	 */
+	@Test fun aSwitchPastATrailingCheckpointRegeneratesInsteadOfBuildingFromIt() = runBlocking<Unit> {
+		val edited = edited()
+		val journal = edited.simulated.document.rigEdits.authoringJournal
+		assertTrue(journal.subList(RigCheckpoint.latest(journal), journal.size).none(ArtPrimitiveJournal::isRecord))
+		assertTrue(edited.simulated.model.rig.puppet.deformers.none { it.id.raw == "DeformHairBackPhysics" })
+		val start = edited.runtime.capture()
+		val off = WorkspaceDocumentCommands(edited.runtime).executeCandidate(start.projectId, start.state, "Hair off", MutationAuthor.USER, mutation = { document, _ ->
+			document.copy(settings = JsonObject(document.settings + ("hairSimulationBack" to JsonPrimitive(false))))
+		}).capture
+		assertTrue(off.model.rig.puppet.deformers.any { it.id.raw == "DeformHairBackPhysics" }, "the legacy sway warp is generated again")
+		assertEquals(journal, off.document.rigEdits.authoringJournal.subList(0, journal.size))
+		assertTrue(RigCheckpoint.isRecord(off.document.rigEdits.authoringJournal.last()))
+	}
+
+	/**
 	 * A journal without a checkpoint whose setting alone switched the generation, as a document saved before the switch
 	 * checkpointed: the journal replays on the new generation, and the split parts keep their place once the legacy
 	 * sway warp they hang on is gone. (A runtime that rebuilds from the previous model checkpoints the split itself.)

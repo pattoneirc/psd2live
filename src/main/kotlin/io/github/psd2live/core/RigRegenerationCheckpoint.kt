@@ -2,7 +2,10 @@ package io.github.psd2live.core
 
 import io.github.psd2live.targets.cubism.PuppetIr
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.umamo.edit.withDrawablesDeleted
 import org.umamo.format.art.SourceArt
+import org.umamo.runtime.model.DrawableId
 import org.umamo.runtime.model.PuppetModel
 
 /**
@@ -31,8 +34,9 @@ internal object RigRegenerationCheckpoint {
 		if (current.sources.baseKnown && base === current.baseRig) return null
 		checkpoint()
 		// The new generation as the entries up to the boundary see it: later splits' parts not yet in place.
-		val seen = base.resolvedPuppet(after.authoringJournal.subList(0, boundary).filter(ArtPrimitiveV2::isV2))
-		val previous = current.baseRig.resolvedPuppet().reboundTo(base.puppet.atlas, base.puppet.sources)
+		val records = after.authoringJournal.subList(0, boundary)
+		val (previous, seen) = withV1Parts(current.baseRig.resolvedPuppet().reboundTo(base.puppet.atlas, base.puppet.sources),
+			current.baseRig.primitiveSkins, base.resolvedPuppet(records.filter(ArtPrimitiveV2::isV2)), base.primitiveSkins, records)
 		if (PuppetIr.toIr(previous) == PuppetIr.toIr(seen)) return null
 		checkpoint()
 		val record = merged(previous, seen, current.authored, base, bindingKey, seen, checkpoint).record
@@ -57,12 +61,45 @@ internal object RigRegenerationCheckpoint {
 		val (base, bindingKey) = pipeline.generatedBaseOf(source, current.config)
 		checkpoint()
 		val atlas = base.puppet.atlas; val sources = base.puppet.sources
-		val previous = stored.authored.rig.puppet.reboundTo(atlas, sources)
-		val now = base.resolvedPuppet(journal.subList(0, index).filter(ArtPrimitiveV2::isV2))
+		// The stored generated rig holds the version 1 parts its checkpoint merged; their skins now come from the base.
+		val (previous, now) = withV1Parts(stored.authored.rig.puppet.reboundTo(atlas, sources), PrimitiveSkins.None,
+			base.resolvedPuppet(journal.subList(0, index).filter(ArtPrimitiveV2::isV2)), base.primitiveSkins, journal.subList(0, index),
+			replayOnPrevious = false)
 		if (PuppetIr.toIr(previous) == PuppetIr.toIr(now)) return null
 		checkpoint()
 		val merged = merged(previous, now, current.authored, base, bindingKey, base.resolvedPuppet(journal.filter(ArtPrimitiveV2::isV2)), checkpoint)
 		return Update(current.config.copy(rigEdits = overlay.copy(authoringJournal = journal + merged.record)), merged.issues)
+	}
+
+	/**
+	 * [previous] and [next] with the parts of the version 1 splits among [journal]'s entries in place, journal order.
+	 * Such a part comes from its record, not from the generators, so a resolved rig never has it; the merge kept the
+	 * authored part as the user's, and the skin and welds the skeleton bake gave it ([PrimitiveSkins]) never arrived.
+	 * A record whose parts the skeleton skins on either side ([previousSkins], [nextSkins]) or [previous] holds already
+	 * (a stored generated rig) replays on both as the journal replays it - on [previous] only where it lacks the parts,
+	 * and not at all there when [replayOnPrevious] is false. One that does not replay leaves its parts out of both, so
+	 * they stay the user's.
+	 */
+	private fun withV1Parts(previous: PuppetModel, previousSkins: PrimitiveSkins, next: PuppetModel, nextSkins: PrimitiveSkins,
+	                        journal: List<JsonObject>, replayOnPrevious: Boolean = true): Pair<PuppetModel, PuppetModel> {
+		var g = previous
+		var g2 = next
+		for (record in journal) {
+			if (!ArtPrimitiveJournal.isRecord(record) || ArtPrimitiveV2.isV2(record)) continue
+			val ids = ArtPrimitiveJournal.primitives(record).mapTo(HashSet()) { DrawableId(it.getValue("id").jsonPrimitive.content) }
+			val held = g.drawables.any { it.id in ids }
+			if (!held && (!replayOnPrevious || ids.none { it in previousSkins.drawables || it in nextSkins.drawables })) continue
+			try {
+				val replayed = if (held) g else ArtPrimitiveJournal.replay(g, record, previousSkins)
+				g2 = ArtPrimitiveJournal.replay(g2, record, nextSkins)
+				g = replayed
+			} catch (failure: java.util.concurrent.CancellationException) {
+				throw failure
+			} catch (failure: RuntimeException) {
+				g = g.withDrawablesDeleted(ids)
+			}
+		}
+		return g to g2
 	}
 
 	private class Merged(val record: JsonObject, val issues: List<RigRegeneration.Issue>)

@@ -357,7 +357,7 @@
 
 **重放**：删除乘客，放置停放的部件（画布纹理坐标经当前纹理集换算，延迟父级换到其父级空间），恢复生成遮罩与部件槽，两端都在时加入焊接，写入生成路径，再加残差与作者层。停放拓扑与记录不同（骨架加入关节行、之后的网格重建）时，逐顶点数据按画布纹理坐标迁移到新网格。
 
-**两遍捕获与守卫**（`application/WorkspaceArtPrimitives.decide`）：第一遍写基础字段；随后由 `PrimitiveBaseProvider` 构建候选基础（应用默认 `PipelineBaseProvider`：候选文档只保留 v2 记录构建，GUI、MCP 单项拆分与原子批量都经此入口；测试可替换）；第二遍对照候选基础写残差与覆盖。候选基础在拆分的后台候选内构建（`Dispatchers.Default`），进度落在拆分任务的 0.8–0.92，原协程取消即中止且不会被当作回退。只有候选基础仍生成既有日志引用的每个变形器、参数与网格（原图层除外），且整条日志能在其上重放时才写 v2；否则写版本 1，并在记录上加 `v2_fallback {reason, detail}`。原因码：`base_unavailable`（无候选基础）、`original_not_generated`（原网格不是生成网格）、`parts_not_generated`、`reference_missing`、`replay_failed`、`capture_failed`。
+**两遍捕获与守卫**（`application/WorkspaceArtPrimitives.decide`）：第一遍写基础字段；随后由 `PrimitiveBaseProvider` 构建候选基础（应用默认 `PipelineBaseProvider`：候选文档只保留 v2 记录构建，GUI、MCP 单项拆分与原子批量都经此入口；测试可替换）；第二遍对照候选基础写残差与覆盖。候选基础在拆分的后台候选内构建（`Dispatchers.Default`），进度落在拆分任务的 0.8–0.92，原协程取消即中止且不会被当作回退。只有候选基础仍生成既有日志引用的每个变形器、参数与网格（原图层除外），且整条日志能在其上重放时才写 v2（日志已有固化点时，按提交时的方式在拆分之前先合并出新的固化点再重放，否则拆分新生成的变形器——例如左右拆分的成对 Warp——不在旧固化点里）；否则写版本 1，并在记录上加 `v2_fallback {reason, detail}`。原因码：`base_unavailable`（无候选基础）、`original_not_generated`（原网格不是生成网格）、`parts_not_generated`、`reference_missing`、`replay_failed`、`capture_failed`。
 
 **乘客容错**：记录之前的条目若只因其引用的网格全是后续 v2 记录的乘客而失败，按空操作重放并记一条说明（`SupersededEntryNote`：日志序号、`op`、目标、原因）；其他失败照常报错。说明随重放检查点保存，从检查点续放也完整，并经 `BuiltRig.supersededEntryNotes` 进入 `workspace_inspect` 的 `quality.overrides`（`SUPERSEDED_ENTRY_SKIPPED`，info，不阻断）。
 
