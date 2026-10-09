@@ -4,7 +4,7 @@
 
 只记录使用者能感知到的变化。v1.4.2 及更早的版本见 [Releases](https://github.com/tsunehimatoi/psd2live/releases)。
 
-## 未发布
+## v3.1.2 · 2026-10-09
 
 ### 改进
 

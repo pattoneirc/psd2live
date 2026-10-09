@@ -89,7 +89,7 @@ fun HelpDialog(
 		scrollable = false,
 		bodySpacing = 12.dp,
 		titleTrailing = {
-			Text(text = "v3.1.1", style = typography.monoSmall.copy(fontSize = 10.sp), color = colors.textMuted)
+			Text(text = "v3.1.2", style = typography.monoSmall.copy(fontSize = 10.sp), color = colors.textMuted)
 		},
 		footerStart = {
 			Text(
@@ -504,7 +504,7 @@ private fun DccAboutContent() {
 				color = colors.textPrimary,
 			)
 			Text(
-				text = "v3.1.1",
+				text = "v3.1.2",
 				style = typography.monoSmall.copy(fontSize = 11.sp),
 				color = colors.accent,
 			)

@@ -13,7 +13,7 @@ plugins {
 }
 
 group = "io.github.psd2live"
-version = "3.1.1"
+version = "3.1.2"
 
 // Cubism proprietary binaries under src/main/resources/cubism/ are opt-in only.
 // Default jars/distributions must NOT embed them. Enable with:
@@ -239,10 +239,10 @@ compose.desktop {
 			// LWJGL (the canvas GPU renderer) reaches native memory through sun.misc.Unsafe.
 			modules("java.net.http", "jdk.unsupported")
 			// Compose only packages formats supported on the build host; Deb is for Linux. The Windows
-			// installers are built below from the app image instead, with our own WiX project.
+			// installer is built below from the app image instead, with Inno Setup.
 			targetFormats(org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb)
 			packageName = "PSD2Live"
-			packageVersion = "3.1.1"
+			packageVersion = "3.1.2"
 			description = "PSD2Live - Automated Live2D Rigging Pipeline"
 			copyright = "© 2026 PSD2Live. Licensed under GPL-3.0."
 			vendor = "PSD2Live"
