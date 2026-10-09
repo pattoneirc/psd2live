@@ -10,6 +10,12 @@ publish = false
 name = "p2l_runtime"
 crate-type = ["rlib", "cdylib", "staticlib"]
 
+[features]
+# The runtime's allocator hands every allocation to a host's functions once p2l_set_allocator sets them. Crates
+# that use the runtime as a Rust library and bring their own allocator turn it off.
+default = ["host-allocator"]
+host-allocator = []
+
 [dependencies]
 # Chunk decompression for .p2lrt 2: zlib (deflate) and zstd, both pure Rust so the WebAssembly build keeps them.
 miniz_oxide = "0.8"

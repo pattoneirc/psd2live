@@ -7,8 +7,8 @@ runtime's software renderer, `p2l_render`.
 
 ## C and C++ (and Unreal)
 
-`examples/c/render_example.c` loads a rig through a shared model, plays a clip for a second and writes the software
-renderer's frame to a BMP. `examples/c/build_example.bat` builds it as C and as C++ with MSVC (`/W4 /WX`) against
+`examples/c/render_example.c` hands the runtime its own allocator and log first, loads a rig through a shared model,
+plays a clip for a second and writes the software renderer's frame to a BMP. `examples/c/build_example.bat` builds it as C and as C++ with MSVC (`/W4 /WX`) against
 `target/release/p2l_runtime.dll.lib`:
 
 ```

@@ -8,6 +8,9 @@
 #include "p2l_runtime.h"
 
 #include <stdio.h>
+#ifdef _WIN32
+#include <malloc.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,6 +24,36 @@ static unsigned char *read_file(const char *path, size_t *len) {
     *len = bytes ? fread(bytes, 1, (size_t)n, f) : 0;
     fclose(f);
     return bytes;
+}
+
+/* The host allocator: every allocation of the runtime, counted. */
+static size_t allocations, live;
+
+static void *allocate(size_t size, size_t align, void *user) {
+    (void)user;
+#ifdef _WIN32
+    void *p = _aligned_malloc(size, align);
+#else
+    void *p = NULL;
+    if (posix_memalign(&p, align < sizeof(void *) ? sizeof(void *) : align, size) != 0) p = NULL;
+#endif
+    if (p) { allocations++; live++; }
+    return p;
+}
+
+static void release(void *pointer, size_t size, size_t align, void *user) {
+    (void)size; (void)align; (void)user;
+    live--;
+#ifdef _WIN32
+    _aligned_free(pointer);
+#else
+    free(pointer);
+#endif
+}
+
+static void log_message(int32_t level, const char *message, void *user) {
+    (void)user;
+    fprintf(stderr, "%s: %s\n", level == P2L_LOG_ERROR ? "error" : "warning", message);
 }
 
 static void put32(FILE *f, uint32_t v) {
@@ -55,6 +88,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s model.p2lrt frame.bmp [width]\n", argv[0]);
         return 2;
     }
+    /* First, before anything else of the runtime: its memory from this program, and its log. */
+    int hosted = p2l_set_allocator(allocate, release, NULL);
+    p2l_set_log(log_message, NULL);
     uint32_t abi = p2l_abi_version();
     if (!P2L_ABI_COMPATIBLE(abi)) {
         fprintf(stderr, "runtime ABI %u.%u, built against %u.%u\n", abi >> 16, abi & 0xffffu, P2L_ABI_VERSION_MAJOR, P2L_ABI_VERSION_MINOR);
@@ -101,5 +137,6 @@ int main(int argc, char **argv) {
     printf("%s %ux%u, %u pixels drawn\n", ok ? "wrote" : "could not write", width, height, covered);
     free(rgba);
     p2l_rig_free(rig);
-    return ok && !failure ? 0 : 1;
+    printf("host allocator %s: %u allocations, %u still held\n", hosted ? "on" : "off", (unsigned)allocations, (unsigned)live);
+    return ok && !failure && hosted && allocations > 0 ? 0 : 1;
 }

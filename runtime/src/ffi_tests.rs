@@ -554,3 +554,64 @@ fn behaviors_take_settings_and_lip_sync_follows_audio() {
         p2l_rig_free(handle);
     }
 }
+
+#[test]
+fn meshes_report_what_changed_since_the_evaluation_before() {
+    // The triangle's first vertex follows parameter A.
+    let mut r = triangle(None);
+    r.meshes[0].offsets = Some(Grid::new(
+        vec![Axis { parameter: 0, keys: vec![0.0, 1.0] }],
+        vec![(vec![0], vec![0.0; 6]), (vec![1], vec![5.0, 0.0, 0.0, 0.0, 0.0, 0.0])],
+    ).unwrap());
+    r.render.children = vec![RenderNode::Mesh(0)];
+    let handle = rig_on(r);
+    unsafe {
+        let all = MESH_VISIBILITY_CHANGED | MESH_OPACITY_CHANGED | MESH_DRAW_ORDER_CHANGED | MESH_RENDER_ORDER_CHANGED | MESH_VERTICES_CHANGED | MESH_COLORS_CHANGED;
+        assert_eq!(p2l_mesh_changes(handle, 0), MESH_VISIBLE | all);
+        p2l_evaluate(handle);
+        assert_eq!(p2l_mesh_changes(handle, 0), MESH_VISIBLE);
+        p2l_set_parameter(handle, 0, 1.0);
+        p2l_evaluate(handle);
+        assert_eq!(p2l_mesh_changes(handle, 0), MESH_VISIBLE | MESH_VERTICES_CHANGED);
+        p2l_set_opacity(handle, 0.0);
+        p2l_evaluate(handle);
+        assert_eq!(p2l_mesh_changes(handle, 0), MESH_VISIBILITY_CHANGED | MESH_OPACITY_CHANGED);
+        assert_eq!(p2l_mesh_changes(handle, 9), 0);
+        p2l_rig_free(handle);
+    }
+}
+
+#[test]
+fn what_goes_wrong_reaches_the_hosts_log() {
+    use std::sync::Mutex;
+    static MESSAGES: Mutex<Vec<(i32, String)>> = Mutex::new(Vec::new());
+    unsafe extern "C" fn log(level: i32, message: *const c_char, _user: *mut std::ffi::c_void) {
+        MESSAGES.lock().unwrap().push((level, CStr::from_ptr(message).to_string_lossy().into_owned()));
+    }
+    unsafe {
+        p2l_set_log(Some(log), ptr::null_mut());
+        let bytes = [9u8; 16];
+        assert!(p2l_rig_load(bytes.as_ptr(), bytes.len(), ptr::null_mut(), 0).is_null());
+        p2l_set_log(None, ptr::null_mut());
+        assert!(p2l_rig_load(bytes.as_ptr(), bytes.len(), ptr::null_mut(), 0).is_null());
+    }
+    // Other tests may log meanwhile; this one's failed load is there, and nothing came after the log was cleared
+    // from this load.
+    let messages = MESSAGES.lock().unwrap();
+    assert!(messages.iter().any(|(level, text)| *level == crate::host::ERROR && text.contains("rig")), "{:?}", *messages);
+}
+
+#[test]
+fn a_host_allocator_comes_too_late_once_the_runtime_has_allocated() {
+    unsafe extern "C" fn allocate(size: usize, align: usize, _user: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
+        std::alloc::System.alloc(std::alloc::Layout::from_size_align(size, align).unwrap()) as *mut std::ffi::c_void
+    }
+    unsafe extern "C" fn free(pointer: *mut std::ffi::c_void, size: usize, align: usize, _user: *mut std::ffi::c_void) {
+        std::alloc::System.dealloc(pointer as *mut u8, std::alloc::Layout::from_size_align(size, align).unwrap())
+    }
+    use std::alloc::GlobalAlloc;
+    // The test harness has allocated long before: memory must go back where it came from, so the host's comes too late.
+    let _warm = vec![0u8; 16];
+    assert!(!unsafe { p2l_set_allocator(Some(allocate), Some(free), ptr::null_mut()) });
+    assert!(!unsafe { p2l_set_allocator(None, None, ptr::null_mut()) });
+}

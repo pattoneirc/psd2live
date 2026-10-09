@@ -11,8 +11,18 @@ namespace PSD2Live.Runtime
         /// <summary>The runtime library: p2l_runtime.dll, libp2l_runtime.so or .dylib.</summary>
         public const string Library = "p2l_runtime";
 
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate void P2lLog(int level, IntPtr message, IntPtr user);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate IntPtr P2lAllocate(UIntPtr size, UIntPtr align, IntPtr user);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate void P2lFree(IntPtr pointer, UIntPtr size, UIntPtr align, IntPtr user);
+        // Keep a delegate given to the runtime alive (in a static field) for as long as the runtime may call it.
+
         public const uint ABI_VERSION_MAJOR = 1;
-        public const uint ABI_VERSION_MINOR = 3;
+        public const uint ABI_VERSION_MINOR = 4;
+        public const uint LOG_ERROR = 0;
+        public const uint LOG_WARNING = 1;
         public const uint LOAD_VERIFY_CRC = 1;
         public const uint PARAMETER_REPEAT = 1;
         public const uint PARAMETER_BLEND_SHAPE = 2;
@@ -51,6 +61,13 @@ namespace PSD2Live.Runtime
         public const uint ALPHA_OUT = 2;
         public const uint ALPHA_CONJOINT_OVER = 3;
         public const uint ALPHA_DISJOINT_OVER = 4;
+        public const uint MESH_VISIBLE = 1;
+        public const uint MESH_VISIBILITY_CHANGED = 2;
+        public const uint MESH_OPACITY_CHANGED = 4;
+        public const uint MESH_DRAW_ORDER_CHANGED = 8;
+        public const uint MESH_RENDER_ORDER_CHANGED = 16;
+        public const uint MESH_VERTICES_CHANGED = 32;
+        public const uint MESH_COLORS_CHANGED = 64;
         public const uint PART_VISIBLE = 1;
         public const uint PART_SKETCH = 2;
         public const uint GROUP_PASS_THROUGH = 0;
@@ -65,6 +82,11 @@ namespace PSD2Live.Runtime
 
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern uint p2l_abi_version();
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void p2l_set_log(P2lLog log, IntPtr user);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        public static extern bool p2l_set_allocator(P2lAllocate allocate, P2lFree free, IntPtr user);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern IntPtr p2l_rig_load(byte[] bytes, UIntPtr len, byte[] error, UIntPtr error_capacity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -233,6 +255,8 @@ namespace PSD2Live.Runtime
         public static extern float p2l_mesh_draw_order(IntPtr rig, uint index);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern void p2l_mesh_colors(IntPtr rig, uint index, float[] multiply, float[] screen);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern uint p2l_mesh_changes(IntPtr rig, uint index);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern uint p2l_render_order(IntPtr rig, uint[] @out, uint capacity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

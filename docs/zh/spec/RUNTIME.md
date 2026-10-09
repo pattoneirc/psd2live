@@ -84,6 +84,12 @@ ABI 1.2 增加的部分（同样只有新函数）：
 - **整体透明度与颜色覆盖**：`p2l_set_opacity` 乘到全部网格上（与片段设置的整体透明度相乘，`p2l_opacity` 读取乘积）；`p2l_set_mesh_colors` / `p2l_set_part_colors` 用宿主给的乘算/屏幕色替换求值结果，网格自身的设置优先于其所在部件链上最近的设置。
 - **物理与行为**：`p2l_physics_wind`、`p2l_physics_stabilize`、`p2l_blink_settings`、`p2l_behavior_strength`、`p2l_lip_sync_samples`，见上文“物理”“程序化行为”。
 
+ABI 1.3 增加 `p2l_render` 与 `p2l_render_texture`（见下文“软件渲染”）。ABI 1.4 增加：
+
+- **变化标志**：`p2l_mesh_changes` 给出网格是否绘制（在绘制顺序中且不透明度大于 0），以及与上一次求值相比可见性、不透明度、绘制顺序值、在绘制顺序中的位置、顶点、乘算/屏幕色是否改变，对应 Cubism 的 dynamic flags，宿主只需上传改变的部分；首次求值后全部置位。所有改变姿势的入口（`p2l_update`、`p2l_update_stages`、`p2l_evaluate`、`p2l_set_advanced`、`p2l_physics_stabilize`）结束时更新。
+- **日志**：`p2l_set_log` 接收加载失败、句柄失效与渲染器无法解码的贴图页。
+- **宿主分配器**：`p2l_set_allocator` 让运行时此后的全部内存都来自宿主的分配与释放函数（大小与对齐照给）；必须在使用运行时的其他任何部分之前、在单一线程中调用，运行时已向系统申请过内存时返回 false 且不改变。由默认开启的 `host-allocator` 特性提供（运行时作为 Rust 库被 Godot 节点等使用时关闭）。C 示例实测：渲染 tml 样例的 7570 次分配全部经宿主分配器。
+
 写出端：IR 的 `Clip` 增加 `events`、`targetCurves`，`Curve` 增加 `fadeIn` / `fadeOut`，`PhysicsSource` 增加 `Y`；p2lrt 导出写 `CEXT` 与按需写 `PHYS` 版本 2，moc3 导出的 motion3 写出 `UserData`、`PartOpacity` 与 `Model`（`Opacity`、`EyeBlink`、`LipSync`）曲线和曲线淡入淡出，physics3 写出 `Y`；cmo3 没有纵向物理，略去纵向输入输出。编辑器的动作编辑尚不提供事件与非参数曲线的编辑入口，这些数据来自 IR。
 
 绘制规则写在头文件开头，以 `SoftwareRasterizer` 为准：贴图为直通 alpha，规则在预乘颜色上计算；片段颜色先乘乘算色、再按 `c + s·a − c·s` 叠屏幕色，最后乘不透明度与遮罩覆盖（遮罩网格在该点纹理 alpha 的最大值，反相取 1 − 覆盖；实时播放器可用 alpha ≥ 0.5 的模板近似）；开启剔除时只画画布坐标（y 向下）中顺时针的面；Cubism 的普通、叠加、乘算按其预乘公式（叠加与乘算保留目标 alpha），扩展模式按 W3C 合成公式；混合模式与透明度合成模式有 `P2L_BLEND_*`、`P2L_ALPHA_*` 常量。
@@ -110,8 +116,8 @@ ABI 版本：头文件的 `P2L_ABI_VERSION_MAJOR` / `P2L_ABI_VERSION_MINOR` 与�
 见 [`runtime/bindings/README.md`](../../../runtime/bindings/README.md)：
 
 - **C/C++**：`runtime/examples/c/render_example.c` 经共享模型加载、播放一秒并用 `p2l_render` 写出 BMP；`build_example.bat` 用 MSVC 以 C 与 C++ 各编译一次（`/W4 /WX`，头文件无警告），两者输出逐字节相同。Unreal 以第三方模块方式使用同一头文件与库。
-- **.NET / Unity**：`bindings/csharp/P2lNative.cs` 是由 `generate.py` 从头文件生成的全部 P/Invoke 声明（`cargo test` 校验其与导出函数一致），`P2l.cs` 提供字符串辅助与自动释放的 `P2lRig`；`Smoke.cs` 以 C# 6 编译后用 `Marshal.Prelink` 解析全部 126 个入口点，并加载、播放、渲染 tml 样例。`bindings/unity/P2LCharacter.cs` 把模型每帧用软件渲染画进 `Texture2D`，只按所用 Unity API 的桩代码做过类型检查，未在 Unity 中运行。
-- **Android**：`runtime/build_android.sh` 用 NDK 的 clang 为 arm64-v8a、armeabi-v7a、x86_64 构建 `libp2l_runtime.so`，三者各导出全部 126 个函数。iOS 需在 Mac 上构建，未在此验证。
+- **.NET / Unity**：`bindings/csharp/P2lNative.cs` 是由 `generate.py` 从头文件生成的全部 P/Invoke 声明（`cargo test` 校验其与导出函数一致），`P2l.cs` 提供字符串辅助与自动释放的 `P2lRig`；`Smoke.cs` 以 C# 6 编译后用 `Marshal.Prelink` 解析全部 129 个入口点，并加载、播放、渲染 tml 样例。`bindings/unity/P2LCharacter.cs` 把模型每帧用软件渲染画进 `Texture2D`，只按所用 Unity API 的桩代码做过类型检查，未在 Unity 中运行。
+- **Android**：`runtime/build_android.sh` 用 NDK 的 clang 为 arm64-v8a、armeabi-v7a、x86_64 构建 `libp2l_runtime.so`，三者各导出全部 129 个函数。iOS 需在 Mac 上构建，未在此验证。
 
 ## 网页播放器
 

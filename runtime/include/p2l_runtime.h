@@ -64,9 +64,9 @@ extern "C" {
  * host layer, parts and isolated groups, alpha blending and what the file says about parameters, clips and the
  * parameter panel. 1.2 adds clip layers with priorities, clip events, several expressions at once, the rig's
  * opacity, color overrides, physics wind and stabilization, behavior settings and lip sync from audio. 1.3 adds the
- * software renderer, p2l_render. */
+ * software renderer, p2l_render. 1.4 adds what changed per mesh, a log and a host allocator. */
 #define P2L_ABI_VERSION_MAJOR 1
-#define P2L_ABI_VERSION_MINOR 3
+#define P2L_ABI_VERSION_MINOR 4
 #define P2L_ABI_VERSION ((P2L_ABI_VERSION_MAJOR << 16) | P2L_ABI_VERSION_MINOR)
 #define P2L_ABI_COMPATIBLE(v) (((v) >> 16) == P2L_ABI_VERSION_MAJOR && ((v) & 0xffffu) >= P2L_ABI_VERSION_MINOR)
 /* The ABI the library implements, major << 16 | minor. */
@@ -74,6 +74,19 @@ uint32_t p2l_abi_version(void);
 
 typedef struct P2lRig P2lRig;
 typedef struct P2lModel P2lModel;
+
+/* What goes wrong (loads that fail, rigs that fail, pages the renderer cannot decode) goes to [log] with [user];
+ * NULL for none. Any thread may set it; it is called from the thread the failing call runs on. */
+#define P2L_LOG_ERROR 0
+#define P2L_LOG_WARNING 1
+typedef void (*P2lLog)(int32_t level, const char *message, void *user);
+void p2l_set_log(P2lLog log, void *user);
+/* All the runtime's memory from [allocate] and [free] (sizes and alignments as given) from now on. Call it first,
+ * from one thread, before anything else of the runtime: false, changing nothing, once the runtime has taken memory
+ * from the system, for a missing function, or in a build without the host-allocator feature. */
+typedef void *(*P2lAllocate)(size_t size, size_t align, void *user);
+typedef void (*P2lFree)(void *pointer, size_t size, size_t align, void *user);
+bool p2l_set_allocator(P2lAllocate allocate, P2lFree free, void *user);
 
 /* Loads [len] bytes of a .p2lrt file (version 1 or 2); on failure returns NULL and writes a message into [error]. */
 P2lRig *p2l_rig_load(const uint8_t *bytes, size_t len, char *error, size_t error_capacity);
@@ -260,6 +273,17 @@ const float *p2l_mesh_vertices(const P2lRig *rig, uint32_t index);
 float p2l_mesh_opacity(const P2lRig *rig, uint32_t index);
 float p2l_mesh_draw_order(const P2lRig *rig, uint32_t index);
 void p2l_mesh_colors(const P2lRig *rig, uint32_t index, float *multiply, float *screen);
+/* Whether the mesh draws at the last evaluation (in the render order with an opacity above 0), and what changed
+ * from the evaluation before, as Cubism's dynamic flags: a host uploads only what changed. All change bits are set
+ * after the first evaluation. */
+#define P2L_MESH_VISIBLE 1u
+#define P2L_MESH_VISIBILITY_CHANGED 2u
+#define P2L_MESH_OPACITY_CHANGED 4u
+#define P2L_MESH_DRAW_ORDER_CHANGED 8u
+#define P2L_MESH_RENDER_ORDER_CHANGED 16u
+#define P2L_MESH_VERTICES_CHANGED 32u
+#define P2L_MESH_COLORS_CHANGED 64u
+uint32_t p2l_mesh_changes(const P2lRig *rig, uint32_t index);
 uint32_t p2l_render_order(const P2lRig *rig, uint32_t *out, uint32_t capacity);
 /* p2l_render_order with isolated groups kept: a mesh index, P2L_RENDER_BEGIN_GROUP(part) opening the group of
  * an isolated part, P2L_RENDER_END_GROUP closing it. */

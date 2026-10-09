@@ -23,8 +23,10 @@ def parameter(declaration):
 def parameter_of(declaration, name):
     kind = re.sub(r'\s+', ' ', declaration[:-len(name)]).replace(' *', '*').strip()
     kind = kind.replace('const ', '')
-    if kind in ('P2lRig*', 'P2lModel*'):
+    if kind in ('P2lRig*', 'P2lModel*', 'void*'):
         return 'IntPtr ' + name
+    if kind in ('P2lLog', 'P2lAllocate', 'P2lFree'):
+        return kind + ' ' + name
     if kind == 'char**' or kind == 'uint8_t**':
         return 'out IntPtr ' + name
     if kind == 'uint8_t*':
@@ -65,7 +67,14 @@ def main():
            'using System;', 'using System.Runtime.InteropServices;', '', 'namespace PSD2Live.Runtime', '{',
            '    public static class P2lNative', '    {',
            '        /// <summary>The runtime library: p2l_runtime.dll, libp2l_runtime.so or .dylib.</summary>',
-           '        public const string Library = "p2l_runtime";', '']
+           '        public const string Library = "p2l_runtime";', '',
+           '        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]',
+           '        public delegate void P2lLog(int level, IntPtr message, IntPtr user);',
+           '        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]',
+           '        public delegate IntPtr P2lAllocate(UIntPtr size, UIntPtr align, IntPtr user);',
+           '        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]',
+           '        public delegate void P2lFree(IntPtr pointer, UIntPtr size, UIntPtr align, IntPtr user);',
+           '        // Keep a delegate given to the runtime alive (in a static field) for as long as the runtime may call it.', '']
     for name, value in defines:
         out.append('        public const uint %s = %s;' % (name[4:], value))
     out.append('')

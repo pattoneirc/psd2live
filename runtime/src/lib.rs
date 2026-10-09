@@ -10,6 +10,7 @@ pub mod container;
 pub mod eval;
 pub mod expression;
 pub mod ffi;
+pub mod host;
 pub mod physics;
 pub mod png;
 pub mod pose;

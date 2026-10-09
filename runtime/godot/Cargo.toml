@@ -10,7 +10,8 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-p2l-runtime = { path = ".." }
+# The node lives in Godot's process with Godot's allocator; the runtime's host allocator stays out.
+p2l-runtime = { path = "..", default-features = false }
 # The 4.3 API, which later Godot 4 versions also load.
 godot = { version = "0.5.5", features = ["api-4-3"] }
 

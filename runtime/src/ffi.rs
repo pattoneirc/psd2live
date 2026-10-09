@@ -23,7 +23,7 @@ use std::sync::Arc;
 /// The ABI version, `p2l_abi_version`: the major changes when a function changes or goes, the minor when
 /// functions are added. Kept equal to `P2L_ABI_VERSION_MAJOR` / `_MINOR` in the header.
 pub const ABI_MAJOR: u32 = 1;
-pub const ABI_MINOR: u32 = 3;
+pub const ABI_MINOR: u32 = 4;
 
 /// `p2l_update_stages` bits: the layers an update runs, in this order.
 pub const STAGE_CLIPS: u32 = 1;
@@ -37,6 +37,15 @@ pub const STAGE_ALL: u32 = 63;
 /// `p2l_render` flags: straight (not premultiplied) output, and drawing over what the image holds.
 pub const RENDER_STRAIGHT: u32 = 1;
 pub const RENDER_KEEP: u32 = 2;
+
+/// `p2l_mesh_changes` bits: whether the mesh draws, then what changed since the evaluation before the last.
+pub const MESH_VISIBLE: u32 = 1;
+pub const MESH_VISIBILITY_CHANGED: u32 = 2;
+pub const MESH_OPACITY_CHANGED: u32 = 4;
+pub const MESH_DRAW_ORDER_CHANGED: u32 = 8;
+pub const MESH_RENDER_ORDER_CHANGED: u32 = 16;
+pub const MESH_VERTICES_CHANGED: u32 = 32;
+pub const MESH_COLORS_CHANGED: u32 = 64;
 
 /// How many clip layers a rig can play at once.
 pub const MAX_LAYERS: u32 = 16;
@@ -232,6 +241,9 @@ pub struct Handle {
     part_colors: Vec<Option<Colors>>,
     /// Textures the host gave pages in place of the file's, for the software renderer.
     textures: Vec<Option<crate::png::Image>>,
+    /// What each mesh showed at the evaluation before the last, and what changed since.
+    shown: Shown,
+    changes: Vec<u32>,
     behaviors: Behaviors,
     physics: Physics,
     /// The pose the host sets, under clips, expressions, behaviors and physics.
@@ -293,6 +305,8 @@ impl Handle {
             mesh_colors: vec![None; rig.meshes.len()],
             part_colors: vec![None; rig.parts.len()],
             textures: vec![None; rig.textures.len()],
+            shown: Shown::default(),
+            changes: Vec::new(),
             behaviors,
             current: values.clone(),
             values,
@@ -301,12 +315,14 @@ impl Handle {
             model,
         };
         evaluate(&mut handle);
+        track_changes(&mut handle);
         handle
     }
 
     /// Records the panic a call ended in; the handle stays failed.
     fn fail(&self, payload: Box<dyn Any + Send>) {
         let message = panic_message(payload.as_ref()).replace('\0', "");
+        crate::host::log(crate::host::ERROR, &format!("The rig failed: {}", message));
         let _ = self.failure.set(CString::new(message).unwrap());
     }
 }
@@ -316,11 +332,12 @@ pub const LOAD_VERIFY_CRC: u32 = 1;
 
 /// The model [read] gives; a message when it does not read or panics.
 fn read_model(read: impl FnOnce() -> crate::rig::Result<Rig>) -> Result<Arc<Model>, String> {
-    match panic::catch_unwind(AssertUnwindSafe(|| read().map(|rig| Arc::new(Model::new(rig))))) {
+    let model = match panic::catch_unwind(AssertUnwindSafe(|| read().map(|rig| Arc::new(Model::new(rig))))) {
         Ok(Ok(model)) => Ok(model),
         Ok(Err(e)) => Err(e.0),
         Err(payload) => Err(format!("The rig could not be read: {}", panic_message(payload.as_ref()))),
-    }
+    };
+    model.inspect_err(|message| crate::host::log(crate::host::ERROR, message))
 }
 
 /// A rig handle on [model], evaluated once; null with a message in [error] when that first evaluation panics.
@@ -328,10 +345,68 @@ fn create(model: Arc<Model>, error: *mut c_char, error_capacity: usize) -> *mut 
     match panic::catch_unwind(AssertUnwindSafe(|| Handle::new(model))) {
         Ok(handle) => Box::into_raw(Box::new(handle)),
         Err(payload) => {
-            write_error(&format!("The rig could not be read: {}", panic_message(payload.as_ref())), error, error_capacity);
+            let message = format!("The rig could not be read: {}", panic_message(payload.as_ref()));
+            crate::host::log(crate::host::ERROR, &message);
+            write_error(&message, error, error_capacity);
             ptr::null_mut()
         }
     }
+}
+
+/// What every mesh showed at an evaluation, to tell what the next one changes.
+#[derive(Default)]
+struct Shown {
+    vertices: Vec<Vec<f32>>,
+    opacity: Vec<f32>,
+    draw_order: Vec<f32>,
+    multiply: Vec<crate::rig::Rgb>,
+    screen: Vec<crate::rig::Rgb>,
+    /// Each mesh's place in the render order, -1 when it does not draw.
+    place: Vec<i64>,
+}
+
+/// Sets each mesh's MESH_* bits from the pose against the one shown before (everything changed the first time).
+fn track_changes(h: &mut Handle) {
+    let pose = &h.evaluator.pose;
+    let n = h.model.rig.meshes.len();
+    let mut place = vec![-1i64; n];
+    for (k, &m) in h.render_order.iter().enumerate() {
+        if let Some(p) = place.get_mut(m as usize) {
+            *p = k as i64;
+        }
+    }
+    let first = h.shown.place.len() != n;
+    h.changes.clear();
+    for m in 0..n {
+        let opacity = pose.opacity.get(m).copied().unwrap_or(0.0);
+        let visible = place[m] >= 0 && opacity > 0.0;
+        let mut bits = if visible { MESH_VISIBLE } else { 0 };
+        if first {
+            bits |= MESH_VISIBILITY_CHANGED | MESH_OPACITY_CHANGED | MESH_DRAW_ORDER_CHANGED | MESH_RENDER_ORDER_CHANGED | MESH_VERTICES_CHANGED | MESH_COLORS_CHANGED;
+        } else {
+            let was_visible = h.shown.place[m] >= 0 && h.shown.opacity[m] > 0.0;
+            let changed = |bit: u32, differs: bool| if differs { bit } else { 0 };
+            bits |= changed(MESH_VISIBILITY_CHANGED, visible != was_visible)
+                | changed(MESH_OPACITY_CHANGED, opacity.to_bits() != h.shown.opacity[m].to_bits())
+                | changed(MESH_DRAW_ORDER_CHANGED, pose.draw_order.get(m).map(|d| d.to_bits()) != Some(h.shown.draw_order[m].to_bits()))
+                | changed(MESH_RENDER_ORDER_CHANGED, place[m] != h.shown.place[m])
+                | changed(MESH_VERTICES_CHANGED, pose.vertices.get(m).map_or(&[][..], |v| &v[..]) != &h.shown.vertices[m][..])
+                | changed(MESH_COLORS_CHANGED, pose.multiply.get(m) != h.shown.multiply.get(m) || pose.screen.get(m) != h.shown.screen.get(m));
+        }
+        h.changes.push(bits);
+    }
+    let shown = &mut h.shown;
+    shown.vertices.resize(n, Vec::new());
+    for (m, v) in pose.vertices.iter().enumerate().take(n) {
+        shown.vertices[m].clone_from(v);
+    }
+    shown.opacity.clone_from(&pose.opacity);
+    shown.opacity.resize(n, 0.0);
+    shown.draw_order.clone_from(&pose.draw_order);
+    shown.draw_order.resize(n, 0.0);
+    shown.multiply.clone_from(&pose.multiply);
+    shown.screen.clone_from(&pose.screen);
+    shown.place = place;
 }
 
 /// A rig handle on the rig [read] gives; null with a message in [error] when it does not read or panics,
@@ -378,6 +453,31 @@ pub unsafe extern "C" fn p2l_model_load(bytes: *const u8, len: usize, flags: u32
             write_error(&message, error, error_capacity);
             ptr::null()
         }
+    }
+}
+
+/// Sends what goes wrong (loads that fail, rigs that fail, pages that do not decode) to [log] with [user]; null for
+/// none. Any thread may call it.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_set_log(log: Option<crate::host::LogFunction>, user: *mut std::ffi::c_void) {
+    crate::host::set_log(log, user)
+}
+
+/// Takes all the runtime's memory from [allocate] and [free] from now on; call it first, from one thread, before
+/// anything else of the runtime. False, changing nothing, once the runtime has taken memory from the system, for a
+/// missing function, or in a build without the host-allocator feature.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_set_allocator(
+    allocate: Option<unsafe extern "C" fn(usize, usize, *mut std::ffi::c_void) -> *mut std::ffi::c_void>,
+    free: Option<unsafe extern "C" fn(*mut std::ffi::c_void, usize, usize, *mut std::ffi::c_void)>,
+    user: *mut std::ffi::c_void,
+) -> bool {
+    #[cfg(feature = "host-allocator")]
+    return crate::host::set_allocator(allocate, free, user);
+    #[cfg(not(feature = "host-allocator"))]
+    {
+        let _ = (allocate, free, user);
+        false
     }
 }
 
@@ -495,6 +595,7 @@ fn update(h: &mut Handle, dt: f32, stages: u32) {
     } else {
         h.advanced.show_simulations(rig, &mut h.evaluator.pose);
     }
+    track_changes(h);
 }
 
 /// Runs [body] on a working handle, [default] for a null or failed one. A panic in [body] fails the handle and
@@ -751,6 +852,7 @@ pub unsafe extern "C" fn p2l_evaluate(handle: *mut Handle) {
         h.clip_opacity = 1.0;
         evaluate(h);
         h.advanced.show_simulations(&h.model.rig, &mut h.evaluator.pose);
+        track_changes(h);
     })
 }
 
@@ -791,6 +893,7 @@ pub unsafe extern "C" fn p2l_physics_stabilize(handle: *mut Handle) {
         h.physics.stabilize(&h.model.rig, &mut values);
         h.current = values;
         evaluate(h);
+        track_changes(h);
     })
 }
 
@@ -1199,6 +1302,12 @@ pub unsafe extern "C" fn p2l_mesh_colors(handle: *const Handle, index: u32, mult
     })
 }
 
+/// Mesh [index]'s MESH_* bits: whether it draws at the last evaluation, and what changed from the one before.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_mesh_changes(handle: *const Handle, index: u32) -> u32 {
+    with!(handle, 0, |h| h.changes.get(index as usize).copied().unwrap_or(0))
+}
+
 /// Meshes back to front from the last evaluation; returns the count.
 #[no_mangle]
 pub unsafe extern "C" fn p2l_render_order(handle: *const Handle, out: *mut u32, capacity: u32) -> u32 {
@@ -1326,7 +1435,15 @@ pub unsafe extern "C" fn p2l_render(handle: *mut Handle, rgba: *mut u8, width: u
                     if page.kind != TextureKind::Png {
                         return None;
                     }
-                    model.decoded[p].get_or_init(|| crate::png::decode(&page.data)).as_ref()
+                    model.decoded[p]
+                        .get_or_init(|| {
+                            let image = crate::png::decode(&page.data);
+                            if image.is_none() {
+                                crate::host::log(crate::host::WARNING, &format!("Texture page {} is not a PNG the renderer reads", p));
+                            }
+                            image
+                        })
+                        .as_ref()
                 })
             })
             .collect();
@@ -1573,6 +1690,7 @@ pub unsafe extern "C" fn p2l_set_advanced(handle: *mut Handle, features: u32) ->
     with_mut!(handle, 0, |h| {
         let on = h.advanced.set(&h.model.rig, features);
         evaluate(h);
+        track_changes(h);
         on
     })
 }
