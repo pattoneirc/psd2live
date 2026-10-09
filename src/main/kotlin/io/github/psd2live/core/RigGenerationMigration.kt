@@ -4,6 +4,7 @@ import kotlinx.serialization.json.*
 import io.github.psd2live.core.sim.*
 import org.umamo.edit.withParameterDeleted
 import org.umamo.format.art.SourceArt
+import org.umamo.format.art.SourceLayer
 import org.umamo.runtime.model.*
 
 /** One ordered candidate for source, classification and generation-mode changes. */
@@ -51,7 +52,7 @@ internal object RigGenerationMigration {
             Cmo3ModelImport.paintingPreview(pipeline, source, full).also { progress.update("Prepared imported generation textures", 0.1) }
         }
         var activationOverlay = full.rigEdits
-        val inputs = (requested.meshSource ?: source).layers.associateBy { it.id.raw }
+        val inputs = meshInput(source, requested).layers.associateBy { it.id.raw }
         for (drawable in preceding.rig.puppet.drawables.filter { it.mesh == null }) {
             val layerId = preceding.rig.layerIdByDrawableId[drawable.id.raw] ?: continue
             val layer = inputs[layerId] ?: continue
@@ -79,7 +80,7 @@ internal object RigGenerationMigration {
         if (activationOverlay != full.rigEdits) preceding = if (full.rigEdits.importedCmo3 == null)
             pipeline.buildPreview(source, activated, ProgressListener { message, _ -> progress.update(message, 0.1) }) else
             Cmo3ModelImport.paintingPreview(pipeline, source, activated)
-        val desiredLayers = MouthLipLayers.prepare(CharacterAnalyzer.analyze(requested.meshSource ?: source,
+        val desiredLayers = MouthLipLayers.prepare(CharacterAnalyzer.analyze(meshInput(source, requested),
             requested.copy(deletedLayerIds = emptySet())), requested.copy(deletedLayerIds = emptySet())).layers.associateBy { it.source.id.raw }
         val oldLayers = current.analysis.layers.associateBy { it.source.id.raw }
         val sourceChanged = source !== current.analysis.source && source != current.analysis.source
@@ -115,7 +116,7 @@ internal object RigGenerationMigration {
                     deformers = savedPrevious.deformers + born.deformers, drawables = savedPrevious.drawables + born.drawables.filter { it.id in bornIds })
             }
         }
-        val desiredRig = generated(requested.meshSource ?: source, requested, 0.6, 0.7)
+        val desiredRig = generated(meshInput(source, requested), requested, 0.6, 0.7)
         var desired = canvasUvs(desiredRig)
         val activeIds = desired.drawables.mapTo(HashSet()) { it.id }
         val existing = authored.rig.puppet.parameters.associateBy { it.id }
@@ -233,6 +234,20 @@ internal object RigGenerationMigration {
             pageByDrawableId = base.pageByDrawableId - stubs + resolved.parts.mapNotNull { part ->
                 base.primitiveSkins.drawables[part.drawableId]?.let { part.drawableId.raw to it.texturePage }
             })
+    }
+
+    /**
+     * [source] with each layer's saved mesh input in its place. The mesh input holds only the layers a mesh was
+     * rebuilt from, beside a copy of the generation input taken when it was first saved - which can predate the
+     * layers a partition or an import added since - so it never stands for the whole source.
+     */
+    internal fun meshInput(source: SourceArt, config: PipelineConfig): SourceArt {
+        val saved = config.meshSource?.layers?.associateBy { it.id.raw } ?: return source
+        return object : SourceArt by source {
+            override val layers = source.layers.map { layer ->
+                saved[layer.id.raw]?.let { input -> object : SourceLayer by input { override val order = layer.order } } ?: layer
+            }
+        }
     }
 
     private fun canvasUvs(rig: BuiltRig): PuppetModel = rig.puppet.copy(drawables = rig.puppet.drawables.map { drawable ->

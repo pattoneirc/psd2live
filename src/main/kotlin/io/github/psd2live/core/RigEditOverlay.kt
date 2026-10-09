@@ -370,7 +370,8 @@ data class RigEditOverlay(
 	/**
 	 * The authored state from the journal's last checkpoint without the base: its stored rig and the entries after it,
 	 * with the binding key of the atlas it is bound to. Null without a checkpoint, or when an entry after it needs the
-	 * base (an `art_primitive` record places parts the base generated).
+	 * base (an `art_primitive` record places parts the base generated, a mesh creation samples artwork the stored
+	 * atlas has no tile for).
 	 */
 	internal fun authoredFromCheckpoint(): Pair<AuthoredRig, String>? {
 		if (checkpointIndex < 0) return null
@@ -378,6 +379,11 @@ data class RigEditOverlay(
 		if (after.any { it["op"]?.jsonPrimitive?.contentOrNull == ArtPrimitiveJournal.OP }) return null
 		val stored = RigCheckpoint.decode(authoringJournal[checkpointIndex])
 		var model = stored.authored.rig.puppet
+		// A mesh created on artwork added after the checkpoint (an import a generation migration materializes)
+		// samples a tile the stored atlas lacks; only the full build has it.
+		val tiles = model.atlas.tiles.mapNotNullTo(HashSet()) { tile -> tile.source?.let { it.sourceId.raw to it.layerKey } }
+		if (after.any { it["op"]?.jsonPrimitive?.contentOrNull == RasterMeshCreation.OP &&
+				(it["source_id"]?.jsonPrimitive?.contentOrNull to it["source"]?.jsonPrimitive?.contentOrNull) !in tiles }) return null
 		var notes = stored.authored.rig.supersededEntryNotes
 		for (command in after) replayEntry(ReplayState(model, notes), command, PrimitiveSkins.None).let { model = it.model; notes = it.notes }
 		return AuthoredRig(stored.authored.rig.copy(puppet = model, supersededEntryNotes = notes), stored.authored.visibilityTargets)

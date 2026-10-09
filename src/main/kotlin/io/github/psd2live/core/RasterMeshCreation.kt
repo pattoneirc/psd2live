@@ -69,7 +69,7 @@ internal object RasterMeshCreation {
         require(parent == null || input.deformers.any { it.id == parent }) { "Mesh creation parent is missing" }
         val tile = input.atlas.tiles.singleOrNull { it.source?.let { source ->
             source.sourceId.raw == command.text("source_id") && source.layerKey == command.text("source") } == true }
-            ?: throw IllegalArgumentException("Mesh creation artwork is missing")
+            ?: throw IllegalArgumentException("Mesh creation artwork is missing: ${command.text("source")}")
         var model = input
         for (element in command.getValue("parameters").jsonArray) {
             val p = element.jsonObject
