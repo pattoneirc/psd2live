@@ -350,7 +350,7 @@ impl Drawing {
         // Masks cover by their texture alpha at their own vertices, without their colors or opacity.
         for &(item, m) in &self.mask_items {
             rs.canvas_item_clear(item);
-            draw_mesh(&mut rs, item, rig, pose, textures, m, offset, Color::WHITE);
+            draw_mesh(&mut rs, item, rig, pose, textures, m, offset, Color::WHITE, false);
         }
 
         let mut open = vec![Open { layer: None, segment: 0, next: 0, composite: false }];
@@ -421,7 +421,7 @@ impl Drawing {
                     rs.material_set_param(item.material, "screen", &Vector3::new(s[0], s[1], s[2]).to_variant());
                 }
                 let c = pose.multiply[index];
-                draw_mesh(&mut rs, item.rid, rig, pose, textures, index, offset, Color::from_rgba(c[0], c[1], c[2], pose.opacity[index]));
+                draw_mesh(&mut rs, item.rid, rig, pose, textures, index, offset, Color::from_rgba(c[0], c[1], c[2], pose.opacity[index]), true);
             } else {
                 let l = index - mesh_count;
                 let s = pose.part_screen[self.layers[l].part];
@@ -460,16 +460,29 @@ impl Drawing {
     }
 }
 
-/// Mesh [m] of [pose] into [item], its vertices offset by [offset], with vertex color [color].
+/// Mesh [m] of [pose] into [item], its vertices offset by [offset], with vertex color [color]; with [cull] and the
+/// mesh culling, only Cubism's front faces, those with (b - a) x (c - a) < 0 in canvas coordinates.
 #[allow(clippy::too_many_arguments)]
-fn draw_mesh(rs: &mut Gd<RenderingServer>, item: Rid, rig: &Rig, pose: &Pose, textures: &[Gd<ImageTexture>], m: usize, offset: Vector2, color: Color) {
+fn draw_mesh(rs: &mut Gd<RenderingServer>, item: Rid, rig: &Rig, pose: &Pose, textures: &[Gd<ImageTexture>], m: usize, offset: Vector2, color: Color, cull: bool) {
     let mesh = &rig.meshes[m];
     let (Some(geometry), Some(vertices)) = (&mesh.geometry, pose.vertices.get(m)) else { return };
     // A mesh without a texture draws nothing, as in the reference.
     let Some(texture) = usize::try_from(mesh.page).ok().and_then(|p| textures.get(p)) else { return };
     let points: PackedVector2Array = vertices.chunks_exact(2).map(|p| Vector2::new(p[0], p[1]) + offset).collect();
     let uvs: PackedVector2Array = geometry.uvs.chunks_exact(2).map(|p| Vector2::new(p[0], p[1])).collect();
-    let indices: PackedInt32Array = geometry.indices.iter().map(|&i| i as i32).collect();
+    let front = |t: &[u32]| {
+        let p = |i: u32| (vertices[i as usize * 2], vertices[i as usize * 2 + 1]);
+        let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
+        (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0) < 0.0
+    };
+    let indices: PackedInt32Array = if cull && mesh.culling {
+        geometry.indices.chunks_exact(3).filter(|t| front(t)).flatten().map(|&i| i as i32).collect()
+    } else {
+        geometry.indices.iter().map(|&i| i as i32).collect()
+    };
+    if indices.is_empty() {
+        return;
+    }
     let colors: PackedColorArray = std::iter::repeat(color).take(points.len()).collect();
     rs.canvas_item_add_triangle_array_ex(item, &indices, &points, &colors).uvs(&uvs).texture(texture.get_rid()).done();
 }

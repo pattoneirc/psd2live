@@ -63,9 +63,10 @@ extern "C" {
  * P2L_ABI_COMPATIBLE; a library without p2l_abi_version predates ABI 1.0. 1.1 adds models, update stages, the
  * host layer, parts and isolated groups, alpha blending and what the file says about parameters, clips and the
  * parameter panel. 1.2 adds clip layers with priorities, clip events, several expressions at once, the rig's
- * opacity, color overrides, physics wind and stabilization, behavior settings and lip sync from audio. */
+ * opacity, color overrides, physics wind and stabilization, behavior settings and lip sync from audio. 1.3 adds the
+ * software renderer, p2l_render. */
 #define P2L_ABI_VERSION_MAJOR 1
-#define P2L_ABI_VERSION_MINOR 2
+#define P2L_ABI_VERSION_MINOR 3
 #define P2L_ABI_VERSION ((P2L_ABI_VERSION_MAJOR << 16) | P2L_ABI_VERSION_MINOR)
 #define P2L_ABI_COMPATIBLE(v) (((v) >> 16) == P2L_ABI_VERSION_MAJOR && ((v) & 0xffffu) >= P2L_ABI_VERSION_MINOR)
 /* The ABI the library implements, major << 16 | minor. */
@@ -346,6 +347,17 @@ const char *p2l_meta_value(const P2lRig *rig, uint32_t index);
 /* Memory for passing a rig in from a WebAssembly host: [len] zeroed bytes, freed with the same [len]. */
 uint8_t *p2l_alloc(size_t len);
 void p2l_dealloc(uint8_t *pointer, size_t len);
+
+/* Software rendering: draws the last evaluation into [rgba], width x height RGBA8 pixels, rows top first, by the
+ * drawing rules above (masks, isolated groups, every blend mode, culling), as PSD2Live's reference rasterizer does.
+ * [transform] maps canvas pixels to image pixels as [a, b, c, d, tx, ty]; NULL fits the canvas into the image from
+ * its top left corner. P2L_RENDER_STRAIGHT gives straight alpha (premultiplied otherwise); P2L_RENDER_KEEP draws
+ * over what [rgba] holds instead of transparency. Embedded PNG pages decode themselves (non-interlaced); other
+ * pages draw once p2l_render_texture gives them straight RGBA8 pixels (NULL takes them back). */
+#define P2L_RENDER_STRAIGHT 1u
+#define P2L_RENDER_KEEP 2u
+bool p2l_render(P2lRig *rig, uint8_t *rgba, uint32_t width, uint32_t height, const float *transform, uint32_t flags);
+bool p2l_render_texture(P2lRig *rig, uint32_t page, const uint8_t *rgba, uint32_t width, uint32_t height);
 
 /* Textures: PNG bytes per page; NULL, with [len] 0, for a page that is not an embedded PNG. */
 uint32_t p2l_texture_count(const P2lRig *rig);

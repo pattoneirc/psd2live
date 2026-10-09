@@ -23,7 +23,7 @@ use std::sync::Arc;
 /// The ABI version, `p2l_abi_version`: the major changes when a function changes or goes, the minor when
 /// functions are added. Kept equal to `P2L_ABI_VERSION_MAJOR` / `_MINOR` in the header.
 pub const ABI_MAJOR: u32 = 1;
-pub const ABI_MINOR: u32 = 2;
+pub const ABI_MINOR: u32 = 3;
 
 /// `p2l_update_stages` bits: the layers an update runs, in this order.
 pub const STAGE_CLIPS: u32 = 1;
@@ -33,6 +33,10 @@ pub const STAGE_POSES: u32 = 8;
 pub const STAGE_PHYSICS: u32 = 16;
 pub const STAGE_SIM: u32 = 32;
 pub const STAGE_ALL: u32 = 63;
+
+/// `p2l_render` flags: straight (not premultiplied) output, and drawing over what the image holds.
+pub const RENDER_STRAIGHT: u32 = 1;
+pub const RENDER_KEEP: u32 = 2;
 
 /// How many clip layers a rig can play at once.
 pub const MAX_LAYERS: u32 = 16;
@@ -80,6 +84,8 @@ pub struct Model {
     meta_values: Vec<CString>,
     /// Per clip, the text of each of its events.
     event_values: Vec<Vec<CString>>,
+    /// Each embedded PNG page decoded once, on the first render that needs it.
+    decoded: Vec<std::sync::OnceLock<Option<crate::png::Image>>>,
     /// Per mesh, the part holding it, or -1.
     mesh_part: Vec<i32>,
     /// Per part, the part holding it, or -1.
@@ -165,6 +171,7 @@ impl Model {
             meta_keys: c_strings(rig.meta.iter().map(|(k, _)| k)),
             meta_values: c_strings(rig.meta.iter().map(|(_, v)| v)),
             event_values: rig.clips.iter().map(|c| c_strings(c.extras.events.iter().map(|(_, v)| v))).collect(),
+            decoded: rig.textures.iter().map(|_| std::sync::OnceLock::new()).collect(),
             mesh_part,
             part_parent,
             groups,
@@ -223,6 +230,8 @@ pub struct Handle {
     /// Colors the host puts in place of a mesh's, or of every mesh under a part.
     mesh_colors: Vec<Option<Colors>>,
     part_colors: Vec<Option<Colors>>,
+    /// Textures the host gave pages in place of the file's, for the software renderer.
+    textures: Vec<Option<crate::png::Image>>,
     behaviors: Behaviors,
     physics: Physics,
     /// The pose the host sets, under clips, expressions, behaviors and physics.
@@ -283,6 +292,7 @@ impl Handle {
             clip_opacity: 1.0,
             mesh_colors: vec![None; rig.meshes.len()],
             part_colors: vec![None; rig.parts.len()],
+            textures: vec![None; rig.textures.len()],
             behaviors,
             current: values.clone(),
             values,
@@ -1284,6 +1294,76 @@ pub unsafe extern "C" fn p2l_part_opacity(handle: *const Handle, index: u32) -> 
 #[no_mangle]
 pub unsafe extern "C" fn p2l_set_part_opacity(handle: *mut Handle, index: u32, opacity: f32) -> bool {
     with_mut!(handle, false, |h| h.poses.set_host_opacity(index as usize, opacity))
+}
+
+// --- software rendering ---
+
+/// Draws the last evaluation into [rgba], [width] x [height] RGBA8 pixels, rows top first, by the drawing rules
+/// the header states. [transform] maps canvas pixels to image pixels as [a, b, c, d, tx, ty] (x' = a x + b y + tx,
+/// y' = c x + d y + ty); null fits the canvas into the image from its top left corner. [flags]: RENDER_STRAIGHT for
+/// straight alpha (premultiplied otherwise), RENDER_KEEP to draw over what [rgba] holds instead of transparency.
+/// Embedded PNG pages decode themselves; other pages draw only once p2l_render_texture gives them pixels.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_render(handle: *mut Handle, rgba: *mut u8, width: u32, height: u32, transform: *const f32, flags: u32) -> bool {
+    if rgba.is_null() || width == 0 || height == 0 || (width as u64) * (height as u64) > (1 << 28) {
+        return false;
+    }
+    let (w, h) = (width as usize, height as usize);
+    with_mut!(handle, false, |h_| {
+        let model = &h_.model;
+        let rig = &model.rig;
+        let transform = if transform.is_null() {
+            let scale = (w as f32 / rig.canvas.width).min(h as f32 / rig.canvas.height);
+            crate::render::Affine { a: scale, b: 0.0, c: 0.0, d: scale, tx: 0.0, ty: 0.0 }
+        } else {
+            let t = std::slice::from_raw_parts(transform, 6);
+            crate::render::Affine { a: t[0], b: t[1], c: t[2], d: t[3], tx: t[4], ty: t[5] }
+        };
+        let textures: Vec<Option<&crate::png::Image>> = (0..rig.textures.len())
+            .map(|p| {
+                h_.textures[p].as_ref().or_else(|| {
+                    let page = &rig.textures[p];
+                    if page.kind != TextureKind::Png {
+                        return None;
+                    }
+                    model.decoded[p].get_or_init(|| crate::png::decode(&page.data)).as_ref()
+                })
+            })
+            .collect();
+        let groups: Vec<crate::render::GroupStyle> = model.groups.iter()
+            .map(|g| crate::render::GroupStyle { blend: g.blend as u8, alpha_blend: g.alpha_blend as u8, invert_mask: g.invert_mask, masks: &g.masks })
+            .collect();
+        let scene = crate::render::Scene { rig, pose: &h_.evaluator.pose, commands: &h_.render_commands, textures: &textures, groups: &groups };
+        let image = std::slice::from_raw_parts_mut(rgba, w * h * 4);
+        let straight = flags & RENDER_STRAIGHT != 0;
+        let mut pixels = vec![0.0f32; w * h * 4];
+        let keep = flags & RENDER_KEEP != 0;
+        if keep {
+            crate::render::from_rgba8(image, straight, &mut pixels);
+        }
+        crate::render::render(&scene, transform, w, h, &mut pixels, keep);
+        crate::render::to_rgba8(&pixels, straight, image);
+        true
+    })
+}
+
+/// Gives page [page] [width] x [height] straight RGBA8 pixels for p2l_render, in place of the file's (a KTX2 page
+/// or a file next to the rig, which the runtime does not decode); null takes them back. False for no such page.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_render_texture(handle: *mut Handle, page: u32, rgba: *const u8, width: u32, height: u32) -> bool {
+    with_mut!(handle, false, |h| {
+        let Some(slot) = h.textures.get_mut(page as usize) else { return false };
+        if rgba.is_null() {
+            *slot = None;
+            return true;
+        }
+        if width == 0 || height == 0 || (width as u64) * (height as u64) > (1 << 28) {
+            return false;
+        }
+        let n = width as usize * height as usize * 4;
+        *slot = Some(crate::png::Image { width, height, rgba: std::slice::from_raw_parts(rgba, n).to_vec() });
+        true
+    })
 }
 
 // --- textures ---
