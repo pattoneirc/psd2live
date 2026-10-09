@@ -121,7 +121,7 @@ These are the default (Photoshop-style) bindings. **Settings** can switch to Ble
 
 When reporting a problem, include the version, operating system, steps to reproduce and the relevant files.
 
-Further reading: [SDK setup](CUBISM_SDK_SETUP.md), [development and CLI](DEVELOPMENT.md), [project format](../spec/PROJECT_FORMAT.md), and the Chinese references for [canvas editing](../../zh/guide/CANVAS_EDITOR.md), [paths](../../zh/guide/DEFORM_PATHS.md), [skeleton and poses](../../zh/guide/SKELETON.md), [physics](../../zh/guide/PHYSICS.md), [upscaling](../../zh/guide/TEXTURE_UPSCALE.md) and [MCP](../../zh/agent/MCP_AUTHORING.md).
+Further reading: [SDK setup](CUBISM_SDK_SETUP.md), [development and CLI](DEVELOPMENT.md), [project format](../spec/PROJECT_FORMAT.md), and the Chinese references for [canvas editing](../../zh/guide/CANVAS_EDITOR.md), [paths](../../zh/guide/DEFORM_PATHS.md), [skeleton and poses](../../zh/guide/SKELETON.md), [physics](../../zh/guide/PHYSICS.md), [simulation and baking](../../zh/guide/SIMULATION.md), [upscaling](../../zh/guide/TEXTURE_UPSCALE.md) and [MCP](../../zh/agent/MCP_AUTHORING.md).
 
 For Cubism terms and workflows, see Live2D's official [Cubism tutorials](https://docs.live2d.com/en/cubism-editor-tutorials/top/), [parameters](https://docs.live2d.com/en/cubism-editor-manual/parameter/), [blend shapes](https://docs.live2d.com/en/cubism-editor-manual/blend-shape/) and [embedded-data export](https://docs.live2d.com/en/cubism-editor-manual/export-moc3-motion3-files/). PSD2Live's interface and modeling aids are not Cubism Editor; the in-app tutorials remain the reference for its operation.
 

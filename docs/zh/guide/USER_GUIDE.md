@@ -121,7 +121,7 @@
 
 提交问题时请附版本、操作系统、复现步骤及相关素材。
 
-进一步阅读：[画布编辑](CANVAS_EDITOR.md) · [变形路径](DEFORM_PATHS.md) · [骨骼与姿态](SKELETON.md) · [物理](PHYSICS.md) · [高清化](TEXTURE_UPSCALE.md) · [SDK](CUBISM_SDK_SETUP.md) · [Agent / MCP](../agent/MCP_AUTHORING.md) · [构建与 CLI](DEVELOPMENT.md)。
+进一步阅读：[画布编辑](CANVAS_EDITOR.md) · [变形路径](DEFORM_PATHS.md) · [骨骼与姿态](SKELETON.md) · [物理](PHYSICS.md) · [模拟与烘焙](SIMULATION.md) · [高清化](TEXTURE_UPSCALE.md) · [SDK](CUBISM_SDK_SETUP.md) · [Agent / MCP](../agent/MCP_AUTHORING.md) · [构建与 CLI](DEVELOPMENT.md)。
 
 Cubism 术语与流程对照参考 Live2D 官方的 [Cubism 基础教程](https://docs.live2d.com/zh-CHS/cubism-editor-tutorials/top/)、[参数](https://docs.live2d.com/zh-CHS/cubism-editor-manual/parameter/)、[融合变形](https://docs.live2d.com/zh-CHS/cubism-editor-manual/blend-shape/)与[嵌入数据导出](https://docs.live2d.com/zh-CHS/cubism-editor-manual/export-moc3-motion3-files/)。PSD2Live 的界面与制作辅助不等同于 Cubism Editor，具体操作仍以本程序内教程为准。
 

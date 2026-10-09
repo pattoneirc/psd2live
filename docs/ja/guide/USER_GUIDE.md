@@ -121,7 +121,7 @@ PSD をインポート（`Ctrl+Shift+O`）→ 分類とプレビューを確認 
 
 問題を報告するときは、バージョン、OS、再現手順、関連する素材を添えてください。
 
-関連資料：[SDK](CUBISM_SDK_SETUP.md) · [開発・CLI](DEVELOPMENT.md)。詳細な[キャンバス](../../zh/guide/CANVAS_EDITOR.md)・[パス](../../zh/guide/DEFORM_PATHS.md)・[ボーンとポーズ](../../zh/guide/SKELETON.md)・[物理演算](../../zh/guide/PHYSICS.md)・[高解像度化](../../zh/guide/TEXTURE_UPSCALE.md)・[プロジェクト形式](../../zh/spec/PROJECT_FORMAT.md)・[MCP](../../zh/agent/MCP_AUTHORING.md)資料は中国語です。
+関連資料：[SDK](CUBISM_SDK_SETUP.md) · [開発・CLI](DEVELOPMENT.md)。詳細な[キャンバス](../../zh/guide/CANVAS_EDITOR.md)・[パス](../../zh/guide/DEFORM_PATHS.md)・[ボーンとポーズ](../../zh/guide/SKELETON.md)・[物理演算](../../zh/guide/PHYSICS.md)・[シミュレーションと焼き込み](../../zh/guide/SIMULATION.md)・[高解像度化](../../zh/guide/TEXTURE_UPSCALE.md)・[プロジェクト形式](../../zh/spec/PROJECT_FORMAT.md)・[MCP](../../zh/agent/MCP_AUTHORING.md)資料は中国語です。
 
 Cubism の用語と制作の流れは、Live2D 公式の [Cubism 基本チュートリアル](https://docs.live2d.com/cubism-editor-tutorials/top/)、[パラメータ](https://docs.live2d.com/cubism-editor-manual/parameter/)、[ブレンドシェイプ](https://docs.live2d.com/cubism-editor-manual/blend-shape/)、[組み込み用ファイルの書き出し](https://docs.live2d.com/cubism-editor-manual/export-moc3-motion3-files/)を参照してください。PSD2Live の画面と制作支援は Cubism Editor と同じではないため、具体的な操作はアプリ内チュートリアルに従ってください。
 

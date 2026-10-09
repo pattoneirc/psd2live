@@ -102,7 +102,6 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `MotionSheetTool.idle` | 待機 12 秒のフレーム画像 | `motion-frames/<サンプル>-idle/` |
 | `ModelProfileTool.cmo3` | `.cmo3` のパラメータ、デフォーマツリー（グリッド軸と範囲）、メッシュ、帯ごとの動きのプロファイル、体パラメータでの各メッシュの移動、体 X × 体 Y のシルエット、物理グループ | `model-profile/<名前>.txt`、`.png`、`-physics.txt` |
 | `ModelProfileTool.sample` | 生成モデル（スケルトンなしと自動スケルトン）の帯ごとの動きのプロファイル、体レイヤーと自動ボーン | `model-profile/<サンプル>.txt` |
-| `SimBakeBenchmark` | `tml` の後ろ髪をいくつかの設定で焼き込み、フィットに使わなかった動きでシミュレーションと書き出し結果を比較 | 標準出力 |
 | `SimBakeSuite` | モデルプリセットと同じ手順で後ろ髪・前髪・衣服などの物理体を作り（上端 10% 固定の後ろ髪も）、従来の方法と入力ごとの方法で焼き込み、フィットに使わなかった動き（フェイストラッキング風の追従、首かしげ、組み込みモーション、入力ごとのステップ、振り向き、ドラッグ、揺さぶり）で参照シミュレーションと書き出し結果を見た目の指標で比較 | `build/tools/sim-bake/<サンプル>/`：`summary.md`、設定ごとの JSON、先端の軌跡図 |
 | `SimRootDofExperiment` | 物体が根元の平行移動と回転だけに応答するかの検証：各入力が根元をどれだけ動かし、それ以外にどれだけ形を変えるか、実際の駆動と剛体駆動・振幅・同じ根元の動きをする別の入力の違い | `build/tools/sim-root-dof/<サンプル>.md` |
 | `SimBakeProfileTool` | `tml` の後ろ髪を単一スレッドと全スレッドで焼き込み、進捗ごとの所要時間と全スレッドのサンプリング | 標準出力 |
@@ -151,7 +150,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `PSD2LIVE_BIND_LEGS` | `1` で脚と靴のメッシュを最初の太ももボーンにバインド |
 | `PSD2LIVE_ZOOM` | 脚の拡大範囲。`左,上,右,下` をキャンバスに対する比率で指定 |
 | `PSD2LIVE_VERBOSE` | `1` で `motions` が各カーブも出力 |
-| `PSD2LIVE_BAKE_CONFIGS` | `SimBakeBenchmark` / `SimBakeSuite` の設定。`モード数:キー数,...`。前者の既定は `2:5,2:7,1:5`、後者は `preset`（部位ごとの設定） |
+| `PSD2LIVE_BAKE_CONFIGS` | `SimBakeSuite` の設定。`モード数:キー数,...`。既定は `preset`（部位ごとの設定） |
 | `PSD2LIVE_SIM_PARTS` | `SimBakeSuite` / `SimRootDofExperiment` の部位。カンマ区切り、既定はすべて |
 | `PSD2LIVE_BAKE_METHODS` | `SimBakeSuite` の焼き込み方法。`legacy,dof` |
 | `PSD2LIVE_SIM_INPUTS` | `SimBakeSuite` で残す入力 |

@@ -124,7 +124,7 @@ internal object SimBenchMotions {
 		return track.toFloatArray()
 	}
 
-	/** SimBakeBenchmark's turns and wobbles, mouse drags, and steady hard shaking, 10 s each. */
+	/** Turns and wobbles, mouse drags, and steady hard shaking, 10 s each. */
 	private fun legacy(kind: String): Map<String, FloatArray> {
 		val names = listOf("ParamAngleX", "ParamAngleZ", "ParamBodyAngleX", "ParamBodyAngleZ")
 		val spans = listOf(30f, 30f, 10f, 10f)

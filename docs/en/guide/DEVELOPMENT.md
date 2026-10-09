@@ -102,7 +102,6 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `MotionSheetTool.idle` | Twelve seconds of the idle, frame by frame | `motion-frames/<sample>-idle/` |
 | `ModelProfileTool.cmo3` | A `.cmo3`'s parameters, deformer tree (grid axes and bounds), drawables, band motion profile and per-drawable motion under the body parameters, silhouettes over body X × body Y, and its physics groups | `model-profile/<name>.txt`, `.png`, `-physics.txt` |
 | `ModelProfileTool.sample` | The band motion profile of a generated model (without a skeleton and on the auto skeleton), its body layers and auto bones | `model-profile/<sample>.txt` |
-| `SimBakeBenchmark` | Bakes the `tml` back hair at a few settings and compares the simulation with the export on motion the fit never saw | standard output |
 | `SimBakeSuite` | Sets up the back hair, front hair and clothing as the model presets do (plus the back hair pinned along its top tenth), bakes each with the old and the input-by-input method, and compares the reference simulation and the export on motion the fit never saw (tracking-like pointer, head rolls, built-in motions, each input stepped, turns, drags, shaking) by visual measures | `build/tools/sim-bake/<sample>/`: `summary.md`, a JSON per setting, tip trajectory plots |
 | `SimRootDofExperiment` | Whether a body answers only how its root is carried and turned: how far each input moves the root and how much it reshapes the body besides; real against rigid driving, amplitudes, and inputs moving the root alike | `build/tools/sim-root-dof/<sample>.md` |
 | `SimBakeProfileTool` | Bakes the `tml` back hair on one thread and on all, times the stages between progress marks and samples every thread | standard output |
@@ -151,7 +150,7 @@ PSD2LIVE_TOOLS=1 PSD2LIVE_SAMPLE=ds ./gradlew test --tests "io.github.psd2live.t
 | `PSD2LIVE_BIND_LEGS` | `1` binds the leg and shoe meshes to the first thigh bone |
 | `PSD2LIVE_ZOOM` | Frame of the leg close-up, `left,top,right,bottom` as shares of the canvas |
 | `PSD2LIVE_VERBOSE` | `1` makes `motions` also print every curve |
-| `PSD2LIVE_BAKE_CONFIGS` | Settings of `SimBakeBenchmark` / `SimBakeSuite`, `modes:keys,...`; `2:5,2:7,1:5` by default for the first, `preset` (each part's own) for the second |
+| `PSD2LIVE_BAKE_CONFIGS` | Settings of `SimBakeSuite`, `modes:keys,...`; `preset` (each part's own) by default |
 | `PSD2LIVE_SIM_PARTS` | Parts for `SimBakeSuite` / `SimRootDofExperiment`, comma-separated; all by default |
 | `PSD2LIVE_BAKE_METHODS` | Bake methods for `SimBakeSuite`, `legacy,dof` |
 | `PSD2LIVE_SIM_INPUTS` | `SimBakeSuite` keeps only these inputs |
