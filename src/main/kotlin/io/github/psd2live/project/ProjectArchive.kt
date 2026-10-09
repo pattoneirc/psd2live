@@ -111,6 +111,15 @@ internal object ProjectArchive {
         Files.setLastModifiedTime(target, Files.getLastModifiedTime(source))
     }
 
+    private fun copy(input: InputStream, output: OutputStream, counted: (Long) -> Unit) {
+        val buffer = ByteArray(1 shl 16)
+        var size = 0L
+        while (true) {
+            val n = input.read(buffer); if (n < 0) break
+            output.write(buffer, 0, n); size += n; counted(size)
+        }
+    }
+
     /** Reads [input] to its end, copying it to [output] when given, and returns its digest; [counted] sees the running length. */
     private fun measure(input: InputStream, output: OutputStream?, counted: (Long) -> Unit = {}): Digest {
         val hash = MessageDigest.getInstance("SHA-256")
@@ -129,12 +138,17 @@ internal object ProjectArchive {
     /**
      * Packs [directory] into [target]. Each file is read once (a STORED entry whose digest is known is only
      * copied), the manifest is built from the digests taken while writing, and the finished archive is read back
-     * (entry set, lengths, CRCs and manifest) before it atomically replaces [target].
+     * (entry set, lengths, CRCs and manifest) before it atomically replaces [target]. [progress] sees the share of
+     * bytes written and read back, from 0 to 1.
      */
-    fun write(directory: Path, target: Path, projectId: String, version: Int = ProjectFormatV2.VERSION, beforeReplace: () -> Unit = {}) {
+    fun write(directory: Path, target: Path, projectId: String, version: Int = ProjectFormatV2.VERSION,
+              progress: (Double) -> Unit = {}, beforeReplace: () -> Unit = {}) {
         val files = Files.walk(directory).use { paths -> paths.filter(Files::isRegularFile).toList() }
             .map { directory.relativize(it).toString().replace('\\', '/') to it }
             .filter { it.first != MANIFEST }.sortedBy { it.first }
+        // Writing hashes and compresses, reading back only inflates: the read takes the smaller share.
+        val total = files.sumOf { Files.size(it.second) }.coerceAtLeast(1L).toDouble()
+        var done = 0L
         val destination = target.toAbsolutePath().normalize()
         Files.createDirectories(destination.parent)
         val temporary = Files.createTempFile(destination.parent, ".psd2live-", ".tmp")
@@ -146,19 +160,21 @@ internal object ProjectArchive {
                 for ((name, file) in files) {
                     val entry = ZipEntry(name)
                     val size = Files.size(file)
+                    val before = done
+                    val counted = { length: Long -> done = before + length; progress(0.8 * done / total) }
                     val large = size >= SAMPLED_BYTES && !name.endsWith(".json")
                     if (isStored(name) || large && !compresses(file, size)) {
                         val digest = Digests.of(name, file)
                         entry.method = ZipEntry.STORED
                         entry.size = digest.size; entry.compressedSize = digest.size; entry.crc = digest.crc
                         // ZipOutputStream checks the bytes it is given against this CRC and length.
-                        zip.putNextEntry(entry); Files.copy(file, zip); zip.closeEntry()
+                        zip.putNextEntry(entry); Files.newInputStream(file).use { copy(it, zip, counted) }; zip.closeEntry()
                         written[name] = digest
                     } else {
                         // A large binary that does compress takes the fastest level; JSON keeps the default.
                         zip.setLevel(if (large) java.util.zip.Deflater.BEST_SPEED else java.util.zip.Deflater.DEFAULT_COMPRESSION)
                         zip.putNextEntry(entry)
-                        written[name] = Files.newInputStream(file).use { measure(it, zip) }
+                        written[name] = Files.newInputStream(file).use { measure(it, zip, counted) }
                         zip.closeEntry()
                     }
                 }
@@ -172,7 +188,7 @@ internal object ProjectArchive {
                 zip.close()
             }
             // Verify the actual completed archive before replacing the previous saved project.
-            verify(temporary, written, manifest)
+            verify(temporary, written, manifest) { read -> progress(0.8 + 0.2 * (read / total).coerceAtMost(1.0)) }
             beforeReplace()
             // On Windows a scanner or previewer briefly holding the old project refuses the replace; wait it out.
             var attempt = 0
@@ -183,11 +199,15 @@ internal object ProjectArchive {
         } finally { Files.deleteIfExists(temporary) }
     }
 
-    /** Reads [archive] back as a stream: exactly the [expected] entries and [manifest], each with its length and CRC. */
-    internal fun verify(archive: Path, expected: Map<String, Digest>, manifest: ByteArray) {
+    /**
+     * Reads [archive] back as a stream: exactly the [expected] entries and [manifest], each with its length and CRC.
+     * [counted] sees the running number of bytes read.
+     */
+    internal fun verify(archive: Path, expected: Map<String, Digest>, manifest: ByteArray, counted: (Long) -> Unit = {}) {
         ZipFile(archive.toFile()).use { zip ->
             val names = HashSet<String>()
             val buffer = ByteArray(1 shl 16)
+            var read = 0L
             for (entry in zip.entries()) {
                 val name = entry.name
                 require(names.add(name)) { "Duplicate project entry: $name" }
@@ -199,6 +219,7 @@ internal object ProjectArchive {
                     while (true) {
                         val n = input.read(buffer); if (n < 0) break
                         size += n; crc.update(buffer, 0, n); bytes?.write(buffer, 0, n)
+                        read += n; counted(read)
                     }
                 }
                 if (digest != null) require(size == digest.size && entry.size == digest.size && crc.value == digest.crc && entry.crc == digest.crc) {
@@ -209,10 +230,13 @@ internal object ProjectArchive {
         }
     }
 
-    fun extract(file: Path): Path {
+    /** Unpacks [file] into a new temporary directory; [progress] sees the share of declared entry bytes written, from 0 to 1. */
+    fun extract(file: Path, progress: (Double) -> Unit = {}): Path {
         val root = Files.createTempDirectory("psd2live-project-").toAbsolutePath().normalize()
         try {
             ZipFile(file.toFile()).use { zip ->
+                // Declared sizes only pace the progress; the limit below counts the bytes actually written.
+                val declared = zip.entries().asSequence().sumOf { it.size.coerceAtLeast(0L) }.coerceAtLeast(1L).toDouble()
                 val names = mutableSetOf<String>()
                 val folded = HashSet<String>()
                 val digests = HashMap<String, Digest>()
@@ -235,6 +259,7 @@ internal object ProjectArchive {
                         digests[name] = zip.getInputStream(entry).use { input -> Files.newOutputStream(path).use { output ->
                             measure(input, output) { size ->
                                 total = before + size
+                                progress((total / declared).coerceAtMost(1.0))
                                 require(total <= 64L * 1024 * 1024 * 1024) { "Project exceeds 64 GiB unpacked limit" }
                             }
                         } }

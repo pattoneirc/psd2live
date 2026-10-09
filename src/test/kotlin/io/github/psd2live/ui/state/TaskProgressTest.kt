@@ -33,6 +33,14 @@ class TaskProgressTest {
         }
     }
 
+    @Test fun projectOpenOrSaveShowsItsOwnProgressEvenWhenNothingElseIsBusy() {
+        val project = PSD2LiveViewModel.ProjectProgress("Opening a.psd2live", 0.3f)
+        val task = assertNotNull(taskProgress(PSD2LiveState(), null, DownloadState.Idle, project))
+        assertEquals("Opening a.psd2live", task.text)
+        assertEquals(0.3f, task.fraction)
+        assertNull(taskProgress(PSD2LiveState(), null, DownloadState.Idle, null))
+    }
+
     @Test fun operationsWithoutMeasuredProgressUseAnIndeterminateIndicator() {
         assertNull(assertNotNull(taskProgress(PSD2LiveState(isAnalyzing = true, isIndeterminateProgress = true), null, DownloadState.Idle)).fraction)
         assertNull(assertNotNull(taskProgress(PSD2LiveState(canvasEditBusy = true), null, DownloadState.Idle)).fraction)

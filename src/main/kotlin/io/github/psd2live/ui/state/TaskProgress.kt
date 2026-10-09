@@ -14,6 +14,7 @@ internal fun taskProgress(
     state: PSD2LiveState,
     baking: PSD2LiveViewModel.SimulationBaking?,
     download: DownloadState,
+    project: PSD2LiveViewModel.ProjectProgress? = null,
 ): TaskProgress? {
     // Baking may run inside another workspace operation; prefer its detailed progress.
     if (baking != null) {
@@ -34,6 +35,7 @@ internal fun taskProgress(
         DownloadState.Verifying -> return TaskProgress(tr("upscale.verifying"))
         else -> Unit
     }
+    if (project != null) return TaskProgress(project.text, project.fraction)
     return when {
         state.isBusy || state.isExportingPsd -> TaskProgress(
             state.statusText,

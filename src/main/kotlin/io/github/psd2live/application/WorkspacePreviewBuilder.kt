@@ -18,6 +18,11 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
+/** Sees how far a preview build is, from 0 to 1, where no workspace job reports it - such as installing an opened project. */
+internal class WorkspacePreviewProgress(val update: (Float) -> Unit) : kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+    companion object Key : kotlin.coroutines.CoroutineContext.Key<WorkspacePreviewProgress>
+}
+
 /** Rebuild and ordered replay are application work; adapters only project the resulting model. */
 internal class WorkspacePreviewBuilder {
     private val pipeline = PSD2LivePipeline()
@@ -26,6 +31,7 @@ internal class WorkspacePreviewBuilder {
         val context = currentCoroutineContext()
         return ProgressListener { message, fraction ->
             context.ensureActive()
+            context[WorkspacePreviewProgress]?.update(fraction.toFloat().coerceIn(0f, 1f))
             if (context[WorkspaceGenerationJobExecution] != null || context[WorkspacePartitionJobExecution] != null || context[WorkspaceSplitUpgradeJobExecution] != null || context[WorkspaceGenerationUpdateJobExecution] != null || context[WorkspaceWarpJobExecution] != null || context[WorkspaceWarpControlJobExecution] != null || context[WorkspaceLayerJobExecution] != null)
                 context[WorkspaceJobContext]?.progress(start + (end - start) * fraction.toFloat().coerceIn(0f, 1f), message)
         }

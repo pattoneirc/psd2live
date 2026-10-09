@@ -148,7 +148,8 @@ fun FrameWindowScope.PSD2LiveApp(
 	val state by viewModel.uiState
 	val baking by viewModel.simulationBaking.collectAsState()
 	val download by viewModel.modelDownloadState.collectAsState()
-	val task = io.github.psd2live.ui.state.taskProgress(state, baking, download)
+	val projectProgress by viewModel.projectProgress.collectAsState()
+	val task = io.github.psd2live.ui.state.taskProgress(state, baking, download, projectProgress)
 	var helpDialogTab by remember { mutableStateOf<HelpTab?>(null) }
 	var showAgentDialog by remember { mutableStateOf(false) }
 	var tutorial by remember { mutableStateOf(InteractiveTutorialState()) }

@@ -60,6 +60,23 @@ class ProjectArchiveTest {
 		} finally { ProjectArchive.deleteTemporaryDirectory(directory) }
 	}
 
+	@Test fun writeAndExtractReportProgressThatOnlyGrowsAndEndsComplete() {
+		val directory = staging()
+		try {
+			val target = temporary.resolve("project.psd2live")
+			val written = mutableListOf<Double>()
+			ProjectArchive.write(directory, target, "project", progress = { written += it })
+			val extracted = mutableListOf<Double>()
+			ProjectArchive.deleteTemporaryDirectory(ProjectArchive.extract(target) { extracted += it })
+			for ((name, seen) in listOf("write" to written, "extract" to extracted)) {
+				assertTrue(seen.size > 2, "$name reports along the way, not only at the end")
+				assertEquals(seen.sorted(), seen, "$name progress never goes back")
+				assertTrue(seen.all { it in 0.0..1.0 }, name)
+				assertEquals(1.0, seen.last(), 1e-9, "$name ends complete")
+			}
+		} finally { ProjectArchive.deleteTemporaryDirectory(directory) }
+	}
+
 	@Test fun archivesWrittenEntirelyDeflatedWithTheManifestFirstStillOpen() {
 		val payload = mapOf("history/HEAD.json" to "{}".encodeToByteArray(), "assets/raster.png" to Random(3).nextBytes(512))
 		val target = temporary.resolve("earlier.psd2live")

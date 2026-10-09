@@ -417,6 +417,18 @@ class PSD2LiveViewModel : AutoCloseable {
 
     private val _simulationBaking = MutableStateFlow<SimulationBaking?>(null)
     val simulationBaking: StateFlow<SimulationBaking?> = _simulationBaking.asStateFlow()
+    /** A project being opened or saved: what it is doing and how far along, 0..1; null while none is. */
+    data class ProjectProgress(val text: String, val fraction: Float)
+
+    private val _projectProgress = MutableStateFlow<ProjectProgress?>(null)
+    val projectProgress: StateFlow<ProjectProgress?> = _projectProgress.asStateFlow()
+    /** Called from worker threads per buffer read; only a new stage or a whole percent reaches the status bar. */
+    internal fun reportProjectProgress(text: String, fraction: Float) = _projectProgress.update { current ->
+        val next = fraction.coerceIn(0f, 1f)
+        if (current != null && current.text == text && (next * 100).toInt() <= (current.fraction * 100).toInt()) current
+        else ProjectProgress(text, next)
+    }
+    internal fun clearProjectProgress() { _projectProgress.value = null }
     /** Per simulation, how its bake follows the reference over the motions last checked; a running check is absent. */
     private val _simulationChecks = MutableStateFlow<Map<String, SimulationCheck>>(emptyMap())
     val simulationChecks: StateFlow<Map<String, SimulationCheck>> = _simulationChecks.asStateFlow()
