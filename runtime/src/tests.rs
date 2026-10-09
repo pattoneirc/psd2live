@@ -3,7 +3,7 @@
 use crate::eval::Evaluator;
 use crate::rig::*;
 
-fn parameter(id: &str, min: f32, max: f32, default: f32) -> Parameter {
+pub(crate) fn parameter(id: &str, min: f32, max: f32, default: f32) -> Parameter {
     Parameter { id: id.into(), name: id.into(), min, max, default, blend: false, repeat: false }
 }
 
@@ -36,7 +36,7 @@ fn pivot(x: f32, y: f32, angle: f32, scale: f32) -> Pivot {
 }
 
 /// A mesh with its first vertices at [positions]; the triangle is only for validity.
-fn mesh(id: &str, parent: Option<usize>, positions: Vec<f32>) -> Mesh {
+pub(crate) fn mesh(id: &str, parent: Option<usize>, positions: Vec<f32>) -> Mesh {
     let n = positions.len();
     Mesh {
         id: id.into(), name: id.into(), parent, blend: 0, alpha_blend: 0, masked_by: vec![], invert_mask: false, culling: false, visible: true, page: -1,
@@ -45,7 +45,7 @@ fn mesh(id: &str, parent: Option<usize>, positions: Vec<f32>) -> Mesh {
     }
 }
 
-fn rig(parameters: Vec<Parameter>, deformers: Vec<Deformer>, meshes: Vec<Mesh>) -> Rig {
+pub(crate) fn rig(parameters: Vec<Parameter>, deformers: Vec<Deformer>, meshes: Vec<Mesh>) -> Rig {
     Rig {
         canvas: Canvas { width: 512.0, height: 512.0, origin_x: 0.0, origin_y: 0.0, pixels_per_unit: None },
         parameters, deformers, parts: vec![], meshes, glues: vec![],

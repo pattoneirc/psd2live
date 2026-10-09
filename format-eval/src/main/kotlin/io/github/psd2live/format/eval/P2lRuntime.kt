@@ -21,7 +21,9 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 	private interface Bindings : Library {
 		fun p2l_rig_load(bytes: ByteArray, len: Long, error: ByteArray, errorCapacity: Long): Pointer?
 		fun p2l_rig_free(rig: Pointer)
+		fun p2l_rig_failure(rig: Pointer): String?
 		fun p2l_version(): String
+		fun p2l_abi_version(): Int
 		fun p2l_parameter_count(rig: Pointer): Int
 		fun p2l_parameter_id(rig: Pointer, index: Int): String?
 		fun p2l_parameter_values(rig: Pointer): Pointer
@@ -53,8 +55,11 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 		fun p2l_sim_reset(rig: Pointer)
 	}
 
-	/** The runtime's version, `major.minor.patch`. */
+	/** The library's build version, `major.minor.patch`. */
 	public val version: String get() = native.p2l_version()
+
+	/** The ABI the library implements, `major shl 16 or minor`. */
+	public val abiVersion: Int get() = native.p2l_abi_version()
 
 	/** Loads a compiled rig; throws [IllegalArgumentException] with the runtime's message when it is invalid. */
 	public fun load(bytes: ByteArray): Rig {
@@ -87,10 +92,24 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 			values = v
 		}
 
-		public fun evaluate(): Unit = native.p2l_evaluate(h())
+		/** Why a call panicked inside the runtime, after which the rig answers nothing; null while it works. */
+		public val failure: String? get() = native.p2l_rig_failure(h())
 
-		/** Advances clips and physics by [dt] seconds, then evaluates. */
-		public fun update(dt: Float): Unit = native.p2l_update(h(), dt)
+		/** Deforms the rig at [values]; throws [IllegalStateException] when the runtime fails on it. */
+		public fun evaluate() {
+			native.p2l_evaluate(h())
+			checkWorking()
+		}
+
+		/** Advances clips and physics by [dt] seconds, then evaluates; throws as [evaluate] does. */
+		public fun update(dt: Float) {
+			native.p2l_update(h(), dt)
+			checkWorking()
+		}
+
+		private fun checkWorking() {
+			failure?.let { throw IllegalStateException("The PSD2Live runtime failed: $it") }
+		}
 
 		public fun resetPhysics(): Unit = native.p2l_physics_reset(h())
 
@@ -196,10 +215,23 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 				.map { File(it, name) }.firstOrNull(File::isFile)
 		}
 
-		/** The runtime from [library] (or [locate]d), or null when there is none. */
+		/** The ABI these bindings need: the same major version and at least this minor one. */
+		public const val ABI_MAJOR: Int = 1
+		public const val ABI_MINOR: Int = 0
+
+		/**
+		 * The runtime from [library] (or [locate]d), or null when there is none or its ABI does not match the
+		 * bindings' (a library without `p2l_abi_version` predates ABI 1.0).
+		 */
 		public fun load(library: File? = locate()): P2lRuntime? {
 			library ?: return null
-			return P2lRuntime(Native.load(library.absolutePath, Bindings::class.java))
+			val runtime = P2lRuntime(Native.load(library.absolutePath, Bindings::class.java))
+			val abi = try {
+				runtime.abiVersion
+			} catch (_: UnsatisfiedLinkError) {
+				return null
+			}
+			return runtime.takeIf { (abi ushr 16) == ABI_MAJOR && (abi and 0xffff) >= ABI_MINOR }
 		}
 	}
 }

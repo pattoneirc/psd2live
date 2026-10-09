@@ -6,6 +6,10 @@
  * vertices in canvas pixels (y down) and draw them back to front in p2l_render_order. Pointers returned
  * stay valid until the handle is freed; pose data until the next evaluation. A null handle is accepted
  * everywhere and returns zeros.
+ *
+ * A call that panics inside the runtime (a bug, or a rig the reader let through that cannot be evaluated)
+ * never unwinds into the host: the call returns as for a null handle, the handle fails, p2l_rig_failure
+ * tells why, and from then on it acts as a null handle until p2l_rig_free.
  */
 #ifndef P2L_RUNTIME_H
 #define P2L_RUNTIME_H
@@ -18,6 +22,16 @@
 extern "C" {
 #endif
 
+/* The ABI this header declares. The major version changes when a function changes or goes, the minor one when
+ * functions are added. A host built against this header works with a library whose p2l_abi_version() passes
+ * P2L_ABI_COMPATIBLE; a library without p2l_abi_version predates ABI 1.0. */
+#define P2L_ABI_VERSION_MAJOR 1
+#define P2L_ABI_VERSION_MINOR 0
+#define P2L_ABI_VERSION ((P2L_ABI_VERSION_MAJOR << 16) | P2L_ABI_VERSION_MINOR)
+#define P2L_ABI_COMPATIBLE(v) (((v) >> 16) == P2L_ABI_VERSION_MAJOR && ((v) & 0xffffu) >= P2L_ABI_VERSION_MINOR)
+/* The ABI the library implements, major << 16 | minor. */
+uint32_t p2l_abi_version(void);
+
 typedef struct P2lRig P2lRig;
 
 /* Loads [len] bytes of a .p2lrt file (version 1 or 2); on failure returns NULL and writes a message into [error]. */
@@ -28,6 +42,9 @@ P2lRig *p2l_rig_load_ex(const uint8_t *bytes, size_t len, uint32_t flags, char *
 /* The versions and chunks this runtime reads, e.g. "1,2 STRS/1 CANV/1 ...": major versions, then tag/newest version. */
 const char *p2l_format_support(void);
 void p2l_rig_free(P2lRig *rig);
+/* Why a call on the handle panicked, after which it acts as a null handle; NULL while it works. */
+const char *p2l_rig_failure(const P2lRig *rig);
+/* The library's build version, "major.minor.patch"; p2l_abi_version tells which functions it has. */
 const char *p2l_version(void);
 void p2l_canvas(const P2lRig *rig, float *width, float *height);
 

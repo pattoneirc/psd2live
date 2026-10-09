@@ -66,6 +66,10 @@
 
 一个句柄对应一个已加载模型，持有参数、动作播放器和物理状态。典型流程：`p2l_rig_load` → 设置参数（`p2l_parameter_values` / `p2l_set_parameter`）→ `p2l_update(dt)`（动作、物理、变形）或 `p2l_evaluate` → 读取 `p2l_mesh_vertices`、`p2l_mesh_opacity`、`p2l_mesh_colors`，按 `p2l_render_order` 由后往前绘制，贴图由 `p2l_texture_png` 提供（`p2l_texture_info` 给出贴图页类型：内嵌 PNG、KTX2 或模型旁的文件）。`p2l_rig_load_ex` 可要求校验块的 CRC，`p2l_format_support` 列出支持的版本与块。表情（`p2l_expression`）在动作片段之后、程序化行为之前叠加；`p2l_hit_test` 返回画布点下的点击区域；`p2l_mesh_user_data` 读取网格的用户数据；`p2l_pose_show` 切换部件互斥组（导出设置 `pose_groups`），被替换的部件随 `p2l_update` 淡出。`p2l_parameter_values` 是宿主设置的姿势，每次 `p2l_update` 都从它重新开始叠加动作、表情、行为和物理，叠加结果不写回，所以眨眼、呼吸和加法表情不会逐帧累积；本帧实际使用的值由 `p2l_parameter_current` 读取。所有函数接受空句柄；返回的指针在句柄释放（姿势数据在下次求值）前有效。
 
+调用在运行时内部 panic（缺陷，或读取器放行却无法求值的模型）时不会展开到宿主：该次调用按空句柄返回，句柄失效，`p2l_rig_failure` 给出原因，此后它与空句柄相同，直到 `p2l_rig_free`；加载中（含首次求值）panic 时 `p2l_rig_load` 返回空并写出原因。WebAssembly 构建的 panic 仍会中止实例（该目标不支持栈展开）。
+
+ABI 版本：头文件的 `P2L_ABI_VERSION_MAJOR` / `P2L_ABI_VERSION_MINOR` 与库的 `p2l_abi_version()`（`major << 16 | minor`）。增加函数时次版本加一，修改或删除函数时主版本加一；宿主用 `P2L_ABI_COMPATIBLE(p2l_abi_version())` 检查，没有 `p2l_abi_version` 的库早于 1.0。`p2l_version` 只是库的构建版本。JVM 绑定加载库时要求主版本相同、次版本不低于绑定所需，否则视为没有运行时；求值或更新后句柄失效时抛出异常（软件预览因此回退到编辑器求值器，运行时预览后端与导出报告错误）。`cargo test` 校验头文件声明的函数与库导出的函数一一对应、版本号一致。
+
 ## 验证
 
 - `cargo test`：每条求值规则一个小模型单元测试（数值来自探测结果），以及 Warp、动作片段测试；`format_tests` 逐块拼出版本 2 文件，覆盖压缩、CRC、块目录与各种拒绝情形、全部数组编码、贴图页类型和参数面板。

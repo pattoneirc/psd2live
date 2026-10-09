@@ -36,6 +36,16 @@ class P2lRuntimeTest {
 		}
 	}
 
+	@Test fun theLibraryImplementsTheAbiTheBindingsNeed() {
+		val abi = runtime().abiVersion
+		assertEquals(P2lRuntime.ABI_MAJOR, abi ushr 16)
+		assertTrue((abi and 0xffff) >= P2lRuntime.ABI_MINOR)
+		runtime().load(rig).use { r ->
+			r.evaluate()
+			assertNull(r.failure)
+		}
+	}
+
 	@Test fun invalidRigsAreRejectedWithTheRuntimesMessage() {
 		val runtime = runtime()
 		val error = assertFailsWith<IllegalArgumentException> { runtime.load(byteArrayOf(1, 2, 3)) }

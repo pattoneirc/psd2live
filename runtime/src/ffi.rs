@@ -1,6 +1,7 @@
 //! The C ABI: one opaque handle per loaded rig, holding its evaluator, clip player and physics.
 //! Strings and arrays returned stay valid until the handle is freed or, for pose data, until the
-//! next evaluation. Every function tolerates a null handle. See `include/p2l_runtime.h`.
+//! next evaluation. Every function tolerates a null handle. A panic never unwinds into the host: the
+//! handle fails and acts as a null one from then on (`p2l_rig_failure`). See `include/p2l_runtime.h`.
 
 use crate::advanced::{Advanced, Affine};
 use crate::behavior::Behaviors;
@@ -10,8 +11,16 @@ use crate::expression::ExpressionPlayer;
 use crate::pose::PosePlayer;
 use crate::physics::Physics;
 use crate::rig::{Rig, TextureKind};
+use std::any::Any;
+use std::cell::OnceCell;
 use std::ffi::{c_char, CStr, CString};
+use std::panic::{self, AssertUnwindSafe};
 use std::ptr;
+
+/// The ABI version, `p2l_abi_version`: the major changes when a function changes or goes, the minor when
+/// functions are added. Kept equal to `P2L_ABI_VERSION_MAJOR` / `_MINOR` in the header.
+pub const ABI_MAJOR: u32 = 1;
+pub const ABI_MINOR: u32 = 0;
 
 pub struct Handle {
     rig: Rig,
@@ -35,10 +44,19 @@ pub struct Handle {
     poses: PosePlayer,
     advanced: Advanced,
     render_order: Vec<u32>,
+    /// Why a call on this handle panicked; once set, the handle acts as a null one.
+    failure: OnceCell<CString>,
 }
 
 fn c_strings<'a>(ids: impl Iterator<Item = &'a String>) -> Vec<CString> {
     ids.map(|id| CString::new(id.replace('\0', "")).unwrap()).collect()
+}
+
+/// The message a panic carried.
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    payload.downcast_ref::<&str>().map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".to_string())
 }
 
 fn write_error(message: &str, error: *mut c_char, capacity: usize) {
@@ -82,6 +100,7 @@ impl Handle {
             expressions: ExpressionPlayer::new(),
             poses: PosePlayer::new(&rig),
             advanced: Advanced::new(),
+            failure: OnceCell::new(),
             evaluator: Evaluator::new(),
             player: Player::new(),
             behaviors: Behaviors::default(),
@@ -93,6 +112,12 @@ impl Handle {
         };
         evaluate(&mut handle);
         handle
+    }
+
+    /// Records the panic a call ended in; the handle stays failed.
+    fn fail(&self, payload: Box<dyn Any + Send>) {
+        let message = panic_message(payload.as_ref()).replace('\0', "");
+        let _ = self.failure.set(CString::new(message).unwrap());
     }
 }
 
@@ -107,16 +132,20 @@ pub unsafe extern "C" fn p2l_rig_load_ex(bytes: *const u8, len: usize, flags: u3
         return ptr::null_mut();
     }
     let data = std::slice::from_raw_parts(bytes, len);
-    match std::panic::catch_unwind(|| Rig::read_with(data, flags & LOAD_VERIFY_CRC != 0)) {
-        Ok(Ok(rig)) => {
-            Box::into_raw(Box::new(Handle::new(rig)))
-        }
+    open(|| Rig::read_with(data, flags & LOAD_VERIFY_CRC != 0), error, error_capacity)
+}
+
+/// A handle on the rig [read] gives, evaluated once; null with a message in [error] when it does not read or
+/// panics, reading or in that first evaluation.
+fn open(read: impl FnOnce() -> crate::rig::Result<Rig>, error: *mut c_char, error_capacity: usize) -> *mut Handle {
+    match panic::catch_unwind(AssertUnwindSafe(|| read().map(Handle::new))) {
+        Ok(Ok(handle)) => Box::into_raw(Box::new(handle)),
         Ok(Err(e)) => {
             write_error(&e.0, error, error_capacity);
             ptr::null_mut()
         }
-        Err(_) => {
-            write_error("The rig could not be read", error, error_capacity);
+        Err(payload) => {
+            write_error(&format!("The rig could not be read: {}", panic_message(payload.as_ref())), error, error_capacity);
             ptr::null_mut()
         }
     }
@@ -125,7 +154,17 @@ pub unsafe extern "C" fn p2l_rig_load_ex(bytes: *const u8, len: usize, flags: u3
 #[no_mangle]
 pub unsafe extern "C" fn p2l_rig_free(handle: *mut Handle) {
     if !handle.is_null() {
-        drop(Box::from_raw(handle));
+        let handle = Box::from_raw(handle);
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| drop(handle)));
+    }
+}
+
+/// Why a call on the handle panicked, after which it acts as a null handle; null while it works.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_rig_failure(handle: *const Handle) -> *const c_char {
+    match handle.as_ref().and_then(|h| h.failure.get()) {
+        Some(message) => message.as_ptr(),
+        None => ptr::null(),
     }
 }
 
@@ -136,11 +175,19 @@ fn evaluate(handle: &mut Handle) {
     handle.poses.apply(&handle.rig, &mut handle.evaluator.pose);
 }
 
+/// Runs [body] on a working handle, [default] for a null or failed one. A panic in [body] fails the handle and
+/// gives [default] instead of unwinding into the host.
 macro_rules! with {
     ($handle:expr, $default:expr, |$h:ident| $body:expr) => {{
         match ($handle as *const Handle).as_ref() {
-            Some($h) => $body,
-            None => $default,
+            Some($h) if $h.failure.get().is_none() => match panic::catch_unwind(AssertUnwindSafe(|| $body)) {
+                Ok(value) => value,
+                Err(payload) => {
+                    $h.fail(payload);
+                    $default
+                }
+            },
+            _ => $default,
         }
     }};
 }
@@ -148,8 +195,14 @@ macro_rules! with {
 macro_rules! with_mut {
     ($handle:expr, $default:expr, |$h:ident| $body:expr) => {{
         match $handle.as_mut() {
-            Some($h) => $body,
-            None => $default,
+            Some($h) if $h.failure.get().is_none() => match panic::catch_unwind(AssertUnwindSafe(|| $body)) {
+                Ok(value) => value,
+                Err(payload) => {
+                    $h.fail(payload);
+                    $default
+                }
+            },
+            _ => $default,
         }
     }};
 }
@@ -694,8 +747,82 @@ pub unsafe extern "C" fn p2l_bone_transform(handle: *mut Handle, index: u32, out
     })
 }
 
-/// The runtime's version, `major.minor.patch`.
+/// The library's build version, `major.minor.patch`; [p2l_abi_version] tells which functions it has.
 #[no_mangle]
 pub extern "C" fn p2l_version() -> *const c_char {
     concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
+}
+
+/// The ABI the library implements, `major << 16 | minor`.
+#[no_mangle]
+pub extern "C" fn p2l_abi_version() -> u32 {
+    ABI_MAJOR << 16 | ABI_MINOR
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::{mesh, parameter, rig};
+
+    fn triangle(parent: Option<usize>) -> Rig {
+        rig(vec![parameter("A", 0.0, 1.0, 0.0)], vec![], vec![mesh("M", parent, vec![0.0, 0.0, 10.0, 0.0, 0.0, 10.0])])
+    }
+
+    #[test]
+    fn a_panic_fails_the_handle_instead_of_unwinding_into_the_host() {
+        let handle = open(|| Ok(triangle(None)), ptr::null_mut(), 0);
+        unsafe {
+            assert!(!handle.is_null());
+            assert!(p2l_rig_failure(handle).is_null());
+            assert_eq!(p2l_mesh_count(handle), 1);
+            // A mesh under a deformer the rig does not have panics in the evaluation.
+            (&mut *handle).rig.meshes[0].parent = Some(7);
+            p2l_update(handle, 0.1);
+            let failure = p2l_rig_failure(handle);
+            assert!(!failure.is_null());
+            assert!(!CStr::from_ptr(failure).to_bytes().is_empty());
+            // From then on the handle acts as a null one, reads and writes alike.
+            assert_eq!(p2l_mesh_count(handle), 0);
+            assert!(p2l_mesh_vertices(handle, 0).is_null());
+            assert!(p2l_parameter_values(handle).is_null());
+            p2l_evaluate(handle);
+            p2l_rig_free(handle);
+            assert!(p2l_rig_failure(ptr::null()).is_null());
+        }
+    }
+
+    #[test]
+    fn a_panic_in_the_first_evaluation_fails_the_load_with_its_message() {
+        let mut error = [0 as c_char; 256];
+        let handle = open(|| Ok(triangle(Some(7))), error.as_mut_ptr(), error.len());
+        assert!(handle.is_null());
+        let message = unsafe { CStr::from_ptr(error.as_ptr()) }.to_string_lossy();
+        assert!(message.starts_with("The rig could not be read: "), "{message}");
+    }
+
+    #[test]
+    fn the_header_declares_every_exported_function_and_this_abi_version() {
+        let header = include_str!("../include/p2l_runtime.h");
+        let source = include_str!("ffi.rs");
+        let exported: Vec<&str> = source.split("extern \"C\" fn ").skip(1).map(|s| &s[..s.find('(').unwrap()]).collect();
+        // Declarations: the first p2l_ name followed by a parenthesis on each line outside comments and macros.
+        let declared: Vec<&str> = header.lines()
+            .map(str::trim_start)
+            .filter(|l| !l.starts_with("/*") && !l.starts_with('*') && !l.starts_with('#'))
+            .filter_map(|l| {
+                let start = l.find("p2l_")?;
+                let name = &l[start..];
+                let end = name.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))?;
+                name[end..].starts_with('(').then(|| &name[..end])
+            })
+            .collect();
+        let mut a = exported.clone();
+        let mut b = declared.clone();
+        a.sort_unstable();
+        b.sort_unstable();
+        assert_eq!(a, b);
+        assert!(header.contains(&format!("#define P2L_ABI_VERSION_MAJOR {ABI_MAJOR}\n")));
+        assert!(header.contains(&format!("#define P2L_ABI_VERSION_MINOR {ABI_MINOR}\n")));
+        assert_eq!(p2l_abi_version(), ABI_MAJOR << 16 | ABI_MINOR);
+    }
 }
