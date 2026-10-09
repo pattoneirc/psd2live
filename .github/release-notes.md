@@ -11,6 +11,7 @@ Windows 安装包改用 Inno Setup，覆盖安装不再报「Error writing to fi
 ### 修复
 
 - **Windows 安装包改用 Inno Setup**：直接复制文件，覆盖安装不再经过 MSI 的 `Config.Msi`，避开部分电脑报「Error writing to file … .rbf」、只能删掉安装目录再重试的问题（#14）。升级时装回原来的目录；3.1.x 及更早的 EXE / MSI 安装会被自动移除并沿用原目录，安装目录里你自己的文件保留。安装前若 PSD2Live 正在运行，会提示保存并关闭后重试。启动时可选择为所有用户或只为自己安装（后者无需管理员权限）；安装界面跟随系统语言；卸载时询问是否同时删除 PSD2Live 的数据（默认保留）。不再提供 MSI 安装包。
+- **带 ffmpeg 的 Windows 包重新内置 ffmpeg**：自 3.0.1 起 `-ffmpeg` 包实际与普通包相同、并不含 ffmpeg，现在已内置，可直接导出视频和动图。
 - **前发模拟不再大幅乱甩**：模型预设生成的前发改用新增的「刘海」材质（回弹更强、阻尼更大），摇头、点头时的摆幅明显减小。已有工程重新应用前发预设即可改用。
 - **Alt + 右键调整笔刷不再串轴**：左右拖动调整半径后，下一次上下拖动不会再沿用半径调整；方向要拖出约 12 像素且明显偏向一侧才会锁定。
 
@@ -30,6 +31,7 @@ The Windows installer is now built with Inno Setup: upgrading over an installed 
 ### Fixes
 
 - **Windows installer built with Inno Setup**: files are copied in place instead of going through Windows Installer's `Config.Msi`, avoiding the "Error writing to file … .rbf" failure some machines hit on upgrades, which only deleting the installation folder got past (#14). An upgrade goes back to the installed folder; EXE / MSI installs of 3.1.x and earlier are removed and their folder kept, along with your own files in it. When PSD2Live is running, setup asks you to save, close it and retry. At start you choose to install for all users or only for yourself (no administrator rights needed); the wizard follows the system language; uninstalling asks whether to delete your PSD2Live data too (kept by default). There is no MSI package any more.
+- **The -ffmpeg Windows packages include ffmpeg again**: since 3.0.1 they were the same as the plain packages, without ffmpeg; they now carry it, so video and animated image export work without installing it.
 - **Front hair no longer swings wildly**: front hair made by the model presets uses the new "Bangs" material (stiffer return, more damping), so head turns and nods swing it much less. Reapply the front hair preset in an existing project to switch.
 - **Alt + right-drag brush adjustment no longer mixes axes**: after a horizontal drag adjusts the radius, the next vertical drag no longer keeps adjusting it; a direction locks only after about 12 px clearly along one axis.
 

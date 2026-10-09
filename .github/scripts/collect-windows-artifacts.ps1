@@ -11,6 +11,10 @@ $binaries = "build/compose/binaries/main"
 
 $app = Join-Path $binaries "app/PSD2Live"
 if (-not (Test-Path (Join-Path $app "PSD2Live.exe"))) { throw "No app image at $app" }
+# The app image of an ffmpeg build carries ffmpeg; until 3.1.2 a stale image made the -ffmpeg packages the plain ones.
+$ffmpeg = Test-Path (Join-Path $app "app/resources/ffmpeg/ffmpeg.exe")
+if ($Suffix -like "*ffmpeg*" -and -not $ffmpeg) { throw "The app image at $app has no app/resources/ffmpeg/ffmpeg.exe" }
+if ($Suffix -notlike "*ffmpeg*" -and $ffmpeg) { throw "The app image at $app carries ffmpeg but -Suffix is '$Suffix'" }
 $portable = Join-Path (Resolve-Path $out) "PSD2Live-$Version-windows-x86_64-portable$Suffix.zip"
 if (Test-Path $portable) { Remove-Item $portable -Force }
 Compress-Archive -Path (Join-Path $app "*") -DestinationPath $portable -Force

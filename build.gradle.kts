@@ -214,6 +214,9 @@ afterEvaluate {
 		dependsOn(buildRuntime)
 		systemProperty("psd2live.runtime.dir", runtimeLibrary.parentFile.absolutePath)
 	}
+	// createDistributable does not track what prepareAppResources put together, so a build adding ffmpeg
+	// (psd2live.ffmpegDir) after one without it kept the app image without it, and so did every package made from it.
+	tasks.named("createDistributable") { inputs.files(tasks.named("prepareAppResources")).withPropertyName("appResources") }
 }
 
 // License texts ship inside every package, under the app's resources directory, beside the runtime.
