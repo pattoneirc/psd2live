@@ -58,7 +58,8 @@ UninstallLogging=yes
 
 [Languages]
 Name: "en"; MessagesFile: "compiler:Default.isl"
-Name: "zh"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; Not among the translations Inno Setup ships: the user-contributed one (jrsoftware.org/files/istrans), kept here.
+Name: "zh"; MessagesFile: "ChineseSimplified.isl"
 Name: "ja"; MessagesFile: "compiler:Languages\Japanese.isl"
 Name: "ko"; MessagesFile: "compiler:Languages\Korean.isl"
 
