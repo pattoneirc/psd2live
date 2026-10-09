@@ -290,10 +290,28 @@ object RigBuilder {
 			if (skeletonEnabled && layer.semantic.tag in SkeletonAutoBuilder.limbTags) layer
 			else layer.riggedIn(analysis.anchors, headSpace)
 
-		/** The space head layers are aligned into, or null when the layer stays in canvas space. */
-		fun headSpaceFor(layer: ClassifiedLayer): HeadCoordinateSpace? =
-			if (deformersEnabled && !(skeletonEnabled && layer.semantic.tag in SkeletonAutoBuilder.limbTags) &&
-				inferredGroup(layer, analysis.anchors) == LayerGroup.HEAD) headSpace else null
+		/**
+		 * The space head layers are aligned into, or null when the layer stays in canvas space. A layer an
+		 * override re-parents is aligned by where it hangs - under the head rotation or not - since the head
+		 * deformers' frames are aligned and the others' are not, whatever the layer depicts.
+		 */
+		fun headSpaceFor(layer: ClassifiedLayer, config: PipelineConfig): HeadCoordinateSpace? {
+			if (!deformersEnabled || skeletonEnabled && layer.semantic.tag in SkeletonAutoBuilder.limbTags) return null
+			val head = if (config.parentOverrides.containsKey(layer.source.id.raw)) underHeadRotation(parentAndFrame(layer, config).first, config)
+				else inferredGroup(layer, analysis.anchors) == LayerGroup.HEAD
+			return if (head) headSpace else null
+		}
+
+		private fun underHeadRotation(parentId: DeformerId?, config: PipelineConfig): Boolean {
+			var id = parentId?.raw ?: return false
+			val seen = HashSet<String>()
+			while (seen.add(id)) {
+				if (id == headRotationId.raw) return true
+				id = deformers.firstOrNull { it.id.raw == id }?.parent?.raw
+					?: config.rigEdits.warpEdits.firstOrNull { it.id == id }?.parentId ?: return false
+			}
+			return false
+		}
 
 		/**
 		 * The deformer [layer] hangs under and the frame that deformer was fitted to. An override
@@ -317,6 +335,9 @@ object RigBuilder {
 		 * nothing, and the caller has to recover the frame from the geometry it is replacing.
 		 */
 		fun resolveFrame(parentId: DeformerId, config: PipelineConfig): Bounds? {
+			// The head rotation's children are head-aligned pixels from its pivot, as the head container's lattice is.
+			if (parentId == headRotationId && deformers.any { it.id == headRotationId && it is Deformer.Rotation })
+				return Bounds(faceRig.centerX, faceRig.mouthLineY, faceRig.centerX + 1f, faceRig.mouthLineY + 1f)
 			var id = parentId.raw
 			val seen = mutableSetOf<String>()
 			while (id !in frameByDeformer && seen.add(id)) {
@@ -1070,7 +1091,7 @@ object RigBuilder {
 				// space and keeps its raw rig positions.
 				parentId = if (shouldBuildDeformers) parentId else null,
 				parentFrame = parentFrame,
-				headSpace = context.headSpaceFor(layer),
+				headSpace = context.headSpaceFor(layer, config),
 				config = config,
 				meshConfig = meshConfig,
 				meshCache = meshCache,
@@ -1595,7 +1616,7 @@ object RigBuilder {
 		val parentFrame = contextFrame ?: canvasFrame ?: context.character
 		// A frame read off the mesh is already in canvas space, so the layer must not be head-aligned
 		// on top of it; the rig's own frames only make sense together with the rig's own alignment.
-		val headSpace = if (canvasFrame == null) context.headSpaceFor(layer) else null
+		val headSpace = if (canvasFrame == null) context.headSpaceFor(layer, config) else null
 		val parts = buildDrawableMesh(
 			layer,
 			context.rigLayer(layer),
@@ -1762,7 +1783,7 @@ object RigBuilder {
 		val rigLayer = context.rigLayer(layer)
 		val deferred = part.parent != null
 		val (generatedParent, parentFrame) = if (deferred) null to context.character else context.parentAndFrame(layer, config)
-		val headSpace = if (deferred) null else context.headSpaceFor(layer)
+		val headSpace = if (deferred) null else context.headSpaceFor(layer, config)
 		val canvas = part.positions
 		val rig = FloatArray(canvas.size)
 		val local = FloatArray(canvas.size)

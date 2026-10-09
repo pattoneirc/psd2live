@@ -468,6 +468,8 @@ private data class ItemLayoutInfo(
 	val currentParentId: String?,
 	val top: Float,
 	val bottom: Float,
+	/** The rig object a drag reparents: a mesh row's drawable, whose ID can differ from its layer's. */
+	val objectId: String = id,
 )
 
 private class TreeDragState {
@@ -533,7 +535,7 @@ private class TreeDragState {
 		if (wasDragging && item != null && target != null) {
 			val newParent = if (target == "ROOT") null else target
 			if (newParent != item.currentParentId) {
-				viewModel.reparentItem(item.id, newParent)
+				viewModel.reparentItem(item.objectId, newParent)
 			}
 		} else if (!wasDragging && item != null) {
 			onSelectItem(item)
@@ -1684,6 +1686,7 @@ private fun DrawableTreeItem(
 							currentParentId = effectiveParent(drawable.id.raw, drawable.parentDeformerId?.raw, state.hierarchyParentOverrides),
 							top = topLeft.y,
 							bottom = topLeft.y + coords.size.height,
+							objectId = drawable.id.raw,
 						)
 					}
 				}
@@ -1764,6 +1767,7 @@ private fun DrawableTreeItem(
 								currentParentId = effectiveParent(drawable.id.raw, drawable.parentDeformerId?.raw, state.hierarchyParentOverrides),
 								top = containerPos.y - localPos.y,
 								bottom = containerPos.y - localPos.y + coords.size.height,
+								objectId = drawable.id.raw,
 							)
 							treeDragState.onPress(info, containerPos)
 						}

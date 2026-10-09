@@ -98,6 +98,18 @@ class AtlasArrangeTest {
 		assertTrue(ra.x + size <= rb.x || rb.x + size <= ra.x || ra.y + size <= rb.y || rb.y + size <= ra.y)
 	}
 
+	@Test fun aKeptLayoutShrinksATileNoPageHolds() {
+		val config = PipelineConfig(atlasSize = 512)
+		val frozen = AtlasLayout.frozen(AtlasLayout.pack(layers, config))
+		// A dense raster whose canvas extent fits the page but whose pixels do not, added after the arrangement.
+		val dense = layer("dense", 300, 300, 20)
+		val kept = AtlasLayout.pack(layers + dense, config.copy(atlasArrangement = frozen,
+			textureOverrides = mapOf("dense" to TextureOverride(density = 4f))))
+		val at = kept.placementByLayerId.getValue("dense")
+		assertTrue(at.width <= 512 - 2 * config.effectiveAtlasBudget().padding && at.width == at.height, "$at")
+		assertEquals(frozen.tiles.keys, kept.placementByLayerId.keys - "dense")
+	}
+
 	@Test fun anArrangementThatCannotFitShrinksTheTilesTogether() {
 		val config = PipelineConfig(atlasBudget = AtlasBudget(256, 1, 2))
 		val arranged = assertNotNull(AtlasLayout.arrange(layers, config, emptyMap(), null))

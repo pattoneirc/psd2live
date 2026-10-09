@@ -164,9 +164,20 @@ internal object AtlasLayout {
     /** One tile to draw on a page: its texture, its rectangle and, with a footprint, the only cells it may write. */
     private class Tile(val texture: SourceLayer, val at: AtlasPlacement, val mask: AtlasArrange.Shape?)
 
-    private fun request(item: Item, fit: Double, stored: ArrangedTile?, footprint: TextureFootprint?): AtlasArrange.Request =
-        AtlasArrange.Request(item.id, item.layer.source.name, item.width(fit, true), item.height(fit, true),
+    private fun request(item: Item, fit: Double, stored: ArrangedTile?, footprint: TextureFootprint?, honour: Boolean = true): AtlasArrange.Request =
+        AtlasArrange.Request(item.id, item.layer.source.name, item.width(fit, honour), item.height(fit, honour),
             item.texture.raster.width, item.texture.raster.height, stored, footprint)
+
+    /**
+     * [item]'s request at a stored arrangement's [fit] - or, when a page cannot hold it there (a dense raster
+     * placed or imported after the arrangement was stored, say), at the largest step that it can, lock or not.
+     */
+    private fun keptRequest(item: Item, fit: Double, stored: ArrangedTile?, pageSize: Int, padding: Int): AtlasArrange.Request {
+        val room = pageSize - padding * 2
+        if (maxOf(item.width(fit, true), item.height(fit, true)) <= room) return request(item, fit, stored, stored?.footprint)
+        val step = Math.floor(room / maxOf(item.baseWidth, item.baseHeight) * AtlasArrangement.FIT_STEPS).toInt().coerceIn(1, AtlasArrangement.FIT_STEPS)
+        return request(item, minOf(fit, step.toDouble() / AtlasArrangement.FIT_STEPS), stored, stored?.footprint, honour = false)
+    }
 
     private fun placement(item: Item, request: AtlasArrange.Request, spot: AtlasArrange.Spot) = AtlasPlacement(spot.page, spot.x, spot.y,
         request.width, request.height, request.width.toFloat() / item.texture.raster.width, request.height.toFloat() / item.texture.raster.height,
@@ -178,7 +189,7 @@ internal object AtlasLayout {
      */
     private fun kept(items: List<Item>, arrangement: AtlasArrangement, pageSize: Int, padding: Int, maxPages: Int): Solved {
         val fit = arrangement.fit
-        val requests = items.map { item -> arrangement.tiles[item.id].let { request(item, fit, it, it?.footprint) } }
+        val requests = items.map { item -> keptRequest(item, fit, arrangement.tiles[item.id], pageSize, padding) }
         val kept = AtlasArrange.keep(requests, pageSize, padding, maxPages)
         val placements = LinkedHashMap<String, AtlasPlacement>()
         val masks = HashMap<String, AtlasArrange.Shape>()
