@@ -5,10 +5,10 @@ import org.umamo.runtime.model.Drawable
 
 /** What the hierarchy tree orders siblings by; deformers stay above meshes under each parent. */
 internal enum class HierarchySortMode(val labelKey: String) {
+	/** Highest on the canvas first: hair before feet. The tree's default. */
+	HEIGHT("canvas.hierarchy.sort.height"),
 	/** The order the model lists them in. */
 	MODEL("canvas.hierarchy.sort.model"),
-	/** Highest on the canvas first: hair before feet. */
-	HEIGHT("canvas.hierarchy.sort.height"),
 	/** Leftmost on the canvas first. */
 	HORIZONTAL("canvas.hierarchy.sort.horizontal"),
 	/** Frontmost first; a deformer stands where its frontmost mesh does. */
@@ -21,7 +21,7 @@ internal enum class HierarchySortMode(val labelKey: String) {
 	val needsBounds: Boolean get() = this == HEIGHT || this == HORIZONTAL
 }
 
-internal data class HierarchySort(val mode: HierarchySortMode = HierarchySortMode.MODEL, val reversed: Boolean = false) {
+internal data class HierarchySort(val mode: HierarchySortMode = HierarchySortMode.HEIGHT, val reversed: Boolean = false) {
 	val isDefault: Boolean get() = this == HierarchySort()
 
 	fun encode(): String = if (reversed) "${mode.name}:reversed" else mode.name
@@ -72,7 +72,7 @@ internal fun sortHierarchyChildren(
 	bounds: Map<String, MeshBounds>,
 	drawOrder: (Drawable) -> Float,
 ): Pair<Map<String?, List<Deformer>>, Map<String?, List<Drawable>>> {
-	if (sort.isDefault) return deformerChildren to drawableChildren
+	if (sort == HierarchySort(HierarchySortMode.MODEL)) return deformerChildren to drawableChildren
 
 	val subtreeBounds = HashMap<String, MeshBounds?>()
 	val subtreeOrder = HashMap<String, Float?>()

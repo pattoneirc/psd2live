@@ -47,9 +47,11 @@ class HierarchySortTest {
 		assertEquals(listOf("Head", "Legs"), byOrder.ids(null).take(2))
 		assertEquals(listOf("Hair", "Face"), drawablesByOrder.names("Head"))
 		assertEquals(listOf("Empty", "Head", "Legs"), sorted(HierarchySort(HierarchySortMode.NAME)).first.ids(null))
-		assertEquals(listOf("Empty", "Head", "Legs"), sorted(HierarchySort(reversed = true)).first.ids(null))
-		val (model, _) = sorted(HierarchySort())
+		assertEquals(listOf("Empty", "Head", "Legs"), sorted(HierarchySort(HierarchySortMode.MODEL, reversed = true)).first.ids(null))
+		val (model, _) = sorted(HierarchySort(HierarchySortMode.MODEL))
 		assertEquals(listOf("Legs", "Head", "Empty"), model.ids(null))
+		// The tree opens sorted from top to bottom.
+		assertEquals(sorted(HierarchySort(HierarchySortMode.HEIGHT)), sorted(HierarchySort()))
 	}
 
 	@Test fun horizontalPutsTheLeftmostFirst() {
@@ -72,6 +74,7 @@ class HierarchySortTest {
 		assertEquals(sort, HierarchySort.decode(sort.encode()))
 		assertEquals(HierarchySort(HierarchySortMode.NAME), HierarchySort.decode("NAME"))
 		assertEquals(HierarchySort(), HierarchySort.decode("BOGUS:reversed"))
-		assertEquals(HierarchySort(), HierarchySort.decode(null))
+		assertEquals(HierarchySort(HierarchySortMode.HEIGHT), HierarchySort.decode(null))
+		assertEquals(HierarchySort(HierarchySortMode.MODEL), HierarchySort.decode("MODEL"))
 	}
 }
