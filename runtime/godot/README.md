@@ -26,10 +26,25 @@ a `P2LCharacter` node and set **Rig Path** to an exported `.p2lrt`.
 | `get_pose_group_sizes()`, `show_pose(group, entry)` | Part poses: each group shows one of its parts, the others fading out |
 | `get_bone_ids()`, `get_bone_transform(id)` | Skeleton bones' frames in the node's space, to attach things to |
 
-Each mesh draws in its own canvas item in the rig's draw order. Cubism's add and multiply use a
-CanvasItemMaterial; screen colors and the extended blend modes use shaders that read the screen below;
-masks use a clip-only canvas group. Inverted masks draw unmasked: Godot's canvas groups cannot remove
-coverage.
+The node draws by the rules at the top of `runtime/include/p2l_runtime.h`. Each mesh draws in its own
+canvas item in the rig's render order, through a shader that applies its multiply and screen colors,
+opacity and mask coverage to the premultiplied texture and composites it by its color and alpha blend
+modes: normal under over, Cubism's add and multiply (any alpha mode) and out use the hardware blend; the
+other color modes under over, and atop, conjoint and disjoint over, read the colors below.
+
+Isolated groups draw their meshes into a layer: offscreen viewports of the target viewport's size whose
+canvases map the node exactly as the target does. One canvas item, where the group sits in the order,
+composites the layer by the group's blend modes, opacity, multiply and screen colors and masks; groups
+nest. Godot's back buffer copy drops the alpha under the Forward+ and Mobile renderers, so inside a
+layer each item that reads the colors below starts a viewport of its own that copies the layer so far
+and reads that copy. Outside groups such an item reads the screen (copying the back buffer first), whose
+alpha counts as opaque there: exact over an opaque scene, approximate over a transparent window.
+
+Masks are coverage viewports: each distinct set of mask meshes adds its texture alpha into one color
+channel (three sets per viewport), and the masked mesh or layer reads it at its own pixel, taking
+1 - coverage when inverted. Overlapping mask meshes of one set add their alphas (the reference takes the
+largest). Every layer, reading item inside a layer and coverage viewport costs a render target of the
+screen's size and a pass per frame.
 
 The demo (`demo/`) loads a rig given on the command line:
 
@@ -38,3 +53,9 @@ godot --path demo -- --rig model.p2lrt                     # window, gaze follow
 godot --path demo -- --rig model.p2lrt --shot frame.png    # save a frame after a second and quit
 godot --headless --path demo --script smoke_test.gd -- model.p2lrt
 ```
+
+`GodotLayerSamplesTool` (in the editor's tests, `PSD2LIVE_TOOLS=1`) writes a rig of solid quads covering
+every color and alpha blend pair, over the background and inside isolated groups, and the groups' own
+settings (colors, opacity, blend modes, masks by meshes and by parts, inverted masks, nesting), with the
+expected color at sample points; render it with `--resolution 800x600 ... --shot` and compare the shot's
+pixels there.

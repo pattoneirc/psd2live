@@ -1,35 +1,31 @@
 //! `P2LCharacter`: a Godot 4 node that plays a `.p2lrt` rig through the PSD2Live runtime.
 //!
-//! Each mesh draws into its own canvas item under the node, reordered every frame by the rig's draw
-//! order. Cubism's add and multiply use a CanvasItemMaterial; screen colors and the extended blend modes
-//! use shaders, the latter reading the screen below (each such item copies the back buffer first). A
-//! masked mesh draws inside a clip-only canvas group holding its masks. Godot's canvas groups offer no
-//! way to remove coverage, so inverted masks draw unmasked.
+//! The node draws by the rules in `p2l_runtime.h`: each mesh in its own canvas item, reordered every frame
+//! by the rig's render commands, through a shader that applies its colors, opacity and mask coverage and
+//! composites it by its color and alpha blend modes (see `shaders`). Isolated groups draw into layers and
+//! masks into coverage viewports (see `drawing`).
 
+mod drawing;
 mod shaders;
 
-use godot::classes::canvas_item_material::BlendMode;
-use godot::classes::rendering_server::CanvasGroupMode;
-use godot::classes::{CanvasItemMaterial, FileAccess, INode2D, Image, ImageTexture, Material, Node2D, RenderingServer, Shader, ShaderMaterial};
+use godot::classes::image::Format;
+use godot::classes::{FileAccess, INode2D, Image, ImageTexture, Node2D};
 use godot::prelude::*;
+use p2l_runtime::advanced::{Advanced, Affine};
 use p2l_runtime::behavior::Behaviors;
 use p2l_runtime::clip::Player;
-use p2l_runtime::advanced::{Advanced, Affine};
+use p2l_runtime::eval::render_commands;
 use p2l_runtime::expression::ExpressionPlayer;
 use p2l_runtime::pose::PosePlayer;
 use p2l_runtime::rig::TextureKind;
-use p2l_runtime::{render_order, Evaluator, Physics, Rig};
+use p2l_runtime::{Evaluator, Physics, Rig};
+
+use drawing::Drawing;
 
 struct P2lExtension;
 
 #[gdextension]
 unsafe impl ExtensionLibrary for P2lExtension {}
-
-/// The canvas items of one mesh: a slot in draw order and, for a masked mesh, the item inside its mask group.
-struct Slot {
-    item: Rid,
-    content: Option<Rid>,
-}
 
 #[derive(GodotClass)]
 #[class(base = Node2D)]
@@ -65,11 +61,10 @@ pub struct P2LCharacter {
     pose: Vec<f32>,
     /// The values of the last frame.
     values: Vec<f32>,
+    /// Texture pages, premultiplied.
     textures: Vec<Gd<ImageTexture>>,
-    materials: Vec<Option<Gd<Material>>>,
-    /// Shader materials taking each mesh's screen color, where it has one.
-    screens: Vec<Option<Gd<ShaderMaterial>>>,
-    slots: Vec<Slot>,
+    /// What draws the rig, made once the node is in a viewport.
+    drawing: Option<Drawing>,
     base: Base<Node2D>,
 }
 
@@ -80,8 +75,7 @@ impl INode2D for P2LCharacter {
             rig_path: GString::new(), centered: true, autoplay: GString::new(), behaviors: 3, look_at_mouse: false, advanced_features: 0,
             rig: None, evaluator: Evaluator::new(), player: Player::new(), behavior: Behaviors::default(), physics: None,
             expressions: ExpressionPlayer::new(), poses: PosePlayer::default(), advanced: Advanced::new(),
-            pose: Vec::new(), values: Vec::new(), textures: Vec::new(), materials: Vec::new(), screens: Vec::new(),
-            slots: Vec::new(), base,
+            pose: Vec::new(), values: Vec::new(), textures: Vec::new(), drawing: None, base,
         }
     }
 
@@ -101,7 +95,7 @@ impl INode2D for P2LCharacter {
     }
 
     fn exit_tree(&mut self) {
-        self.free_slots();
+        self.free_drawing();
     }
 }
 
@@ -122,7 +116,7 @@ impl P2LCharacter {
                 return false;
             }
         };
-        self.free_slots();
+        self.free_drawing();
         let folder = path.get_base_dir();
         self.textures = rig.textures.iter().map(|t| {
             let mut image = Image::new_gd();
@@ -134,66 +128,7 @@ impl P2LCharacter {
             if loaded != godot::global::Error::OK {
                 godot_warn!("P2LCharacter: a texture page could not be decoded");
             }
-            ImageTexture::create_from_image(&image).unwrap_or_else(ImageTexture::new_gd)
-        }).collect();
-        // Shaders are shared per blend mode; each mesh with a screen color gets its own material.
-        let mut shader_cache: std::collections::HashMap<u8, Gd<Shader>> = std::collections::HashMap::new();
-        let mut shader = |mode: u8| {
-            shader_cache
-                .entry(mode)
-                .or_insert_with(|| {
-                    let mut shader = Shader::new_gd();
-                    shader.set_code(&shaders::mesh(mode));
-                    shader
-                })
-                .clone()
-        };
-        let mut screens = Vec::with_capacity(rig.meshes.len());
-        self.materials = rig.meshes.iter().map(|m| {
-            let black = p2l_runtime::rig::BLACK;
-            let screened = m.screen != black
-                || m.channels.iter().any(|(c, _)| *c == p2l_runtime::rig::Channel::ScreenColor)
-                || m.shapes.iter().flat_map(|b| b.shapes.iter().flatten()).any(|s| s.screen != black);
-            if screened || shaders::reads_below(m.blend) {
-                let mut material = ShaderMaterial::new_gd();
-                material.set_shader(&shader(m.blend));
-                screens.push(Some(material.clone()));
-                return Some(material.upcast::<Material>());
-            }
-            screens.push(None);
-            // The IR's blend order: normal, Cubism's add and multiply, then the extended modes.
-            let mode = match m.blend {
-                1 | 4 => BlendMode::ADD,
-                2 => BlendMode::MUL,
-                _ => return None,
-            };
-            let mut material = CanvasItemMaterial::new_gd();
-            material.set_blend_mode(mode);
-            Some(material.upcast::<Material>())
-        }).collect();
-        self.screens = screens;
-        let mut rs = RenderingServer::singleton();
-        let parent = self.base().get_canvas_item();
-        let everywhere = Rect2::new(Vector2::new(-1e6, -1e6), Vector2::new(2e6, 2e6));
-        self.slots = rig.meshes.iter().enumerate().map(|(i, m)| {
-            let item = rs.canvas_item_create();
-            rs.canvas_item_set_parent(item, parent);
-            let mut slot = Slot { item, content: None };
-            if !m.masked_by.is_empty() && !m.invert_mask {
-                // A clip-only group keeps its child where the masks drew.
-                rs.canvas_item_set_canvas_group_mode(item, CanvasGroupMode::CLIP_ONLY);
-                let content = rs.canvas_item_create();
-                rs.canvas_item_set_parent(content, item);
-                slot.content = Some(content);
-            }
-            let target = slot.content.unwrap_or(item);
-            if let Some(material) = &self.materials[i] {
-                rs.canvas_item_set_material(target, material.get_rid());
-            }
-            if shaders::reads_below(m.blend) {
-                rs.canvas_item_set_copy_to_backbuffer(target, true, everywhere);
-            }
-            slot
+            ImageTexture::create_from_image(&premultiplied(image)).unwrap_or_else(ImageTexture::new_gd)
         }).collect();
 
         self.pose = rig.defaults();
@@ -366,6 +301,7 @@ impl P2LCharacter {
     }
 }
 
+
 impl P2LCharacter {
     fn last_values(&self) -> &[f32] {
         &self.values
@@ -395,68 +331,54 @@ impl P2LCharacter {
             let values: Vec<f32> = rig.parameters.iter().zip(&self.values).map(|(p, v)| p.normalize(*v)).collect();
             self.advanced.step_simulations(rig, &values, dt, &mut self.evaluator.pose);
         }
-        let order = render_order(rig, &self.evaluator.pose);
+        let commands = render_commands(rig, &self.evaluator.pose);
         self.poses.apply(rig, &mut self.evaluator.pose);
+        self.redraw(&commands);
+    }
+
+    /// Draws [commands] into the viewport holding the node, first making the drawing for it when needed.
+    fn redraw(&mut self, commands: &[i32]) {
+        if self.rig.is_none() || !self.base().is_inside_tree() {
+            return;
+        }
+        let Some(viewport) = self.base().get_viewport() else { return };
+        let target = viewport.get_viewport_rid();
+        let size = viewport.get_texture().map_or(Vector2::ONE, |t| t.get_size());
+        let size = Vector2i::new(size.x.round() as i32, size.y.round() as i32);
+        // The node's space onto the target's pixels, which every layer shares.
+        let transform = self.base().get_viewport_transform() * self.base().get_global_transform();
+        let parent = self.base().get_canvas_item();
+        if self.drawing.as_ref().is_some_and(|d| d.target != target) {
+            self.free_drawing();
+        }
+        let Some(rig) = &self.rig else { return };
         let offset = self.offset(rig);
-        let mut rs = RenderingServer::singleton();
-        for slot in &self.slots {
-            rs.canvas_item_clear(slot.item);
-            rs.canvas_item_set_visible(slot.item, false);
-            if let Some(content) = slot.content {
-                rs.canvas_item_clear(content);
-            }
-        }
-        for (draw_index, &m) in order.iter().enumerate() {
-            let m = m as usize;
-            let slot = &self.slots[m];
-            rs.canvas_item_set_visible(slot.item, true);
-            rs.canvas_item_set_draw_index(slot.item, draw_index as i32);
-            if let Some(material) = &self.screens[m] {
-                let s = self.evaluator.pose.screen[m];
-                material.clone().set_shader_parameter("screen", &Vector3::new(s[0], s[1], s[2]).to_variant());
-            }
-            match slot.content {
-                Some(content) => {
-                    // The masks draw into the clip group; the mesh inside it shows only where they cover.
-                    for &mask in &rig.meshes[m].masked_by {
-                        self.draw_mesh(&mut rs, slot.item, mask, offset, true);
-                    }
-                    self.draw_mesh(&mut rs, content, m, offset, false);
-                }
-                None => self.draw_mesh(&mut rs, slot.item, m, offset, false),
-            }
-        }
+        let drawing = self.drawing.get_or_insert_with(|| Drawing::new(rig, parent, target, size, viewport.is_using_hdr_2d()));
+        drawing.draw(rig, &self.evaluator.pose, &self.textures, commands, offset, transform, size);
     }
 
-    fn draw_mesh(&self, rs: &mut Gd<RenderingServer>, item: Rid, m: usize, offset: Vector2, as_mask: bool) {
-        let (Some(rig), pose) = (&self.rig, &self.evaluator.pose) else { return };
-        let mesh = &rig.meshes[m];
-        let Some(geometry) = &mesh.geometry else { return };
-        let vertices = &pose.vertices[m];
-        let points: PackedVector2Array = vertices.chunks_exact(2).map(|p| Vector2::new(p[0], p[1]) + offset).collect();
-        let uvs: PackedVector2Array = geometry.uvs.chunks_exact(2).map(|p| Vector2::new(p[0], p[1])).collect();
-        let indices: PackedInt32Array = geometry.indices.iter().map(|&i| i as i32).collect();
-        let color = if as_mask {
-            Color::from_rgba(1.0, 1.0, 1.0, pose.opacity[m].max(0.0).min(1.0).max(if pose.opacity[m] > 0.0 { 1.0 } else { 0.0 }))
-        } else {
-            let c = pose.multiply[m];
-            Color::from_rgba(c[0], c[1], c[2], pose.opacity[m])
-        };
-        let colors: PackedColorArray = std::iter::repeat(color).take(points.len()).collect();
-        let mut call = rs.canvas_item_add_triangle_array_ex(item, &indices, &points, &colors).uvs(&uvs);
-        if let Some(texture) = usize::try_from(mesh.page).ok().and_then(|p| self.textures.get(p)) {
-            call = call.texture(texture.get_rid());
+    fn free_drawing(&mut self) {
+        if let Some(mut drawing) = self.drawing.take() {
+            drawing.free();
         }
-        call.done();
     }
+}
 
-    fn free_slots(&mut self) {
-        let mut rs = RenderingServer::singleton();
-        for slot in self.slots.drain(..) {
-            if let Some(content) = slot.content {
-                rs.free_rid(content);
-            }
-            rs.free_rid(slot.item);
+/// [image] as RGBA8 with its colors multiplied by their alpha, rounded.
+fn premultiplied(mut image: Gd<Image>) -> Gd<Image> {
+    if image.is_empty() {
+        return image;
+    }
+    if image.is_compressed() {
+        image.decompress();
+    }
+    image.convert(Format::RGBA8);
+    let mut data = image.get_data().to_vec();
+    for texel in data.chunks_exact_mut(4) {
+        let a = texel[3] as u32;
+        for c in &mut texel[..3] {
+            *c = ((*c as u32 * a + 127) / 255) as u8;
         }
     }
+    Image::create_from_data(image.get_width(), image.get_height(), false, Format::RGBA8, &PackedByteArray::from(data)).unwrap_or(image)
 }
