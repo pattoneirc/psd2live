@@ -47,19 +47,39 @@ fn ease(x: f32) -> f32 {
     0.5 - 0.5 * (x * std::f32::consts::PI).cos()
 }
 
-/// Plays one clip at a time over the parameters, fading between clips.
+/// Plays one clip at a time over the parameters, fading between clips. Every clip a switch replaced keeps
+/// fading out under the newer ones, however quickly the switches come.
 #[derive(Debug, Default, Clone)]
 pub struct Player {
     current: Option<Playing>,
-    previous: Option<Playing>,
+    /// Replaced clips fading out, oldest first.
+    previous: Vec<Playing>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct Playing {
     clip: usize,
+    /// The clip's own time, which a seek moves.
     time: f32,
+    /// Seconds since the clip started, which its fade-in follows.
+    age: f32,
     /// Seconds since the clip started fading out, when it is.
     fading: Option<f32>,
+}
+
+impl Playing {
+    /// The clip's weight: its fade-in times its fade-out, as Cubism weighs a motion.
+    fn weight(&self, clip: &Clip) -> f32 {
+        let fade_in = clip.fade_in.unwrap_or(1.0);
+        let weight = if fade_in > 0.0 { ease(self.age / fade_in) } else { 1.0 };
+        match self.fading {
+            None => weight,
+            Some(elapsed) => {
+                let out = clip.fade_out.unwrap_or(1.0);
+                if out <= 0.0 { 0.0 } else { weight * (1.0 - ease(elapsed / out)) }
+            }
+        }
+    }
 }
 
 impl Player {
@@ -69,22 +89,33 @@ impl Player {
 
     /// Starts [clip], fading out the one playing.
     pub fn play(&mut self, clip: usize) {
-        if let Some(mut current) = self.current.take() {
-            current.fading = Some(0.0);
-            self.previous = Some(current);
-        }
-        self.current = Some(Playing { clip, time: 0.0, fading: None });
+        self.stop();
+        self.current = Some(Playing { clip, time: 0.0, age: 0.0, fading: None });
     }
 
     pub fn stop(&mut self) {
         if let Some(mut current) = self.current.take() {
             current.fading = Some(0.0);
-            self.previous = Some(current);
+            self.previous.push(current);
         }
     }
 
     pub fn playing(&self) -> Option<usize> {
         self.current.map(|p| p.clip)
+    }
+
+    /// The playing clip's local time: wrapped for a loop, held at the end for a one-shot.
+    pub fn time(&self, rig: &Rig) -> f32 {
+        self.current.map_or(0.0, |p| local_time(&rig.clips[p.clip], p.time))
+    }
+
+    /// Moves the playing clip to [time] seconds; its fade-in goes on as it was.
+    pub fn seek(&mut self, time: f32) {
+        if let Some(current) = &mut self.current {
+            if time.is_finite() {
+                current.time = time.max(0.0);
+            }
+        }
     }
 
     /// Whether the current clip is a one-shot past its end.
@@ -98,31 +129,18 @@ impl Player {
     /// Advances by [dt] seconds and blends the clips into [values], one per rig parameter.
     pub fn update(&mut self, rig: &Rig, dt: f32, values: &mut [f32]) {
         let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
-        if let Some(previous) = &mut self.previous {
-            previous.time += dt;
-            if let Some(f) = &mut previous.fading {
+        for p in self.previous.iter_mut().chain(self.current.iter_mut()) {
+            p.time += dt;
+            p.age += dt;
+            if let Some(f) = &mut p.fading {
                 *f += dt;
             }
         }
-        if let Some(current) = &mut self.current {
-            current.time += dt;
-        }
-        // The previous clip fades out under the current one.
-        if let Some(previous) = self.previous {
-            let clip = &rig.clips[previous.clip];
-            let out = clip.fade_out.unwrap_or(1.0);
-            let elapsed = previous.fading.unwrap_or(0.0);
-            if out <= 0.0 || elapsed >= out {
-                self.previous = None;
-            } else {
-                apply(clip, previous.time, 1.0 - ease(elapsed / out), values);
-            }
-        }
-        if let Some(current) = self.current {
-            let clip = &rig.clips[current.clip];
-            let fade = clip.fade_in.unwrap_or(1.0);
-            let weight = if fade > 0.0 { ease(current.time / fade) } else { 1.0 };
-            apply(clip, current.time, weight, values);
+        // The replaced clips fade out under the current one, the oldest lowest.
+        self.previous.retain(|p| p.weight(&rig.clips[p.clip]) > 0.0);
+        for p in self.previous.iter().chain(self.current.iter()) {
+            let clip = &rig.clips[p.clip];
+            apply(clip, p.time, p.weight(clip), values);
         }
     }
 }

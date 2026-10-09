@@ -46,6 +46,15 @@ const CLOSED: f32 = 0.05;
 const OPENING: f32 = 0.15;
 
 impl Behaviors {
+    /// Reseeds the blink timing, so rigs side by side do not blink together; the next blink comes in 2..6
+    /// seconds. Zero takes the default seed.
+    pub fn seed(&mut self, seed: u32) {
+        self.seed = if seed == 0 { Behaviors::default().seed } else { seed };
+        if self.blink_start.is_none() {
+            self.blink_at = self.time + 2.0 + self.random() * 4.0;
+        }
+    }
+
     /// Where to look, each axis -1..1 (x right, y up).
     pub fn look_at(&mut self, x: f32, y: f32) {
         self.target = (x.clamp(-1.0, 1.0), y.clamp(-1.0, 1.0));

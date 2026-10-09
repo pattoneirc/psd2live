@@ -22,6 +22,8 @@ pub struct PosePlayer {
     shown: Vec<usize>,
     /// Pose opacity of every part, 1 for parts in no group.
     opacity: Vec<f32>,
+    /// The opacity the host gives each part, 1 unless it set one.
+    host: Vec<f32>,
     /// Per mesh, the product of its ancestor parts' pose opacities.
     factor: Vec<f32>,
     /// Per mesh, the parts above it.
@@ -56,7 +58,9 @@ impl PosePlayer {
                 chain
             })
             .collect();
-        let mut player = PosePlayer { shown: vec![0; rig.poses.len()], opacity: vec![1.0; rig.parts.len()], factor: vec![1.0; rig.meshes.len()], ancestors };
+        let mut player = PosePlayer {
+            shown: vec![0; rig.poses.len()], opacity: vec![1.0; rig.parts.len()], host: vec![1.0; rig.parts.len()], factor: vec![1.0; rig.meshes.len()], ancestors,
+        };
         for group in &rig.poses {
             for (k, (part, links)) in group.entries.iter().enumerate() {
                 let o = if k == 0 { 1.0 } else { 0.0 };
@@ -87,6 +91,20 @@ impl PosePlayer {
 
     pub fn part_opacity(&self, part: usize) -> f32 {
         self.opacity.get(part).copied().unwrap_or(1.0)
+    }
+
+    /// The opacity the host gave [part], 1 unless it set one.
+    pub fn host_opacity(&self, part: usize) -> f32 {
+        self.host.get(part).copied().unwrap_or(1.0)
+    }
+
+    /// Gives [part] an opacity of the host's, clamped to 0..1, that multiplies every mesh below it on top of the
+    /// pose; false when there is no such part.
+    pub fn set_host_opacity(&mut self, part: usize, opacity: f32) -> bool {
+        let Some(slot) = self.host.get_mut(part) else { return false };
+        *slot = if opacity.is_finite() { opacity.clamp(0.0, 1.0) } else { 1.0 };
+        self.refresh();
+        true
     }
 
     /// Fades by [dt] seconds over [fade_in] seconds.
@@ -121,13 +139,13 @@ impl PosePlayer {
 
     fn refresh(&mut self) {
         for (m, chain) in self.ancestors.iter().enumerate() {
-            self.factor[m] = chain.iter().map(|p| self.opacity[*p]).product();
+            self.factor[m] = chain.iter().map(|p| self.opacity[*p] * self.host[*p]).product();
         }
     }
 
-    /// Multiplies each mesh's opacity in [pose] by its parts' pose opacities.
+    /// Multiplies each mesh's opacity in [pose] by its parts' pose and host opacities.
     pub fn apply(&self, rig: &Rig, pose: &mut Pose) {
-        if rig.poses.is_empty() {
+        if rig.poses.is_empty() && self.host.iter().all(|h| *h == 1.0) {
             return;
         }
         for (o, f) in pose.opacity.iter_mut().zip(&self.factor) {

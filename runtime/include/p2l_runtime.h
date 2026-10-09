@@ -5,11 +5,42 @@
  * p2l_update (clips, physics, deformation) or p2l_evaluate (deformation only), then read each mesh's
  * vertices in canvas pixels (y down) and draw them back to front in p2l_render_order. Pointers returned
  * stay valid until the handle is freed; pose data until the next evaluation. A null handle is accepted
- * everywhere and returns zeros.
+ * everywhere and returns zeros; an index out of range on a working handle returns NULL for strings and
+ * pointers, -1 for indices and modes, NaN for values and false for the functions that report success.
+ *
+ * Several rigs of one character share its file through a model: p2l_model_load once, p2l_rig_create per
+ * character. p2l_rig_load is the two in one.
+ *
+ * Threads: a model is read-only and may be shared by rigs on any threads. A rig must not be used from two
+ * threads at once, reads included (p2l_bone_transform, for one, updates the rig); different rigs may run on
+ * different threads.
  *
  * A call that panics inside the runtime (a bug, or a rig the reader let through that cannot be evaluated)
  * never unwinds into the host: the call returns as for a null handle, the handle fails, p2l_rig_failure
  * tells why, and from then on it acts as a null handle until p2l_rig_free.
+ *
+ * Drawing. The reference is the software rasterizer in PSD2Live (format-compile, SoftwareRasterizer); the web
+ * player, the Godot node and the editor draw the same way in real time, with the differences noted below.
+ * - Textures hold straight (not premultiplied) alpha. Sample them bilinearly; the rules below work on
+ *   premultiplied color (rgb*a, a).
+ * - A mesh's fragment: c = texel; c.rgb *= multiply; c.rgb += screen*c.a - c.rgb*screen; then c *= opacity*k,
+ *   where k is the mask coverage, 1 without masks.
+ * - Masks: coverage is the largest texture alpha of the mask meshes at the point, drawn at their own vertices
+ *   without their colors or opacity; an inverted mask takes 1 - coverage. Real-time players may use a stencil
+ *   that counts texels at least half opaque as covering (the web player, Godot and the editor do).
+ * - Culling: with culling on, only faces that wind clockwise in canvas coordinates (x right, y down) draw.
+ * - Blending c over the destination d (premultiplied):
+ *   P2L_BLEND_NORMAL           c + d*(1 - c.a)
+ *   P2L_BLEND_CUBISM_ADD       d.rgb + c.rgb, the destination alpha kept; P2L_BLEND_ADD_GLOW draws the same
+ *   P2L_BLEND_CUBISM_MULTIPLY  c.rgb*d.rgb + d.rgb*(1 - c.a), the destination alpha kept
+ *   the others                 W3C compositing: rgb = (1 - d.a)*c.rgb + (1 - c.a)*d.rgb + c.a*d.a*B(Cs, Cd) on
+ *                              unpremultiplied Cs, Cd, a = c.a + d.a - c.a*d.a, with B the mode's W3C function
+ *                              (P2L_BLEND_ADD: min(1, Cs + Cd)). Players without them draw them as the nearest
+ *                              basic mode (add as 1, multiply as 2, the rest as normal).
+ *   The alpha blend modes other than P2L_ALPHA_OVER are Cubism 5.3's; every bundled player draws them as over.
+ * - Isolated groups (p2l_render_commands): draw the group's commands into a cleared layer, then draw the layer
+ *   as a mesh would be drawn, with the group's colors, opacity, masks and blend modes (p2l_part_composite,
+ *   p2l_part_masks, p2l_part_group). Players that do not isolate draw p2l_render_order instead.
  */
 #ifndef P2L_RUNTIME_H
 #define P2L_RUNTIME_H
@@ -24,21 +55,31 @@ extern "C" {
 
 /* The ABI this header declares. The major version changes when a function changes or goes, the minor one when
  * functions are added. A host built against this header works with a library whose p2l_abi_version() passes
- * P2L_ABI_COMPATIBLE; a library without p2l_abi_version predates ABI 1.0. */
+ * P2L_ABI_COMPATIBLE; a library without p2l_abi_version predates ABI 1.0. 1.1 adds models, update stages, the
+ * host layer, parts and isolated groups, alpha blending and what the file says about parameters, clips and the
+ * parameter panel. */
 #define P2L_ABI_VERSION_MAJOR 1
-#define P2L_ABI_VERSION_MINOR 0
+#define P2L_ABI_VERSION_MINOR 1
 #define P2L_ABI_VERSION ((P2L_ABI_VERSION_MAJOR << 16) | P2L_ABI_VERSION_MINOR)
 #define P2L_ABI_COMPATIBLE(v) (((v) >> 16) == P2L_ABI_VERSION_MAJOR && ((v) & 0xffffu) >= P2L_ABI_VERSION_MINOR)
 /* The ABI the library implements, major << 16 | minor. */
 uint32_t p2l_abi_version(void);
 
 typedef struct P2lRig P2lRig;
+typedef struct P2lModel P2lModel;
 
 /* Loads [len] bytes of a .p2lrt file (version 1 or 2); on failure returns NULL and writes a message into [error]. */
 P2lRig *p2l_rig_load(const uint8_t *bytes, size_t len, char *error, size_t error_capacity);
 /* p2l_rig_load with flags: P2L_LOAD_VERIFY_CRC checks every chunk that carries a CRC. */
 #define P2L_LOAD_VERIFY_CRC 1u
 P2lRig *p2l_rig_load_ex(const uint8_t *bytes, size_t len, uint32_t flags, char *error, size_t error_capacity);
+/* A model to create rigs from, read as p2l_rig_load_ex reads; NULL with a message in [error] on failure. */
+P2lModel *p2l_model_load(const uint8_t *bytes, size_t len, uint32_t flags, char *error, size_t error_capacity);
+/* Lets go of the model; the rigs created from it keep it until they are freed. */
+void p2l_model_free(P2lModel *model);
+/* A rig on [model] at its defaults, sharing the model with every rig created from it; NULL with a message in
+ * [error] when its first evaluation fails. */
+P2lRig *p2l_rig_create(const P2lModel *model, char *error, size_t error_capacity);
 /* The versions and chunks this runtime reads, e.g. "1,2 STRS/1 CANV/1 ...": major versions, then tag/newest version. */
 const char *p2l_format_support(void);
 void p2l_rig_free(P2lRig *rig);
@@ -47,25 +88,59 @@ const char *p2l_rig_failure(const P2lRig *rig);
 /* The library's build version, "major.minor.patch"; p2l_abi_version tells which functions it has. */
 const char *p2l_version(void);
 void p2l_canvas(const P2lRig *rig, float *width, float *height);
+/* Where the canvas origin sits in canvas pixels, and the pixels in a model unit (0 when the file names none). */
+void p2l_canvas_origin(const P2lRig *rig, float *x, float *y, float *pixels_per_unit);
 
 /* Parameters */
 uint32_t p2l_parameter_count(const P2lRig *rig);
 const char *p2l_parameter_id(const P2lRig *rig, uint32_t index);
+const char *p2l_parameter_name(const P2lRig *rig, uint32_t index);
 int32_t p2l_parameter_index(const P2lRig *rig, const char *id);
 bool p2l_parameter_range(const P2lRig *rig, uint32_t index, float *min, float *max, float *default_value);
-/* The pose the host sets, one value per parameter: what every update and evaluation starts from. Clips,
+/* P2L_PARAMETER_REPEAT: values beyond the range wrap; P2L_PARAMETER_BLEND_SHAPE: it weighs blend shapes. */
+#define P2L_PARAMETER_REPEAT 1u
+#define P2L_PARAMETER_BLEND_SHAPE 2u
+uint32_t p2l_parameter_flags(const P2lRig *rig, uint32_t index);
+/* The values a parameter panel snaps the parameter to, ascending; returns how many there are. */
+uint32_t p2l_parameter_snaps(const P2lRig *rig, uint32_t index, float *out, uint32_t capacity);
+/* The pose the host sets, p2l_parameter_count values: what every update and evaluation starts from. Clips,
  * expressions, behaviors and physics apply over a copy of it, so additive layers never accumulate here. */
 float *p2l_parameter_values(P2lRig *rig);
 /* The values the last evaluation used, after every layer; read-only. */
 const float *p2l_parameter_current(const P2lRig *rig);
 void p2l_set_parameter(P2lRig *rig, uint32_t index, float value);
+/* The host's layer, for face tracking and the like: after clips and expressions, before behaviors and physics,
+ * the parameter moves toward [value] by [weight] 0..1 (1 replaces). Weight 0 takes the layer off it. */
+bool p2l_set_parameter_override(P2lRig *rig, uint32_t index, float value, float weight);
+void p2l_clear_parameter_overrides(P2lRig *rig);
 /* Parameters with a role such as "EyeBlink" or "LipSync"; returns how many there are. */
 uint32_t p2l_role_parameters(const P2lRig *rig, const char *role, uint32_t *out, uint32_t capacity);
 
+/* Parameter panel: pairs shown as one two-dimensional control (horizontal, vertical; returns the pair count),
+ * and the group tree in pre-order, each node followed by its children. */
+uint32_t p2l_gui_joysticks(const P2lRig *rig, uint32_t *out, uint32_t capacity);
+uint32_t p2l_gui_node_count(const P2lRig *rig);
+/* The parameter a leaf shows (-1 for a group), how many nodes follow as its children, whether it starts open. */
+bool p2l_gui_node(const P2lRig *rig, uint32_t index, int32_t *parameter, uint32_t *children, bool *open);
+const char *p2l_gui_node_id(const P2lRig *rig, uint32_t index);
+const char *p2l_gui_node_name(const P2lRig *rig, uint32_t index);
+/* 0 no label, 1 a preset named in [preset], 2 a custom color in [argb]. */
+int32_t p2l_gui_node_label(const P2lRig *rig, uint32_t index, const char **preset, uint32_t *argb);
+
 /* Evaluation */
+/* Deforms the rig at the host's pose alone: what an earlier update's clips and physics added is not kept. */
 void p2l_evaluate(P2lRig *rig);
 /* Advances clips, behaviors and physics by [dt] seconds over the current values, then evaluates. */
 void p2l_update(P2lRig *rig, float dt);
+/* p2l_update running only the layers in [stages], in this order; the others neither advance nor apply. */
+#define P2L_STAGE_CLIPS 1u
+#define P2L_STAGE_EXPRESSIONS 2u
+#define P2L_STAGE_BEHAVIORS 4u
+#define P2L_STAGE_POSES 8u
+#define P2L_STAGE_PHYSICS 16u
+#define P2L_STAGE_SIM 32u
+#define P2L_STAGE_ALL 63u
+void p2l_update_stages(P2lRig *rig, float dt, uint32_t stages);
 void p2l_physics_reset(P2lRig *rig);
 
 /* Behaviors: P2L_BLINK | P2L_BREATH | P2L_LOOK | P2L_LIP_SYNC; blinking and breathing start on. */
@@ -74,6 +149,9 @@ void p2l_physics_reset(P2lRig *rig);
 #define P2L_LOOK 4u
 #define P2L_LIP_SYNC 8u
 void p2l_behaviors(P2lRig *rig, uint32_t flags);
+/* Reseeds the blink timing. Every rig after the first in a process gets a seed of its own, so rigs side by
+ * side do not blink together; a host wanting the same blinks every run seeds them. */
+void p2l_behavior_seed(P2lRig *rig, uint32_t seed);
 /* Where to look, each axis -1..1 (x right, y up). */
 void p2l_look_at(P2lRig *rig, float x, float y);
 /* Mouth opening 0..1. */
@@ -82,27 +160,95 @@ void p2l_lip_sync(P2lRig *rig, float level);
 /* Clips */
 uint32_t p2l_clip_count(const P2lRig *rig);
 const char *p2l_clip_id(const P2lRig *rig, uint32_t index);
-/* Starts clip [index], fading out the current one; -1 stops. */
+const char *p2l_clip_name(const P2lRig *rig, uint32_t index);
+/* The group a clip belongs to, such as "Idle"; empty when none. */
+const char *p2l_clip_group(const P2lRig *rig, uint32_t index);
+/* Length in seconds, frame rate, whether it loops, and its fade times (1 second when the file names none). */
+bool p2l_clip_info(const P2lRig *rig, uint32_t index, float *duration, float *fps, bool *looping, float *fade_in,
+                   float *fade_out);
+/* Starts clip [index], fading out the current one (every replaced clip finishes its fade); -1 stops. */
 void p2l_play(P2lRig *rig, int32_t index);
+/* The clip playing, or -1. */
+int32_t p2l_clip_playing(const P2lRig *rig);
+/* The playing clip's time, wrapped for a loop and held at the end for a one-shot. */
+float p2l_clip_time(const P2lRig *rig);
+/* Moves the playing clip to [time] seconds; its fade-in goes on as it was. */
+void p2l_clip_seek(P2lRig *rig, float time);
 bool p2l_clip_finished(const P2lRig *rig);
 
 /* Meshes */
 uint32_t p2l_mesh_count(const P2lRig *rig);
 const char *p2l_mesh_id(const P2lRig *rig, uint32_t index);
+const char *p2l_mesh_name(const P2lRig *rig, uint32_t index);
 uint32_t p2l_mesh_vertex_count(const P2lRig *rig, uint32_t index);
 const float *p2l_mesh_uvs(const P2lRig *rig, uint32_t index);
 const uint32_t *p2l_mesh_indices(const P2lRig *rig, uint32_t index, uint32_t *count);
 int32_t p2l_mesh_texture(const P2lRig *rig, uint32_t index);
-/* 0 normal, 1 add, 2 multiply as Cubism draws them, then the extended modes: 3 add, 4 add glow,
- * 5 darken, 6 multiply, 7 color burn, 8 linear burn, 9 lighten, 10 screen, 11 color dodge, 12 overlay,
- * 13 soft light, 14 hard light, 15 linear light, 16 hue, 17 color. */
+/* Color blend modes (see Drawing above): Cubism's three, then the extended modes. */
+#define P2L_BLEND_NORMAL 0
+#define P2L_BLEND_CUBISM_ADD 1
+#define P2L_BLEND_CUBISM_MULTIPLY 2
+#define P2L_BLEND_ADD 3
+#define P2L_BLEND_ADD_GLOW 4
+#define P2L_BLEND_DARKEN 5
+#define P2L_BLEND_MULTIPLY 6
+#define P2L_BLEND_COLOR_BURN 7
+#define P2L_BLEND_LINEAR_BURN 8
+#define P2L_BLEND_LIGHTEN 9
+#define P2L_BLEND_SCREEN 10
+#define P2L_BLEND_COLOR_DODGE 11
+#define P2L_BLEND_OVERLAY 12
+#define P2L_BLEND_SOFT_LIGHT 13
+#define P2L_BLEND_HARD_LIGHT 14
+#define P2L_BLEND_LINEAR_LIGHT 15
+#define P2L_BLEND_HUE 16
+#define P2L_BLEND_COLOR 17
+/* The color blend mode, and whether the mesh culls back faces. */
 int32_t p2l_mesh_blend(const P2lRig *rig, uint32_t index, bool *culling);
+/* Alpha blend modes, Cubism 5.3's. */
+#define P2L_ALPHA_OVER 0
+#define P2L_ALPHA_ATOP 1
+#define P2L_ALPHA_OUT 2
+#define P2L_ALPHA_CONJOINT_OVER 3
+#define P2L_ALPHA_DISJOINT_OVER 4
+int32_t p2l_mesh_alpha_blend(const P2lRig *rig, uint32_t index);
+/* The part holding the mesh, or -1. */
+int32_t p2l_mesh_part(const P2lRig *rig, uint32_t index);
 uint32_t p2l_mesh_masks(const P2lRig *rig, uint32_t index, uint32_t *out, uint32_t capacity, bool *inverted);
 const float *p2l_mesh_vertices(const P2lRig *rig, uint32_t index);
 float p2l_mesh_opacity(const P2lRig *rig, uint32_t index);
 float p2l_mesh_draw_order(const P2lRig *rig, uint32_t index);
 void p2l_mesh_colors(const P2lRig *rig, uint32_t index, float *multiply, float *screen);
 uint32_t p2l_render_order(const P2lRig *rig, uint32_t *out, uint32_t capacity);
+/* p2l_render_order with isolated groups kept: a mesh index, P2L_RENDER_BEGIN_GROUP(part) opening the group of
+ * an isolated part, P2L_RENDER_END_GROUP closing it. */
+#define P2L_RENDER_END_GROUP (-1)
+#define P2L_RENDER_BEGIN_GROUP(part) (-2 - (int32_t)(part))
+#define P2L_RENDER_IS_GROUP(command) ((command) <= -2)
+#define P2L_RENDER_GROUP_PART(command) ((uint32_t)(-2 - (command)))
+uint32_t p2l_render_commands(const P2lRig *rig, int32_t *out, uint32_t capacity);
+
+/* Parts */
+uint32_t p2l_part_count(const P2lRig *rig);
+const char *p2l_part_id(const P2lRig *rig, uint32_t index);
+const char *p2l_part_name(const P2lRig *rig, uint32_t index);
+/* The part holding this one, or -1. */
+int32_t p2l_part_parent(const P2lRig *rig, uint32_t index);
+#define P2L_PART_VISIBLE 1u
+#define P2L_PART_SKETCH 2u
+uint32_t p2l_part_flags(const P2lRig *rig, uint32_t index);
+/* How the part groups its meshes, P2L_GROUP_*, and the blend modes and mask inversion of an isolated group. */
+#define P2L_GROUP_PASS_THROUGH 0
+#define P2L_GROUP_SORTED 1
+#define P2L_GROUP_ISOLATED 2
+int32_t p2l_part_group(const P2lRig *rig, uint32_t index, int32_t *blend, int32_t *alpha_blend, bool *invert_mask);
+/* The meshes masking the part's isolated group, the masking parts' meshes included; returns how many. */
+uint32_t p2l_part_masks(const P2lRig *rig, uint32_t index, uint32_t *out, uint32_t capacity);
+/* The opacity and the multiply and screen colors (three floats each) of the group at the last evaluation. */
+bool p2l_part_composite(const P2lRig *rig, uint32_t index, float *opacity, float *multiply, float *screen);
+/* An opacity the host gives the part, 0..1 (1 until set), multiplying every mesh under it on top of part poses. */
+float p2l_part_opacity(const P2lRig *rig, uint32_t index);
+bool p2l_set_part_opacity(P2lRig *rig, uint32_t index, float opacity);
 
 /* Advanced mode: what the file's extension chunks add over the Cubism-equivalent evaluation, all off by default.
  * P2L_SKIN skins meshes along true arcs between their baked keys; P2L_EXACT_LINKS moves pivots keyed along a
@@ -130,10 +276,12 @@ bool p2l_bone_transform(P2lRig *rig, uint32_t index, float *out);
 /* Expressions: a few parameters set over the motion, faded as Cubism fades exp3 expressions. -1 fades out. */
 uint32_t p2l_expression_count(const P2lRig *rig);
 const char *p2l_expression_id(const P2lRig *rig, uint32_t index);
+const char *p2l_expression_name(const P2lRig *rig, uint32_t index);
 void p2l_expression(P2lRig *rig, int32_t index);
 /* Hit areas (e.g. "HitAreaHead", "HitAreaBody"): the first one whose visible meshes cover a canvas point. */
 uint32_t p2l_hit_area_count(const P2lRig *rig);
 const char *p2l_hit_area_id(const P2lRig *rig, uint32_t index);
+const char *p2l_hit_area_name(const P2lRig *rig, uint32_t index);
 int32_t p2l_hit_test(const P2lRig *rig, float x, float y);
 /* The meshes a hit area covers, written into out up to capacity; returns how many there are. */
 uint32_t p2l_hit_area_meshes(const P2lRig *rig, uint32_t index, uint32_t *out, uint32_t capacity);
@@ -144,12 +292,16 @@ bool p2l_pose_show(P2lRig *rig, uint32_t group, uint32_t entry);
 int32_t p2l_pose_shown(const P2lRig *rig, uint32_t group);
 /* A mesh's user data, empty when it has none. */
 const char *p2l_mesh_user_data(const P2lRig *rig, uint32_t index);
+/* The file's generator information as key-value pairs. */
+uint32_t p2l_meta_count(const P2lRig *rig);
+const char *p2l_meta_key(const P2lRig *rig, uint32_t index);
+const char *p2l_meta_value(const P2lRig *rig, uint32_t index);
 
-/* Memory for passing a rig in from a WebAssembly host. */
+/* Memory for passing a rig in from a WebAssembly host: [len] zeroed bytes, freed with the same [len]. */
 uint8_t *p2l_alloc(size_t len);
 void p2l_dealloc(uint8_t *pointer, size_t len);
 
-/* Textures: PNG bytes per page; NULL for a page that is not an embedded PNG. */
+/* Textures: PNG bytes per page; NULL, with [len] 0, for a page that is not an embedded PNG. */
 uint32_t p2l_texture_count(const P2lRig *rig);
 const uint8_t *p2l_texture_png(const P2lRig *rig, uint32_t index, size_t *len, uint32_t *width, uint32_t *height);
 /* A page's kind (0 PNG, 1 KTX2, 2 a file next to the rig, -1 none), size and embedded bytes; returns the file

@@ -202,7 +202,36 @@ fn order_key(value: f32) -> i64 {
 /// pose-blended draw order, else its static one), keeping tree order on ties, and draws them in place.
 /// Hidden meshes are left out.
 pub fn render_order(rig: &Rig, pose: &Pose) -> Vec<u32> {
-    fn group(rig: &Rig, pose: &Pose, g: &RenderGroup, out: &mut Vec<u32>) {
+    let mut out = Vec::with_capacity(rig.meshes.len());
+    walk_render(rig, pose, &mut |c| if c >= 0 { out.push(c as u32) });
+    out
+}
+
+/// The command [render_commands] writes to close an isolated group.
+pub const RENDER_END_GROUP: i32 = -1;
+
+/// The part of the isolated group a render command opens, or `None` for a mesh or a group's end.
+pub fn render_group_part(command: i32) -> Option<usize> {
+    (command <= -2).then(|| (-2 - command) as usize)
+}
+
+/// [render_order] with isolated groups kept: a mesh index, `-2 - part` opening the group of an isolated part
+/// (a group with a part and a composite) and [RENDER_END_GROUP] closing it. Groups that draw nothing are left out.
+pub fn render_commands(rig: &Rig, pose: &Pose) -> Vec<i32> {
+    let mut out: Vec<i32> = Vec::with_capacity(rig.meshes.len());
+    walk_render(rig, pose, &mut |c| {
+        if c == RENDER_END_GROUP && out.last().is_some_and(|l| render_group_part(*l).is_some()) {
+            out.pop();
+        } else {
+            out.push(c)
+        }
+    });
+    out
+}
+
+/// Visits the render tree back to front: visible meshes by index, isolated groups as their open and close commands.
+fn walk_render(rig: &Rig, pose: &Pose, visit: &mut impl FnMut(i32)) {
+    fn group(rig: &Rig, pose: &Pose, g: &RenderGroup, visit: &mut impl FnMut(i32)) {
         let mut children: Vec<(i64, &RenderNode)> = g
             .children
             .iter()
@@ -219,16 +248,21 @@ pub fn render_order(rig: &Rig, pose: &Pose) -> Vec<u32> {
             match c {
                 RenderNode::Mesh(m) => {
                     if rig.meshes[*m].visible {
-                        out.push(*m as u32)
+                        visit(*m as i32)
                     }
                 }
-                RenderNode::Group(child) => group(rig, pose, child, out),
+                RenderNode::Group(child) => match (child.part, &child.composite) {
+                    (Some(p), Some(_)) => {
+                        visit(-2 - p as i32);
+                        group(rig, pose, child, visit);
+                        visit(RENDER_END_GROUP);
+                    }
+                    _ => group(rig, pose, child, visit),
+                },
             }
         }
     }
-    let mut out = Vec::with_capacity(rig.meshes.len());
-    group(rig, pose, &rig.render, &mut out);
-    out
+    group(rig, pose, &rig.render, visit);
 }
 
 /// The first hit area (in file order) one of whose visible meshes covers canvas point ([x], [y]) in [pose].
@@ -286,6 +320,11 @@ pub struct Pose {
     pub deformer_opacity: Vec<f32>,
     /// Draw order of each part, blended from its channels and blend shapes.
     pub part_draw_order: Vec<f32>,
+    /// What each part's isolated group composites with: its group's channels over its composite's statics,
+    /// opacity clamped to 0..1. A part without a group keeps its statics.
+    pub part_opacity: Vec<f32>,
+    pub part_multiply: Vec<Rgb>,
+    pub part_screen: Vec<Rgb>,
 }
 
 #[derive(Default)]
@@ -375,6 +414,15 @@ impl Evaluator {
             }
             pose.part_draw_order.push(state.draw_order);
         }
+        pose.part_opacity.clear();
+        pose.part_multiply.clear();
+        pose.part_screen.clear();
+        for part in &rig.parts {
+            pose.part_opacity.push(part.composite.opacity.clamp(0.0, 1.0));
+            pose.part_multiply.push(part.composite.multiply);
+            pose.part_screen.push(part.composite.screen);
+        }
+        composite_states(&rig.render, values, cells, pose);
 
         for glue in &rig.glues {
             let mut state = ChannelState {
@@ -541,6 +589,26 @@ fn deformer_state(d: &Deformer, values: &[f32], cells: &mut Vec<(usize, f32)>) -
     }
     apply_channels(&d.channels, values, &mut state, cells);
     state
+}
+
+/// Each isolated group's composite state into [pose]: the group's channels over its composite's statics.
+fn composite_states(g: &RenderGroup, values: &[f32], cells: &mut Vec<(usize, f32)>, pose: &mut Pose) {
+    if let (Some(p), Some(c)) = (g.part, &g.composite) {
+        if p < pose.part_opacity.len() {
+            let mut state = ChannelState {
+                draw_order: 0.0, opacity: c.opacity, multiply: c.multiply, screen: c.screen, flip_x: false, flip_y: false, glue_intensity: 1.0,
+            };
+            apply_channels(&g.channels, values, &mut state, cells);
+            pose.part_opacity[p] = state.opacity.clamp(0.0, 1.0);
+            pose.part_multiply[p] = state.multiply;
+            pose.part_screen[p] = state.screen;
+        }
+    }
+    for child in &g.children {
+        if let RenderNode::Group(child) = child {
+            composite_states(child, values, cells, pose);
+        }
+    }
 }
 
 fn part_state(part: &Part, values: &[f32], cells: &mut Vec<(usize, f32)>) -> ChannelState {

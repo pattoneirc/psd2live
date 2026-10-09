@@ -203,7 +203,7 @@ fn behaviors_and_expressions_do_not_pile_up_over_updates() {
     rig.parameters[0].id = "ParamAngleX".into();
     rig.roles = vec![Role { role: "AngleX".into(), parameters: vec![0] }];
     rig.expressions = vec![Expression { id: "add".into(), name: "add".into(), fade_in: 0.1, fade_out: 0.1, parameters: vec![(0, Blend::Add, 5.0)] }];
-    let handle = Box::into_raw(Box::new(Handle::new(rig)));
+    let handle = Box::into_raw(Box::new(Handle::new(std::sync::Arc::new(Model::new(rig)))));
     unsafe {
         p2l_behaviors(handle, 2 | 4);
         p2l_look_at(handle, 1.0, 0.0);
