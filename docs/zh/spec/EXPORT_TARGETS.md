@@ -53,7 +53,7 @@ MIT 模块不依赖任何 GPL 模块，由 Gradle 依赖关系在编译期保证
 | `apng` | 光栅 | 动态 PNG（ffmpeg） | — |
 | `webp` | 光栅 | 动态 WebP（ffmpeg） | 有损压缩 |
 
-光栅类和 `psd-pose` 通过宿主提供的 `FrameRenderer` 渲染。编辑器的实现（`IrFrameRenderer`）用引擎的 CPU 求值器得到几何，用 `IrColors` 按通道与混合形求出乘算/屏幕色，再由 `:format-compile` 的 `SoftwareRasterizer`（MIT）逐像素绘制：预乘浮点缓冲、双线性采样、按纹理 alpha 的遮罩（含反相）、Cubism 的叠加/乘算（保持目标 alpha）以及 W3C 合成规范的全部可分离与非可分离混合模式；帧之间推进摆锤物理。部件的分组合成与 over 以外的 alpha 合成尚按普通绘制。
+光栅类和 `psd-pose` 通过宿主提供的 `FrameRenderer` 渲染。编辑器的实现（`IrFrameRenderer`）用引擎的 CPU 求值器得到几何，用 `IrColors` 按通道与混合形求出乘算/屏幕色及部件的绘制顺序与分组合成值，再由 `:format-compile` 的 `SoftwareRasterizer`（MIT）逐像素绘制：预乘浮点缓冲、双线性采样、按纹理 alpha 的遮罩（含反相），颜色混合与 alpha 合成按 `p2l_runtime.h` 的合成规则（与编辑器一致）：Cubism 的叠加/乘算不看 alpha 模式并保持目标 alpha，普通配 over 为预乘 source-over，其余组合取 W3C 混合函数、按 alpha 模式的重叠加权并用其 Porter-Duff 系数（over、atop、out、conjoint/disjoint over）。绘制顺序按渲染树：各组内按绘制顺序排序，组按其部件在该姿势下的绘制顺序参与排序；隔离部件的分组先画进清空的图层，再取分组的乘算/屏幕色、以不透明度与遮罩覆盖缩放 alpha，按分组的混合模式合成。帧之间推进摆锤物理。
 
 ### 设置
 

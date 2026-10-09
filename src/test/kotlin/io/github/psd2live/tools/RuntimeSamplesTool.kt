@@ -14,8 +14,10 @@ import kotlin.test.Test
 
 /**
  * A synthetic rig for checking players by eye: every color blend mode over a gradient, multiply and screen
- * colors, a mask and an inverted mask. Writes build/tools/runtime-samples/features.p2lrt and the software
- * rasterizer's rendering of it, features.png, as the reference.
+ * colors, a mask and an inverted mask, an isolated group (opacity, multiply and screen colors, a blend mode
+ * and a mask), and every alpha blend mode, each in an isolated group of its own so the source meets a disc on
+ * an empty layer. Writes build/tools/runtime-samples/features.p2lrt and the software rasterizer's rendering of
+ * it, features.png, as the reference.
  *
  * PSD2LIVE_TOOLS=1 ./gradlew test --tests '*RuntimeSamplesTool'
  */
@@ -36,12 +38,13 @@ class RuntimeSamplesTool {
 		for (x in 0 until 64) for (y in 0 until 64) if ((x - 31.5f) * (x - 31.5f) + (y - 31.5f) * (y - 31.5f) < 30f * 30f) disc.setRGB(x, y, 0xffffffff.toInt())
 		fun quad(id: String, x: Float, y: Float, w: Float, h: Float, u0: Float, v0: Float, u1: Float, v1: Float, page: Int,
 		         blend: ColorBlend = ColorBlend.NORMAL, order: Float = 500f, multiply: Rgb = Rgb.White, screen: Rgb = Rgb.Black,
-		         maskedBy: List<String> = emptyList(), invert: Boolean = false, visible: Boolean = true) =
-			Mesh(id, id, null, blend = blend, maskedBy = maskedBy, invertMask = invert, drawOrder = order, multiply = multiply, screen = screen,
-				page = page, visible = visible, offsets = null, geometry = MeshGeometry(
+		         maskedBy: List<String> = emptyList(), invert: Boolean = false, visible: Boolean = true,
+		         alpha: AlphaBlend = AlphaBlend.OVER, opacity: Float = 1f) =
+			Mesh(id, id, null, blend = blend, alphaBlend = alpha, maskedBy = maskedBy, invertMask = invert, drawOrder = order, opacity = opacity,
+				multiply = multiply, screen = screen, page = page, visible = visible, offsets = null, geometry = MeshGeometry(
 					Floats.values(x, y, x + w, y, x, y + h, x + w, y + h), Floats.values(u0, v0, u1, v0, u0, v1, u1, v1), Ints.values(0, 1, 2, 1, 3, 2)))
 		val meshes = ArrayList<Mesh>()
-		meshes += quad("background", 0f, 0f, 800f, 600f, 0f, 0.1f, 1f, 0.4f, 0, order = 100f)
+		meshes += quad("background", 0f, 0f, 800f, 760f, 0f, 0.1f, 1f, 0.4f, 0, order = 100f)
 		val modes = ColorBlend.entries
 		modes.forEachIndexed { i, mode ->
 			val col = i % 6; val row = i / 6
@@ -55,15 +58,41 @@ class RuntimeSamplesTool {
 		meshes += quad("masked", 280f, 410f, 150f, 150f, 0.375f, 0.75f, 0.375f, 0.75f, 0, maskedBy = listOf("mask"))
 		meshes += quad("mask-2", 470f, 430f, 110f, 110f, 0f, 0f, 1f, 1f, 1, visible = false)
 		meshes += quad("inverted", 450f, 410f, 150f, 150f, 0.125f, 0.75f, 0.125f, 0.75f, 0, maskedBy = listOf("mask-2"), invert = true)
-		val ir = RigIR(Canvas(800f, 600f), emptyList(), meshes = meshes,
+		val root = meshes.mapTo(ArrayList<RenderNode>()) { RenderMesh(it.id) }
+		val parts = ArrayList<Part>()
+		fun group(id: String, composite: Composite, children: List<Mesh>) {
+			meshes += children
+			parts += Part(id, id, children.map { ChildRef.MeshRef(it.id) }, groupMode = GroupMode.ISOLATED, composite = composite)
+			root += RenderGroup(id, RigIR.DEFAULT_DRAW_ORDER, children.map { RenderMesh(it.id) }, composite = composite)
+		}
+		// An isolated group: a red block under a half-opaque blue one, drawn on a layer that then fades as one,
+		// takes the group's colors, overlays the gradient and is cut to a disc.
+		meshes += quad("group-mask", 625f, 415f, 140f, 140f, 0f, 0f, 1f, 1f, 1, visible = false)
+		root += RenderMesh("group-mask")
+		group("group", Composite(blend = ColorBlend.OVERLAY, maskedBy = listOf("group-mask"), opacity = 0.8f, multiply = Rgb(1f, 0.8f, 0.5f), screen = Rgb(0.1f, 0f, 0.2f)), listOf(
+			quad("group-red", 620f, 410f, 100f, 100f, 0.125f, 0.75f, 0.125f, 0.75f, 0),
+			quad("group-blue", 670f, 460f, 100f, 100f, 0.625f, 0.75f, 0.625f, 0.75f, 0, order = 600f, opacity = 0.5f)))
+		// Every alpha blend mode: a 70% red block over a 60% blue-tinted disc, alone on its group's layer.
+		val alphas = AlphaBlend.entries
+		alphas.forEachIndexed { i, alpha ->
+			val x = 20f + i * 130f; val y = 590f
+			val name = "alpha-${alpha.name.lowercase()}"
+			group(name, Composite(), listOf(
+				quad("$name-disc", x, y, 110f, 110f, 0f, 0f, 1f, 1f, 1, multiply = Rgb(0.2f, 0.5f, 1f), opacity = 0.6f),
+				quad("$name-block", x + 35f, y + 35f, 75f, 75f, 0.125f, 0.75f, 0.125f, 0.75f, 0, order = 600f, alpha = alpha, opacity = 0.7f)))
+		}
+		val ir = RigIR(Canvas(800f, 760f), emptyList(), meshes = meshes, parts = parts,
+			rootChildren = meshes.filter { mesh -> parts.none { part -> ChildRef.MeshRef(mesh.id) in part.children } }.map { ChildRef.MeshRef(it.id) } + parts.map { ChildRef.PartRef(it.id) },
 			textures = Textures(pages = listOf(TexturePage(256, 64, png(atlas)), TexturePage(64, 64, png(disc)))),
-			renderRoot = RenderGroup(null, RigIR.DEFAULT_DRAW_ORDER, meshes.map { RenderMesh(it.id) }))
+			renderRoot = RenderGroup(null, RigIR.DEFAULT_DRAW_ORDER, root))
 		File(out, "features.p2lrt").writeBytes(P2lrt.write(ir))
 		val pose = IrGeometryEvaluator.open(ir).use { it.evaluate(emptyMap()) }
-		val frame = SoftwareRasterizer(ir).render(pose, IrColors(ir).at(emptyMap()), FrameSpec(0f, 0f, 800f, 600f, 800, 600))
+		val colors = IrColors(ir)
+		val frame = SoftwareRasterizer(ir).render(pose, colors.at(emptyMap()), FrameSpec(0f, 0f, 800f, 760f, 800, 760), parts = colors.parts(emptyMap()))
 		val image = BufferedImage(frame.width, frame.height, BufferedImage.TYPE_INT_ARGB).apply { setRGB(0, 0, width, height, frame.argb, 0, width) }
 		ImageIO.write(image, "png", File(out, "features.png"))
 		File(out, "layout.txt").writeText(modes.withIndex().joinToString("\n") { (i, m) -> "row ${i / 6} column ${i % 6}: ${m.name}" } +
-			"\nrow 3: multiply color, screen color, mask, inverted mask\n")
+			"\nrow 3: multiply color, screen color, mask, inverted mask, isolated group (overlay, opacity 0.8, multiply and screen colors, disc mask)" +
+			"\nrow 4: alpha blend ${alphas.joinToString { it.name }} (a 70% red block over a 60% disc in an isolated group each)\n")
 	}
 }

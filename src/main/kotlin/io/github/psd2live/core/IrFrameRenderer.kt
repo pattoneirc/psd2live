@@ -12,8 +12,8 @@ import io.github.psd2live.format.compile.render.SoftwareRasterizer
 
 /**
  * Renders the IR for raster exports: geometry from the engine's CPU evaluator, colors from the IR, pixels
- * from the software rasterizer (texture-alpha masks, multiply and screen colors, every blend mode), and the
- * editor's pendulum physics stepped between frames. Group composites are drawn as their meshes.
+ * from the software rasterizer (texture-alpha masks, multiply and screen colors, every color and alpha blend mode,
+ * isolated parts as layers), and the editor's pendulum physics stepped between frames.
  */
 internal object IrFrameRenderer : FrameRenderer {
 	override fun open(ir: RigIR, physics: Boolean): FrameSession {
@@ -32,22 +32,19 @@ internal object IrFrameRenderer : FrameRenderer {
 
 			override fun render(parameters: Map<String, Float>, deltaSeconds: Float, frame: FrameSpec, meshes: Set<String>?): RasterImage {
 				val values = parameters + engine?.step(parameters, deltaSeconds).orEmpty()
-				return rasterizer.render(geometry.evaluate(values), colors.at(values), frame, meshes)
+				return rasterizer.render(geometry.evaluate(values), colors.at(values), frame, meshes, colors.parts(values))
 			}
 
 			// The pose is evaluated once; each mesh is drawn over its own reach, in parallel.
 			override fun renderEach(parameters: Map<String, Float>, frame: FrameSpec, meshes: List<String>): List<PlacedRaster?> {
 				val values = parameters + engine?.step(parameters, 0f).orEmpty()
-				return rasterizer.renderMeshes(geometry.evaluate(values), colors.at(values), frame, meshes)
+				return rasterizer.renderMeshes(geometry.evaluate(values), colors.at(values), frame, meshes, colors.parts(values))
 			}
 
 			// Physics and geometry step in frame order; the frames are then drawn in parallel.
 			override fun renderSequence(frames: List<Pair<Map<String, Float>, Float>>, frame: FrameSpec): List<RasterImage> {
-				val poses = frames.map { (parameters, delta) ->
-					val values = parameters + engine?.step(parameters, delta).orEmpty()
-					geometry.evaluate(values) to colors.at(values)
-				}
-				return rasterizer.renderFrames(poses, frame)
+				val values = frames.map { (parameters, delta) -> parameters + engine?.step(parameters, delta).orEmpty() }
+				return rasterizer.renderFrames(values.map { geometry.evaluate(it) to colors.at(it) }, frame, values.map(colors::parts))
 			}
 
 			override fun close() = geometry.close()
