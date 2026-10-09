@@ -15,6 +15,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -25,6 +26,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.psd2live.core.RigPreviewModel
 import io.github.psd2live.ui.theme.LocalToolColors
+import org.umamo.runtime.model.Drawable
 
 // Only tree rows publish here; hovering the main canvas must not open this preview.
 internal data class MeshPreviewHover(val drawableId: String, val centerYInRoot: Float)
@@ -38,23 +40,7 @@ internal fun HierarchyMeshPreview(
     anchorY: Float,
 ) {
     val drawable = model.rig.puppet.drawables.firstOrNull { it.id.raw == drawableId } ?: return
-    val mesh = drawable.mesh ?: return
-    val layerId = model.rig.layerIdByDrawableId[drawable.id.raw]
-    val packed = model.atlas.placementByLayerId[layerId]
-    // A turned tile's upright rectangle is not what it covers; its texture coordinates' box is.
-    val placement = packed?.takeIf { it.rotation == 0f }
-    val pageIndex = packed?.page ?: model.rig.pageByDrawableId[drawable.id.raw] ?: drawable.texturePage
-    val page = model.atlas.pages.getOrNull(pageIndex) ?: return
-    // Imported models may have UVs but no source-layer atlas placement.
-    val source = remember(page, placement, mesh) {
-        if (mesh.uvs.isEmpty()) return@remember null
-        val left = (placement?.x ?: floor(mesh.uvs.filterIndexed { i, _ -> i % 2 == 0 }.min() * page.image.width).toInt()).coerceIn(0, page.image.width)
-        val top = (placement?.y ?: floor(mesh.uvs.filterIndexed { i, _ -> i % 2 == 1 }.min() * page.image.height).toInt()).coerceIn(0, page.image.height)
-        val right = (placement?.let { it.x + it.width } ?: ceil(mesh.uvs.filterIndexed { i, _ -> i % 2 == 0 }.max() * page.image.width).toInt()).coerceIn(left, page.image.width)
-        val bottom = (placement?.let { it.y + it.height } ?: ceil(mesh.uvs.filterIndexed { i, _ -> i % 2 == 1 }.max() * page.image.height).toInt()).coerceIn(top, page.image.height)
-        if (right == left || bottom == top) null
-        else page.image.getSubimage(left, top, right - left, bottom - top).toImageBitmapFast()
-    } ?: return
+    val source = rememberMeshThumbnail(model, drawable) ?: return
     val colors = LocalToolColors.current
     val density = LocalDensity.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -94,5 +80,27 @@ internal fun HierarchyMeshPreview(
             }
             drawPath(outline, colors.border, style = Stroke(1.dp.toPx()))
         }
+    }
+}
+
+/** The atlas region a drawable's mesh samples, or null when it has no textured mesh. */
+@Composable
+internal fun rememberMeshThumbnail(model: RigPreviewModel, drawable: Drawable): ImageBitmap? {
+    val mesh = drawable.mesh ?: return null
+    val layerId = model.rig.layerIdByDrawableId[drawable.id.raw]
+    val packed = model.atlas.placementByLayerId[layerId]
+    // A turned tile's upright rectangle is not what it covers; its texture coordinates' box is.
+    val placement = packed?.takeIf { it.rotation == 0f }
+    val pageIndex = packed?.page ?: model.rig.pageByDrawableId[drawable.id.raw] ?: drawable.texturePage
+    val page = model.atlas.pages.getOrNull(pageIndex) ?: return null
+    // Imported models may have UVs but no source-layer atlas placement.
+    return remember(page, placement, mesh) {
+        if (mesh.uvs.isEmpty()) return@remember null
+        val left = (placement?.x ?: floor(mesh.uvs.filterIndexed { i, _ -> i % 2 == 0 }.min() * page.image.width).toInt()).coerceIn(0, page.image.width)
+        val top = (placement?.y ?: floor(mesh.uvs.filterIndexed { i, _ -> i % 2 == 1 }.min() * page.image.height).toInt()).coerceIn(0, page.image.height)
+        val right = (placement?.let { it.x + it.width } ?: ceil(mesh.uvs.filterIndexed { i, _ -> i % 2 == 0 }.max() * page.image.width).toInt()).coerceIn(left, page.image.width)
+        val bottom = (placement?.let { it.y + it.height } ?: ceil(mesh.uvs.filterIndexed { i, _ -> i % 2 == 1 }.max() * page.image.height).toInt()).coerceIn(top, page.image.height)
+        if (right == left || bottom == top) null
+        else page.image.getSubimage(left, top, right - left, bottom - top).toImageBitmapFast()
     }
 }

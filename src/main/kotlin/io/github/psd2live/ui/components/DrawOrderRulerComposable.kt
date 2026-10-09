@@ -30,6 +30,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -43,6 +46,7 @@ import io.github.psd2live.ui.theme.LocalToolColors
 import io.github.psd2live.ui.theme.LocalToolTypography
 import io.github.psd2live.ui.tutorial.TutorialTargetId
 import io.github.psd2live.ui.tutorial.tutorialTarget
+import io.github.psd2live.ui.views.rememberMeshThumbnail
 import org.umamo.runtime.model.Drawable
 import java.awt.Cursor
 import kotlin.math.abs
@@ -63,10 +67,10 @@ data class DrawableOrderEntry(
  * Vertical Draw Order Ruler replicating Live2D Cubism Editor's vertical draw order slider.
  * - Auto-scales height to fit active layer orders instead of statically fixing 0..1000.
  * - Mouse Wheel: Zooms ruler scale in/out centered at mouse cursor with adaptive dynamic ticks.
- * - Left Mouse Drag: Adjusts selected layer's draw order value in real-time.
+ * - Left Mouse Drag: Adjusts selected layer's draw order value in real-time; the selected mark wins over marks it overlaps.
  * - Right Mouse Drag: Pans the ruler up/down along the scale.
  * - Right Click (or Double Click): Opens precision numeric input dialog.
- * - Hover Tooltip: Displays layer name, effective draw order, and default value.
+ * - Hover Card: Shows the mesh of every mark under the pointer with its name and draw order.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -83,6 +87,7 @@ fun DrawOrderRuler(
 	val textMeasurer = rememberTextMeasurer()
 
 	var rulerHeightPx by remember { mutableStateOf(1f) }
+	var rulerWidthPx by remember { mutableStateOf(1f) }
 	var mousePos by remember { mutableStateOf<Offset?>(null) }
 	var lastMousePos by remember { mutableStateOf<Offset?>(null) }
 
@@ -153,12 +158,24 @@ fun DrawOrderRuler(
 
 	val selectedEntry = entries.firstOrNull { it.isSelected }
 
-	// Closest drawable to mouse pointer within threshold
-	val hoveredEntry = remember(mousePos, entries) {
-		val pos = mousePos ?: return@remember null
-		entries
-			.filter { abs(it.y - pos.y) <= 8f }
-			.minByOrNull { abs(it.y - pos.y) }
+	// The selected mark spans the whole ruler; elsewhere only the short marks by the track can be hit.
+	// A selected mark that overlaps another wins, so a drag on it moves the selection, not its neighbour.
+	fun pickEntry(pos: Offset, threshold: Float): DrawableOrderEntry? {
+		val near = entries.filter { abs(it.y - pos.y) <= threshold }
+		val closest = near.minByOrNull { abs(it.y - pos.y) } ?: return null
+		val selected = near.firstOrNull { it.isSelected } ?: return closest
+		val marksLeft = rulerTrackX(rulerWidthPx) - rulerMarkLength(rulerWidthPx)
+		val onSelected = pos.x < marksLeft || abs(selected.y - pos.y) <= abs(closest.y - pos.y) + OVERLAP_PX
+		return if (onSelected) selected else closest
+	}
+
+	val hoveredEntry = remember(mousePos, entries, rulerWidthPx) {
+		mousePos?.let { pickEntry(it, 8f) }
+	}
+	// Every mark drawn over the hovered one, the hovered one first.
+	val hoveredGroup = remember(hoveredEntry, entries) {
+		val hit = hoveredEntry ?: return@remember emptyList()
+		listOf(hit) + entries.filter { it !== hit && abs(it.y - hit.y) <= OVERLAP_PX }.sortedByDescending { it.effectiveOrder }
 	}
 
 	Box(
@@ -168,7 +185,10 @@ fun DrawOrderRuler(
 			.fillMaxHeight()
 			.background(colors.panelElevated.copy(alpha = 0.5f))
 			.border(BorderStroke(1.dp, colors.divider))
-			.onGloballyPositioned { rulerHeightPx = it.size.height.toFloat().coerceAtLeast(1f) }
+			.onGloballyPositioned {
+				rulerHeightPx = it.size.height.toFloat().coerceAtLeast(1f)
+				rulerWidthPx = it.size.width.toFloat().coerceAtLeast(1f)
+			}
 			.pointerHoverIcon(
 				PointerIcon(
 					when {
@@ -203,7 +223,7 @@ fun DrawOrderRuler(
 					val isDoubleClick = (now - lastClickTime) < 350L
 					lastClickTime = now
 
-					val hit = entries.filter { abs(it.y - pos.y) <= 8f }.minByOrNull { abs(it.y - pos.y) }
+					val hit = pickEntry(pos, 8f)
 					val targetEntry = hit ?: selectedEntry
 
 					if (isDoubleClick) {
@@ -273,7 +293,7 @@ fun DrawOrderRuler(
 					isRightDragging = false
 					rightPressPos = null
 					if (press != null && (pos - press).getDistance() < 5f) {
-						val target = entries.filter { abs(it.y - pos.y) <= 12f }.minByOrNull { abs(it.y - pos.y) } ?: selectedEntry
+						val target = pickEntry(pos, 12f) ?: selectedEntry
 						if (target != null) {
 							onRequestSetOrder?.invoke(
 								target.layerId,
@@ -296,7 +316,7 @@ fun DrawOrderRuler(
 			val w = size.width
 			val h = size.height
 
-			val trackX = (w - 4f).coerceAtLeast(3f)
+			val trackX = rulerTrackX(w)
 			val usable = (h - padTop - padBottom).coerceAtLeast(1f)
 
 			// Vertical track guide line
@@ -386,7 +406,7 @@ fun DrawOrderRuler(
 				val awtColor = ComponentPalette.strong(entry.layerId)
 				val markColor = Color(awtColor.red, awtColor.green, awtColor.blue)
 
-				val markLen = (w * 0.45f).coerceIn(4f, 12f)
+				val markLen = rulerMarkLength(w)
 				drawLine(
 					color = markColor.copy(alpha = 0.85f),
 					start = Offset((trackX - markLen).coerceAtLeast(0f), y),
@@ -445,26 +465,9 @@ fun DrawOrderRuler(
 			}
 		}
 
-		// Tooltip overlay on hover
-		val tooltipItem = hoveredEntry
+		// Hover card: the mesh of every mark under the pointer
 		val currentMouse = mousePos
-		if (tooltipItem != null && currentMouse != null && !isLeftDragging && !isRightDragging) {
-			val isOverridden = tooltipItem.isOverridden
-			val tooltipText = buildString {
-				append(tooltipItem.drawable.name)
-				append(" · ")
-				append(tr("canvas.drawOrder.title"))
-				append(": ")
-				append(tooltipItem.effectiveOrder.roundToInt())
-				if (isOverridden) {
-					append(" (")
-					append(tr("canvas.drawOrder.reset").substringBefore("为").removePrefix("重置").trim())
-					append(": ")
-					append(tooltipItem.defaultOrder.roundToInt())
-					append(")")
-				}
-			}
-
+		if (model != null && hoveredGroup.isNotEmpty() && currentMouse != null && !isLeftDragging && !isRightDragging) {
 			Popup(
 				popupPositionProvider = object : PopupPositionProvider {
 					override fun calculatePosition(
@@ -473,37 +476,129 @@ fun DrawOrderRuler(
 						layoutDirection: LayoutDirection,
 						popupContentSize: IntSize,
 					): IntOffset {
-						val x = anchorBounds.right + 6
+						val right = anchorBounds.right + 6
+						val x = if (right + popupContentSize.width <= windowSize.width) right
+							else (anchorBounds.left - 6 - popupContentSize.width).coerceAtLeast(0)
 						val y = (anchorBounds.top + currentMouse.y - popupContentSize.height / 2f).roundToInt()
-							.coerceIn(8, windowSize.height - popupContentSize.height - 8)
+							.coerceIn(8, (windowSize.height - popupContentSize.height - 8).coerceAtLeast(8))
 						return IntOffset(x, y)
 					}
-				}
+				},
+				properties = PopupProperties(focusable = false),
 			) {
-				Box(
-					modifier = Modifier
-						.background(colors.panelElevated, RoundedCornerShape(3.dp))
-						.border(BorderStroke(1.dp, colors.borderHover), RoundedCornerShape(3.dp))
-						.padding(horizontal = 7.dp, vertical = 4.dp),
-				) {
-					Row(
-						verticalAlignment = Alignment.CenterVertically,
-						horizontalArrangement = Arrangement.spacedBy(5.dp),
-					) {
-						val awtColor = ComponentPalette.strong(tooltipItem.layerId)
-						Box(
-							modifier = Modifier
-								.size(6.dp)
-								.background(Color(awtColor.red, awtColor.green, awtColor.blue), RoundedCornerShape(1.dp))
-						)
-						Text(
-							text = tooltipText,
-							style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.Medium),
-							color = colors.textPrimary,
-						)
-					}
-				}
+				DrawOrderHoverCard(model, hoveredGroup)
 			}
+		}
+	}
+}
+
+private const val OVERLAP_PX = 2f
+private const val HOVER_CARD_MAX_CELLS = 16
+
+private fun rulerTrackX(width: Float): Float = (width - 4f).coerceAtLeast(3f)
+
+private fun rulerMarkLength(width: Float): Float = (width * 0.45f).coerceIn(4f, 12f)
+
+@Composable
+private fun DrawOrderHoverCard(model: RigPreviewModel, group: List<DrawableOrderEntry>) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val shown = group.take(HOVER_CARD_MAX_CELLS)
+	val columns = when {
+		shown.size == 1 -> 1
+		shown.size <= 4 -> 2
+		shown.size <= 9 -> 3
+		else -> 4
+	}
+	val cell = when (columns) {
+		1 -> 150.dp
+		2 -> 84.dp
+		else -> 64.dp
+	}
+	val minOrder = group.minOf { it.effectiveOrder }.roundToInt()
+	val maxOrder = group.maxOf { it.effectiveOrder }.roundToInt()
+	Column(
+		modifier = Modifier
+			.background(colors.panelElevated, RoundedCornerShape(3.dp))
+			.border(BorderStroke(1.dp, colors.borderHover), RoundedCornerShape(3.dp))
+			.padding(6.dp),
+		verticalArrangement = Arrangement.spacedBy(5.dp),
+	) {
+		Text(
+			text = buildString {
+				append(tr("canvas.drawOrder.title"))
+				append(": ")
+				append(if (minOrder == maxOrder) "$minOrder" else "$minOrder – $maxOrder")
+				if (group.size > 1) append(" · ").append(group.size)
+			},
+			style = typography.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+			color = colors.textPrimary,
+		)
+		val showOrder = minOrder != maxOrder || group.any { it.isOverridden }
+		shown.chunked(columns).forEach { row ->
+			Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+				row.forEach { entry -> DrawOrderHoverCell(model, entry, cell, showOrder) }
+			}
+		}
+		if (group.size > shown.size) {
+			Text(
+				text = "+${group.size - shown.size}",
+				style = typography.caption.copy(fontSize = 10.sp),
+				color = colors.textMuted,
+			)
+		}
+	}
+}
+
+@Composable
+private fun DrawOrderHoverCell(model: RigPreviewModel, entry: DrawableOrderEntry, side: Dp, showOrder: Boolean) {
+	val colors = LocalToolColors.current
+	val typography = LocalToolTypography.current
+	val thumbnail = rememberMeshThumbnail(model, entry.drawable)
+	val awtColor = ComponentPalette.strong(entry.layerId)
+	val swatch = Color(awtColor.red, awtColor.green, awtColor.blue)
+	Column(modifier = Modifier.width(side), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+		Canvas(
+			modifier = Modifier
+				.size(side)
+				.background(colors.checkerDark, RoundedCornerShape(2.dp))
+				.border(
+					BorderStroke(if (entry.isSelected) 1.5.dp else 1.dp, if (entry.isSelected) colors.accent else colors.border),
+					RoundedCornerShape(2.dp),
+				),
+		) {
+			val image = thumbnail ?: return@Canvas
+			val inset = 4.dp.toPx()
+			val scale = (size.minDimension - inset * 2).coerceAtLeast(1f) / maxOf(image.width, image.height)
+			val width = (image.width * scale).roundToInt().coerceAtLeast(1)
+			val height = (image.height * scale).roundToInt().coerceAtLeast(1)
+			drawImage(
+				image,
+				dstOffset = IntOffset(((size.width - width) / 2).roundToInt(), ((size.height - height) / 2).roundToInt()),
+				dstSize = IntSize(width, height),
+			)
+		}
+		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+			Box(Modifier.size(6.dp).background(swatch, RoundedCornerShape(1.dp)))
+			Text(
+				text = entry.drawable.name,
+				style = typography.caption.copy(fontSize = 9.sp, fontWeight = if (entry.isSelected) FontWeight.SemiBold else FontWeight.Normal),
+				color = if (entry.isSelected) colors.accent else colors.textPrimary,
+				maxLines = 1,
+				overflow = TextOverflow.Ellipsis,
+			)
+		}
+		if (showOrder) {
+			Text(
+				text = buildString {
+					append(entry.effectiveOrder.roundToInt())
+					if (entry.isOverridden) append(" · ").append(tr("canvas.drawOrder.default", entry.defaultOrder.roundToInt()))
+				},
+				style = typography.caption.copy(fontSize = 9.sp, fontFamily = FontFamily.Monospace),
+				color = colors.textMuted,
+				maxLines = 1,
+				overflow = TextOverflow.Ellipsis,
+			)
 		}
 	}
 }
