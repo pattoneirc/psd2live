@@ -115,6 +115,27 @@ class RegenerationCheckpointTest {
 		}
 	}
 
+	/** A skeleton committed after a checkpoint bakes: its bones' parameters reach the rig, merged onto the checkpoint. */
+	@Test fun aSkeletonAfterACheckpointBakes() = runBlocking<Unit> {
+		val edited = edited()
+		val face = edited.simulated.model.rig.layerIdByDrawableId.entries.single { it.value == "face" }.key
+		val body = SkeletonBone("body", "Body", null, BoneRole.UPPER_BODY, headX = 32f, headY = 60f, tailX = 32f, tailY = 40f)
+		val arm = SkeletonBone("arm", "Arm", "body", BoneRole.UPPER_ARM, Side.LEFT, headX = 36f, headY = 14f, tailX = 36f, tailY = 34f,
+			drawableIds = listOf(face))
+		val spec = SkeletonSpec(bones = listOf(body, arm))
+		val before = edited.simulated
+		val committed = WorkspaceDocumentCommands(edited.runtime).execute(before.projectId, before.state, "Edit skeleton",
+			listOf(WorkspaceDocumentOperation("skeleton_put", buildJsonObject { put("spec", spec.toJson()) })), MutationAuthor.USER).capture
+		val journal = committed.document.rigEdits.authoringJournal
+		assertTrue(RigCheckpoint.latest(journal) > RigCheckpoint.latest(before.document.rigEdits.authoringJournal), "the skeleton checkpoints")
+		val puppet = committed.model.rig.puppet
+		assertTrue(puppet.parameters.any { it.id.raw == arm.parameterId }, "the arm bone drives a parameter")
+		assertTrue(puppet.drawables.none { it.id in edited.parts && it.parentDeformerId == null })
+		// A cold build of the committed document gives the same rig.
+		MaterializedRigStore.clear(); ReplayCheckpoints.clear()
+		assertEquals(hash(committed.model), hash(builder.build(committed.document)))
+	}
+
 	@Test fun buildsStartFromTheCheckpointAndIgnoreTheEntriesBeforeIt() = runBlocking<Unit> {
 		val edited = edited()
 		val document = edited.simulated.document
