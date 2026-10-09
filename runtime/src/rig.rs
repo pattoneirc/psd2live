@@ -11,10 +11,11 @@ use std::fmt;
 /// The newest major version this reader understands; version 1 is read too.
 pub const VERSION: u32 = 2;
 /// The chunks this reader understands, with the newest version of each.
-pub const CHUNKS: [(&str, u16); 22] = [
+pub const CHUNKS: [(&str, u16); 23] = [
     ("STRS", 1), ("CANV", 1), ("PARM", 1), ("DEFM", 1), ("PART", 1), ("MESH", 1), ("GLUE", 1),
-    ("DRAW", 1), ("TEXR", 1), ("PHYS", 1), ("CLIP", 1), ("ROLE", 1), ("PGUI", 1), ("META", 1),
+    ("DRAW", 1), ("TEXR", 1), ("PHYS", 2), ("CLIP", 1), ("ROLE", 1), ("PGUI", 1), ("META", 1),
     ("BONE", 1), ("SKIN", 1), ("COLL", 1), ("SIMS", 1), ("EXPR", 1), ("HITA", 1), ("UDAT", 1), ("POSE", 1),
+    ("CEXT", 1),
 ];
 
 #[derive(Debug)]
@@ -453,11 +454,13 @@ pub struct GuiNode {
     pub children: usize,
 }
 
-/// What a physics input drives or an output reads: sideways travel, or tilt and segment angle.
+/// What a physics input drives or an output reads: sideways or vertical travel, or tilt and segment angle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhysicsSource {
     X,
     Angle,
+    /// Vertical travel, Cubism's Y; physics chunk version 2.
+    Y,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -544,6 +547,41 @@ pub struct Clip {
     pub fade_in: Option<f32>,
     pub fade_out: Option<f32>,
     pub curves: Vec<Curve>,
+    /// What the clip extensions chunk adds; empty without it.
+    pub extras: ClipExtras,
+}
+
+/// What a non-parameter curve of a clip drives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CurveTarget {
+    /// The opacity of a part, set outright as Cubism sets it.
+    PartOpacity(usize),
+    /// The opacity of the whole rig.
+    ModelOpacity,
+    /// Multiplies the EyeBlink parameters while the clip plays.
+    EyeBlink,
+    /// Adds to the LipSync parameters while the clip plays.
+    LipSync,
+}
+
+/// A clip curve on something other than a parameter, with fade times of its own (`None` takes the clip's).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TargetCurve {
+    pub target: CurveTarget,
+    pub fade_in: Option<f32>,
+    pub fade_out: Option<f32>,
+    pub curve: Curve,
+}
+
+/// What `CEXT` adds to a clip: events, curves on parts, the rig and the blink and lip sync effects, and fade
+/// times for the clip's own curves.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ClipExtras {
+    /// Events in time order: when, and the text the host receives.
+    pub events: Vec<(f32, String)>,
+    pub curves: Vec<TargetCurve>,
+    /// Per parameter curve of the clip that has its own fades: the curve's index and its fade-in and fade-out.
+    pub fades: Vec<(usize, Option<f32>, Option<f32>)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1527,6 +1565,7 @@ impl<'a> Reader<'a> {
         match self.u8()? {
             0 => Ok(PhysicsSource::X),
             1 => Ok(PhysicsSource::Angle),
+            2 => Ok(PhysicsSource::Y),
             _ => err("Unknown physics source"),
         }
     }
@@ -1581,24 +1620,74 @@ impl<'a> Reader<'a> {
         let mut curves = Vec::with_capacity(n);
         for _ in 0..n {
             let parameter = self.parameter()?;
-            let (start_time, start_value) = (self.f32()?, self.f32()?);
-            let count = self.count(9)?;
-            let mut segments = Vec::with_capacity(count);
-            for _ in 0..count {
-                let kind = self.u8()?;
-                let c = if kind == 1 { [self.f32()?, self.f32()?, self.f32()?, self.f32()?] } else { [0.0; 4] };
-                let (time, value) = (self.f32()?, self.f32()?);
-                segments.push(match kind {
-                    0 => Segment::Linear { time, value },
-                    1 => Segment::Bezier { c1: (c[0], c[1]), c2: (c[2], c[3]), time, value },
-                    2 => Segment::Stepped { time, value },
-                    3 => Segment::InverseStepped { time, value },
-                    _ => return err("Unknown curve segment"),
-                });
-            }
-            curves.push(Curve { parameter, start_time, start_value, segments });
+            curves.push(self.curve(parameter)?);
         }
-        Ok(Clip { id, name, group, duration, fps, looping, fade_in, fade_out, curves })
+        Ok(Clip { id, name, group, duration, fps, looping, fade_in, fade_out, curves, extras: ClipExtras::default() })
+    }
+
+    /// A curve's start point and segments, driving [parameter].
+    fn curve(&mut self, parameter: usize) -> Result<Curve> {
+        let (start_time, start_value) = (self.f32()?, self.f32()?);
+        let count = self.count(9)?;
+        let mut segments = Vec::with_capacity(count);
+        for _ in 0..count {
+            let kind = self.u8()?;
+            let c = if kind == 1 { [self.f32()?, self.f32()?, self.f32()?, self.f32()?] } else { [0.0; 4] };
+            let (time, value) = (self.f32()?, self.f32()?);
+            segments.push(match kind {
+                0 => Segment::Linear { time, value },
+                1 => Segment::Bezier { c1: (c[0], c[1]), c2: (c[2], c[3]), time, value },
+                2 => Segment::Stepped { time, value },
+                3 => Segment::InverseStepped { time, value },
+                _ => return err("Unknown curve segment"),
+            });
+        }
+        Ok(Curve { parameter, start_time, start_value, segments })
+    }
+
+    /// A fade time, negative for none.
+    fn fade(&mut self) -> Result<Option<f32>> {
+        Ok(Some(self.f32()?).filter(|v| *v >= 0.0))
+    }
+
+    /// CEXT: per extended clip its events, its curves on other targets and the fades of its own curves.
+    fn clip_extras(&mut self, clips: &mut [Clip]) -> Result<()> {
+        let n = self.count(16)?;
+        for _ in 0..n {
+            let c = self.index(clips.len(), "clip")?;
+            let mut extras = ClipExtras::default();
+            let events = self.count(8)?;
+            for _ in 0..events {
+                extras.events.push((self.f32()?, self.str()?));
+            }
+            if extras.events.windows(2).any(|w| w[1].0 < w[0].0) {
+                return err("Clip events out of time order");
+            }
+            let targets = self.count(25)?;
+            for _ in 0..targets {
+                let (kind, index) = (self.u8()?, self.i32()?);
+                let target = match kind {
+                    1 if index >= 0 && (index as usize) < self.parts => CurveTarget::PartOpacity(index as usize),
+                    1 => return err(format!("Invalid part reference {}", index)),
+                    2 => CurveTarget::ModelOpacity,
+                    3 => CurveTarget::EyeBlink,
+                    4 => CurveTarget::LipSync,
+                    t => return err(format!("Unknown clip curve target {}", t)),
+                };
+                let (fade_in, fade_out) = (self.fade()?, self.fade()?);
+                extras.curves.push(TargetCurve { target, fade_in, fade_out, curve: self.curve(usize::MAX)? });
+            }
+            let fades = self.count(12)?;
+            for _ in 0..fades {
+                let curve = self.index(clips[c].curves.len(), "clip curve")?;
+                extras.fades.push((curve, self.fade()?, self.fade()?));
+            }
+            if clips[c].extras != ClipExtras::default() {
+                return err(format!("Clip {} extended twice", clips[c].id));
+            }
+            clips[c].extras = extras;
+        }
+        Ok(())
     }
 }
 
@@ -1743,6 +1832,11 @@ fn read_chunks(bytes: &[u8], verify_crc: bool) -> Result<Rig> {
         let mut r = reader(data);
         (pose_fade_in, poses) = r.poses()?;
         r.end("POSE")?;
+    }
+    if let Some(data) = chunk("CEXT") {
+        let mut r = reader(data);
+        r.clip_extras(&mut clips)?;
+        r.end("CEXT")?;
     }
     let rig = Rig {
         canvas, parameters, deformers, parts, meshes, glues, render, textures, physics_fps, physics, clips, roles, gui, meta, extensions,

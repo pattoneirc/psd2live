@@ -408,3 +408,66 @@ fn expressions_hit_areas_and_user_data_read_back_and_work() {
     assert!(step(&mut player, &rig, 1.0).abs() < 1e-6);
     assert_eq!(player.playing(), None);
 }
+
+/// A one-clip CLIP chunk: clip "c" (string 2), looping over a second, holding parameter A at 0.5.
+fn one_clip() -> C {
+    C { flags: 0, ..chunk("CLIP", W::default().u32(1).u32(2).u32(2).u32(2).f32(1.0).f32(30.0).u8(1).f32(-1.0).f32(-1.0)
+        .u32(1).u32(0).f32(0.0).f32(0.5).u32(1).u8(0).f32(1.0).f32(0.5)) }
+}
+
+#[test]
+fn clip_extensions_read_back_events_target_curves_and_fades() {
+    let mut chunks = core();
+    chunks[0] = chunk("STRS", strings(&["A", "M", "c", "hello", "bye"]));
+    chunks.push(one_clip());
+    // Two events, a rig opacity curve held at 0.5 with its own fades, and a fade-in of 0.2 for the clip's curve.
+    let cext = W::default().u32(1).u32(0)
+        .u32(2).f32(0.25).u32(3).f32(0.75).u32(4)
+        .u32(1).u8(2).i32(-1).f32(0.3).f32(-1.0).f32(0.0).f32(0.5).u32(0)
+        .u32(1).u32(0).f32(0.2).f32(-1.0);
+    chunks.push(C { flags: 0, ..chunk("CEXT", cext) });
+    let rig = read(&chunks).unwrap();
+    let extras = &rig.clips[0].extras;
+    assert_eq!(extras.events, vec![(0.25, "hello".to_string()), (0.75, "bye".to_string())]);
+    assert_eq!(extras.curves.len(), 1);
+    assert_eq!((extras.curves[0].target, extras.curves[0].fade_in, extras.curves[0].fade_out), (CurveTarget::ModelOpacity, Some(0.3), None));
+    assert_eq!(extras.fades, vec![(0, Some(0.2), None)]);
+
+    // Events out of order, a part the rig does not have and a curve the clip does not have are refused.
+    let refuse = |cext: W| {
+        let mut chunks = core_with_clip();
+        chunks.push(C { flags: 0, ..chunk("CEXT", cext) });
+        error(&chunks)
+    };
+    assert!(refuse(W::default().u32(1).u32(0).u32(2).f32(0.5).u32(3).f32(0.25).u32(4).u32(0).u32(0)).contains("order"));
+    assert!(refuse(W::default().u32(1).u32(0).u32(0).u32(1).u8(1).i32(0).f32(-1.0).f32(-1.0).f32(0.0).f32(1.0).u32(0).u32(0)).contains("part"));
+    assert!(refuse(W::default().u32(1).u32(0).u32(0).u32(0).u32(1).u32(3).f32(0.1).f32(0.1)).contains("clip curve"));
+    // Without the chunk, a runtime that does not know it plays the clip's parameter curves alone.
+    assert_eq!(read(&core_with_clip()).unwrap().clips[0].extras, ClipExtras::default());
+}
+
+fn core_with_clip() -> Vec<C> {
+    let mut chunks = core();
+    chunks[0] = chunk("STRS", strings(&["A", "M", "c", "hello", "bye"]));
+    chunks.push(one_clip());
+    chunks
+}
+
+#[test]
+fn physics_version_2_carries_vertical_travel() {
+    // One group: parameter A drives the root's vertical travel; one segment; the output reads its angle.
+    let mut chunks = core();
+    chunks[0] = chunk("STRS", strings(&["A", "M", "g"]));
+    let phys = W::default().f32(0.0).u32(1).u32(2).u32(2)
+        .u32(1).u32(0).f32(100.0).u8(2).u8(0)
+        .u32(1).u32(0).u32(1).f32(1.0).f32(100.0).u8(1).u8(0)
+        .u32(1).f32(10.0).f32(1.0).f32(1.0).f32(1.0)
+        .f32(-10.0).f32(0.0).f32(10.0).f32(-10.0).f32(0.0).f32(10.0);
+    chunks.push(C { version: 2, ..chunk("PHYS", phys) });
+    let rig = read(&chunks).unwrap();
+    assert_eq!(rig.physics[0].inputs[0].source, PhysicsSource::Y);
+    // A version 1 runtime is told it needs the newer chunk.
+    let mut v3 = chunks;
+    v3.last_mut().unwrap().version = 3;
+    assert!(error(&v3).contains("PHYS"));
+}

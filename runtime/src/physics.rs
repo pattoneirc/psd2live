@@ -86,13 +86,13 @@ impl Strand {
         Strand { particles, current: vec![0.0; group.outputs.len()], previous: vec![0.0; group.outputs.len()] }
     }
 
-    fn update(&mut self, translation: V2, total_angle: f32, threshold: f32, dt: f32) {
+    fn update(&mut self, translation: V2, total_angle: f32, wind: V2, threshold: f32, dt: f32) {
         let p = &mut self.particles;
         p[0].position = translation;
         let radian = total_angle.to_radians();
         let gravity = V2::new(radian.sin(), radian.cos()).normalized();
         for i in 1..p.len() {
-            let force = gravity.scale(p[i].acceleration);
+            let force = gravity.scale(p[i].acceleration).add(wind);
             p[i].last_position = p[i].position;
             let delay = p[i].delay * dt * 30.0;
             let mut direction = p[i].position.sub(p[i - 1].position);
@@ -115,7 +115,28 @@ impl Strand {
         }
     }
 
-    /// The raw output of vertex [index]: its sideways offset, or its angle against the segment above.
+    /// Hangs the strand at rest from [translation]: each particle along the force it feels, still, as Cubism's
+    /// stabilization places it.
+    fn settle(&mut self, translation: V2, total_angle: f32, wind: V2, threshold: f32) {
+        let p = &mut self.particles;
+        p[0].position = translation;
+        p[0].last_position = translation;
+        let radian = total_angle.to_radians();
+        let gravity = V2::new(radian.sin(), radian.cos()).normalized();
+        for i in 1..p.len() {
+            let force = gravity.scale(p[i].acceleration).add(wind);
+            let direction = if force.x == 0.0 && force.y == 0.0 { gravity } else { force.normalized() };
+            p[i].position = p[i - 1].position.add(direction.scale(p[i].radius));
+            if p[i].position.x.abs() < threshold {
+                p[i].position.x = 0.0;
+            }
+            p[i].last_position = p[i].position;
+            p[i].velocity = V2::default();
+            p[i].last_gravity = gravity;
+        }
+    }
+
+    /// The raw output of vertex [index]: its sideways or vertical offset, or its angle against the segment above.
     fn output(&self, o: &PhysicsOutput) -> Option<f32> {
         let i = o.vertex;
         if i < 1 || i >= self.particles.len() {
@@ -124,6 +145,7 @@ impl Strand {
         let translation = self.particles[i].position.sub(self.particles[i - 1].position);
         let value = match o.source {
             PhysicsSource::X => translation.x,
+            PhysicsSource::Y => translation.y,
             PhysicsSource::Angle => {
                 let parent = if i >= 2 { self.particles[i - 1].position.sub(self.particles[i - 2].position) } else { V2::new(0.0, 1.0) };
                 direction_to_radian(parent, translation)
@@ -154,7 +176,7 @@ fn normalize(value: f32, min: f32, max: f32, norm_min: f32, norm_max: f32, norm_
 }
 
 /// Writes a scaled output into [value]: clamped to the range, then mixed in by the output's weight. Only
-/// angle outputs carry a scale; sideways outputs scale by zero, as in that runtime.
+/// angle outputs carry a scale; translation outputs scale by zero, as in that runtime.
 fn write_output(value: &mut f32, min: f32, max: f32, raw: f32, o: &PhysicsOutput) {
     let scale = if o.source == PhysicsSource::Angle { o.scale } else { 0.0 };
     let v = (raw * scale).clamp(min.min(max), max.max(min));
@@ -169,11 +191,55 @@ pub struct Physics {
     input_caches: Option<Vec<f32>>,
     caches: Vec<f32>,
     remain: f32,
+    /// What every strand feels besides gravity, in the strands' units (x right, y down), as Cubism's wind.
+    pub wind: (f32, f32),
+}
+
+/// What [group]'s inputs make of [values]: the root's translation, turned by the tilt, and the tilt in degrees.
+fn inputs(rig: &Rig, group: &PhysicsGroup, values: &[f32]) -> (V2, f32) {
+    let mut translation = V2::default();
+    let mut angle = 0.0f32;
+    for i in &group.inputs {
+        let p = &rig.parameters[i.parameter];
+        let w = i.weight / MAXIMUM_WEIGHT;
+        let n = &group.normalization;
+        let value = values[i.parameter];
+        match i.source {
+            PhysicsSource::X => translation.x += normalize(value, p.min, p.max, n.position_min, n.position_max, n.position_default, i.reflect) * w,
+            PhysicsSource::Y => translation.y += normalize(value, p.min, p.max, n.position_min, n.position_max, n.position_default, i.reflect) * w,
+            PhysicsSource::Angle => angle += normalize(value, p.min, p.max, n.angle_min, n.angle_max, n.angle_default, i.reflect) * w,
+        }
+    }
+    let r = (-angle).to_radians();
+    translation.x = translation.x * r.cos() - translation.y * r.sin();
+    translation.y = translation.x * r.sin() + translation.y * r.cos();
+    (translation, angle)
 }
 
 impl Physics {
     pub fn new(rig: &Rig) -> Physics {
-        Physics { strands: rig.physics.iter().map(Strand::new).collect(), input_caches: None, caches: Vec::new(), remain: 0.0 }
+        Physics { strands: rig.physics.iter().map(Strand::new).collect(), input_caches: None, caches: Vec::new(), remain: 0.0, wind: (0.0, 0.0) }
+    }
+
+    /// Puts every strand at rest under the pose [values] (one per parameter) and writes its outputs into them,
+    /// so physics starts from equilibrium instead of swinging into it.
+    pub fn stabilize(&mut self, rig: &Rig, values: &mut [f32]) {
+        let wind = V2::new(self.wind.0, self.wind.1);
+        for (group, strand) in rig.physics.iter().zip(self.strands.iter_mut()) {
+            let (translation, angle) = inputs(rig, group, values);
+            strand.settle(translation, angle, wind, MOVEMENT_THRESHOLD * group.normalization.position_max);
+            for (k, o) in group.outputs.iter().enumerate() {
+                if let Some(raw) = strand.output(o) {
+                    strand.current[k] = raw;
+                    strand.previous[k] = raw;
+                    let p = &rig.parameters[o.parameter];
+                    write_output(&mut values[o.parameter], p.min, p.max, raw, o);
+                }
+            }
+        }
+        self.input_caches = Some(values.to_vec());
+        self.caches = values.to_vec();
+        self.remain = 0.0;
     }
 
     /// Advances by [dt] seconds from [values], one per parameter, and writes the outputs into them.
@@ -193,6 +259,7 @@ impl Physics {
         let input = self.input_caches.get_or_insert_with(|| values.to_vec());
         self.caches.resize(values.len(), 0.0);
         let h = if rig.physics_fps > 0.0 { 1.0 / rig.physics_fps } else { dt };
+        let wind = V2::new(self.wind.0, self.wind.1);
         while self.remain >= h {
             let weight = h / self.remain;
             for j in 0..values.len() {
@@ -204,22 +271,8 @@ impl Physics {
                     continue;
                 }
                 strand.previous.copy_from_slice(&strand.current);
-                let mut translation = V2::default();
-                let mut angle = 0.0f32;
-                for i in &group.inputs {
-                    let p = &rig.parameters[i.parameter];
-                    let w = i.weight / MAXIMUM_WEIGHT;
-                    let n = &group.normalization;
-                    let value = self.caches[i.parameter];
-                    match i.source {
-                        PhysicsSource::X => translation.x += normalize(value, p.min, p.max, n.position_min, n.position_max, n.position_default, i.reflect) * w,
-                        PhysicsSource::Angle => angle += normalize(value, p.min, p.max, n.angle_min, n.angle_max, n.angle_default, i.reflect) * w,
-                    }
-                }
-                let r = (-angle).to_radians();
-                translation.x = translation.x * r.cos() - translation.y * r.sin();
-                translation.y = translation.x * r.sin() + translation.y * r.cos();
-                strand.update(translation, angle, MOVEMENT_THRESHOLD * group.normalization.position_max, h);
+                let (translation, angle) = inputs(rig, group, &self.caches);
+                strand.update(translation, angle, wind, MOVEMENT_THRESHOLD * group.normalization.position_max, h);
                 for (k, o) in group.outputs.iter().enumerate() {
                     if let Some(raw) = strand.output(o) {
                         strand.current[k] = raw;

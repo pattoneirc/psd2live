@@ -28,7 +28,8 @@
  * - Masks: coverage is the largest texture alpha of the mask meshes at the point, drawn at their own vertices
  *   without their colors or opacity; an inverted mask takes 1 - coverage. Real-time players may use a stencil
  *   that counts texels at least half opaque as covering (the web player, Godot and the editor do).
- * - Culling: with culling on, only faces that wind clockwise in canvas coordinates (x right, y down) draw.
+ * - Culling: with culling on, only Cubism's front faces draw: those with (b - a) x (c - a) < 0 in canvas
+ *   coordinates (x right, y down), which turn counter-clockwise as the picture shows them.
  * - Compositing a source s over the destination d, both premultiplied, by a color blend mode and an alpha
  *   blend mode:
  *   P2L_BLEND_CUBISM_ADD (any alpha mode)       rgb = s.rgb + d.rgb, a = d.a
@@ -61,9 +62,10 @@ extern "C" {
  * functions are added. A host built against this header works with a library whose p2l_abi_version() passes
  * P2L_ABI_COMPATIBLE; a library without p2l_abi_version predates ABI 1.0. 1.1 adds models, update stages, the
  * host layer, parts and isolated groups, alpha blending and what the file says about parameters, clips and the
- * parameter panel. */
+ * parameter panel. 1.2 adds clip layers with priorities, clip events, several expressions at once, the rig's
+ * opacity, color overrides, physics wind and stabilization, behavior settings and lip sync from audio. */
 #define P2L_ABI_VERSION_MAJOR 1
-#define P2L_ABI_VERSION_MINOR 1
+#define P2L_ABI_VERSION_MINOR 2
 #define P2L_ABI_VERSION ((P2L_ABI_VERSION_MAJOR << 16) | P2L_ABI_VERSION_MINOR)
 #define P2L_ABI_COMPATIBLE(v) (((v) >> 16) == P2L_ABI_VERSION_MAJOR && ((v) & 0xffffu) >= P2L_ABI_VERSION_MINOR)
 /* The ABI the library implements, major << 16 | minor. */
@@ -146,6 +148,19 @@ void p2l_update(P2lRig *rig, float dt);
 #define P2L_STAGE_ALL 63u
 void p2l_update_stages(P2lRig *rig, float dt, uint32_t stages);
 void p2l_physics_reset(P2lRig *rig);
+/* Wind on every pendulum besides gravity, in physics units (x right, y down), as Cubism's physics wind. */
+void p2l_physics_wind(P2lRig *rig, float x, float y);
+/* Hangs every pendulum at rest under the last evaluation's pose, as Cubism's stabilization does, and evaluates. */
+void p2l_physics_stabilize(P2lRig *rig);
+/* The rig's opacity, 0..1, multiplying every mesh on top of what clips set (1 until set); p2l_opacity gives the
+ * product at the last update. */
+void p2l_set_opacity(P2lRig *rig, float opacity);
+float p2l_opacity(const P2lRig *rig);
+/* Colors in place of a mesh's evaluated multiply and screen colors (three floats each; a null one stands for
+ * white multiply or black screen), from the next evaluation; both null gives the mesh its own back. The part
+ * version covers every mesh under the part without colors of its own set. */
+bool p2l_set_mesh_colors(P2lRig *rig, uint32_t index, const float *multiply, const float *screen);
+bool p2l_set_part_colors(P2lRig *rig, uint32_t index, const float *multiply, const float *screen);
 
 /* Behaviors: P2L_BLINK | P2L_BREATH | P2L_LOOK | P2L_LIP_SYNC; blinking and breathing start on. */
 #define P2L_BLINK 1u
@@ -156,6 +171,14 @@ void p2l_behaviors(P2lRig *rig, uint32_t flags);
 /* Reseeds the blink timing. Every rig after the first in a process gets a seed of its own, so rigs side by
  * side do not blink together; a host wanting the same blinks every run seeds them. */
 void p2l_behavior_seed(P2lRig *rig, uint32_t seed);
+/* Blink timing in seconds: the interval drawn evenly between the two, then how long the eyes take to close, stay
+ * closed and open (2..6, 0.1, 0.05, 0.15 until set); false, changing nothing, for negative or reversed times. */
+bool p2l_blink_settings(P2lRig *rig, float interval_min, float interval_max, float closing, float closed, float opening);
+/* How strongly breathing sways and gaze turns, and how quickly gaze follows; 1 each until set. */
+bool p2l_behavior_strength(P2lRig *rig, float sway, float look, float look_speed);
+/* Lip sync from audio: the root mean square of [count] samples (-1..1) times [gain], clamped to 0..1, becomes
+ * the mouth opening (as p2l_lip_sync); returns it. */
+float p2l_lip_sync_samples(P2lRig *rig, const float *samples, size_t count, float gain);
 /* Where to look, each axis -1..1 (x right, y up). */
 void p2l_look_at(P2lRig *rig, float x, float y);
 /* Mouth opening 0..1. */
@@ -179,6 +202,19 @@ float p2l_clip_time(const P2lRig *rig);
 /* Moves the playing clip to [time] seconds; its fade-in goes on as it was. */
 void p2l_clip_seek(P2lRig *rig, float time);
 bool p2l_clip_finished(const P2lRig *rig);
+/* Clip layers, as Cubism's motion managers: each plays one clip at a time over the layers below it, at its
+ * weight (1 until set). p2l_play and the p2l_clip_* functions drive layer 0. A clip starts on a layer when its
+ * priority is at least that of the clip playing there (0 once that finishes or stops); -1 stops the layer. */
+#define P2L_MAX_LAYERS 16u
+bool p2l_play_layer(P2lRig *rig, uint32_t layer, int32_t index, uint32_t priority);
+bool p2l_set_layer_weight(P2lRig *rig, uint32_t layer, float weight);
+/* What the layer plays: the clip (-1 for none), its time, its priority and whether it is a finished one-shot. */
+bool p2l_layer_state(const P2lRig *rig, uint32_t layer, int32_t *clip, float *time, uint32_t *priority, bool *finished);
+void p2l_layer_seek(P2lRig *rig, uint32_t layer, float time);
+/* The clip events (Cubism motion user data) the last update passed, in order: the event's text, and the layer,
+ * clip and clip time it came from. A loop fires them every pass; a seek does not fire what it jumps over. */
+uint32_t p2l_event_count(const P2lRig *rig);
+const char *p2l_event(const P2lRig *rig, uint32_t index, uint32_t *layer, int32_t *clip, float *time);
 
 /* Meshes */
 uint32_t p2l_mesh_count(const P2lRig *rig);
@@ -277,11 +313,17 @@ uint32_t p2l_bone_count(const P2lRig *rig);
 const char *p2l_bone_id(const P2lRig *rig, uint32_t index);
 bool p2l_bone_transform(P2lRig *rig, uint32_t index, float *out);
 
-/* Expressions: a few parameters set over the motion, faded as Cubism fades exp3 expressions. -1 fades out. */
+/* Expressions: a few parameters set over the motion, faded as Cubism fades exp3 expressions. p2l_expression
+ * plays one alone, fading the others out; -1 fades them all out. */
 uint32_t p2l_expression_count(const P2lRig *rig);
 const char *p2l_expression_id(const P2lRig *rig, uint32_t index);
 const char *p2l_expression_name(const P2lRig *rig, uint32_t index);
 void p2l_expression(P2lRig *rig, int32_t index);
+/* Several expressions at once: add fades one in over those playing, remove fades one out; the playing ones
+ * (not fading out) come oldest first. */
+bool p2l_expression_add(P2lRig *rig, uint32_t index);
+bool p2l_expression_remove(P2lRig *rig, uint32_t index);
+uint32_t p2l_expressions_playing(const P2lRig *rig, uint32_t *out, uint32_t capacity);
 /* Hit areas (e.g. "HitAreaHead", "HitAreaBody"): the first one whose visible meshes cover a canvas point. */
 uint32_t p2l_hit_area_count(const P2lRig *rig);
 const char *p2l_hit_area_id(const P2lRig *rig, uint32_t index);

@@ -141,4 +141,45 @@ class P2lrtTest {
 		Compiler.export(P2lrtTarget, rig, ExportOptions("old", settings = mapOf("v1" to "true"))) { path, bytes -> files[path] = bytes }
 		assertContentEquals(P2lrt.write(rig, P2lrt.Options(version = 1)), files.getValue("old.p2lrt"))
 	}
+
+	private val extended = rig.copy(
+		parts = listOf(Part("P", "Part", listOf(ChildRef.MeshRef("M")))),
+		clips = listOf(Clip("c", "Clip", "Idle", "", 1f, 30f, true,
+			curves = listOf(Curve("A", 0f, 0f, listOf(CurveSegment.Linear(1f, 1f)), fadeIn = 0.2f), Curve("gone", 0f, 0f, emptyList())),
+			events = listOf(ClipEvent(0.75f, "late"), ClipEvent(0.25f, "early")),
+			targetCurves = listOf(
+				TargetCurve(CurveTarget.PartOpacity("P"), 0f, 0.5f, emptyList()),
+				TargetCurve(CurveTarget.PartOpacity("missing"), 0f, 0.5f, emptyList()),
+				TargetCurve(CurveTarget.EyeBlink, 0f, 1f, listOf(CurveSegment.Stepped(0.5f, 0f)), fadeOut = 0.1f),
+			))),
+		physics = Physics(listOf(PhysicsGroup("g", "G", listOf(PhysicsInput("A", 100f, PhysicsSource.Y, false)),
+			listOf(PhysicsOutput("B", 1, 1f, 100f, PhysicsSource.ANGLE, false)), listOf(PhysicsSegment(10f, 0.9f, 0.9f, 1f)),
+			PhysicsNormalization(-10f, 0f, 10f, -10f, 0f, 10f)))),
+	)
+
+	@Test fun clipExtensionsAreAnOptionalChunkAndVerticalPhysicsAVersionTwoChunk() {
+		val chunks = chunks(P2lrt.write(extended))
+		val cext = chunks.single { it.tag == "CEXT" }
+		assertEquals(0, cext.flags and 1, "an older runtime skips the clip extensions")
+		val b = ByteBuffer.wrap(cext.data).order(ByteOrder.LITTLE_ENDIAN)
+		val strings = strings(chunks[0])
+		// One clip, clip 0; events in time order; the part curve on a part the rig lacks left out.
+		assertEquals(1, b.getInt(0)); assertEquals(0, b.getInt(4)); assertEquals(2, b.getInt(8))
+		assertEquals(0.25f, b.getFloat(12)); assertEquals("early", strings[b.getInt(16)])
+		assertEquals(0.75f, b.getFloat(20)); assertEquals("late", strings[b.getInt(24)])
+		assertEquals(2, b.getInt(28))
+		assertEquals(1, b.get(32).toInt()); assertEquals(0, b.getInt(33)); assertEquals(-1f, b.getFloat(37))
+		assertEquals(2, chunks.single { it.tag == "PHYS" }.version)
+		assertEquals(1, chunks(P2lrt.write(rig.copy(physics = extended.physics.copy(groups = emptyList()), clips = emptyList())))
+			.singleOrNull { it.tag == "PHYS" }?.version ?: 1)
+	}
+
+	@Test fun versionOneReportsWhatItCannotHold() {
+		val losses = P2lrt.version1Losses(extended)
+		assertEquals(listOf(Feature.PHYSICS, Feature.TIMELINE), losses.map { it.feature })
+		assertTrue(losses.all { it.handling == Handling.DROPPED })
+		assertTrue(P2lrt.version1Losses(rig).isEmpty())
+		// Version 1 still writes, without the vertical input.
+		P2lrt.write(extended, P2lrt.Options(version = 1))
+	}
 }

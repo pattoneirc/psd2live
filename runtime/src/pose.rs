@@ -24,6 +24,8 @@ pub struct PosePlayer {
     opacity: Vec<f32>,
     /// The opacity the host gives each part, 1 unless it set one.
     host: Vec<f32>,
+    /// The opacity clips set each part to, 1 for parts no clip sets.
+    clip: Vec<f32>,
     /// Per mesh, the product of its ancestor parts' pose opacities.
     factor: Vec<f32>,
     /// Per mesh, the parts above it.
@@ -59,7 +61,8 @@ impl PosePlayer {
             })
             .collect();
         let mut player = PosePlayer {
-            shown: vec![0; rig.poses.len()], opacity: vec![1.0; rig.parts.len()], host: vec![1.0; rig.parts.len()], factor: vec![1.0; rig.meshes.len()], ancestors,
+            shown: vec![0; rig.poses.len()], opacity: vec![1.0; rig.parts.len()], host: vec![1.0; rig.parts.len()], clip: vec![1.0; rig.parts.len()],
+            factor: vec![1.0; rig.meshes.len()], ancestors,
         };
         for group in &rig.poses {
             for (k, (part, links)) in group.entries.iter().enumerate() {
@@ -107,6 +110,20 @@ impl PosePlayer {
         true
     }
 
+    /// Sets the part opacities clips gave this update (the last for a part wins), the others back to 1.
+    pub fn set_clip_opacities(&mut self, opacities: &[(usize, f32)]) {
+        if opacities.is_empty() && self.clip.iter().all(|c| *c == 1.0) {
+            return;
+        }
+        self.clip.iter_mut().for_each(|c| *c = 1.0);
+        for &(part, opacity) in opacities {
+            if let Some(slot) = self.clip.get_mut(part) {
+                *slot = if opacity.is_finite() { opacity.clamp(0.0, 1.0) } else { 1.0 };
+            }
+        }
+        self.refresh();
+    }
+
     /// Fades by [dt] seconds over [fade_in] seconds.
     pub fn update(&mut self, rig: &Rig, dt: f32) {
         if rig.poses.is_empty() {
@@ -139,13 +156,13 @@ impl PosePlayer {
 
     fn refresh(&mut self) {
         for (m, chain) in self.ancestors.iter().enumerate() {
-            self.factor[m] = chain.iter().map(|p| self.opacity[*p] * self.host[*p]).product();
+            self.factor[m] = chain.iter().map(|p| self.opacity[*p] * self.host[*p] * self.clip[*p]).product();
         }
     }
 
-    /// Multiplies each mesh's opacity in [pose] by its parts' pose and host opacities.
+    /// Multiplies each mesh's opacity in [pose] by its parts' pose, host and clip opacities.
     pub fn apply(&self, rig: &Rig, pose: &mut Pose) {
-        if rig.poses.is_empty() && self.host.iter().all(|h| *h == 1.0) {
+        if rig.poses.is_empty() && self.host.iter().chain(&self.clip).all(|h| *h == 1.0) {
             return;
         }
         for (o, f) in pose.opacity.iter_mut().zip(&self.factor) {

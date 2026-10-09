@@ -54,13 +54,15 @@
 
 按 Cubism 运行时读取 physics3.json 的方式实现，包括其特有行为：输入按参数范围中点归一化；固定步长（`Fps`）时在帧间插值输入、输出在最后两步之间插值；不限步长时输出滞后一帧；平移旋转时复用已旋转的 x；只有角度输出带缩放，平移输出的缩放为零；超过 5 秒的积累时间清零。与编辑器 `PhysicsEngine` 在随机摆锤组和样例模型上逐帧比较，误差小于 2e-5。
 
+另有 Cubism 运行时的三项：纵向（Y）输入输出（`PHYS` 版本 2，见 [P2LRT_V2.md](P2LRT_V2.md)；编辑器与 Cubism Editor 都不产生纵向，physics3 导出可写出）、风力（`p2l_physics_wind`，加到每个粒子受的力上，与 physics3 的 Wind 相同）和稳定化（`p2l_physics_stabilize`，按当前姿势把每条摆锤直接放到受力方向上的静止位置并写出输出，与 Cubism 的 Stabilization 相同）。风力为零时结果与此前逐位一致。
+
 ## 动作片段
 
 曲线段与编辑器相同（线性、Bezier（时间控制点限制在段内）、阶梯、反阶梯）；循环片段按时长回绕，单次片段停在末尾。`Player` 一次播放一个片段，切换时按片段的淡入淡出时间（缺省 1 秒，余弦缓动）交叉过渡；片段权重为淡入与淡出系数之积（与 Cubism 相同），每个被替换的片段都会完整淡出，连续快速切换时不会丢掉仍在淡出的片段。
 
 ## 程序化行为
 
-宿主可开启：眨眼（`EyeBlink` 角色，每 2–6 秒一次，闭合 0.1 秒、保持 0.05 秒、睁开 0.15 秒，乘到当前值上）、呼吸（`Breath` 设置为范围内的正弦，`AngleX/Y/Z`、`BodyAngleX` 叠加小幅摆动）、视线（`look_at(x, y)` 经临界阻尼跟随，驱动 `AngleX/Y`、`BodyAngleX`、`EyeBallX/Y`，`AngleZ` 随 x·y 倾斜）和口型（`lip_sync(level)`，`LipSync` 参数取较大值）。角色由编辑器编译时按存在的标准参数写入；moc3 的 model3.json 仍只写 EyeBlink 与 LipSync 两组。更新顺序：动作片段 → 行为 → 物理 → 变形。
+宿主可开启：眨眼（`EyeBlink` 角色，每 2–6 秒一次，闭合 0.1 秒、保持 0.05 秒、睁开 0.15 秒，乘到当前值上；`p2l_blink_settings` 可改间隔与各阶段时长）、呼吸（`Breath` 设置为范围内的正弦，`AngleX/Y/Z`、`BodyAngleX` 叠加小幅摆动）、视线（`look_at(x, y)` 经临界阻尼跟随，驱动 `AngleX/Y`、`BodyAngleX`、`EyeBallX/Y`，`AngleZ` 随 x·y 倾斜）和口型（`lip_sync(level)`，`LipSync` 参数取较大值；`p2l_lip_sync_samples` 以一段音频样本的均方根乘增益作为张开量）。`p2l_behavior_strength` 调整呼吸摆动幅度、视线转动幅度与跟随速度。角色由编辑器编译时按存在的标准参数写入；moc3 的 model3.json 仍只写 EyeBlink 与 LipSync 两组。更新顺序：动作片段 → 行为 → 物理 → 变形。
 
 ## C ABI
 
@@ -73,6 +75,16 @@ ABI 1.1 增加的部分（都是新函数，1.0 的函数行为不变，只有�
 - **部件与隔离组**：`p2l_part_*` 给出部件 id、名称、父部件、标志和分组方式（直通、整组排序、隔离）。`p2l_render_commands` 是保留隔离组边界的绘制顺序（网格下标；`-2 - 部件` 开组，`-1` 收组），组的混合模式、透明度合成模式、遮罩（遮罩部件展开为其网格）由 `p2l_part_group` / `p2l_part_masks` 给出，求值后的组透明度与乘算/屏幕色由 `p2l_part_composite` 给出：绘制树中该组的通道覆盖组合成的静态值，与编辑器一致。`p2l_set_part_opacity` 设置宿主的部件透明度，与部件姿势一样乘到其下所有网格上。`p2l_mesh_part` 给出网格所属部件，`p2l_mesh_alpha_blend` 给出网格的透明度合成模式。
 - **文件信息**：参数名称与标志（循环、混合形参数）、吸附值和参数面板（`PGUI`：二维摇杆、分组树、标签），画布原点与每单位像素，动作片段的名称、分组、时长、帧率、循环与淡入淡出，正在播放的片段、当前时间与跳转（`p2l_clip_seek` 只移动片段时间，淡入照常），表情、点击区域与网格的显示名称，生成器信息（`META`）。
 - **其他**：`p2l_behavior_seed` 重设眨眼的随机种子，进程中第一个之后的句柄自动取各自的种子；越界下标的取值函数返回 NaN（数值）或 -1（下标、模式），空句柄仍返回 0；`p2l_alloc` 按长度精确分配并清零；非 PNG 贴图页的 `p2l_texture_png` 把长度写为 0；`p2l_parameter_index` 按 `p2l_parameter_id` 给出的字符串查找。
+
+ABI 1.2 增加的部分（同样只有新函数）：
+
+- **动作层**：最多 `P2L_MAX_LAYERS`（16）层，每层一次播放一个片段，按层序叠在下层之上，`p2l_set_layer_weight` 设该层覆盖下层的权重。`p2l_play_layer(layer, clip, priority)` 只在优先级不低于该层正在播放片段的优先级时开始（片段播完或停止后为 0），对应 Cubism 动作管理器的优先级；`p2l_play` 与 `p2l_clip_*` 操作第 0 层。
+- **动作事件与非参数曲线**：来自 `CEXT`（见 [P2LRT_V2.md](P2LRT_V2.md)）。每次更新经过的事件由 `p2l_event_count` / `p2l_event` 给出（文本、层、片段、时间）。片段设置的部件透明度与整体透明度乘到网格上，`p2l_evaluate` 只求宿主姿势，因此不带它们；眨眼与口型效果作用于对应角色参数。有自身淡入淡出的曲线按 Cubism 的规则取权重。
+- **多个表情**：`p2l_expression_add` / `p2l_expression_remove` 让多个表情同时生效（各自淡入淡出，按开始先后叠加），`p2l_expressions_playing` 列出正在生效的；`p2l_expression` 仍是只保留一个。
+- **整体透明度与颜色覆盖**：`p2l_set_opacity` 乘到全部网格上（与片段设置的整体透明度相乘，`p2l_opacity` 读取乘积）；`p2l_set_mesh_colors` / `p2l_set_part_colors` 用宿主给的乘算/屏幕色替换求值结果，网格自身的设置优先于其所在部件链上最近的设置。
+- **物理与行为**：`p2l_physics_wind`、`p2l_physics_stabilize`、`p2l_blink_settings`、`p2l_behavior_strength`、`p2l_lip_sync_samples`，见上文“物理”“程序化行为”。
+
+写出端：IR 的 `Clip` 增加 `events`、`targetCurves`，`Curve` 增加 `fadeIn` / `fadeOut`，`PhysicsSource` 增加 `Y`；p2lrt 导出写 `CEXT` 与按需写 `PHYS` 版本 2，moc3 导出的 motion3 写出 `UserData`、`PartOpacity` 与 `Model`（`Opacity`、`EyeBlink`、`LipSync`）曲线和曲线淡入淡出，physics3 写出 `Y`；cmo3 没有纵向物理，略去纵向输入输出。编辑器的动作编辑尚不提供事件与非参数曲线的编辑入口，这些数据来自 IR。
 
 绘制规则写在头文件开头，以 `SoftwareRasterizer` 为准：贴图为直通 alpha，规则在预乘颜色上计算；片段颜色先乘乘算色、再按 `c + s·a − c·s` 叠屏幕色，最后乘不透明度与遮罩覆盖（遮罩网格在该点纹理 alpha 的最大值，反相取 1 − 覆盖；实时播放器可用 alpha ≥ 0.5 的模板近似）；开启剔除时只画画布坐标（y 向下）中顺时针的面；Cubism 的普通、叠加、乘算按其预乘公式（叠加与乘算保留目标 alpha），扩展模式按 W3C 合成公式；混合模式与透明度合成模式有 `P2L_BLEND_*`、`P2L_ALPHA_*` 常量。
 

@@ -55,6 +55,22 @@ public object P2lrt {
 	/** How version 2 stores its chunks: as they are, as zlib streams, or as zstd frames. */
 	public enum class Compression { NONE, DEFLATE, ZSTD }
 
+	/** Whether [ir]'s physics travels vertically anywhere, which needs version 2 of the physics chunk. */
+	internal fun usesVertical(ir: RigIR): Boolean =
+		ir.physics.groups.any { g -> g.inputs.any { it.source == PhysicsSource.Y } || g.outputs.any { it.source == PhysicsSource.Y } }
+
+	/** Whether [clip] carries what only CEXT holds. */
+	internal fun extends(clip: Clip): Boolean =
+		clip.events.isNotEmpty() || clip.targetCurves.isNotEmpty() || clip.curves.any { it.fadeIn != null || it.fadeOut != null }
+
+	/** What version 1 cannot hold of [ir]: vertical physics and the clips' extensions. */
+	public fun version1Losses(ir: RigIR): List<LossEntry> = buildList {
+		if (usesVertical(ir)) add(LossEntry("*", Feature.PHYSICS, Handling.DROPPED, note = "Version 1 has no vertical physics travel; its inputs and outputs are left out"))
+		for (c in ir.clips.filter(::extends)) {
+			add(LossEntry(c.id, Feature.TIMELINE, Handling.DROPPED, note = "Version 1 has no clip events, part or rig opacity curves, blink or lip sync effects or curve fades"))
+		}
+	}
+
 	public fun write(ir: RigIR, options: Options = Options()): ByteArray =
 		if (options.version == 1) Writer(ir, Out(null), false).v1() else Writer(ir, Out(Strings()), options.stripNames).v2(options)
 
@@ -119,7 +135,7 @@ public object P2lrt {
 	private const val H4 = 8
 	private const val H6 = 32
 
-	private class Chunk(val tag: String, val required: Boolean, val data: ByteArray, val compressible: Boolean = true)
+	private class Chunk(val tag: String, val required: Boolean, val data: ByteArray, val compressible: Boolean = true, val version: Int = 1)
 
 	private class Writer(private val ir: RigIR, private var out: Out, private val stripNames: Boolean) {
 		/** A display name: empty when names are stripped. */
@@ -141,6 +157,8 @@ public object P2lrt {
 			out.u32(ir.parameters.size)
 			for (p in ir.parameters) { out.str(p.id); name(p.name); out.f32(p.min); out.f32(p.max); out.f32(p.default); out.u8((if (p.blend) 1 else 0) or (if (p.repeat) 2 else 0)) }
 		}
+		/** Version 1 has no vertical travel: its physics leaves Y inputs and outputs out. */
+		private var vertical = true
 		private fun physics() { out.f32(ir.physics.fps ?: 0f); out.u32(ir.physics.groups.size); ir.physics.groups.forEach(::physics) }
 		private fun roles() {
 			out.u32(ir.parameterRoles.size)
@@ -151,6 +169,7 @@ public object P2lrt {
 		}
 
 		fun v1(): ByteArray {
+			vertical = false
 			magic(); out.u32(1)
 			canvas(); parameters()
 			out.u32(deformers.size); deformers.forEach(::deformer)
@@ -183,8 +202,18 @@ public object P2lrt {
 				out.u32(ir.textures.pages.size)
 				for (page in ir.textures.pages) { out.u8(0); out.u32(page.width); out.u32(page.height); out.bytes(page.png.shared()) }
 			}
-			if (ir.physics.groups.isNotEmpty() || ir.physics.fps != null) chunks += chunk("PHYS") { physics() }
+			if (ir.physics.groups.isNotEmpty() || ir.physics.fps != null) {
+				// Vertical travel needs version 2 of the chunk, which a runtime that predates it refuses by name.
+				val version = if (P2lrt.usesVertical(ir)) 2 else 1
+				chunks += chunk("PHYS") { physics() }.let { Chunk(it.tag, it.required, it.data, it.compressible, version) }
+			}
 			if (ir.clips.isNotEmpty()) chunks += chunk("CLIP") { out.u32(ir.clips.size); ir.clips.forEach(::clip) }
+			// Events, curves on parts and the rig, and curve fades: optional, so an older runtime plays the clips' parameters.
+			val extended = ir.clips.withIndex().filter { (_, c) -> P2lrt.extends(c) }
+			if (extended.isNotEmpty()) chunks += chunk("CEXT", required = false) {
+				out.u32(extended.size)
+				for ((i, c) in extended) clipExtras(i, c)
+			}
 			if (ir.parameterRoles.isNotEmpty()) chunks += chunk("ROLE") { roles() }
 			if (options.advanced) advanced().forEach { chunks += chunk(it.first, required = false) { it.second() } }
 			// What a host builds interaction on: expressions, hit areas and the meshes' user data.
@@ -393,7 +422,7 @@ public object P2lrt {
 				offset = (offset + 15) / 16 * 16
 				val crc = CRC32().apply { update(bytes) }.value.toInt()
 				c.tag.forEach { file.u8(it.code) }
-				file.u16(1); file.u16((if (c.required) REQUIRED else 0) or HAS_CRC or compression)
+				file.u16(c.version); file.u16((if (c.required) REQUIRED else 0) or HAS_CRC or compression)
 				file.u64(offset.toLong()); file.u64(bytes.size.toLong()); file.u64(c.data.size.toLong())
 				file.u32(crc); file.u32(0)
 				offset += bytes.size
@@ -541,7 +570,8 @@ public object P2lrt {
 
 		private fun physics(g: PhysicsGroup) {
 			out.str(g.id); name(g.name)
-			val inputs = g.inputs.filter { it.parameter in parameterIndex }; val outputs = g.outputs.filter { it.parameter in parameterIndex }
+			val inputs = g.inputs.filter { it.parameter in parameterIndex && (vertical || it.source != PhysicsSource.Y) }
+			val outputs = g.outputs.filter { it.parameter in parameterIndex && (vertical || it.source != PhysicsSource.Y) }
 			out.u32(inputs.size); for (i in inputs) { out.u32(parameter(i.parameter)); out.f32(i.weight); out.u8(i.source.ordinal); out.bool(i.reflect) }
 			out.u32(outputs.size); for (o in outputs) { out.u32(parameter(o.parameter)); out.u32(o.vertex); out.f32(o.scale); out.f32(o.weight); out.u8(o.source.ordinal); out.bool(o.reflect) }
 			out.u32(g.segments.size); for (s in g.segments) { out.f32(s.length); out.f32(s.mobility); out.f32(s.delay); out.f32(s.acceleration) }
@@ -554,17 +584,45 @@ public object P2lrt {
 			val curves = c.curves.filter { it.parameter in parameterIndex }
 			out.u32(curves.size)
 			for (curve in curves) {
-				out.u32(parameter(curve.parameter)); out.f32(curve.startTime); out.f32(curve.startValue); out.u32(curve.segments.size)
-				for (s in curve.segments) {
-					when (s) {
-						is CurveSegment.Linear -> out.u8(0)
-						is CurveSegment.Bezier -> { out.u8(1); out.f32(s.c1Time); out.f32(s.c1Value); out.f32(s.c2Time); out.f32(s.c2Value) }
-						is CurveSegment.Stepped -> out.u8(2)
-						is CurveSegment.InverseStepped -> out.u8(3)
-					}
-					out.f32(s.time); out.f32(s.value)
-				}
+				out.u32(parameter(curve.parameter)); points(curve.startTime, curve.startValue, curve.segments)
 			}
+		}
+
+		/** A curve's start point and segments, as CLIP and CEXT store them. */
+		private fun points(startTime: Float, startValue: Float, segments: List<CurveSegment>) {
+			out.f32(startTime); out.f32(startValue); out.u32(segments.size)
+			for (s in segments) {
+				when (s) {
+					is CurveSegment.Linear -> out.u8(0)
+					is CurveSegment.Bezier -> { out.u8(1); out.f32(s.c1Time); out.f32(s.c1Value); out.f32(s.c2Time); out.f32(s.c2Value) }
+					is CurveSegment.Stepped -> out.u8(2)
+					is CurveSegment.InverseStepped -> out.u8(3)
+				}
+				out.f32(s.time); out.f32(s.value)
+			}
+		}
+
+		/** Clip [index]'s CEXT record: its events, its curves on other targets and its own curves' fades. */
+		private fun clipExtras(index: Int, c: Clip) {
+			out.u32(index)
+			val events = c.events.sortedBy { it.time }
+			out.u32(events.size); events.forEach { out.f32(it.time); out.str(it.value) }
+			val targets = c.targetCurves.filter { t -> (t.target as? CurveTarget.PartOpacity)?.let { it.part in partIndex } ?: true }
+			out.u32(targets.size)
+			for (t in targets) {
+				when (val target = t.target) {
+					is CurveTarget.PartOpacity -> { out.u8(1); out.i32(part(target.part)) }
+					CurveTarget.ModelOpacity -> { out.u8(2); out.i32(-1) }
+					CurveTarget.EyeBlink -> { out.u8(3); out.i32(-1) }
+					CurveTarget.LipSync -> { out.u8(4); out.i32(-1) }
+				}
+				out.f32(t.fadeIn ?: -1f); out.f32(t.fadeOut ?: -1f)
+				points(t.startTime, t.startValue, t.segments)
+			}
+			// Fades refer to the curves as CLIP wrote them: those on parameters the rig has.
+			val faded = c.curves.filter { it.parameter in parameterIndex }.withIndex().filter { (_, k) -> k.fadeIn != null || k.fadeOut != null }
+			out.u32(faded.size)
+			for ((i, k) in faded) { out.u32(i); out.f32(k.fadeIn ?: -1f); out.f32(k.fadeOut ?: -1f) }
 		}
 
 		private companion object {
@@ -621,8 +679,9 @@ public object P2lrtTarget : ExportTarget {
 	override fun plan(ir: RigIR, options: ExportOptions): LoweredExport {
 		val posed = options.setting("pose_groups")?.let(::poseGroups)
 		val ir = if (posed == null) ir else ir.copy(advanced = ir.advanced.copy(pose = posed))
+		val v1 = options.flag("v1", false)
 		val bytes = P2lrt.write(ir, P2lrt.Options(
-			version = if (options.flag("v1", false)) 1 else 2,
+			version = if (v1) 1 else 2,
 			compression = when {
 				!options.flag("compress", false) -> P2lrt.Compression.NONE
 				options.flag("zstd", false) -> P2lrt.Compression.ZSTD
@@ -632,7 +691,7 @@ public object P2lrtTarget : ExportTarget {
 			advanced = options.flag("advanced", true),
 		))
 		return object : LoweredExport {
-			override val losses: List<LossEntry> = CapabilityScan.scan(ir, capabilities, options)
+			override val losses: List<LossEntry> = CapabilityScan.scan(ir, capabilities, options) + if (v1) P2lrt.version1Losses(ir) else emptyList()
 			override fun write(sink: OutputSink) = sink.write("${options.baseName}.p2lrt", bytes)
 		}
 	}

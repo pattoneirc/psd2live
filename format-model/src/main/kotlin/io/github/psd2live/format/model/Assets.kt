@@ -46,8 +46,11 @@ public data class SourceRef(val source: String, val layer: String, val stableKey
 /** A rig of pendulums driven by parameters and writing parameters. [fps] null means the runtime default. */
 public data class Physics(val groups: List<PhysicsGroup> = emptyList(), val fps: Float? = null)
 
-/** X is sideways travel of the root (or of a vertex); ANGLE is tilt (or a segment's angle). */
-public enum class PhysicsSource { X, ANGLE }
+/**
+ * X is sideways travel of the root (or of a vertex); ANGLE is tilt (or a segment's angle); Y is vertical travel,
+ * Cubism's Y. New values go last: the ordinal is what runtime files store.
+ */
+public enum class PhysicsSource { X, ANGLE, Y }
 
 public data class PhysicsInput(val parameter: String, val weight: Float, val source: PhysicsSource, val reflect: Boolean)
 
@@ -78,10 +81,40 @@ public data class Clip(
 	val duration: Float, val fps: Float, val loop: Boolean,
 	val fadeIn: Float? = null, val fadeOut: Float? = null,
 	val curves: List<Curve>,
+	/** Events the runtime reports as the clip passes them (Cubism's motion user data), in time order. */
+	val events: List<ClipEvent> = emptyList(),
+	/** Curves on what is not a parameter: part and rig opacity, and the blink and lip sync effects. */
+	val targetCurves: List<TargetCurve> = emptyList(),
 )
 
-/** A parameter curve: its first point, then segments each ending at a new point. */
-public data class Curve(val parameter: String, val startTime: Float, val startValue: Float, val segments: List<CurveSegment>)
+public data class ClipEvent(val time: Float, val value: String)
+
+/**
+ * A parameter curve: its first point, then segments each ending at a new point. [fadeIn] and [fadeOut] are the
+ * curve's own fade times in seconds, null for the clip's.
+ */
+public data class Curve(
+	val parameter: String, val startTime: Float, val startValue: Float, val segments: List<CurveSegment>,
+	val fadeIn: Float? = null, val fadeOut: Float? = null,
+)
+
+/** What a clip curve drives besides parameters, as Cubism's motion curve targets. */
+public sealed interface CurveTarget {
+	/** A part's opacity, set outright. */
+	public data class PartOpacity(val part: String) : CurveTarget
+	/** The opacity of the whole rig. */
+	public data object ModelOpacity : CurveTarget
+	/** Multiplies the EyeBlink parameters while the clip plays. */
+	public data object EyeBlink : CurveTarget
+	/** Adds to the LipSync parameters while the clip plays. */
+	public data object LipSync : CurveTarget
+}
+
+/** A curve on [target]: its first point and segments as a parameter curve's, with fades of its own (null for the clip's). */
+public data class TargetCurve(
+	val target: CurveTarget, val startTime: Float, val startValue: Float, val segments: List<CurveSegment>,
+	val fadeIn: Float? = null, val fadeOut: Float? = null,
+)
 
 public sealed interface CurveSegment {
 	public val time: Float

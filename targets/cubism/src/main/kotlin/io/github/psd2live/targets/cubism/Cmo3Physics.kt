@@ -37,11 +37,12 @@ public object Cmo3Physics {
 				name = rule.name
 				guid = guid("CPhysicsSettingsGuid", rule.name)
 				id = Id("CPhysicsSettingId").apply { idstr = rule.id }
+				// Cubism Editor projects travel sideways or tilt only; vertical travel (physics3's Y) stays out of them.
 				inputs = CArrayList<Any?>(
-					rule.inputs.map { inputRule -> input(rule, parameterById, inputRule) },
+					rule.inputs.filter { it.source != PhysicsSource.Y }.map { inputRule -> input(rule, parameterById, inputRule) },
 				)
 				outputs = CArrayList<Any?>(
-					rule.outputs.map { outputRule ->
+					rule.outputs.filter { it.source != PhysicsSource.Y }.map { outputRule ->
 						val output = parameterById[outputRule.parameter]
 							?: error("Physics output parameter not found: ${outputRule.parameter}")
 						CPhysicsOutput().apply {
@@ -89,7 +90,7 @@ public object Cmo3Physics {
 			translationScale = vector(0f, 0f)
 			weight = input.weight
 			type = when (input.source) {
-				PhysicsSource.X -> CPhysicsSourceType.SRC_TO_X
+				PhysicsSource.X, PhysicsSource.Y -> CPhysicsSourceType.SRC_TO_X
 				PhysicsSource.ANGLE -> CPhysicsSourceType.SRC_TO_G_ANGLE
 			}
 			isReverse = input.reflect

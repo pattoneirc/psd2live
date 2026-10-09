@@ -1,5 +1,5 @@
 //! Expressions: a few parameters added to, multiplied into or overwriting the motion's values, faded in and
-//! out as Cubism's exp3 expressions are. One plays at a time; switching fades the last one out.
+//! out as Cubism's exp3 expressions are. Several may play at once, applied oldest first.
 
 use crate::rig::Rig;
 
@@ -36,12 +36,18 @@ pub fn apply(e: &Expression, weight: f32, values: &mut [f32]) {
     }
 }
 
-/// The expression playing and the one fading out behind it.
+/// The expressions playing, each fading in when it starts and out when it stops, applied oldest first.
 #[derive(Debug, Default, Clone)]
 pub struct ExpressionPlayer {
-    current: Option<(usize, f32)>,
-    /// The last expression, its weight when it was replaced, and the time since.
-    previous: Option<(usize, f32, f32)>,
+    entries: Vec<Entry>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Entry {
+    index: usize,
+    age: f32,
+    /// When fading out: the weight it had when it began to, and the time since.
+    fading: Option<(f32, f32)>,
 }
 
 impl ExpressionPlayer {
@@ -49,42 +55,78 @@ impl ExpressionPlayer {
         ExpressionPlayer::default()
     }
 
-    fn weight(rig: &Rig, (index, time): (usize, f32)) -> f32 {
-        let fade = rig.expressions[index].fade_in;
-        if fade > 0.0 { ease(time / fade) } else { 1.0 }
+    fn weight(rig: &Rig, e: &Entry) -> f32 {
+        let expression = &rig.expressions[e.index];
+        let fade = expression.fade_in;
+        let weight = if fade > 0.0 { ease(e.age / fade) } else { 1.0 };
+        match e.fading {
+            None => weight,
+            Some((start, time)) => {
+                let fade = expression.fade_out;
+                start * (1.0 - if fade > 0.0 { ease(time / fade) } else { 1.0 })
+            }
+        }
     }
 
-    /// Starts expression [index] (none for `None`), fading out the one playing.
+    /// Fades out the playing entries [which] picks.
+    fn fade_out(&mut self, rig: &Rig, which: impl Fn(usize) -> bool) {
+        for e in &mut self.entries {
+            if e.fading.is_none() && which(e.index) {
+                e.fading = Some((ExpressionPlayer::weight(rig, e), 0.0));
+            }
+        }
+    }
+
+    /// Plays expression [index] alone (none for `None`), fading out the others.
     pub fn play(&mut self, rig: &Rig, index: Option<usize>) {
-        if index.is_some() && self.current.map(|c| c.0) == index {
+        let index = index.filter(|i| *i < rig.expressions.len());
+        if index.is_some() && self.active().collect::<Vec<_>>() == [index.unwrap()] {
             return;
         }
-        if let Some(current) = self.current {
-            self.previous = Some((current.0, ExpressionPlayer::weight(rig, current), 0.0));
+        self.fade_out(rig, |_| true);
+        if let Some(i) = index {
+            self.entries.push(Entry { index: i, age: 0.0, fading: None });
         }
-        self.current = index.filter(|i| *i < rig.expressions.len()).map(|i| (i, 0.0));
     }
 
+    /// Adds expression [index] over those playing; false when there is no such expression or it already plays.
+    pub fn add(&mut self, rig: &Rig, index: usize) -> bool {
+        if index >= rig.expressions.len() || self.active().any(|i| i == index) {
+            return false;
+        }
+        self.entries.push(Entry { index, age: 0.0, fading: None });
+        true
+    }
+
+    /// Fades expression [index] out, leaving the others; false when it is not playing.
+    pub fn remove(&mut self, rig: &Rig, index: usize) -> bool {
+        let playing = self.active().any(|i| i == index);
+        self.fade_out(rig, |i| i == index);
+        playing
+    }
+
+    /// The expressions playing and not fading out, oldest first.
+    pub fn active(&self) -> impl Iterator<Item = usize> + '_ {
+        self.entries.iter().filter(|e| e.fading.is_none()).map(|e| e.index)
+    }
+
+    /// The newest expression playing.
     pub fn playing(&self) -> Option<usize> {
-        self.current.map(|c| c.0)
+        self.active().last()
     }
 
     /// Advances by [dt] seconds and applies the expressions over [values].
     pub fn update(&mut self, rig: &Rig, dt: f32, values: &mut [f32]) {
-        if let Some((index, start, time)) = &mut self.previous {
-            *time += dt.max(0.0);
-            let fade = rig.expressions[*index].fade_out;
-            let weight = *start * (1.0 - if fade > 0.0 { ease(*time / fade) } else { 1.0 });
-            if weight <= 0.0 {
-                self.previous = None;
-            } else {
-                apply(&rig.expressions[*index], weight, values);
+        let dt = dt.max(0.0);
+        for e in &mut self.entries {
+            e.age += dt;
+            if let Some((_, time)) = &mut e.fading {
+                *time += dt;
             }
         }
-        if let Some((index, time)) = &mut self.current {
-            *time += dt.max(0.0);
-            let weight = ExpressionPlayer::weight(rig, (*index, *time));
-            apply(&rig.expressions[*index], weight, values);
+        self.entries.retain(|e| e.fading.is_none() || ExpressionPlayer::weight(rig, e) > 0.0);
+        for e in &self.entries {
+            apply(&rig.expressions[e.index], ExpressionPlayer::weight(rig, e), values);
         }
     }
 }

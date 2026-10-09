@@ -6,7 +6,7 @@
 
 use crate::advanced::{Advanced, Affine};
 use crate::behavior::Behaviors;
-use crate::clip::Player;
+use crate::clip::{Effects, Player};
 use crate::eval::{render_commands, render_order, Evaluator};
 use crate::expression::ExpressionPlayer;
 use crate::pose::PosePlayer;
@@ -23,7 +23,7 @@ use std::sync::Arc;
 /// The ABI version, `p2l_abi_version`: the major changes when a function changes or goes, the minor when
 /// functions are added. Kept equal to `P2L_ABI_VERSION_MAJOR` / `_MINOR` in the header.
 pub const ABI_MAJOR: u32 = 1;
-pub const ABI_MINOR: u32 = 1;
+pub const ABI_MINOR: u32 = 2;
 
 /// `p2l_update_stages` bits: the layers an update runs, in this order.
 pub const STAGE_CLIPS: u32 = 1;
@@ -33,6 +33,9 @@ pub const STAGE_POSES: u32 = 8;
 pub const STAGE_PHYSICS: u32 = 16;
 pub const STAGE_SIM: u32 = 32;
 pub const STAGE_ALL: u32 = 63;
+
+/// How many clip layers a rig can play at once.
+pub const MAX_LAYERS: u32 = 16;
 
 /// `p2l_parameter_flags` bits.
 pub const PARAMETER_REPEAT: u32 = 1;
@@ -75,6 +78,8 @@ pub struct Model {
     gui_presets: Vec<CString>,
     meta_keys: Vec<CString>,
     meta_values: Vec<CString>,
+    /// Per clip, the text of each of its events.
+    event_values: Vec<Vec<CString>>,
     /// Per mesh, the part holding it, or -1.
     mesh_part: Vec<i32>,
     /// Per part, the part holding it, or -1.
@@ -159,6 +164,7 @@ impl Model {
             gui_presets: gui_nodes.iter().map(|n| c_string(if let GuiLabel::Preset(p) = &n.label { p } else { "" })).collect(),
             meta_keys: c_strings(rig.meta.iter().map(|(k, _)| k)),
             meta_values: c_strings(rig.meta.iter().map(|(_, v)| v)),
+            event_values: rig.clips.iter().map(|c| c_strings(c.extras.events.iter().map(|(_, v)| v))).collect(),
             mesh_part,
             part_parent,
             groups,
@@ -189,10 +195,34 @@ fn part_meshes(rig: &Rig, part: usize) -> Vec<usize> {
 /// Rigs created so far, so each after the first blinks on its own seed.
 static INSTANCES: AtomicU32 = AtomicU32::new(0);
 
+/// One clip layer: its player, the priority of what it plays, and its weight over the layers below.
+struct Layer {
+    player: Player,
+    priority: u32,
+    weight: f32,
+}
+
+impl Layer {
+    fn new() -> Layer {
+        Layer { player: Player::new(), priority: 0, weight: 1.0 }
+    }
+}
+
+type Colors = ([f32; 3], [f32; 3]);
+
 pub struct Handle {
     model: Arc<Model>,
     evaluator: Evaluator,
-    player: Player,
+    /// Clip layers, applied in order; layer 0 is the one p2l_play drives.
+    layers: Vec<Layer>,
+    /// Events the last update's clips passed: layer, clip and event.
+    events: Vec<(u32, usize, usize)>,
+    /// The rig's opacity: the host's, and the one clips set.
+    opacity: f32,
+    clip_opacity: f32,
+    /// Colors the host puts in place of a mesh's, or of every mesh under a part.
+    mesh_colors: Vec<Option<Colors>>,
+    part_colors: Vec<Option<Colors>>,
     behaviors: Behaviors,
     physics: Physics,
     /// The pose the host sets, under clips, expressions, behaviors and physics.
@@ -247,7 +277,12 @@ impl Handle {
             advanced: Advanced::new(),
             failure: OnceCell::new(),
             evaluator: Evaluator::new(),
-            player: Player::new(),
+            layers: vec![Layer::new()],
+            events: Vec::new(),
+            opacity: 1.0,
+            clip_opacity: 1.0,
+            mesh_colors: vec![None; rig.meshes.len()],
+            part_colors: vec![None; rig.parts.len()],
             behaviors,
             current: values.clone(),
             values,
@@ -381,6 +416,29 @@ fn evaluate(handle: &mut Handle) {
     handle.render_order = render_order(rig, pose);
     handle.render_commands = render_commands(rig, pose);
     handle.poses.apply(rig, &mut handle.evaluator.pose);
+    let pose = &mut handle.evaluator.pose;
+    let opacity = handle.opacity * handle.clip_opacity;
+    if opacity != 1.0 {
+        pose.opacity.iter_mut().for_each(|o| *o *= opacity);
+    }
+    if handle.mesh_colors.iter().chain(&handle.part_colors).any(Option::is_some) {
+        let model = &handle.model;
+        for m in 0..pose.multiply.len() {
+            // The mesh's own colors, else those of the nearest part above it that has some.
+            let mut colors = handle.mesh_colors[m];
+            let mut part = model.mesh_part[m];
+            let mut steps = 0;
+            while colors.is_none() && part >= 0 && steps <= model.part_parent.len() {
+                colors = handle.part_colors[part as usize];
+                part = model.part_parent[part as usize];
+                steps += 1;
+            }
+            if let Some((multiply, screen)) = colors {
+                pose.multiply[m] = multiply;
+                pose.screen[m] = screen;
+            }
+        }
+    }
 }
 
 /// Runs the layers in [stages] over the host's pose by [dt] seconds, then evaluates.
@@ -389,7 +447,17 @@ fn update(h: &mut Handle, dt: f32, stages: u32) {
     h.current.clone_from(&h.values);
     let rig = &h.model.rig;
     if stages & STAGE_CLIPS != 0 {
-        h.player.update(rig, dt, &mut h.current);
+        h.events.clear();
+        let mut effects = Effects::default();
+        for (l, layer) in h.layers.iter_mut().enumerate() {
+            layer.player.update_layer(rig, dt, layer.weight, &mut h.current, &mut effects);
+            h.events.extend(effects.events.drain(..).map(|(c, e)| (l as u32, c, e)));
+            if layer.player.finished(rig) {
+                layer.priority = 0;
+            }
+        }
+        h.poses.set_clip_opacities(&effects.part_opacity);
+        h.clip_opacity = effects.model_opacity.map_or(1.0, |o| if o.is_finite() { o.clamp(0.0, 1.0) } else { 1.0 });
     }
     if stages & STAGE_EXPRESSIONS != 0 {
         h.expressions.update(rig, dt, &mut h.current);
@@ -669,6 +737,8 @@ pub unsafe extern "C" fn p2l_gui_node_label(handle: *const Handle, index: u32, p
 pub unsafe extern "C" fn p2l_evaluate(handle: *mut Handle) {
     with_mut!(handle, (), |h| {
         h.current.clone_from(&h.values);
+        h.poses.set_clip_opacities(&[]);
+        h.clip_opacity = 1.0;
         evaluate(h);
         h.advanced.show_simulations(&h.model.rig, &mut h.evaluator.pose);
     })
@@ -688,7 +758,79 @@ pub unsafe extern "C" fn p2l_update_stages(handle: *mut Handle, dt: f32, stages:
 
 #[no_mangle]
 pub unsafe extern "C" fn p2l_physics_reset(handle: *mut Handle) {
-    with_mut!(handle, (), |h| h.physics = Physics::new(&h.model.rig))
+    with_mut!(handle, (), |h| {
+        let wind = h.physics.wind;
+        h.physics = Physics::new(&h.model.rig);
+        h.physics.wind = wind;
+    })
+}
+
+/// Wind on every pendulum besides gravity, in physics units (x right, y down), as Cubism's physics wind.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_physics_wind(handle: *mut Handle, x: f32, y: f32) {
+    with_mut!(handle, (), |h| if x.is_finite() && y.is_finite() {
+        h.physics.wind = (x, y)
+    })
+}
+
+/// Hangs every pendulum at rest under the last evaluation's pose, as Cubism's stabilization does, and evaluates.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_physics_stabilize(handle: *mut Handle) {
+    with_mut!(handle, (), |h| {
+        let mut values = h.current.clone();
+        h.physics.stabilize(&h.model.rig, &mut values);
+        h.current = values;
+        evaluate(h);
+    })
+}
+
+/// The rig's opacity, 0..1, multiplying every mesh on top of what clips set (1 until set).
+#[no_mangle]
+pub unsafe extern "C" fn p2l_set_opacity(handle: *mut Handle, opacity: f32) {
+    with_mut!(handle, (), |h| if opacity.is_finite() {
+        h.opacity = opacity.clamp(0.0, 1.0)
+    })
+}
+
+/// The rig's opacity at the last update: the host's times the one clips set.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_opacity(handle: *const Handle) -> f32 {
+    with!(handle, 0.0, |h| h.opacity * h.clip_opacity)
+}
+
+/// Puts [multiply] and [screen] (three floats each) in place of the mesh's evaluated colors from the next
+/// evaluation; both null gives the mesh its own back. False for no such mesh.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_set_mesh_colors(handle: *mut Handle, index: u32, multiply: *const f32, screen: *const f32) -> bool {
+    with_mut!(handle, false, |h| match h.mesh_colors.get_mut(index as usize) {
+        Some(slot) => {
+            *slot = colors_from(multiply, screen);
+            true
+        }
+        None => false,
+    })
+}
+
+/// [p2l_set_mesh_colors] for every mesh under the part that has no colors of its own set.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_set_part_colors(handle: *mut Handle, index: u32, multiply: *const f32, screen: *const f32) -> bool {
+    with_mut!(handle, false, |h| match h.part_colors.get_mut(index as usize) {
+        Some(slot) => {
+            *slot = colors_from(multiply, screen);
+            true
+        }
+        None => false,
+    })
+}
+
+/// Colors the host gives: null for none when both are null, white multiply and black screen standing in for a
+/// null one.
+unsafe fn colors_from(multiply: *const f32, screen: *const f32) -> Option<Colors> {
+    if multiply.is_null() && screen.is_null() {
+        return None;
+    }
+    let read = |p: *const f32, default: [f32; 3]| if p.is_null() { default } else { [*p, *p.add(1), *p.add(2)] };
+    Some((read(multiply, crate::rig::WHITE), read(screen, crate::rig::BLACK)))
 }
 
 // --- behaviors ---
@@ -697,6 +839,46 @@ pub unsafe extern "C" fn p2l_physics_reset(handle: *mut Handle) {
 #[no_mangle]
 pub unsafe extern "C" fn p2l_behaviors(handle: *mut Handle, flags: u32) {
     with_mut!(handle, (), |h| h.behaviors.enabled = flags)
+}
+
+/// Blink timing in seconds: the interval drawn evenly between [interval_min] and [interval_max], and how long
+/// the eyes take to close, stay closed and open; false, changing nothing, for negative or reversed times.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_blink_settings(handle: *mut Handle, interval_min: f32, interval_max: f32, closing: f32, closed: f32, opening: f32) -> bool {
+    with_mut!(handle, false, |h| {
+        let times = [interval_min, interval_max, closing, closed, opening];
+        if times.iter().any(|t| !t.is_finite() || *t < 0.0) || interval_max < interval_min || closing <= 0.0 || opening <= 0.0 {
+            return false;
+        }
+        let s = &mut h.behaviors.settings;
+        s.blink_interval = (interval_min, interval_max);
+        (s.blink_closing, s.blink_closed, s.blink_opening) = (closing, closed, opening);
+        true
+    })
+}
+
+/// How strongly breathing sways and gaze turns (1 as they are), and how quickly gaze follows (1 settles in about
+/// a third of a second); false, changing nothing, for negative values.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_behavior_strength(handle: *mut Handle, sway: f32, look: f32, look_speed: f32) -> bool {
+    with_mut!(handle, false, |h| {
+        if [sway, look, look_speed].iter().any(|v| !v.is_finite() || *v < 0.0) {
+            return false;
+        }
+        let s = &mut h.behaviors.settings;
+        (s.sway, s.look, s.look_speed) = (sway, look, look_speed);
+        true
+    })
+}
+
+/// Lip sync from audio: the root mean square of [count] samples (-1..1) times [gain], clamped to 0..1, becomes
+/// the mouth opening; returns it.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_lip_sync_samples(handle: *mut Handle, samples: *const f32, count: usize, gain: f32) -> f32 {
+    with_mut!(handle, 0.0, |h| {
+        let samples = if samples.is_null() || count == 0 { &[][..] } else { std::slice::from_raw_parts(samples, count) };
+        h.behaviors.lip_sync_samples(samples, gain)
+    })
 }
 
 /// Reseeds the blink timing; rigs after the first get seeds of their own.
@@ -764,34 +946,133 @@ pub unsafe extern "C" fn p2l_clip_info(
 pub unsafe extern "C" fn p2l_play(handle: *mut Handle, index: i32) {
     with_mut!(handle, (), |h| {
         if index < 0 {
-            h.player.stop()
+            h.layers[0].player.stop();
+            h.layers[0].priority = 0;
         } else if (index as usize) < h.model.rig.clips.len() {
-            h.player.play(index as usize)
+            h.layers[0].player.play(index as usize);
+            h.layers[0].priority = 0;
         }
+    })
+}
+
+/// Starts clip [index] on [layer] (0 to MAX_LAYERS - 1) when [priority] is at least that of the clip the layer
+/// plays (0 once it finishes or stops); -1 stops the layer. Returns whether it did.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_play_layer(handle: *mut Handle, layer: u32, index: i32, priority: u32) -> bool {
+    with_mut!(handle, false, |h| {
+        if layer >= MAX_LAYERS || (index >= 0 && index as usize >= h.model.rig.clips.len()) {
+            return false;
+        }
+        while h.layers.len() <= layer as usize {
+            h.layers.push(Layer::new());
+        }
+        let l = &mut h.layers[layer as usize];
+        if index < 0 {
+            l.player.stop();
+            l.priority = 0;
+            return true;
+        }
+        let current = if l.player.finished(&h.model.rig) { 0 } else { l.priority };
+        if priority < current {
+            return false;
+        }
+        l.player.play(index as usize);
+        l.priority = priority;
+        true
+    })
+}
+
+/// How much [layer] covers the layers below it, 0..1 (1 until set).
+#[no_mangle]
+pub unsafe extern "C" fn p2l_set_layer_weight(handle: *mut Handle, layer: u32, weight: f32) -> bool {
+    with_mut!(handle, false, |h| {
+        if layer >= MAX_LAYERS || !weight.is_finite() {
+            return false;
+        }
+        while h.layers.len() <= layer as usize {
+            h.layers.push(Layer::new());
+        }
+        h.layers[layer as usize].weight = weight.clamp(0.0, 1.0);
+        true
+    })
+}
+
+/// What [layer] plays: the clip (-1 for none), its time, its priority and whether it is a finished one-shot.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_layer_state(handle: *const Handle, layer: u32, clip: *mut i32, time: *mut f32, priority: *mut u32, finished: *mut bool) -> bool {
+    with!(handle, false, |h| {
+        if layer >= MAX_LAYERS {
+            return false;
+        }
+        let rig = &h.model.rig;
+        match h.layers.get(layer as usize) {
+            Some(l) => {
+                let done = l.player.finished(rig);
+                put(clip, l.player.playing().map_or(-1, |c| c as i32));
+                put(time, l.player.time(rig));
+                put(priority, if done { 0 } else { l.priority });
+                put(finished, done);
+            }
+            None => {
+                put(clip, -1);
+                put(time, 0.0);
+                put(priority, 0);
+                put(finished, true);
+            }
+        }
+        true
+    })
+}
+
+/// Moves the clip [layer] plays to [time] seconds; the events it jumps over do not fire.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_layer_seek(handle: *mut Handle, layer: u32, time: f32) {
+    with_mut!(handle, (), |h| if let Some(l) = h.layers.get_mut(layer as usize) {
+        l.player.seek(time)
+    })
+}
+
+/// How many clip events the last update passed.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_event_count(handle: *const Handle) -> u32 {
+    with!(handle, 0, |h| h.events.len() as u32)
+}
+
+/// Event [index] of the last update: its text, and the layer, clip and clip time it came from.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_event(handle: *const Handle, index: u32, layer: *mut u32, clip: *mut i32, time: *mut f32) -> *const c_char {
+    with!(handle, ptr::null(), |h| match h.events.get(index as usize) {
+        Some(&(l, c, e)) => {
+            put(layer, l);
+            put(clip, c as i32);
+            put(time, h.model.rig.clips[c].extras.events[e].0);
+            h.model.event_values[c][e].as_ptr()
+        }
+        None => ptr::null(),
     })
 }
 
 /// The clip playing, or -1.
 #[no_mangle]
 pub unsafe extern "C" fn p2l_clip_playing(handle: *const Handle) -> i32 {
-    with!(handle, -1, |h| h.player.playing().map_or(-1, |c| c as i32))
+    with!(handle, -1, |h| h.layers[0].player.playing().map_or(-1, |c| c as i32))
 }
 
 /// The playing clip's time in seconds, wrapped for a loop and held at the end for a one-shot.
 #[no_mangle]
 pub unsafe extern "C" fn p2l_clip_time(handle: *const Handle) -> f32 {
-    with!(handle, 0.0, |h| h.player.time(&h.model.rig))
+    with!(handle, 0.0, |h| h.layers[0].player.time(&h.model.rig))
 }
 
 /// Moves the playing clip to [time] seconds; its fade-in goes on as it was.
 #[no_mangle]
 pub unsafe extern "C" fn p2l_clip_seek(handle: *mut Handle, time: f32) {
-    with_mut!(handle, (), |h| h.player.seek(time))
+    with_mut!(handle, (), |h| h.layers[0].player.seek(time))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn p2l_clip_finished(handle: *const Handle) -> bool {
-    with!(handle, true, |h| h.player.finished(&h.model.rig))
+    with!(handle, true, |h| h.layers[0].player.finished(&h.model.rig))
 }
 
 // --- meshes ---
@@ -1096,10 +1377,28 @@ pub unsafe extern "C" fn p2l_expression_name(handle: *const Handle, index: u32) 
     with!(handle, ptr::null(), |h| string_at(&h.model.expression_names, index))
 }
 
-/// Fades expression [index] in over the motion, fading the last one out; -1 fades it out to none.
+/// Fades expression [index] in over the motion, fading the others out; -1 fades them all out.
 #[no_mangle]
 pub unsafe extern "C" fn p2l_expression(handle: *mut Handle, index: i32) {
     with_mut!(handle, (), |h| h.expressions.play(&h.model.rig, usize::try_from(index).ok()))
+}
+
+/// Fades expression [index] in over those playing; false when there is no such expression or it already plays.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_expression_add(handle: *mut Handle, index: u32) -> bool {
+    with_mut!(handle, false, |h| h.expressions.add(&h.model.rig, index as usize))
+}
+
+/// Fades expression [index] out, leaving the others; false when it is not playing.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_expression_remove(handle: *mut Handle, index: u32) -> bool {
+    with_mut!(handle, false, |h| h.expressions.remove(&h.model.rig, index as usize))
+}
+
+/// The expressions playing (not fading out), oldest first, into [out]; returns how many.
+#[no_mangle]
+pub unsafe extern "C" fn p2l_expressions_playing(handle: *const Handle, out: *mut u32, capacity: u32) -> u32 {
+    with!(handle, 0, |h| write_all(&h.expressions.active().map(|i| i as u32).collect::<Vec<_>>(), out, capacity))
 }
 
 #[no_mangle]

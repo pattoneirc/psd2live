@@ -1,8 +1,8 @@
 package io.github.psd2live.targets.cubism
 
 import io.github.psd2live.format.model.Clip
-import io.github.psd2live.format.model.Curve
 import io.github.psd2live.format.model.CurveSegment
+import io.github.psd2live.format.model.CurveTarget
 import io.github.psd2live.format.model.PhysicsGroup
 import io.github.psd2live.format.model.PhysicsSource
 
@@ -11,16 +11,34 @@ import io.github.psd2live.format.model.PhysicsSource
  * every export go through it, so the files the editor plays are the files it exports.
  */
 public object Cubism3Json {
-	/** The motion3 JSON of [clip], keeping only curves on [availableParameters]; null when none remain. */
-	public fun motion3(clip: Clip, availableParameters: Set<String>): String? {
-		val curves = clip.curves.filter { it.parameter in availableParameters }
-		if (curves.isEmpty()) return null
+	/**
+	 * The motion3 JSON of [clip], keeping only curves on [availableParameters] (and part curves on [availableParts],
+	 * all of them when null), with its curves on part and model opacity, the EyeBlink and LipSync effects, curve
+	 * fades and user data events; null when nothing remains.
+	 */
+	public fun motion3(clip: Clip, availableParameters: Set<String>, availableParts: Set<String>? = null): String? {
+		val parameterCurves = clip.curves.filter { it.parameter in availableParameters }
+		val targetCurves = clip.targetCurves.filter { t -> (t.target as? CurveTarget.PartOpacity)?.let { availableParts == null || it.part in availableParts } ?: true }
+		if (parameterCurves.isEmpty() && targetCurves.isEmpty()) return null
+		val curves = parameterCurves.map { MotionCurve("Parameter", it.parameter, it.startTime, it.startValue, it.segments, it.fadeIn, it.fadeOut) } +
+			targetCurves.map { t ->
+				val (target, id) = when (val target = t.target) {
+					is CurveTarget.PartOpacity -> "PartOpacity" to target.part
+					CurveTarget.ModelOpacity -> "Model" to "Opacity"
+					CurveTarget.EyeBlink -> "Model" to "EyeBlink"
+					CurveTarget.LipSync -> "Model" to "LipSync"
+				}
+				MotionCurve(target, id, t.startTime, t.startValue, t.segments, t.fadeIn, t.fadeOut)
+			}
 		val segmentCount = curves.sumOf { it.segments.size }
 		val pointCount = curves.sumOf { curve -> 1 + curve.segments.sumOf { if (it is CurveSegment.Bezier) 3 else 1 } }
+		val events = clip.events.sortedBy { it.time }
 		val fades = buildString {
 			clip.fadeIn?.let { append(" \"FadeInTime\": $it,") }
 			clip.fadeOut?.let { append(" \"FadeOutTime\": $it,") }
 		}
+		val userData = if (events.isEmpty()) "" else
+			",\n  \"UserData\": [${events.joinToString(",") { "{\"Time\":${it.time},\"Value\":${quote(it.value)}}" }}]"
 		return """
 		{
 		  "Version": 3,
@@ -32,15 +50,21 @@ public object Cubism3Json {
 		    "CurveCount": ${curves.size},
 		    "TotalSegmentCount": $segmentCount,
 		    "TotalPointCount": $pointCount,
-		    "UserDataCount": 0,
-		    "TotalUserDataSize": 0
+		    "UserDataCount": ${events.size},
+		    "TotalUserDataSize": ${events.sumOf { it.value.encodeToByteArray().size }}
 		  },
-		  "Curves": [${curves.joinToString(",", transform = ::curveJson)}]
+		  "Curves": [${curves.joinToString(",", transform = ::curveJson)}]$userData
 		}
 		""".trimIndent()
 	}
 
-	private fun curveJson(curve: Curve): String {
+	/** A motion3 curve: its target and id, points, and fades of its own when it has them. */
+	private class MotionCurve(
+		val target: String, val id: String, val startTime: Float, val startValue: Float, val segments: List<CurveSegment>,
+		val fadeIn: Float?, val fadeOut: Float?,
+	)
+
+	private fun curveJson(curve: MotionCurve): String {
 		val segments = buildList<Number> {
 			add(curve.startTime); add(curve.startValue)
 			for (segment in curve.segments) {
@@ -53,7 +77,8 @@ public object Cubism3Json {
 				add(segment.time); add(segment.value)
 			}
 		}.joinToString(",") { number -> if (number is Int) number.toString() else number.toFloat().toString() }
-		return """{"Target":"Parameter","Id":"${curve.parameter}","Segments":[$segments]}"""
+		val fades = (curve.fadeIn?.let { ",\"FadeInTime\":$it" } ?: "") + (curve.fadeOut?.let { ",\"FadeOutTime\":$it" } ?: "")
+		return """{"Target":"${curve.target}","Id":${quote(curve.id)}$fades,"Segments":[$segments]}"""
 	}
 
 	/** The physics3 JSON of [groups]; [fps] 0 leaves the frame rate to the runtime. Null when there are none. */
@@ -80,7 +105,11 @@ public object Cubism3Json {
 	/** Particle positions down the strand, root first; Cubism reads only the radii, but writes both. */
 	public fun vertexY(group: PhysicsGroup): List<Float> = group.segments.runningFold(0f) { y, s -> y + s.length }
 
-	private fun type(source: PhysicsSource) = if (source == PhysicsSource.ANGLE) "Angle" else "X"
+	private fun type(source: PhysicsSource) = when (source) {
+		PhysicsSource.X -> "X"
+		PhysicsSource.Y -> "Y"
+		PhysicsSource.ANGLE -> "Angle"
+	}
 
 	private fun settingJson(group: PhysicsGroup): String {
 		val inputs = group.inputs.joinToString(",\n") { input ->

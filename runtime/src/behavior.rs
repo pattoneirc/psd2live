@@ -22,9 +22,33 @@ const SWAYS: [(&str, f32, f32, f32); 5] = [
 /// How far gaze turns each role, as a fraction of the parameter's half range; AngleZ follows x times y.
 const LOOKS: [(&str, f32, f32); 5] = [("AngleX", 1.0, 0.0), ("AngleY", 0.0, 1.0), ("BodyAngleX", 0.33, 0.0), ("EyeBallX", 1.0, 0.0), ("EyeBallY", 0.0, 1.0)];
 
+/// How the behaviors move: blink timing in seconds and how strongly breathing and gaze move the head.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Settings {
+    /// The time between blinks, drawn evenly between these.
+    pub blink_interval: (f32, f32),
+    /// How long the eyes take to close, stay closed and open again.
+    pub blink_closing: f32,
+    pub blink_closed: f32,
+    pub blink_opening: f32,
+    /// Multiplies the breathing sways (1 as they are).
+    pub sway: f32,
+    /// Multiplies how far gaze turns the head, body and eyes.
+    pub look: f32,
+    /// Multiplies how quickly gaze follows its target.
+    pub look_speed: f32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings { blink_interval: (2.0, 6.0), blink_closing: CLOSING, blink_closed: CLOSED, blink_opening: OPENING, sway: 1.0, look: 1.0, look_speed: 1.0 }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Behaviors {
     pub enabled: u32,
+    pub settings: Settings,
     time: f32,
     blink_at: f32,
     blink_start: Option<f32>,
@@ -37,7 +61,7 @@ pub struct Behaviors {
 
 impl Default for Behaviors {
     fn default() -> Self {
-        Behaviors { enabled: BLINK | BREATH, time: 0.0, blink_at: 2.0, blink_start: None, seed: 0x2545_f491, look: (0.0, 0.0), look_velocity: (0.0, 0.0), target: (0.0, 0.0), lip: 0.0 }
+        Behaviors { enabled: BLINK | BREATH, settings: Settings::default(), time: 0.0, blink_at: 2.0, blink_start: None, seed: 0x2545_f491, look: (0.0, 0.0), look_velocity: (0.0, 0.0), target: (0.0, 0.0), lip: 0.0 }
     }
 }
 
@@ -51,8 +75,24 @@ impl Behaviors {
     pub fn seed(&mut self, seed: u32) {
         self.seed = if seed == 0 { Behaviors::default().seed } else { seed };
         if self.blink_start.is_none() {
-            self.blink_at = self.time + 2.0 + self.random() * 4.0;
+            self.blink_at = self.next_blink();
         }
+    }
+
+    /// When the next blink comes, from now.
+    fn next_blink(&mut self) -> f32 {
+        let (min, max) = self.settings.blink_interval;
+        self.time + min + self.random() * (max - min)
+    }
+
+    /// Sets the mouth opening from a block of audio [samples] (-1..1): their root mean square times [gain],
+    /// clamped to 0..1; returns it.
+    pub fn lip_sync_samples(&mut self, samples: &[f32], gain: f32) -> f32 {
+        let finite = samples.iter().filter(|s| s.is_finite());
+        let (sum, n) = finite.fold((0.0f64, 0usize), |(sum, n), s| (sum + (*s as f64) * (*s as f64), n + 1));
+        let rms = if n == 0 { 0.0 } else { (sum / n as f64).sqrt() as f32 };
+        self.lip_sync(rms * if gain.is_finite() { gain } else { 1.0 });
+        self.lip
     }
 
     /// Where to look, each axis -1..1 (x right, y up).
@@ -79,16 +119,17 @@ impl Behaviors {
         }
         let Some(start) = self.blink_start else { return 1.0 };
         let t = self.time - start;
-        if t < CLOSING {
-            1.0 - t / CLOSING
-        } else if t < CLOSING + CLOSED {
+        let (closing, closed, opening) = (self.settings.blink_closing, self.settings.blink_closed, self.settings.blink_opening);
+        if t < closing {
+            1.0 - t / closing
+        } else if t < closing + closed {
             0.0
-        } else if t < CLOSING + CLOSED + OPENING {
-            (t - CLOSING - CLOSED) / OPENING
+        } else if t < closing + closed + opening {
+            (t - closing - closed) / opening
         } else {
             self.blink_start = None;
-            // The next blink in 2..6 seconds.
-            self.blink_at = self.time + 2.0 + self.random() * 4.0;
+            // The next blink in 2..6 seconds unless the settings say otherwise.
+            self.blink_at = self.next_blink();
             1.0
         }
     }
@@ -107,7 +148,7 @@ impl Behaviors {
         }
         if self.enabled & BREATH != 0 {
             for (role, offset, peak, cycle) in SWAYS {
-                let wave = (self.time * std::f32::consts::TAU / cycle).sin();
+                let wave = (self.time * std::f32::consts::TAU / cycle).sin() * self.settings.sway;
                 for p in roles(rig, role) {
                     let param = &rig.parameters[p];
                     let span = param.max - param.min;
@@ -122,7 +163,7 @@ impl Behaviors {
         }
         if self.enabled & LOOK != 0 {
             // A critically damped follow, settling in about a third of a second.
-            let k = 120.0f32;
+            let k = 120.0f32 * self.settings.look_speed * self.settings.look_speed;
             let d = 2.0 * k.sqrt();
             for (pos, vel, target) in [(&mut self.look.0, &mut self.look_velocity.0, self.target.0), (&mut self.look.1, &mut self.look_velocity.1, self.target.1)] {
                 let mut remaining = dt;
@@ -133,7 +174,7 @@ impl Behaviors {
                     remaining -= h;
                 }
             }
-            let (x, y) = self.look;
+            let (x, y) = (self.look.0 * self.settings.look, self.look.1 * self.settings.look);
             for (role, gx, gy) in LOOKS {
                 for p in roles(rig, role) {
                     values[p] += half_range(rig, p, gx * x + gy * y);

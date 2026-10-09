@@ -14,6 +14,7 @@ fn hold(id: &str, value: f32) -> Clip {
     Clip {
         id: id.into(), name: id.into(), group: "Idle".into(), duration: 2.0, fps: 30.0, looping: true, fade_in: None, fade_out: None,
         curves: vec![Curve { parameter: 0, start_time: 0.0, start_value: value, segments: vec![Segment::Linear { time: 2.0, value }] }],
+        extras: ClipExtras::default(),
     }
 }
 
@@ -311,5 +312,239 @@ fn host_memory_round_trips_at_its_length() {
             }
             p2l_dealloc(p, len);
         }
+    }
+}
+
+/// A clip holding parameter 0 at [value], looping over a second, without fades.
+fn instant(id: &str, value: f32) -> Clip {
+    Clip { duration: 1.0, fade_in: Some(0.0), fade_out: Some(0.0), ..hold(id, value) }
+}
+
+#[test]
+fn layers_play_over_each_other_by_weight_and_priority() {
+    let mut r = triangle(None);
+    r.parameters[0] = parameter("A", 0.0, 10.0, 0.0);
+    r.clips = vec![instant("low", 2.0), instant("high", 6.0)];
+    let handle = rig_on(r);
+    unsafe {
+        p2l_behaviors(handle, 0);
+        assert!(p2l_play_layer(handle, 0, 0, 1));
+        assert!(p2l_play_layer(handle, 1, 1, 2));
+        p2l_update(handle, 0.1);
+        assert!((current(handle) - 6.0).abs() < 1e-5);
+        assert!(p2l_set_layer_weight(handle, 1, 0.5));
+        p2l_update(handle, 0.1);
+        assert!((current(handle) - 4.0).abs() < 1e-5);
+        // A lower priority cannot take the layer over; an equal or higher one can, and stopping frees it.
+        assert!(!p2l_play_layer(handle, 1, 0, 1));
+        assert!(p2l_play_layer(handle, 1, 0, 2));
+        let (mut clip, mut priority) = (0, 0);
+        assert!(p2l_layer_state(handle, 1, &mut clip, ptr::null_mut(), &mut priority, ptr::null_mut()));
+        assert_eq!((clip, priority), (0, 2));
+        assert!(p2l_play_layer(handle, 1, -1, 0));
+        assert!(p2l_play_layer(handle, 1, 1, 0));
+        assert!(!p2l_play_layer(handle, MAX_LAYERS, 0, 9));
+        p2l_rig_free(handle);
+    }
+}
+
+fn event_texts(handle: *mut Handle) -> Vec<String> {
+    unsafe {
+        (0..p2l_event_count(handle))
+            .map(|i| CStr::from_ptr(p2l_event(handle, i, ptr::null_mut(), ptr::null_mut(), ptr::null_mut())).to_string_lossy().into_owned())
+            .collect()
+    }
+}
+
+#[test]
+fn clip_events_fire_as_the_clip_passes_them() {
+    let mut r = triangle(None);
+    let mut clip = instant("c", 0.5);
+    clip.extras.events = vec![(0.0, "start".into()), (0.5, "middle".into())];
+    r.clips = vec![clip];
+    let handle = rig_on(r);
+    unsafe {
+        p2l_play(handle, 0);
+        p2l_update(handle, 0.6);
+        assert_eq!(event_texts(handle), ["start", "middle"]);
+        p2l_update(handle, 0.2);
+        assert!(event_texts(handle).is_empty());
+        // The loop comes round: the start fires again.
+        p2l_update(handle, 0.3);
+        assert_eq!(event_texts(handle), ["start"]);
+        // A seek jumps over what lies between.
+        p2l_clip_seek(handle, 0.9);
+        p2l_update(handle, 0.05);
+        assert!(event_texts(handle).is_empty());
+        let (mut layer, mut clip, mut time) = (9, 9, 0.0);
+        p2l_update(handle, 0.6);
+        assert!(!p2l_event(handle, 0, &mut layer, &mut clip, &mut time).is_null());
+        assert_eq!((layer, clip, time), (0, 0, 0.0));
+        p2l_rig_free(handle);
+    }
+}
+
+#[test]
+fn clips_set_part_and_rig_opacity_and_drive_the_blink_and_lip_sync_effects() {
+    let mut r = isolated();
+    r.parameters = vec![parameter("A", 0.0, 1.0, 0.0), parameter("Eye", 0.0, 1.0, 1.0), parameter("Mouth", 0.0, 1.0, 0.0)];
+    r.roles = vec![Role { role: "EyeBlink".into(), parameters: vec![1] }, Role { role: "LipSync".into(), parameters: vec![2] }];
+    let constant = |value: f32| Curve { parameter: usize::MAX, start_time: 0.0, start_value: value, segments: vec![] };
+    let mut clip = instant("c", 0.0);
+    clip.extras.curves = vec![
+        TargetCurve { target: CurveTarget::PartOpacity(0), fade_in: None, fade_out: None, curve: constant(0.5) },
+        TargetCurve { target: CurveTarget::ModelOpacity, fade_in: None, fade_out: None, curve: constant(0.5) },
+        TargetCurve { target: CurveTarget::EyeBlink, fade_in: None, fade_out: None, curve: constant(0.25) },
+        TargetCurve { target: CurveTarget::LipSync, fade_in: None, fade_out: None, curve: constant(0.5) },
+    ];
+    r.clips = vec![clip];
+    let handle = rig_on(r);
+    unsafe {
+        p2l_behaviors(handle, 0);
+        p2l_play(handle, 0);
+        p2l_update(handle, 0.1);
+        // Part 0.5 times rig 0.5.
+        assert!((p2l_mesh_opacity(handle, 0) - 0.25).abs() < 1e-6);
+        assert!((p2l_opacity(handle) - 0.5).abs() < 1e-6);
+        let values = std::slice::from_raw_parts(p2l_parameter_current(handle), 3);
+        assert!((values[1] - 0.25).abs() < 1e-6, "{:?}", values);
+        assert!((values[2] - 0.5).abs() < 1e-6, "{:?}", values);
+        // Evaluating the host pose alone drops what the clip set.
+        p2l_evaluate(handle);
+        assert_eq!(p2l_mesh_opacity(handle, 0), 1.0);
+        p2l_rig_free(handle);
+    }
+}
+
+#[test]
+fn a_curve_with_fades_of_its_own_weighs_by_them() {
+    let mut r = triangle(None);
+    r.parameters[0] = parameter("A", 0.0, 10.0, 0.0);
+    let mut clip = instant("c", 10.0);
+    clip.extras.fades = vec![(0, Some(1.0), None)];
+    r.clips = vec![clip];
+    let handle = rig_on(r);
+    unsafe {
+        p2l_behaviors(handle, 0);
+        p2l_play(handle, 0);
+        p2l_update(handle, 0.5);
+        // The clip has no fade, but its curve fades in over a second: half way, the cosine ease gives a half.
+        assert!((current(handle) - 5.0).abs() < 1e-4, "{}", current(handle));
+        p2l_rig_free(handle);
+    }
+}
+
+#[test]
+fn several_expressions_play_at_once() {
+    use crate::expression::{Blend, Expression};
+    let mut r = triangle(None);
+    r.parameters[0] = parameter("A", -10.0, 10.0, 0.0);
+    let add = |id: &str, v: f32| Expression { id: id.into(), name: id.into(), fade_in: 0.0, fade_out: 0.0, parameters: vec![(0, Blend::Add, v)] };
+    r.expressions = vec![add("a", 1.0), add("b", 2.0)];
+    let handle = rig_on(r);
+    unsafe {
+        p2l_behaviors(handle, 0);
+        assert!(p2l_expression_add(handle, 0));
+        assert!(p2l_expression_add(handle, 1));
+        assert!(!p2l_expression_add(handle, 1));
+        p2l_update(handle, 0.1);
+        assert!((current(handle) - 3.0).abs() < 1e-6);
+        let mut playing = [9u32; 4];
+        assert_eq!(p2l_expressions_playing(handle, playing.as_mut_ptr(), 4), 2);
+        assert_eq!(&playing[..2], &[0, 1]);
+        assert!(p2l_expression_remove(handle, 0));
+        p2l_update(handle, 0.1);
+        assert!((current(handle) - 2.0).abs() < 1e-6);
+        // Playing one alone fades out the rest.
+        p2l_expression(handle, 0);
+        p2l_update(handle, 0.1);
+        assert!((current(handle) - 1.0).abs() < 1e-6);
+        p2l_rig_free(handle);
+    }
+}
+
+#[test]
+fn the_host_sets_the_rig_opacity_and_colors_in_place_of_the_evaluated_ones() {
+    let handle = rig_on(isolated());
+    unsafe {
+        p2l_set_opacity(handle, 0.5);
+        let red = [1.0f32, 0.0, 0.0];
+        assert!(p2l_set_part_colors(handle, 0, red.as_ptr(), ptr::null()));
+        p2l_evaluate(handle);
+        assert_eq!(p2l_mesh_opacity(handle, 0), 0.5);
+        let (mut multiply, mut screen) = ([0.0f32; 3], [9.0f32; 3]);
+        p2l_mesh_colors(handle, 0, multiply.as_mut_ptr(), screen.as_mut_ptr());
+        assert_eq!((multiply, screen), (red, [0.0; 3]));
+        // The mesh setting wins over its part; clearing both gives the evaluated colors back.
+        let blue = [0.0f32, 0.0, 1.0];
+        assert!(p2l_set_mesh_colors(handle, 0, blue.as_ptr(), ptr::null()));
+        p2l_evaluate(handle);
+        p2l_mesh_colors(handle, 0, multiply.as_mut_ptr(), ptr::null_mut());
+        assert_eq!(multiply, blue);
+        p2l_set_mesh_colors(handle, 0, ptr::null(), ptr::null());
+        p2l_set_part_colors(handle, 0, ptr::null(), ptr::null());
+        p2l_evaluate(handle);
+        p2l_mesh_colors(handle, 0, multiply.as_mut_ptr(), ptr::null_mut());
+        assert_eq!(multiply, [1.0; 3]);
+        assert!(!p2l_set_mesh_colors(handle, 5, red.as_ptr(), ptr::null()));
+        p2l_rig_free(handle);
+    }
+}
+
+/// A pendulum: parameter 0 moves the root sideways, parameter 1 reads the segment angle.
+fn pendulum() -> Rig {
+    let mut r = triangle(None);
+    r.parameters = vec![parameter("Tilt", -10.0, 10.0, 0.0), parameter("Swing", -10.0, 10.0, 0.0)];
+    r.physics = vec![PhysicsGroup {
+        id: "g".into(), name: "g".into(),
+        inputs: vec![PhysicsInput { parameter: 0, weight: 100.0, source: PhysicsSource::X, reflect: false }],
+        outputs: vec![PhysicsOutput { parameter: 1, vertex: 1, scale: 10.0, weight: 100.0, source: PhysicsSource::Angle, reflect: false }],
+        segments: vec![PhysicsSegment { length: 10.0, mobility: 0.9, delay: 0.9, acceleration: 1.0 }],
+        normalization: Normalization { position_min: -10.0, position_default: 0.0, position_max: 10.0, angle_min: -10.0, angle_default: 0.0, angle_max: 10.0 },
+    }];
+    r
+}
+
+#[test]
+fn wind_pushes_the_pendulums_and_stabilizing_hangs_them_at_rest() {
+    let handle = rig_on(pendulum());
+    unsafe {
+        p2l_behaviors(handle, 0);
+        let swing = |handle: *mut Handle| *p2l_parameter_current(handle).add(1);
+        p2l_physics_stabilize(handle);
+        assert_eq!(swing(handle), 0.0);
+        // A sideways wind tilts the hanging segment; at rest it hangs along gravity plus the wind.
+        p2l_physics_wind(handle, 1.0, 0.0);
+        p2l_physics_stabilize(handle);
+        let at_rest = swing(handle);
+        assert!(at_rest.abs() > 1.0, "{}", at_rest);
+        // Stepping on from rest keeps it there.
+        for _ in 0..30 {
+            p2l_update(handle, 1.0 / 30.0);
+        }
+        assert!((swing(handle) - at_rest).abs() < 0.05, "{} vs {}", swing(handle), at_rest);
+        p2l_rig_free(handle);
+    }
+}
+
+#[test]
+fn behaviors_take_settings_and_lip_sync_follows_audio() {
+    let mut r = triangle(None);
+    r.parameters = vec![parameter("Mouth", 0.0, 1.0, 0.0)];
+    r.roles = vec![Role { role: "LipSync".into(), parameters: vec![0] }];
+    let handle = rig_on(r);
+    unsafe {
+        assert!(!p2l_blink_settings(handle, 3.0, 2.0, 0.1, 0.05, 0.15));
+        assert!(p2l_blink_settings(handle, 1.0, 1.5, 0.05, 0.0, 0.05));
+        assert!(!p2l_behavior_strength(handle, -1.0, 1.0, 1.0));
+        assert!(p2l_behavior_strength(handle, 0.0, 1.0, 2.0));
+        p2l_behaviors(handle, 8);
+        // A square wave of amplitude 0.5 has a root mean square of 0.5.
+        let samples = [0.5f32, -0.5, 0.5, -0.5];
+        assert!((p2l_lip_sync_samples(handle, samples.as_ptr(), 4, 1.0) - 0.5).abs() < 1e-6);
+        p2l_update(handle, 0.1);
+        assert!((current(handle) - 0.5).abs() < 1e-6);
+        assert_eq!(p2l_lip_sync_samples(handle, ptr::null(), 0, 1.0), 0.0);
+        p2l_rig_free(handle);
     }
 }
