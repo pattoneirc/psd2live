@@ -9,6 +9,18 @@ package org.umamo.render.glsl
 // X Render conjoint/disjoint); nothing here is derived from the official Cubism SDK.
 
 /**
+ * The composite program's desktop GL 3.3 core sources, vertex then fragment, for renderers outside this module
+ * that composite layers the same way (the editor's `.p2lrt` preview).  Its uniforms: `layerTexture`,
+ * `destTexture`, `maskTexture` (samplers read at `gl_FragCoord.xy / screenTexSize`), `colorMode` (0-17),
+ * `alphaMode` (0-4), `opacity`, `multiplyColor`, `screenColor`, `useMask`, `invertMask`; draw 3 vertices with an
+ * empty vertex array and blending disabled.
+ *
+ * @return Pair<String, String> The vertex and fragment sources.
+ */
+public fun desktopCompositeShaderSources(): Pair<String, String> =
+	compositeVertexShader(GlslDialect.Core330) to compositeFragmentShader(GlslDialect.Core330)
+
+/**
  * The composite vertex shader: an attribute-less full-screen triangle from `gl_VertexID`
  * (draw 3 vertices with an empty VAO, like the grid backdrop).
  *

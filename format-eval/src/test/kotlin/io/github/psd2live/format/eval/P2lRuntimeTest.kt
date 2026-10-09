@@ -52,6 +52,39 @@ class P2lRuntimeTest {
 		assertTrue(error.message!!.isNotBlank())
 	}
 
+	@Test fun isolatedPartsKeepTheirGroupInTheRenderCommands() {
+		val mask = Mesh("K", "K", null, blend = ColorBlend.SCREEN, alphaBlend = AlphaBlend.ATOP, visible = false,
+			geometry = rig.meshes[0].geometry, offsets = null)
+		val isolated = rig.copy(
+			meshes = rig.meshes + mask,
+			parts = listOf(Part("P", "P", listOf(ChildRef.MeshRef("M")), groupMode = GroupMode.ISOLATED)),
+			renderRoot = RenderGroup(null, 500, listOf(RenderMesh("K"), RenderGroup("P", 500, listOf(RenderMesh("M")),
+				composite = Composite(ColorBlend.MULTIPLY, AlphaBlend.OUT, maskedBy = listOf("K"), invertMask = true,
+					opacity = 0.5f, multiply = Rgb(1f, 0.5f, 0.25f), screen = Rgb(0f, 0.1f, 0f))))),
+		)
+		runtime().load(isolated).use { r ->
+			r.evaluate()
+			assertEquals(listOf("P"), r.partIds)
+			assertContentEquals(intArrayOf(P2lRuntime.beginGroup(0), 0, P2lRuntime.END_GROUP), r.renderCommands())
+			assertEquals(0, P2lRuntime.groupPart(r.renderCommands()[0]))
+			val part = r.part(0)
+			assertEquals(P2lRuntime.GROUP_ISOLATED, part.group)
+			assertEquals(ColorBlend.MULTIPLY.ordinal, part.blend)
+			assertEquals(AlphaBlend.OUT.ordinal, part.alphaBlend)
+			assertTrue(part.invertMask)
+			assertContentEquals(intArrayOf(1), part.masks)
+			val multiply = FloatArray(3)
+			val screen = FloatArray(3)
+			assertEquals(0.5f, r.partComposite(0, multiply, screen))
+			assertContentEquals(floatArrayOf(1f, 0.5f, 0.25f), multiply)
+			assertContentEquals(floatArrayOf(0f, 0.1f, 0f), screen)
+			assertTrue(r.partComposite(5, multiply, screen).isNaN())
+			assertEquals(ColorBlend.SCREEN.ordinal, r.mesh(1).blend)
+			assertEquals(AlphaBlend.ATOP.ordinal, r.mesh(1).alphaBlend)
+			assertEquals(AlphaBlend.OVER.ordinal, r.mesh(0).alphaBlend)
+		}
+	}
+
 	@Test fun theRigReportsItsObjectsAndDrawsBackToFront() {
 		runtime().load(rig).use { r ->
 			assertEquals(listOf("A"), r.parameterIds)

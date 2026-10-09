@@ -50,6 +50,13 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 		fun p2l_mesh_blend(rig: Pointer, index: Int, culling: ByteArray): Int
 		fun p2l_mesh_masks(rig: Pointer, index: Int, out: IntArray?, capacity: Int, inverted: ByteArray?): Int
 		fun p2l_mesh_colors(rig: Pointer, index: Int, multiply: FloatArray, screen: FloatArray)
+		fun p2l_mesh_alpha_blend(rig: Pointer, index: Int): Int
+		fun p2l_render_commands(rig: Pointer, out: IntArray?, capacity: Int): Int
+		fun p2l_part_count(rig: Pointer): Int
+		fun p2l_part_id(rig: Pointer, index: Int): String?
+		fun p2l_part_group(rig: Pointer, index: Int, blend: IntArray?, alphaBlend: IntArray?, invertMask: ByteArray?): Int
+		fun p2l_part_masks(rig: Pointer, index: Int, out: IntArray?, capacity: Int): Int
+		fun p2l_part_composite(rig: Pointer, index: Int, opacity: FloatArray?, multiply: FloatArray?, screen: FloatArray?): Byte
 		fun p2l_advanced_available(rig: Pointer): Int
 		fun p2l_set_advanced(rig: Pointer, features: Int): Int
 		fun p2l_sim_reset(rig: Pointer)
@@ -78,6 +85,7 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 		public val parameterIds: List<String> = List(native.p2l_parameter_count(h())) { native.p2l_parameter_id(h(), it)!! }
 		public val meshIds: List<String> = List(native.p2l_mesh_count(h())) { native.p2l_mesh_id(h(), it)!! }
 		public val clipIds: List<String> = List(native.p2l_clip_count(h())) { native.p2l_clip_id(h(), it)!! }
+		public val partIds: List<String> = List(native.p2l_part_count(h())) { native.p2l_part_id(h(), it)!! }
 		private val parameterIndex = parameterIds.withIndex().associate { it.value to it.index }
 
 		/** The values the next update reads and writes, one per parameter. */
@@ -141,6 +149,15 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 			return IntArray(n).also { native.p2l_render_order(h(), it, n) }
 		}
 
+		/**
+		 * [renderOrder] with isolated groups kept: a mesh index, [beginGroup] of a part opening its isolated group,
+		 * [END_GROUP] closing it (`p2l_render_commands`).
+		 */
+		public fun renderCommands(): IntArray {
+			val n = native.p2l_render_commands(h(), null, 0)
+			return IntArray(n).also { if (n > 0) native.p2l_render_commands(h(), it, n) }
+		}
+
 		/** The canvas size in pixels. */
 		public val canvas: Pair<Float, Float> = FloatArray(1).let { w -> FloatArray(1).let { hh -> native.p2l_canvas(h(), w, hh); w[0] to hh[0] } }
 
@@ -177,12 +194,32 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 			return Mesh(
 				uvs = if (vertices == 0) FloatArray(0) else native.p2l_mesh_uvs(h(), index)?.getFloatArray(0, vertices * 2) ?: FloatArray(0),
 				indices = indices, texture = native.p2l_mesh_texture(h(), index), blend = blend, culling = culling[0].toInt() != 0,
-				masks = masks, invertMask = inverted[0].toInt() != 0,
+				masks = masks, invertMask = inverted[0].toInt() != 0, alphaBlend = native.p2l_mesh_alpha_blend(h(), index),
 			)
 		}
 
 		/** Mesh [index]'s multiply and screen colors from the last evaluation, RGB each, into [multiply] and [screen]. */
 		public fun colors(index: Int, multiply: FloatArray, screen: FloatArray): Unit = native.p2l_mesh_colors(h(), index, multiply, screen)
+
+		/** Part [index]'s static grouping: how it groups its meshes and how its isolated group composites. */
+		public fun part(index: Int): Part {
+			val blend = IntArray(1)
+			val alphaBlend = IntArray(1)
+			val invert = ByteArray(1)
+			val group = native.p2l_part_group(h(), index, blend, alphaBlend, invert)
+			val maskCount = native.p2l_part_masks(h(), index, null, 0)
+			val masks = IntArray(maskCount).also { if (maskCount > 0) native.p2l_part_masks(h(), index, it, maskCount) }
+			return Part(group = group, blend = blend[0], alphaBlend = alphaBlend[0], invertMask = invert[0].toInt() != 0, masks = masks)
+		}
+
+		/**
+		 * Part [index]'s isolated group at the last evaluation: its multiply and screen colors, RGB each, into
+		 * [multiply] and [screen]; returns its opacity, NaN when there is no such part.
+		 */
+		public fun partComposite(index: Int, multiply: FloatArray, screen: FloatArray): Float {
+			val opacity = FloatArray(1)
+			return if (native.p2l_part_composite(h(), index, opacity, multiply, screen).toInt() != 0) opacity[0] else Float.NaN
+		}
 
 		override fun close() {
 			handle?.let(native::p2l_rig_free)
@@ -191,15 +228,40 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 	}
 
 	/**
-	 * How a mesh draws: [blend] is 0 normal, 1 add, 2 multiply as Cubism draws them, 3 and up the extended modes
-	 * (`p2l_mesh_blend`); [masks] are the meshes that clip it, outside them when [invertMask].
+	 * How a mesh draws: [blend] is 0 normal, 1 add, 2 multiply as Cubism draws them, 3 to 17 the extended modes
+	 * (`p2l_mesh_blend`), [alphaBlend] 0 over, 1 atop, 2 out, 3 conjoint over, 4 disjoint over
+	 * (`p2l_mesh_alpha_blend`); [masks] are the meshes that clip it, outside them when [invertMask].
 	 */
 	public class Mesh(
 		public val uvs: FloatArray, public val indices: IntArray, public val texture: Int, public val blend: Int,
 		public val culling: Boolean, public val masks: IntArray, public val invertMask: Boolean,
+		public val alphaBlend: Int = 0,
+	)
+
+	/**
+	 * How a part groups its meshes ([group]: [GROUP_PASS_THROUGH], [GROUP_SORTED] or [GROUP_ISOLATED]) and how its
+	 * isolated group composites: blend modes as a mesh's, and the meshes masking it (the masking parts' included),
+	 * outside them when [invertMask] (`p2l_part_group`, `p2l_part_masks`).
+	 */
+	public class Part(
+		public val group: Int, public val blend: Int, public val alphaBlend: Int, public val invertMask: Boolean,
+		public val masks: IntArray,
 	)
 
 	public companion object {
+		public const val GROUP_PASS_THROUGH: Int = 0
+		public const val GROUP_SORTED: Int = 1
+		public const val GROUP_ISOLATED: Int = 2
+
+		/** The render command closing an isolated group ([Rig.renderCommands]). */
+		public const val END_GROUP: Int = -1
+
+		/** The render command opening the isolated group of [part]. */
+		public fun beginGroup(part: Int): Int = -2 - part
+
+		/** The part whose group [command] opens, or -1 for a mesh or a group's end. */
+		public fun groupPart(command: Int): Int = if (command <= -2) -2 - command else -1
+
 		private val name = System.mapLibraryName("p2l_runtime")
 
 		/** The native library file, or null when none is configured or found. */
@@ -217,7 +279,7 @@ public class P2lRuntime private constructor(private val native: Bindings) {
 
 		/** The ABI these bindings need: the same major version and at least this minor one. */
 		public const val ABI_MAJOR: Int = 1
-		public const val ABI_MINOR: Int = 0
+		public const val ABI_MINOR: Int = 1
 
 		/**
 		 * The runtime from [library] (or [locate]d), or null when there is none or its ABI does not match the
