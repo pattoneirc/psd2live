@@ -112,10 +112,14 @@ internal fun keyBindingOf(event: KeyEvent): KeyBinding = KeyBinding(
     alt = event.isAltPressed,
 )
 
+/** Ctrl, or on macOS also Command: the modifier pointer gestures (toggle selection, Ctrl-click) read. */
+internal val PointerKeyboardModifiers.isPrimaryPressed: Boolean
+    get() = if (IS_MAC) isPointerCtrlPressed || isPointerMetaPressed else isPointerCtrlPressed
+
 /** The binding a mouse [input] with these pointer [modifiers] represents; the pointer twin of [keyBindingOf]. */
 internal fun mouseBindingOf(input: MouseInput, modifiers: PointerKeyboardModifiers): KeyBinding = KeyBinding(
     key = null,
-    ctrl = if (IS_MAC) modifiers.isPointerCtrlPressed || modifiers.isPointerMetaPressed else modifiers.isPointerCtrlPressed,
+    ctrl = modifiers.isPrimaryPressed,
     shift = modifiers.isPointerShiftPressed,
     alt = modifiers.isPointerAltPressed,
     mouse = input,

@@ -12,16 +12,16 @@
 - ローカルの Cubism 5 SDK for Native (5-r.5 の構成)
 - 必要：`Core/lib/windows/x86_64/143/Live2DCubismCore_MT.lib`
 
-### Linux x86_64
-- 対応プラットフォーム：X11/GLX を備えた Linux x86_64（XWayland と `xvfb-run` を含む）
-- 非対応：XWayland のない純粋な Wayland、aarch64、musl/Alpine 環境
+### Linux x86_64 / arm64
+- 対応プラットフォーム：X11/GLX を備えた Linux x86_64 と arm64（XWayland と `xvfb-run` を含む）。arm64 は SDK の実験的な Cubism Core を使用
+- 非対応：XWayland のない純粋な Wayland、musl/Alpine 環境
 - CMake 3.16+
 - GCC または Clang（C++14 サポート）
 - OpenGL / GLX 開発パッケージ（例: Debian/Ubuntu の `libgl1-mesa-dev` と `libglx-dev` または `libglx-mesa-dev`、Fedora の `mesa-libGL-devel`）
 - X11 開発ライブラリ（`libx11-dev` / `libX11-devel`）
 - 実行時に有効な X11 `DISPLAY`（デスクトップ、またはヘッドレスでは `xvfb-run`）
 - ローカルの Cubism 5 SDK for Native (5-r.5 の構成)
-- 必要：`Core/lib/linux/x86_64/libLive2DCubismCore.a`
+- 必要：`Core/lib/linux/x86_64/libLive2DCubismCore.a`（arm64 は `Core/lib/experimental/linux/arm64/libLive2DCubismCore.a`）
 
 ## ビルドと配置
 
@@ -50,7 +50,7 @@ export CUBISM_SDK_ROOT=/path/to/CubismSdkForNative-5-r.5
 リポジトリのルートで実行します。`--deploy` は共有ライブラリとシェーダーを下記の Git 対象外ディレクトリへコピーします。`--clean` は古いビルドキャッシュを除いて再構築します。
 
 ```text
-src/main/resources/cubism/linux-x86_64/
+src/main/resources/cubism/linux-x86_64/   （arm64 は linux-arm64/）
 ├── liblive2d_renderer.so
 └── FrameworkShaders/
 ```

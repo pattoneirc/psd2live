@@ -42,7 +42,7 @@ On Windows, `run-gui.bat` in the repository root also starts the GUI. Without ar
 | `--no-moc3` | off | Skip MOC3 |
 | `--no-json` | off | Skip the diagnostics JSON |
 | `--upscale <1\|2\|4>` | 1 | Texture upscale factor; 1 disables it |
-| `--upscale-python <path>` | `python` | Python with nunif dependencies |
+| `--upscale-python <path>` | `python` (Windows), `python3` elsewhere | Python with nunif dependencies |
 | `--nunif-dir <path>` | empty | nunif source directory |
 | `--upscale-model <path>` | empty | Weights directory |
 | `--upscale-tile <64..512>` | 256 | Inference tile size |

@@ -39,7 +39,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.isAltPressed
-import androidx.compose.ui.input.pointer.isCtrlPressed
+import io.github.psd2live.ui.state.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import java.awt.Cursor
@@ -591,7 +591,7 @@ internal fun LayersTableView(
 											viewModel.selectLayer(layerId, subtractive = true)
 										event.keyboardModifiers.isShiftPressed ->
 											viewModel.selectLayerRange(ordered, layerId)
-										event.keyboardModifiers.isCtrlPressed ->
+										event.keyboardModifiers.isPrimaryPressed ->
 											viewModel.toggleLayerSelection(layerId)
 										else -> viewModel.selectLayer(layerId)
 									}

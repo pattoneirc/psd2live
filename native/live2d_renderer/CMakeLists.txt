@@ -55,12 +55,16 @@ if(WIN32)
   # /MT ↔ Core_MT.lib (Release), /MTd ↔ Core_MTd.lib (Debug). Do not mix with *_MD*.
   set(CORE_LIB_RELEASE "${CORE_PATH}/lib/windows/x86_64/143/Live2DCubismCore_MT.lib")
   set(CORE_LIB_DEBUG "${CORE_PATH}/lib/windows/x86_64/143/Live2DCubismCore_MTd.lib")
+elseif(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+  # Linux arm64: the SDK ships this Core as experimental.
+  set(CORE_LIB_RELEASE "${CORE_PATH}/lib/experimental/linux/arm64/libLive2DCubismCore.a")
+  set(CORE_LIB_DEBUG "${CORE_LIB_RELEASE}")
 elseif(UNIX AND NOT APPLE)
   # Linux: static Core library (typically libLive2DCubismCore.a)
   set(CORE_LIB_RELEASE "${CORE_PATH}/lib/linux/x86_64/libLive2DCubismCore.a")
   set(CORE_LIB_DEBUG "${CORE_LIB_RELEASE}")  # Linux SDK typically provides one static lib
 else()
-  message(FATAL_ERROR "Unsupported platform. Only Windows and Linux x86_64 are supported.")
+  message(FATAL_ERROR "Unsupported platform. Only Windows x86_64 and Linux x86_64 / arm64 are supported.")
 endif()
 
 # Verify required SDK files exist

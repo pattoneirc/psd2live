@@ -135,7 +135,8 @@ PSD2Live는 Cubism Editor나 SDK 없이 동작하면서 Cubism 형식과의 호�
 | 플랫폼 | 패키지 | 설명 |
 | --- | --- | --- |
 | Windows 10 / 11 x64 | 포터블 ZIP, EXE | Java 런타임 포함. 압축을 풀거나 설치한 뒤 바로 실행. 각각 ffmpeg가 포함된 `-ffmpeg` 버전도 있음 |
-| Linux x86_64 | Deb | 런타임과 Cubism 네이티브 미리보기 포함. X11 / GLX 필요(XWayland 사용 가능) |
+| Windows 11 ARM64 | 포터블 ZIP, EXE | Java 런타임 포함. Cubism 네이티브 미리보기 없음(Live2D가 이 플랫폼용 Cubism Core를 제공하지 않음), 미리보기는 PSD2Live 런타임 사용 |
+| Linux x86_64 / arm64 | Deb | 런타임과 Cubism 네이티브 미리보기 포함(arm64는 Live2D의 실험 버전). X11 / GLX 필요(XWayland 사용 가능) |
 | macOS 및 기타 | 패키지 없음 | JDK 21 설치 후 [소스에서 실행](#소스에서-빌드) |
 
 <details>
@@ -143,7 +144,7 @@ PSD2Live는 Cubism Editor나 SDK 없이 동작하면서 Cubism 형식과의 호�
 
 - **업그레이드**: 설치된 폴더에 설치되어 경로를 다시 고를 필요가 없습니다. 3.1.x 이하의 EXE / MSI 설치는 자동으로 제거되고 그 폴더를 그대로 사용합니다.
 - **제거**: 설정과 작업 공간 데이터는 기본적으로 남습니다. 제거할 때 PSD2Live 데이터도 삭제할지 묻고, 「예」를 고르면 함께 삭제됩니다. 저장한 프로젝트 파일과 설치 폴더에 넣은 파일은 항상 남습니다.
-- **Linux**: 네이티브 미리보기는 XWayland가 없는 순수 Wayland, aarch64, musl(Alpine 등)을 지원하지 않으며, 이런 환경에서는 내장 렌더러로 자동 전환됩니다. [Cubism 네이티브 미리보기](../en/guide/CUBISM_SDK_SETUP.md)(영어)를 참고하세요.
+- **Linux**: 네이티브 미리보기는 XWayland가 없는 순수 Wayland와 musl(Alpine 등)을 지원하지 않으며, 이런 환경에서는 내장 렌더러로 자동 전환됩니다. [Cubism 네이티브 미리보기](../en/guide/CUBISM_SDK_SETUP.md)(영어)를 참고하세요.
 
 </details>
 

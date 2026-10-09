@@ -1,5 +1,5 @@
 ﻿; PSD2Live's Windows installer, built by build.gradle.kts (packageExe) from the app image with Inno Setup 6:
-;   ISCC /DAppVersion=x.y.z /DAppImage=<app image> /DOutputDir=<folder> /DIconFile=<.ico> psd2live.iss
+;   ISCC /DAppVersion=x.y.z /DAppImage=<app image> /DOutputDir=<folder> /DIconFile=<.ico> [/DArch=arm64] psd2live.iss
 ; Files are copied in place, so an upgrade needs no rollback copies, and the installer goes back to the folder of
 ; the installed version. Versions up to 3.1.x were MSI packages (jpackage with WiX); setup finds them by their
 ; upgrade code, removes them and installs into their folder.
@@ -12,6 +12,10 @@
 #endif
 #ifndef OutputDir
   #define OutputDir "."
+#endif
+; The app image's architecture: x64 (default) or arm64.
+#ifndef Arch
+  #define Arch "x64"
 #endif
 
 [Setup]
@@ -30,8 +34,13 @@ VersionInfoDescription=PSD2Live Setup
 ; All users by default, as the MSI packages installed; the dialog or /CURRENTUSER installs for the current user only.
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog commandline
+#if Arch == "arm64"
+ArchitecturesAllowed=arm64
+ArchitecturesInstallIn64BitMode=arm64
+#else
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+#endif
 DefaultDirName={code:DefaultDir}
 ; The folder page shows on a first install only; an upgrade goes back to the installed folder.
 DisableDirPage=auto
@@ -44,7 +53,11 @@ UninstallDisplayIcon={app}\PSD2Live.exe
 SetupIconFile={#IconFile}
 #endif
 OutputDir={#OutputDir}
+#if Arch == "arm64"
+OutputBaseFilename=PSD2Live-{#AppVersion}-arm64
+#else
 OutputBaseFilename=PSD2Live-{#AppVersion}
+#endif
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

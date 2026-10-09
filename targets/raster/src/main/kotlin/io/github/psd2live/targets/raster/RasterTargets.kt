@@ -39,10 +39,22 @@ public class RasterTargets(private val renderer: FrameRenderer) {
 
 	/**
 	 * The ffmpeg to encode with: the `ffmpeg` setting, then PSD2LIVE_FFMPEG, then the one a packaged app ships
-	 * among its resources (`ffmpeg/`), then ffmpeg on the PATH.
+	 * among its resources (`ffmpeg/`), then ffmpeg on the PATH, then on macOS the Homebrew and MacPorts one: an app
+	 * opened from Finder does not see the shell's PATH.
 	 */
 	private fun ffmpeg(options: ExportOptions): String =
-		options.setting("ffmpeg") ?: System.getenv("PSD2LIVE_FFMPEG")?.takeIf { it.isNotBlank() } ?: bundledFfmpeg()?.path ?: "ffmpeg"
+		options.setting("ffmpeg") ?: System.getenv("PSD2LIVE_FFMPEG")?.takeIf { it.isNotBlank() } ?: bundledFfmpeg()?.path
+			?: macPackageFfmpeg() ?: "ffmpeg"
+
+	private fun macPackageFfmpeg(): String? {
+		if (!System.getProperty("os.name").startsWith("Mac", ignoreCase = true)) return null
+		if (onPath("ffmpeg")) return null
+		return listOf("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/opt/local/bin/ffmpeg")
+			.firstOrNull { java.io.File(it).canExecute() }
+	}
+
+	private fun onPath(command: String): Boolean = System.getenv("PATH").orEmpty().split(java.io.File.pathSeparator)
+		.any { it.isNotBlank() && java.io.File(it, command).canExecute() }
 
 	private fun bundledFfmpeg(): java.io.File? {
 		val resources = System.getProperty("compose.application.resources.dir") ?: return null

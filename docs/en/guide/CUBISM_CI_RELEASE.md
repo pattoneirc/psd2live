@@ -8,8 +8,8 @@ This page describes the two GitHub Actions workflows: public tests (no SDK) and 
 
 | Workflow | File | Purpose |
 | --- | --- | --- |
-| **CI** | `.github/workflows/ci.yml` | On `push` / `pull_request` to `master` (and `main`), runs `./gradlew test` on Ubuntu and Windows. Does not download the Cubism SDK and does not set `PSD2LIVE_INCLUDE_CUBISM`. |
-| **Release Cubism** | `.github/workflows/release-cubism.yml` | On manual `workflow_dispatch` or a `v*` tag push, privately fetches the SDK, builds the native bridges, packages Windows/Linux Cubism builds, and can publish a GitHub Release. |
+| **CI** | `.github/workflows/ci.yml` | On `push` / `pull_request` to `master` (and `main`), runs `./gradlew test` on Ubuntu and Windows, x64 and arm64. Does not download the Cubism SDK and does not set `PSD2LIVE_INCLUDE_CUBISM`. |
+| **Release Cubism** | `.github/workflows/release-cubism.yml` | On manual `workflow_dispatch` or a `v*` tag push, privately fetches the SDK, builds the native bridges, packages Windows/Linux Cubism builds (Linux for x64 and arm64) plus a Windows ARM64 build without Cubism, and can publish a GitHub Release. |
 
 macOS packaging is deferred; this workflow does not build it.
 
@@ -50,13 +50,15 @@ Prerequisites: the SDK zip is uploaded to the private repository, and the variab
    - `PSD2Live-<version>-windows-x86_64-portable.zip`
    - `PSD2Live-<version>.exe`
    - each of the two above also with ffmpeg included: `PSD2Live-<version>-windows-x86_64-portable-ffmpeg.zip`, `PSD2Live-<version>-ffmpeg.exe`
-   - `PSD2Live-<version>-linux-amd64.deb`
+   - `PSD2Live-<version>-windows-arm64-portable.zip`, `PSD2Live-<version>-arm64.exe`: Windows ARM64, without Cubism (Live2D ships no Cubism Core for it) and without an ffmpeg build
+   - `PSD2Live-<version>-linux-amd64.deb`, `PSD2Live-<version>-linux-arm64.deb` (arm64 uses the SDK's experimental Cubism Core)
 
 Pushing tag `v<version>` triggers the same workflow. Use one entry point to avoid running the full matrix twice.
 
 ## Artifacts and platform limits
 
-- Linux preview needs X11/GLX (including XWayland / `xvfb-run`). Pure Wayland, aarch64, and musl/Alpine are unsupported. See [CUBISM_SDK_SETUP](CUBISM_SDK_SETUP.md).
+- Linux preview needs X11/GLX (including XWayland / `xvfb-run`). Pure Wayland and musl/Alpine are unsupported. See [CUBISM_SDK_SETUP](CUBISM_SDK_SETUP.md).
+- The ARM64 packages are not yet tested on real hardware: whenever the assets include an arm64 package, `release_notes.py` adds a note saying so, with the known limits (the experimental Cubism Core on Linux arm64; the canvas may fail to draw on GPUs with only OpenGL 3.1). Remove the note once they have been verified.
 - v1 skips fragile GUI smoke tests; Linux checks that the `.deb` exists and is non-empty.
 - Windows packages are built twice: the second pass adds `-Ppsd2live.ffmpegDir=<dir>`, putting a pinned Gyan.dev ffmpeg essentials build (GPLv3; its SHA-256 and the encoders the video and animated image exports use are checked) with its `LICENSE.txt` and `README.txt` into the app's `resources/ffmpeg/`. To update ffmpeg, change both `FFMPEG_URL` and `FFMPEG_SHA256` in the workflow. Linux packages do not include ffmpeg.
 - The Windows installer is built by `packageExe` from the app image with Inno Setup 6 and `packaging/windows/psd2live.iss`; `ISCC.exe` comes from `-Ppsd2live.iscc`, the `ISCC` environment variable or Inno Setup 6's default install folders, and the workflow installs Inno Setup with Chocolatey. Files are copied in place, without the MSI way of first moving the old ones into `Config.Msi`. It installs for all users by default (administrator rights), or for the current user only from the dialog at start or with `/CURRENTUSER`; an upgrade goes back to the installed folder and install mode, deletes the previous version's `app` and `runtime` folders before copying, and keeps the user's own files in the installation folder. The builds with and without ffmpeg share one AppId and replace each other. When PSD2Live runs from the installation folder, setup asks for it to be closed and retried (a silent setup stops). Versions 3.1.x and earlier are jpackage MSI packages: setup finds them by their upgrade code, defaults to their folder, clears the folder they recorded (the uninstall of 3.0.0 and earlier empties it), deletes the files they installed and removes them with `msiexec /x` before copying any file, so Windows Installer only unregisters them and moves nothing into `Config.Msi` (its log is `PSD2Live MSI removal.log` beside the setup log), asking for administrator rights when a current-user setup meets an all-users install. Uninstalling asks whether to delete the user's data too (No by default; the app's `--clear-user-data`, run as the account that runs the uninstaller; a command-line uninstall can pass `/CLEARUSERDATA=1`). Every install and uninstall writes a log to `%TEMP%` (`Setup Log *.txt`).

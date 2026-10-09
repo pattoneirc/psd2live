@@ -135,7 +135,8 @@ PSD2Live 不依赖 Cubism Editor 或 SDK 运行，但与 Cubism 格式保持兼�
 | 平台 | 安装包 | 说明 |
 | --- | --- | --- |
 | Windows 10 / 11 x64 | 便携版 ZIP、EXE | 自带 Java 运行时，解压或安装后直接运行；每种都另有内置 ffmpeg 的 `-ffmpeg` 版本 |
-| Linux x86_64 | Deb | 自带运行时与 Cubism 原生预览，需要 X11 / GLX（XWayland 可用） |
+| Windows 11 ARM64 | 便携版 ZIP、EXE | 自带 Java 运行时；不含 Cubism 原生预览（Live2D 未提供该平台的 Cubism Core），预览使用 PSD2Live 运行时 |
+| Linux x86_64 / arm64 | Deb | 自带运行时与 Cubism 原生预览（arm64 为 Live2D 的实验性版本），需要 X11 / GLX（XWayland 可用） |
 | macOS 及其他 | 暂无安装包 | 安装 JDK 21 后[从源码运行](#从源码构建) |
 
 <details>
@@ -143,7 +144,7 @@ PSD2Live 不依赖 Cubism Editor 或 SDK 运行，但与 Cubism 格式保持兼�
 
 - **升级**：安装到已安装的目录，无需再选路径；3.1.x 及更早的 EXE / MSI 安装会被自动移除并沿用原目录。
 - **卸载**：默认保留设置与工作区数据；卸载时询问是否同时删除 PSD2Live 的数据，选「是」可一并删除。已保存的工程文件和你放在安装目录里的文件始终保留。
-- **Linux**：原生预览不支持无 XWayland 的纯 Wayland、aarch64 和 musl（如 Alpine），这些环境会自动回退到内置渲染。详见 [Cubism Native 预览](docs/zh/guide/CUBISM_SDK_SETUP.md)。
+- **Linux**：原生预览不支持无 XWayland 的纯 Wayland 和 musl（如 Alpine），这些环境会自动回退到内置渲染。详见 [Cubism Native 预览](docs/zh/guide/CUBISM_SDK_SETUP.md)。
 
 </details>
 

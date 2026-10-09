@@ -24,6 +24,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Cubism binaries are deployed per architecture (native/build_live2d_renderer.sh --deploy).
+case "$(uname -m)" in
+  aarch64|arm64) CUBISM_PLATFORM="linux-arm64" ;;
+  *) CUBISM_PLATFORM="linux-x86_64" ;;
+esac
 INCLUDE_CUBISM=0
 
 # Parse arguments
@@ -157,11 +162,11 @@ fi
 # the launcher, so CUBISM_SDK_PATH is exported BEFORE exec (matches runtime loader).
 CUBISM_INCLUDED=0
 if [[ "$INCLUDE_CUBISM" == "1" ]]; then
-  CUBISM_SRC="$REPO_ROOT/src/main/resources/cubism/linux-x86_64"
+  CUBISM_SRC="$REPO_ROOT/src/main/resources/cubism/$CUBISM_PLATFORM"
   if [[ -d "$CUBISM_SRC" ]]; then
     echo " Including local Cubism SDK binaries (PERSONAL USE ONLY)..."
-    mkdir -p "$DIST_DIR/cubism/linux-x86_64"
-    cp -r "$CUBISM_SRC"/* "$DIST_DIR/cubism/linux-x86_64/"
+    mkdir -p "$DIST_DIR/cubism/$CUBISM_PLATFORM"
+    cp -r "$CUBISM_SRC"/* "$DIST_DIR/cubism/$CUBISM_PLATFORM/"
     CUBISM_INCLUDED=1
 
     cat > "$DIST_DIR/CUBISM_NOTICE.txt" << 'NOTICE_EOF'
@@ -204,7 +209,7 @@ if ! command -v java &> /dev/null; then
 fi
 
 # Note: This package includes locally built Cubism SDK binaries (personal use only).
-export CUBISM_SDK_PATH="$SCRIPT_DIR/cubism/linux-x86_64"
+export CUBISM_SDK_PATH="$(ls -d "$SCRIPT_DIR"/cubism/linux-* | head -1)"
 
 # Launch PSD2Live (fat jar with Main-Class)
 exec java -jar psd2live.jar "$@"
@@ -239,7 +244,7 @@ SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 cd "\$SCRIPT_DIR"
 
 # Note: This package includes locally built Cubism SDK binaries (personal use only).
-export CUBISM_SDK_PATH="\$SCRIPT_DIR/cubism/linux-x86_64"
+export CUBISM_SDK_PATH="\$SCRIPT_DIR/cubism/$CUBISM_PLATFORM"
 
 exec "\$SCRIPT_DIR/$START_REL" "\$@"
 LAUNCHER_EOF

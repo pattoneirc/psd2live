@@ -66,7 +66,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.isAltPressed
-import androidx.compose.ui.input.pointer.isCtrlPressed
+import io.github.psd2live.ui.state.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import java.awt.Cursor
@@ -708,7 +708,7 @@ private fun HierarchyTreeList(
 					if (event.button == PointerButton.Primary && treeDragState.isPressed) {
 						val additive = event.keyboardModifiers.isShiftPressed
 						val subtractive = event.keyboardModifiers.isAltPressed
-						val toggle = event.keyboardModifiers.isCtrlPressed
+						val toggle = event.keyboardModifiers.isPrimaryPressed
 						val orderedLayers = itemBoundsMap.values
 							.filter { !it.isDeformer }
 							.sortedBy { it.top }

@@ -8,8 +8,8 @@
 
 | 工作流 | 文件 | 作用 |
 | --- | --- | --- |
-| **CI** | `.github/workflows/ci.yml` | `push` / `pull_request` 到 `master`（及 `main`）时，在 Ubuntu 与 Windows 上跑 `./gradlew test`。不下载 Cubism SDK，不设置 `PSD2LIVE_INCLUDE_CUBISM`。 |
-| **Release Cubism** | `.github/workflows/release-cubism.yml` | 手动 `workflow_dispatch` 或推送 `v*` 标签时，私有拉取 SDK、编译原生桥、打 Windows/Linux 含 Cubism 的安装包，并可创建 GitHub Release。 |
+| **CI** | `.github/workflows/ci.yml` | `push` / `pull_request` 到 `master`（及 `main`）时，在 Ubuntu 与 Windows 的 x64 和 arm64 上跑 `./gradlew test`。不下载 Cubism SDK，不设置 `PSD2LIVE_INCLUDE_CUBISM`。 |
+| **Release Cubism** | `.github/workflows/release-cubism.yml` | 手动 `workflow_dispatch` 或推送 `v*` 标签时，私有拉取 SDK、编译原生桥、打 Windows/Linux 含 Cubism 的安装包（Linux 含 x64 与 arm64），另打不含 Cubism 的 Windows ARM64 包，并可创建 GitHub Release。 |
 
 macOS 打包暂缓，本工作流不构建。
 
@@ -50,13 +50,15 @@ macOS 打包暂缓，本工作流不构建。
    - `PSD2Live-<version>-windows-x86_64-portable.zip`
    - `PSD2Live-<version>.exe`
    - 以上两项另各有内置 ffmpeg 的版本：`PSD2Live-<version>-windows-x86_64-portable-ffmpeg.zip`、`PSD2Live-<version>-ffmpeg.exe`
-   - `PSD2Live-<version>-linux-amd64.deb`
+   - `PSD2Live-<version>-windows-arm64-portable.zip`、`PSD2Live-<version>-arm64.exe`：Windows ARM64，不含 Cubism（Live2D 未提供该平台的 Cubism Core），无 ffmpeg 版本
+   - `PSD2Live-<version>-linux-amd64.deb`、`PSD2Live-<version>-linux-arm64.deb`（arm64 用 SDK 中实验性的 Cubism Core）
 
 也可以直接推送标签 `v<version>` 触发同一工作流。两种入口选其一，避免重复运行完整的构建矩阵。
 
 ## 产物与平台限制
 
-- Linux 预览需要 X11/GLX（含 XWayland / `xvfb-run`）。纯 Wayland、aarch64、musl/Alpine 不支持。详见 [CUBISM_SDK_SETUP](CUBISM_SDK_SETUP.md)。
+- Linux 预览需要 X11/GLX（含 XWayland / `xvfb-run`）。纯 Wayland、musl/Alpine 不支持。详见 [CUBISM_SDK_SETUP](CUBISM_SDK_SETUP.md)。
+- ARM64 包尚未实机测试：只要附件里有 arm64 包，`release_notes.py` 就在发布说明中注明未经实机测试及已知限制（Linux arm64 的 Cubism Core 为实验性版本、只支持 OpenGL 3.1 的 GPU 上画布可能无法绘制）。实机验证后删去这条说明。
 - v1 不做脆弱的 GUI 冒烟；Linux 侧以 `.deb` 存在且非空为准。
 - Windows 包打两遍：第二遍加 `-Ppsd2live.ffmpegDir=<目录>`，把固定版本的 Gyan.dev ffmpeg essentials 构建（GPLv3，下载后校验 SHA-256，并检查视频与动图导出用到的编码器）连同其 `LICENSE.txt`、`README.txt` 放进应用的 `resources/ffmpeg/`。升级 ffmpeg 时同时修改工作流中的 `FFMPEG_URL` 与 `FFMPEG_SHA256`。Linux 包不内置 ffmpeg。
 - Windows 安装包由 `packageExe` 用 Inno Setup 6 从应用镜像构建，脚本为 `packaging/windows/psd2live.iss`；`ISCC.exe` 依次取 `-Ppsd2live.iscc`、环境变量 `ISCC`、Inno Setup 6 的默认安装目录，工作流用 Chocolatey 安装 Inno Setup。文件就地复制，不像 MSI 那样先把旧文件移到 `Config.Msi`。默认为所有用户安装（需管理员），也可在启动时的对话框或用 `/CURRENTUSER` 只为当前用户安装；升级时装回已安装的目录并沿用当时的安装方式，先删除上一版的 `app`、`runtime` 目录再复制，安装目录中用户自己的文件保留。带与不带 ffmpeg 的包共用同一 AppId，互相替换。安装前若有 PSD2Live 从安装目录运行，会提示关闭后重试（静默安装直接中止）。3.1.x 及更早版本是 jpackage 生成的 MSI：安装程序按其升级码找到它们，默认装到它们的目录，并在复制文件前先清掉它们记录的安装目录（3.0.0 及更早版本卸载时会清空该目录）并删掉它们安装的文件，再用 `msiexec /x` 静默卸载，这时 MSI 只做反注册，不必再把文件移进 `Config.Msi`；卸载日志写在 Setup 日志旁（`PSD2Live MSI removal.log`）；只为当前用户安装而旧版为所有用户安装时，会请求管理员权限。卸载时询问是否同时删除用户数据（默认否；运行应用的 `--clear-user-data`，以运行卸载程序的账户执行；命令行卸载可传 `/CLEARUSERDATA=1`）。每次安装与卸载都会在 `%TEMP%` 写日志（`Setup Log *.txt`）。

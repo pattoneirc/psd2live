@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm]
 
     steps:
       - name: Checkout
@@ -33,9 +33,14 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
-            ${{ runner.os }}-gradle-
+            ${{ runner.os }}-${{ runner.arch }}-gradle-
+
+      # The x64 images come with Rust; the arm64 ones may not.
+      - name: Set up Rust (arm64)
+        if: runner.arch == 'ARM64'
+        uses: dtolnay/rust-toolchain@stable
 
       # The Rust runtime: its own tests, and the library the runtime conformance tests load.
       - name: Build and test the runtime

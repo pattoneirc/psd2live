@@ -6,7 +6,11 @@ reloadable = true
 [libraries]
 windows.debug.x86_64 = "../target/release/p2l_godot.dll"
 windows.release.x86_64 = "../target/release/p2l_godot.dll"
+windows.debug.arm64 = "../target/release/p2l_godot.dll"
+windows.release.arm64 = "../target/release/p2l_godot.dll"
 linux.debug.x86_64 = "../target/release/libp2l_godot.so"
 linux.release.x86_64 = "../target/release/libp2l_godot.so"
+linux.debug.arm64 = "../target/release/libp2l_godot.so"
+linux.release.arm64 = "../target/release/libp2l_godot.so"
 macos.debug = "../target/release/libp2l_godot.dylib"
 macos.release = "../target/release/libp2l_godot.dylib"

@@ -76,7 +76,7 @@ import io.github.psd2live.ui.SelectionStyle
 import io.github.psd2live.ui.VERTEX_TOOLS
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.isAltPressed
-import androidx.compose.ui.input.pointer.isCtrlPressed
+import io.github.psd2live.ui.state.isPrimaryPressed
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.KeyEventType
@@ -974,7 +974,7 @@ fun CanvasViewportComposable(
                     }
                     var handled = false
                     editorGuard {
-                        handled = editor.press(change.position,computeViewport(previewModel,viewSize.width,viewSize.height),event.keyboardModifiers.isShiftPressed,event.keyboardModifiers.isAltPressed,event.keyboardModifiers.isCtrlPressed)
+                        handled = editor.press(change.position,computeViewport(previewModel,viewSize.width,viewSize.height),event.keyboardModifiers.isShiftPressed,event.keyboardModifiers.isAltPressed,event.keyboardModifiers.isPrimaryPressed)
                     }
                     if (handled) {
                         change.consume(); return@onPointerEvent
@@ -1058,7 +1058,7 @@ fun CanvasViewportComposable(
                             computeViewport(previewModel, viewSize.width, viewSize.height),
                             event.keyboardModifiers.isShiftPressed,
                             event.keyboardModifiers.isAltPressed,
-                            event.keyboardModifiers.isCtrlPressed
+                            event.keyboardModifiers.isPrimaryPressed
                         )
                     }
                 }

@@ -42,7 +42,7 @@ Windows 也可以直接运行根目录的 `run-gui.bat`。不带参数启动 GUI
 | `--no-moc3` | 关闭 | 不输出 MOC3 |
 | `--no-json` | 关闭 | 不输出诊断 JSON |
 | `--upscale <1\|2\|4>` | 1 | 纹理高清化倍率，1 为关闭 |
-| `--upscale-python <path>` | `python` | 装有 nunif 依赖的 Python |
+| `--upscale-python <path>` | Windows 为 `python`，其他为 `python3` | 装有 nunif 依赖的 Python |
 | `--nunif-dir <path>` | 空 | nunif 源码目录 |
 | `--upscale-model <path>` | 空 | 权重目录 |
 | `--upscale-tile <64..512>` | 256 | 推理分块大小 |

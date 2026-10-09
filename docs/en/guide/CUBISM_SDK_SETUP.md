@@ -12,16 +12,16 @@ The built-in renderer and basic exports do not require the official SDK. This pa
 - Local Cubism 5 SDK for Native (5-r.5 layout)
 - Expected: `Core/lib/windows/x86_64/143/Live2DCubismCore_MT.lib`
 
-### Linux x86_64
-- Supported platform: Linux x86_64 with X11/GLX, including XWayland and `xvfb-run`
-- Not supported: pure Wayland without XWayland, aarch64, or musl/Alpine systems
+### Linux x86_64 / arm64
+- Supported platform: Linux x86_64 and arm64 with X11/GLX, including XWayland and `xvfb-run`; arm64 uses the SDK's experimental Cubism Core
+- Not supported: pure Wayland without XWayland, or musl/Alpine systems
 - CMake 3.16+
 - GCC or Clang with C++14 support
 - OpenGL / GLX development packages, e.g. Debian/Ubuntu: `libgl1-mesa-dev` and `libglx-dev` (or `libglx-mesa-dev`); Fedora: `mesa-libGL-devel`
 - X11 development libraries (`libx11-dev` / `libX11-devel`)
 - Runtime: a working X11 `DISPLAY` (desktop session, or headless via `xvfb-run`)
 - Local Cubism 5 SDK for Native (5-r.5 layout)
-- Expected: `Core/lib/linux/x86_64/libLive2DCubismCore.a`
+- Expected: `Core/lib/linux/x86_64/libLive2DCubismCore.a` (arm64: `Core/lib/experimental/linux/arm64/libLive2DCubismCore.a`)
 
 ## Build and deploy
 
@@ -50,7 +50,7 @@ export CUBISM_SDK_ROOT=/path/to/CubismSdkForNative-5-r.5
 Run from the repository root. `--deploy` copies the shared library and shaders to the gitignored directory below. `--clean` rebuilds without the old build cache.
 
 ```text
-src/main/resources/cubism/linux-x86_64/
+src/main/resources/cubism/linux-x86_64/   (arm64: linux-arm64/)
 ├── liblive2d_renderer.so
 └── FrameworkShaders/
 ```

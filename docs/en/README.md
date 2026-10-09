@@ -135,7 +135,8 @@ Get the latest version from [Releases](https://github.com/tsunehimatoi/psd2live/
 | Platform | Package | Notes |
 | --- | --- | --- |
 | Windows 10 / 11 x64 | Portable ZIP, EXE | Bundles a Java runtime; unzip or install and run. Each also comes as a `-ffmpeg` build with ffmpeg included |
-| Linux x86_64 | Deb | Bundles the runtime and Cubism native preview; needs X11 / GLX (XWayland works) |
+| Windows 11 ARM64 | Portable ZIP, EXE | Bundles a Java runtime; no Cubism native preview (Live2D ships no Cubism Core for it), the preview uses the PSD2Live runtime |
+| Linux x86_64 / arm64 | Deb | Bundles the runtime and Cubism native preview (experimental from Live2D on arm64); needs X11 / GLX (XWayland works) |
 | macOS and others | No package yet | Install JDK 21 and [run from source](#building-from-source) |
 
 <details>
@@ -143,7 +144,7 @@ Get the latest version from [Releases](https://github.com/tsunehimatoi/psd2live/
 
 - **Upgrading**: installs into the existing folder without asking for a path; EXE / MSI installs of 3.1.x and earlier are removed automatically and their folder is reused.
 - **Uninstalling**: settings and workspace data are kept by default; the uninstaller asks whether to delete PSD2Live's data as well, and choosing Yes removes it. Saved projects and files you put in the install folder are always kept.
-- **Linux**: native preview does not support pure Wayland without XWayland, aarch64 or musl (such as Alpine); those fall back to the built-in renderer. See [Cubism native preview](guide/CUBISM_SDK_SETUP.md).
+- **Linux**: native preview does not support pure Wayland without XWayland or musl (such as Alpine); those fall back to the built-in renderer. See [Cubism native preview](guide/CUBISM_SDK_SETUP.md).
 
 </details>
 

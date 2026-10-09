@@ -1,9 +1,11 @@
 package io.github.psd2live
 
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -32,6 +34,8 @@ import androidx.compose.ui.window.rememberWindowState
 
 fun main(arguments: Array<String>) {
 	System.setProperty("sun.java2d.uiScale.enabled", "true")
+	// The name macOS shows in the menu bar and Dock instead of the main class; read when AWT starts.
+	System.setProperty("apple.awt.application.name", "PSD2Live")
 	// Canvases draw on the GPU in Skia's own OpenGL context, so Skia must draw the window with OpenGL.
 	io.github.psd2live.render.SkiaGpu.requestOpenGl()
 	configureLanguage(arguments)
@@ -56,7 +60,7 @@ fun main(arguments: Array<String>) {
 		atlasSize = options.int("--atlas", 4096),
         textureUpscale = io.github.psd2live.core.TextureUpscaleConfig(
             scale = options.int("--upscale", 1),
-            python = options.value("--upscale-python") ?: "python",
+            python = options.value("--upscale-python") ?: io.github.psd2live.core.TextureUpscaleConfig.defaultPython,
             nunifDirectory = options.value("--nunif-dir") ?: "",
             modelDirectory = options.value("--upscale-model") ?: "",
             tileSize = options.int("--upscale-tile", 256),
@@ -87,6 +91,17 @@ fun main(arguments: Array<String>) {
 	println(tr("cli.complete", result.exportedFiles.size))
 	result.exportedFiles.forEach { println("  ${it.path.absolutePathString()} (${it.bytes} bytes)") }
 	result.warnings.forEach { System.err.println(tr("cli.warning", it)) }
+}
+
+/** The Dock shows the Java icon on macOS: the window icon only reaches the title bar and taskbar elsewhere. */
+private fun useAppIconInDock() {
+	if (!java.awt.Taskbar.isTaskbarSupported()) return
+	val taskbar = java.awt.Taskbar.getTaskbar()
+	if (!taskbar.isSupported(java.awt.Taskbar.Feature.ICON_IMAGE)) return
+	runCatching {
+		Thread.currentThread().contextClassLoader.getResourceAsStream("icons/psd2live.png")
+			?.use { javax.imageio.ImageIO.read(it) }?.let { taskbar.iconImage = it }
+	}
 }
 
 private fun runGui() {
@@ -121,6 +136,7 @@ private fun runGui() {
 	}, "psd2live-shutdown-hook")
 	Runtime.getRuntime().addShutdownHook(shutdownHook)
 
+	useAppIconInDock()
 	var status = 0
 	try {
 		// Exit from main rather than letting Compose call System.exit on the EDT, which would block
@@ -132,6 +148,17 @@ private fun runGui() {
 					watchdog.arm()
 					exitApplication()
 				}
+			}
+			// macOS quits through the app menu and Cmd+Q, which would otherwise exit without asking to save.
+			val currentCloseApp by rememberUpdatedState(closeApp)
+			DisposableEffect(Unit) {
+				val desktop = if (java.awt.Desktop.isDesktopSupported()) java.awt.Desktop.getDesktop()
+					.takeIf { it.isSupported(java.awt.Desktop.Action.APP_QUIT_HANDLER) } else null
+				desktop?.setQuitHandler { _, response ->
+					response.cancelQuit()
+					javax.swing.SwingUtilities.invokeLater { currentCloseApp() }
+				}
+				onDispose { desktop?.setQuitHandler(null) }
 			}
 			val transparent by remember {
 				derivedStateOf { viewModel.uiState.value.canvasBackground.windowTransparent }

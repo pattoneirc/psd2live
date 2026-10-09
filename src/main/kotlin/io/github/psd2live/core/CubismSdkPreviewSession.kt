@@ -701,27 +701,19 @@ class CubismSdkPreviewSession internal constructor(
 		private fun isLinux(): Boolean =
 			System.getProperty("os.name").contains("linux", ignoreCase = true)
 
-		private fun requireAmd64(): String {
-			val arch = System.getProperty("os.arch").orEmpty().lowercase()
-			if (arch != "amd64" && arch != "x86_64") {
-				throw UnsupportedOperationException(
-					"Cubism SDK preview requires x86_64/amd64. " +
-						"Unsupported os.arch=$arch (os.name=${System.getProperty("os.name")})"
-				)
-			}
-			return arch
-		}
+		private fun isArm64(): Boolean = System.getProperty("os.arch").orEmpty().lowercase().let { it == "aarch64" || it == "arm64" }
 
-		private fun getPlatformDir(): String {
-			requireAmd64()
-			return when {
-				isWindows() -> "windows-x86_64"
-				isLinux() -> "linux-x86_64"
-				else -> throw UnsupportedOperationException(
-					"Cubism SDK preview currently requires Windows or Linux x86-64. " +
-						"Platform: ${System.getProperty("os.name")} ${System.getProperty("os.arch")}"
-				)
-			}
+		private fun isAmd64(): Boolean = System.getProperty("os.arch").orEmpty().lowercase().let { it == "amd64" || it == "x86_64" }
+
+		/** The Cubism Core ships for Windows x86-64 and Linux x86-64, and for Linux arm64 as an experimental library. */
+		private fun getPlatformDir(): String = when {
+			isWindows() && isAmd64() -> "windows-x86_64"
+			isLinux() && isAmd64() -> "linux-x86_64"
+			isLinux() && isArm64() -> "linux-arm64"
+			else -> throw UnsupportedOperationException(
+				"Cubism SDK preview requires Windows x86-64 or Linux x86-64 / arm64. " +
+					"Platform: ${System.getProperty("os.name")} ${System.getProperty("os.arch")}"
+			)
 		}
 
 		private fun getLibraryName(): String = when {

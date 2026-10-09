@@ -12,16 +12,16 @@
 - 本地 Cubism 5 SDK for Native (5-r.5 目录布局)
 - 需要：`Core/lib/windows/x86_64/143/Live2DCubismCore_MT.lib`
 
-### Linux x86_64
-- 支持平台：带 X11/GLX 的 Linux x86_64，包括 XWayland 和 `xvfb-run`
-- 不支持：没有 XWayland 的纯 Wayland、aarch64，或基于 musl 的 Alpine 等系统
+### Linux x86_64 / arm64
+- 支持平台：带 X11/GLX 的 Linux x86_64 与 arm64，包括 XWayland 和 `xvfb-run`；arm64 用 SDK 中实验性的 Cubism Core
+- 不支持：没有 XWayland 的纯 Wayland，或基于 musl 的 Alpine 等系统
 - CMake 3.16+
 - GCC 或 Clang，支持 C++14
 - OpenGL / GLX 开发包，例如 Debian/Ubuntu：`libgl1-mesa-dev` 与 `libglx-dev`（或 `libglx-mesa-dev`）；Fedora：`mesa-libGL-devel`
 - X11 开发库（`libx11-dev` / `libX11-devel`）
 - 运行时需要可用的 X11 `DISPLAY`（桌面会话，或无图形环境用 `xvfb-run`）
 - 本地 Cubism 5 SDK for Native (5-r.5 目录布局)
-- 需要：`Core/lib/linux/x86_64/libLive2DCubismCore.a`
+- 需要：`Core/lib/linux/x86_64/libLive2DCubismCore.a`（arm64 为 `Core/lib/experimental/linux/arm64/libLive2DCubismCore.a`）
 
 ## 构建并部署
 
@@ -50,7 +50,7 @@ export CUBISM_SDK_ROOT=/path/to/CubismSdkForNative-5-r.5
 在仓库根目录执行。`--deploy` 复制共享库与着色器到下列 gitignored 目录，`--clean` 清理旧构建缓存后重建。
 
 ```text
-src/main/resources/cubism/linux-x86_64/
+src/main/resources/cubism/linux-x86_64/   （arm64 为 linux-arm64/）
 ├── liblive2d_renderer.so
 └── FrameworkShaders/
 ```

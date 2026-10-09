@@ -52,6 +52,10 @@ def kind(name):
 	return None
 
 
+def is_arm64(name):
+	return "arm64" in name.lower()
+
+
 def version_tuple(tag):
 	return tuple(int(p) for p in re.findall(r"\d+", tag)[:3])
 
@@ -61,7 +65,6 @@ def downloads(tag, repo, assets):
 	order = {"exe": 0, "msi": 1, "zip": 2}
 	label = {"exe": "Windows EXE", "msi": "Windows MSI", "zip": "Portable ZIP"}
 	win = sorted((a for a in assets if kind(a[0]) in order), key=lambda a: order[kind(a[0])])
-	plain = [a for a in win if "-ffmpeg" not in a[0]]
 	ffmpeg = [a for a in win if "-ffmpeg" in a[0]]
 	debs = [a for a in assets if kind(a[0]) == "deb"]
 
@@ -76,15 +79,22 @@ def downloads(tag, repo, assets):
 		return " ".join(out)
 
 	lines = ["## 下载 · Downloads", ""]
-	if win:
-		lines += ["**Windows** x86_64", ""]
-		if plain:
-			lines += [win_badges(plain, False), ""]
-		if ffmpeg:
-			lines += [win_badges(ffmpeg, True), ""]
-	if debs:
-		lines += ["**Linux** amd64", ""]
-		lines += [" ".join(badge("Linux DEB", size_text(s), COLORS["deb"], "debian", base + quote(n), n) for n, s in debs), ""]
+	for arch, arm in (("x86_64", False), ("ARM64", True)):
+		items = [a for a in win if is_arm64(a[0]) == arm]
+		if not items:
+			continue
+		lines += [f"**Windows** {arch}", ""]
+		plain_items = [a for a in items if "-ffmpeg" not in a[0]]
+		ffmpeg_items = [a for a in items if "-ffmpeg" in a[0]]
+		if plain_items:
+			lines += [win_badges(plain_items, False), ""]
+		if ffmpeg_items:
+			lines += [win_badges(ffmpeg_items, True), ""]
+	for arch, arm in (("amd64", False), ("arm64", True)):
+		items = [a for a in debs if is_arm64(a[0]) == arm]
+		if items:
+			lines += [f"**Linux** {arch}", ""]
+			lines += [" ".join(badge("Linux DEB", size_text(s), COLORS["deb"], "debian", base + quote(n), n) for n, s in items), ""]
 
 	notes = []
 	if any(kind(a[0]) == "zip" for a in win):
@@ -99,6 +109,13 @@ def downloads(tag, repo, assets):
 	elif any(kind(a[0]) in ("exe", "msi") for a in win) and version_tuple(tag) >= (3, 0, 1):
 		notes.append(("EXE / MSI 在已安装时装回原来的目录并替换旧版本。",
 		              "EXE / MSI install into the existing folder and replace the installed version."))
+	if any(is_arm64(a[0]) for a in win):
+		notes.append(("Windows ARM64 包不含 Cubism Native 预览（Live2D 未提供该平台的 Cubism Core），预览使用 PSD2Live 运行时；没有内置 ffmpeg 的版本。",
+		              "The Windows ARM64 packages have no Cubism Native preview (Live2D ships no Cubism Core for it); the preview uses the PSD2Live runtime. There is no build with ffmpeg."))
+	if any(is_arm64(a[0]) for a in win + debs):
+		# Until the arm64 packages have been tried on real hardware.
+		notes.append(("**ARM64 包未经实机测试**，只在 CI 上构建和跑过单元测试。Linux arm64 的 Cubism 预览使用 Live2D 标为实验性的 Cubism Core；只支持 OpenGL 3.1 的 GPU（如树莓派）上画布可能无法绘制。遇到问题请提交 Issue。",
+		              "**The ARM64 packages are untested on real hardware**; they are only built and unit-tested in CI. The Cubism preview on Linux arm64 uses the Cubism Core Live2D marks experimental, and on GPUs with only OpenGL 3.1 (such as a Raspberry Pi) the canvas may fail to draw. Please report problems as issues."))
 	if debs:
 		notes.append(("Linux Deb 需 X11/GLX，内含 Cubism Native 预览桥接；请遵守 Live2D SDK 许可，勿公开再分发专有组件。",
 		              "Linux Deb requires X11/GLX and includes the Cubism Native preview bridge; follow the Live2D SDK license and do not publicly redistribute the proprietary components."))

@@ -26,8 +26,8 @@ Requires:
 ```
 
 Requires:
-- Linux x86_64 with X11/GLX, including XWayland or `xvfb-run`
-- Not supported: pure Wayland without XWayland, aarch64, or musl/Alpine systems
+- Linux x86_64 or arm64 (the SDK's experimental Core) with X11/GLX, including XWayland or `xvfb-run`
+- Not supported: pure Wayland without XWayland, or musl/Alpine systems
 - GCC or Clang with C++14
 - CMake 3.16+
 - OpenGL and X11 development libraries

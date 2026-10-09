@@ -251,16 +251,73 @@ jobs:
           path: dist-artifacts/*
           if-no-files-found: error
 
-  build-linux:
-    name: Build Linux Cubism
+  # Windows on ARM: Live2D ships no Cubism Core for it, so the package has no Cubism and needs no SDK;
+  # the preview uses the PSD2Live runtime. No ffmpeg build either (the bundled one is x64).
+  build-windows-arm64:
+    name: Build Windows ARM64
     needs: prepare
-    runs-on: ubuntu-22.04
-    environment: release-cubism
+    runs-on: windows-11-arm
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Package
+        shell: cmd
+        run: |
+          gradlew.bat packageDistributionForCurrentOS --no-daemon
+
+      - name: Collect Windows ARM64 artifacts
+        shell: pwsh
+        run: ./.github/scripts/collect-windows-artifacts.ps1 -Version $env:VERSION -Suffix "" -Arch arm64
+
+      - name: Upload Windows ARM64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64
+          path: dist-artifacts/*
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Linux Cubism (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    environment: release-cubism
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: amd64
+            platform: linux-x86_64
+            core: Core/lib/linux/x86_64/libLive2DCubismCore.a
+          # The SDK ships the Linux arm64 Core as experimental.
+          - runner: ubuntu-22.04-arm
+            arch: arm64
+            platform: linux-arm64
+            core: Core/lib/experimental/linux/arm64/libLive2DCubismCore.a
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The x64 image comes with Rust; the arm64 one may not.
+      - name: Set up Rust (arm64)
+        if: matrix.arch == 'arm64'
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install native build deps
         run: |
@@ -317,7 +374,7 @@ jobs:
           fail=0
           need=(
             "Core/include/Live2DCubismCore.h"
-            "Core/lib/linux/x86_64/libLive2DCubismCore.a"
+            "${{ matrix.core }}"
             "Samples/OpenGL/thirdParty/glew/include/GL/glew.h"
             "Samples/OpenGL/thirdParty/stb/stb_image.h"
           )
@@ -363,12 +420,12 @@ jobs:
 
       - name: Confirm deployed shared library
         run: |
-          SO="src/main/resources/cubism/linux-x86_64/liblive2d_renderer.so"
+          SO="src/main/resources/cubism/${{ matrix.platform }}/liblive2d_renderer.so"
           if [[ ! -f "$SO" ]]; then
             echo "::error::Expected $SO after --deploy"
             exit 1
           fi
-          ls -la src/main/resources/cubism/linux-x86_64/
+          ls -la src/main/resources/cubism/${{ matrix.platform }}/
 
       - name: Package Deb with Cubism
         run: ./gradlew packageDeb -Ppsd2live.includeCubism=true --no-daemon
@@ -384,10 +441,10 @@ jobs:
             find build/compose/binaries -type f 2>/dev/null | head -50 || true
             exit 1
           fi
-          cp "$DEB" "$OUT/PSD2Live-${VERSION}-linux-amd64.deb"
+          cp "$DEB" "$OUT/PSD2Live-${VERSION}-linux-${{ matrix.arch }}.deb"
           ls -la "$OUT"
           # Soft file-existence smoke (no GUI): confirm package is non-empty
-          test -s "$OUT/PSD2Live-${VERSION}-linux-amd64.deb"
+          test -s "$OUT/PSD2Live-${VERSION}-linux-${{ matrix.arch }}.deb"
           # Optional GUI smoke is intentionally skipped in v1 (brittle under xvfb).
           # Example if re-enabled later:
           # xvfb-run -a timeout 15s ./gradlew run -Ppsd2live.includeCubism=true || true
@@ -395,13 +452,13 @@ jobs:
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: linux-cubism
+          name: linux-cubism-${{ matrix.arch }}
           path: dist-artifacts/*
           if-no-files-found: error
 
   release:
     name: GitHub Release
-    needs: [prepare, build-windows, build-linux]
+    needs: [prepare, build-windows, build-windows-arm64, build-linux]
     if: needs.prepare.outputs.create_release == 'true'
     runs-on: ubuntu-latest
     environment: release-cubism
@@ -418,10 +475,17 @@ jobs:
           name: windows-cubism
           path: release-assets
 
+      - name: Download Windows ARM64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-arm64
+          path: release-assets
+
       - name: Download Linux artifacts
         uses: actions/download-artifact@v4
         with:
-          name: linux-cubism
+          pattern: linux-cubism-*
+          merge-multiple: true
           path: release-assets
 
       # Notes come from .github/release-notes.md; the download badges are built from the assets.
@@ -446,4 +510,7 @@ jobs:
             release-assets/PSD2Live-${{ env.VERSION }}.exe
             release-assets/PSD2Live-${{ env.VERSION }}-windows-x86_64-portable-ffmpeg.zip
             release-assets/PSD2Live-${{ env.VERSION }}-ffmpeg.exe
+            release-assets/PSD2Live-${{ env.VERSION }}-windows-arm64-portable.zip
+            release-assets/PSD2Live-${{ env.VERSION }}-arm64.exe
             release-assets/PSD2Live-${{ env.VERSION }}-linux-amd64.deb
+            release-assets/PSD2Live-${{ env.VERSION }}-linux-arm64.deb

@@ -29,6 +29,9 @@ data class TextureUpscaleConfig(
     companion object {
         private val isWindows = System.getProperty("os.name").lowercase().contains("win")
 
+        /** The interpreter command to try by name: macOS and most Linux distributions have no `python`. */
+        val defaultPython: String get() = if (isWindows) "python" else "python3"
+
         fun detectAvailablePython(): String {
             val root = Path.of(System.getProperty("user.home"), ".psd2live", "runtime")
             val localPython = root.resolve(if (isWindows) "python/Scripts/python.exe" else "python/bin/python")
@@ -49,7 +52,7 @@ data class TextureUpscaleConfig(
                     }
                 } catch (_: Exception) {}
             }
-            return if (isWindows) "python" else "python3"
+            return defaultPython
         }
 
         /** Explicit UI shortcut for the conventional optional runtime installation. */

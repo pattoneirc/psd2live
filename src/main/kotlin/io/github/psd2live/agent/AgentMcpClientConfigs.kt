@@ -22,7 +22,7 @@ object AgentMcpClientConfigs {
         })
         // The proxy otherwise reads the saved token and port itself, but only on Windows.
         AgentMcpClient.STDIO -> servers(buildJsonObject {
-            put("command", "python")
+            put("command", if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) "python" else "python3")
             putJsonArray("args") { add(proxyPath) }
             putJsonObject("env") {
                 put("PSD2LIVE_MCP_ENDPOINT", connection.endpoint)

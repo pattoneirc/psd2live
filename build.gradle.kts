@@ -219,10 +219,10 @@ afterEvaluate {
 	tasks.named("createDistributable") { inputs.files(tasks.named("prepareAppResources")).withPropertyName("appResources") }
 }
 
-// License texts ship inside every package, under the app's resources directory, beside the runtime.
+// License texts and the stdio MCP bridge ship inside every package, under the app's resources directory, beside the runtime.
 tasks.withType<Sync>().matching { it.name == "prepareAppResources" }.configureEach {
 	dependsOn(buildRuntime)
-	from("LICENSE", "THIRD_PARTY_NOTICES.md")
+	from("LICENSE", "THIRD_PARTY_NOTICES.md", "mcp_proxy.py")
 	from("licenses") { into("licenses") }
 	from(runtimeLibrary.parentFile) { include(runtimeLibrary.name) }
 	bundledFfmpeg?.let { dir ->
@@ -283,7 +283,8 @@ if (hostOs == "windows") afterEvaluate {
 		).filterNotNull().map(::File).firstOrNull(File::isFile)
 		executable = iscc?.path ?: "ISCC.exe"
 		args("/Qp", "/DAppVersion=${distributions.packageVersion}", "/DAppImage=${appImage.get().asFile}",
-			"/DOutputDir=${dest.get().asFile}", "/DIconFile=${distributions.windows.iconFile.get().asFile}", script)
+			"/DOutputDir=${dest.get().asFile}", "/DIconFile=${distributions.windows.iconFile.get().asFile}",
+			"/DArch=${if (hostArm) "arm64" else "x64"}", script)
 		doFirst { dest.get().asFile.deleteRecursively() }
 	}
 	tasks.named("packageDistributionForCurrentOS") { dependsOn(packageExe) }

@@ -42,7 +42,7 @@ Windows ではリポジトリ直下の `run-gui.bat` でも GUI を起動でき�
 | `--no-moc3` | オフ | MOC3 を出力しない |
 | `--no-json` | オフ | 診断 JSON を出力しない |
 | `--upscale <1\|2\|4>` | 1 | テクスチャ高解像度化の倍率。1 で無効 |
-| `--upscale-python <path>` | `python` | nunif の依存関係を入れた Python |
+| `--upscale-python <path>` | Windows は `python`、他は `python3` | nunif の依存関係を入れた Python |
 | `--nunif-dir <path>` | 空 | nunif のソースディレクトリ |
 | `--upscale-model <path>` | 空 | 重みファイルのディレクトリ |
 | `--upscale-tile <64..512>` | 256 | 推論のタイルサイズ |

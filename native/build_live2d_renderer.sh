@@ -56,10 +56,17 @@ if [[ ! -f "$CUBISM_SDK_ROOT/Core/include/Live2DCubismCore.h" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$CUBISM_SDK_ROOT/Core/lib/linux/x86_64/libLive2DCubismCore.a" ]]; then
-  echo "[ERROR] Missing libLive2DCubismCore.a (required for Linux x86_64)." >&2
+# The Core library and the resources directory follow the host: x86_64, or arm64 (experimental in the SDK).
+case "$(uname -m)" in
+  x86_64|amd64) CORE_LIB_DIR="Core/lib/linux/x86_64"; PLATFORM_DIR="linux-x86_64" ;;
+  aarch64|arm64) CORE_LIB_DIR="Core/lib/experimental/linux/arm64"; PLATFORM_DIR="linux-arm64" ;;
+  *) echo "[ERROR] Unsupported architecture $(uname -m); Linux x86_64 or arm64 is required." >&2; exit 1 ;;
+esac
+
+if [[ ! -f "$CUBISM_SDK_ROOT/$CORE_LIB_DIR/libLive2DCubismCore.a" ]]; then
+  echo "[ERROR] Missing libLive2DCubismCore.a (required for $PLATFORM_DIR)." >&2
   echo "Expected under:" >&2
-  echo "  $CUBISM_SDK_ROOT/Core/lib/linux/x86_64/" >&2
+  echo "  $CUBISM_SDK_ROOT/$CORE_LIB_DIR/" >&2
   exit 1
 fi
 
@@ -110,8 +117,8 @@ echo " Expected dependents: libGL libX11 libpthread libdl (system libraries)"
 
 # Deploy if requested
 if [[ "$DEPLOY" == "1" ]]; then
-  echo "[3/3] Deploying to src/main/resources/cubism/linux-x86_64/ ..."
-  DEST="$REPO_ROOT/src/main/resources/cubism/linux-x86_64"
+  echo "[3/3] Deploying to src/main/resources/cubism/$PLATFORM_DIR/ ..."
+  DEST="$REPO_ROOT/src/main/resources/cubism/$PLATFORM_DIR"
   mkdir -p "$DEST"
   cp -f "$SO_OUT" "$DEST/liblive2d_renderer.so"
   rm -rf "$DEST/FrameworkShaders"
