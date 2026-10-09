@@ -105,6 +105,14 @@ ABI 版本：头文件的 `P2L_ABI_VERSION_MAJOR` / `P2L_ABI_VERSION_MINOR` 与�
 
 `p2l_render`（ABI 1.3）把最近一次求值画进宿主给的 RGBA8 图像，规则与参考光栅器 `SoftwareRasterizer` 相同：双线性预乘采样、像素中心与左上规则、按纹理 alpha 的遮罩（含反相）、隔离组图层、全部颜色与透明度合成模式和剔除。变换为画布到图像的仿射（空指针时按画布等比放入图像左上），输出为预乘或直通 alpha，可画在已有内容之上。内嵌 PNG 贴图页由运行时自带的解码器解出（非隔行，全部颜色类型），KTX2 与外部文件页由宿主经 `p2l_render_texture` 提供像素。供没有自带渲染器的宿主（C/C++、引擎插件、缩略图与校验）使用，逐像素运行在 CPU 上。验证：`SoftwareRenderParityTest` 在覆盖 90 种合成组合、隔离组（通道驱动的不透明度与颜色、网格与部件遮罩、反相、嵌套）、遮罩、乘算/屏幕色与剔除的模型上，于三种姿势与缩放下与参考光栅器逐像素比较，最大通道差 ≤ 1/255；把 conjoint 的重叠权重故意改错时该测试报出 77/255 的差异。
 
+## 其他语言与平台
+
+见 [`runtime/bindings/README.md`](../../../runtime/bindings/README.md)：
+
+- **C/C++**：`runtime/examples/c/render_example.c` 经共享模型加载、播放一秒并用 `p2l_render` 写出 BMP；`build_example.bat` 用 MSVC 以 C 与 C++ 各编译一次（`/W4 /WX`，头文件无警告），两者输出逐字节相同。Unreal 以第三方模块方式使用同一头文件与库。
+- **.NET / Unity**：`bindings/csharp/P2lNative.cs` 是由 `generate.py` 从头文件生成的全部 P/Invoke 声明（`cargo test` 校验其与导出函数一致），`P2l.cs` 提供字符串辅助与自动释放的 `P2lRig`；`Smoke.cs` 以 C# 6 编译后用 `Marshal.Prelink` 解析全部 126 个入口点，并加载、播放、渲染 tml 样例。`bindings/unity/P2LCharacter.cs` 把模型每帧用软件渲染画进 `Texture2D`，只按所用 Unity API 的桩代码做过类型检查，未在 Unity 中运行。
+- **Android**：`runtime/build_android.sh` 用 NDK 的 clang 为 arm64-v8a、armeabi-v7a、x86_64 构建 `libp2l_runtime.so`，三者各导出全部 126 个函数。iOS 需在 Mac 上构建，未在此验证。
+
 ## 网页播放器
 
 导出目标 `web` 写出可直接部署的文件夹：`index.html`、`p2l.js`（ES 模块 `P2LPlayer`）、`p2l_runtime.wasm` 与模型。播放器用 WebGL 绘制，按头文件的合成规则画出全部颜色与透明度混合组合和隔离组：普通（over）与 Cubism 的叠加、乘算用混合函数，其余组合先把网格包围盒内的下层复制到纹理、在着色器中合成；隔离组按 `p2l_render_commands` 画入图层，闭合时按组的模式、不透明度、乘算/屏幕色与遮罩合成；遮罩经模板缓冲（按纹理 alpha 0.5 裁剪，支持反相）；开启剔除的网格只画正面。`WebPlayerCheckTool`（`PSD2LIVE_TOOLS=1`）生成覆盖 90 种组合与 16 种隔离组的模型和逐像素参考图，Edge（无界面）中与参考相差至多 1/255；页面提供动作与表情选择、口型滑块，视线跟随指针，点击显示所在的点击区域；文件带有高级模式数据时，页面提供开关。WebAssembly 构建作为资源随仓库提交，修改运行时后用 `./gradlew :targets:web:updateWasm` 刷新（需要 `rustup target add wasm32-unknown-unknown`）；单元测试核对播放器调用的每个函数都由该构建导出。tml 样例在 Edge（无界面）中显示正确。

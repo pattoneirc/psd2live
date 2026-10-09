@@ -105,6 +105,12 @@ fn the_header_declares_every_exported_function_and_this_abi_version() {
     assert!(header.contains(&format!("#define P2L_ABI_VERSION_MAJOR {ABI_MAJOR}\n")));
     assert!(header.contains(&format!("#define P2L_ABI_VERSION_MINOR {ABI_MINOR}\n")));
     assert_eq!(p2l_abi_version(), ABI_MAJOR << 16 | ABI_MINOR);
+    // The C# declarations generated from the header (bindings/csharp/generate.py) are up to date.
+    let csharp = include_str!("../bindings/csharp/P2lNative.cs");
+    for name in &exported {
+        assert!(csharp.contains(&format!(" {name}(")), "{name} is missing from P2lNative.cs; run bindings/csharp/generate.py");
+    }
+    assert!(csharp.contains(&format!("ABI_VERSION_MINOR = {ABI_MINOR};")));
     // The constants the header names for the bits and modes the functions take and give.
     for (name, value) in [
         ("P2L_STAGE_CLIPS", STAGE_CLIPS), ("P2L_STAGE_EXPRESSIONS", STAGE_EXPRESSIONS), ("P2L_STAGE_BEHAVIORS", STAGE_BEHAVIORS),
