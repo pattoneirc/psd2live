@@ -290,6 +290,18 @@ object AppSettings {
 			}
 		}
 
+	private const val KEY_HIERARCHY_SORT = "hierarchy_sort"
+
+	/** The hierarchy tree's sibling order, as the tree encodes it; null for the model's order. */
+	var hierarchySort: String?
+		get() = runCatching { preferences.get(KEY_HIERARCHY_SORT, null) }.getOrNull()
+		set(value) {
+			runCatching {
+				if (value == null) preferences.remove(KEY_HIERARCHY_SORT) else preferences.put(KEY_HIERARCHY_SORT, value)
+				preferences.flush()
+			}
+		}
+
 	// ---------------------------------------------------------------------------------------
 	// Keyboard shortcuts
 	//

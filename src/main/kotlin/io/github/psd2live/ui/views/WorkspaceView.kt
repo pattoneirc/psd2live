@@ -81,6 +81,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.psd2live.core.RigPreviewModel
+import io.github.psd2live.core.RigCanvasSupport
 import io.github.psd2live.i18n.tr
 import io.github.psd2live.ui.CreatePlacementKind
 import io.github.psd2live.ui.CreateRelation
@@ -109,6 +110,7 @@ import io.github.psd2live.ui.components.DrawOrderRuler
 import io.github.psd2live.ui.components.DrawOrderInputDialog
 import io.github.psd2live.ui.components.IconContextualWarp
 import io.github.psd2live.ui.components.IconMeshWireframe
+import io.github.psd2live.ui.state.AppSettings
 import io.github.psd2live.ui.state.CanvasMode
 import io.github.psd2live.ui.state.PSD2LiveState
 import io.github.psd2live.ui.state.PSD2LiveViewModel
@@ -580,16 +582,25 @@ private fun HierarchyTreeList(
 	val drawables = model.rig.puppet.drawables
 	val parentOverrides = state.hierarchyParentOverrides
 
-	val (deformerChildrenMap, drawableChildrenMap) = remember(deformers, drawables, parentOverrides) {
-		buildHierarchyChildrenMaps(deformers, drawables, parentOverrides)
+	var sort by remember { mutableStateOf(HierarchySort.decode(AppSettings.hierarchySort)) }
+	// Where each mesh lies at rest, read only while an order needs it.
+	val meshBounds = remember(model.rig.puppet, sort.mode.needsBounds) {
+		if (!sort.mode.needsBounds) emptyMap()
+		else runCatching { RigCanvasSupport.evaluate(model).worldPositions }.getOrDefault(emptyMap())
+			.entries.mapNotNull { (id, positions) -> MeshBounds.ofWorld(positions)?.let { id.raw to it } }.toMap()
+	}
+	val sortDrawOrders = if (sort.mode == HierarchySortMode.DRAW_ORDER) state.drawOrderOverrides else null
+
+	val (deformerChildrenMap, drawableChildrenMap) = remember(deformers, drawables, parentOverrides, sort, meshBounds, sortDrawOrders) {
+		val (deformerChildren, drawableChildren) = buildHierarchyChildrenMaps(deformers, drawables, parentOverrides)
+		sortHierarchyChildren(deformerChildren, drawableChildren, sort, meshBounds) { drawable ->
+			val layerId = model.rig.layerIdByDrawableId[drawable.id.raw] ?: drawable.id.raw
+			state.getEffectiveDrawOrder(drawable.id.raw, layerId, drawable.drawOrder)
+		}
 	}
 
-	val rootDeformers = remember(deformers, parentOverrides) {
-		deformers.filter { effectiveParent(it.id.raw, it.parent?.raw, parentOverrides) == null }
-	}
-	val rootDrawables = remember(drawables, parentOverrides) {
-		drawables.filter { effectiveParent(it.id.raw, it.parentDeformerId?.raw, parentOverrides) == null }
-	}
+	val rootDeformers = deformerChildrenMap[null].orEmpty()
+	val rootDrawables = drawableChildrenMap[null].orEmpty()
 
 	// Resolve compacted chains for root deformers
 	val rootChains = remember(rootDeformers, deformerChildrenMap, drawableChildrenMap) {
@@ -665,6 +676,10 @@ private fun HierarchyTreeList(
 			Spacer(Modifier.weight(1f))
 			if (state.activeWorkspace.canvases.size > 1) {
 				PanelToolbarText(viewModel.canvasTitle(state.activeCanvas), modifier = Modifier.widthIn(max = 108.dp))
+			}
+			HierarchySortMenu(sort) { next ->
+				sort = next
+				AppSettings.hierarchySort = next.takeUnless { it.isDefault }?.encode()
 			}
 			PanelExpandCollapseButtons(
 				onExpandAll = { deformers.forEach { expandedMap[it.id.raw] = true } },
