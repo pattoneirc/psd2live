@@ -6,6 +6,7 @@
 | --- | --- | --- | --- |
 | tml | [tml.psd](tml/psd-input/tml.psd) | [文件目录](tml/moc3-cmo3-output/) | [作者说明](tml/readme.md) |
 | ds | [ds.psd](ds/psd-input/ds.psd) | [文件目录](ds/moc3-cmo3-output/) | [来源与权利说明](ds/readme.md) |
+| star_lan | [star_lan.psd](star_lan/psd-input/star_lan.psd) | [文件目录](star_lan/moc3-cmo3-output/)、[WebP](star_lan/webp-output/star_lan.webp) | [作者说明](star_lan/readme.md) |
 
 可通过程序的“导入 PSD”打开输入，或从仓库根目录运行：
 
