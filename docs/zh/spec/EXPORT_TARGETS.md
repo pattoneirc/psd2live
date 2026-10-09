@@ -36,7 +36,7 @@ MIT 模块不依赖任何 GPL 模块，由 Gradle 依赖关系在编译期保证
 | ID | 类别 | 输出 | 主要损失 |
 | --- | --- | --- | --- |
 | `moc3` | 结构化绑定 | `.moc3`、model3、physics3、motion3、cdi3、贴图 | 按目标运行时版本剥离不支持的功能 |
-| `cmo3` | 结构化绑定 | Cubism Editor 工程 | 生成器意图不保留；动作片段不写入 |
+| `cmo3` | 结构化绑定 | Cubism Editor 工程；有动作片段时另写同名 `.can3`（Cubism Animator 工程） | 生成器意图不保留；动作片段中眨眼、口型效果曲线不写入（见 [Cubism Animator](#cubism-animator)） |
 | `dragonbones` | 结构化绑定 | `_ske.json`、每页 `_tex_<i>.json` 与贴图 | 与 Spine 相同的参数动画与片段烘焙；关键点取整到帧；透明度以整百分比记录；运行时以 16 位偏移寻址每个动画的变形数据，超出时按更大容差精简并报告（骨架模型的整身片段误差较大）；遮罩、屏幕色、物理未写入 |
 | `vtube-studio` | 结构化绑定 | `moc3` 的全部文件 + `.vtube.json` | 同 `moc3`；面部跟踪只映射标准参数（头、身体、眼、视线、眉、嘴、呼吸），每个动作片段一个热键；其余设置由 VTube Studio 取默认值 |
 | `spine` | 结构化绑定 | 骨骼 JSON 或 `.skel`、`.atlas`、贴图页 | 旋转变形器成为骨骼链，网格挂在最近的旋转骨骼上；每个参数成为一段 1 秒动画（时间即参数归一化值），键入骨骼变换与骨骼空间内的变形，交叉项按 Spine 骨骼运算测量并报告；动作片段按帧采样后精简关键帧；无 Warp、混合形、Glue（已烘焙）；遮罩转为按轮廓多边形裁剪（反相遮罩丢弃）；驱动骨骼旋转的摆锤转为物理约束（近似），其余物理与屏幕色未写入 |
@@ -60,11 +60,21 @@ MIT 模块不依赖任何 GPL 模块，由 Gradle 依赖关系在编译期保证
 | 目标 | 设置键 |
 | --- | --- |
 | `moc3` | `physics`、`user_data`、`display_info`、`hidden_parts`、`hidden_meshes`、`guide_parts`（布尔）、`pixels_per_unit`（正数）；缺省取工程导出设置 |
-| `cmo3` | `timestamp`（毫秒，默认 0）；内部未公开的 `layer_art`：`canvas`（默认，密度不为 1 的图层以画布分辨率写入，高分辨率只留在纹理集页，并给出 `texture_size` / `approximated` 损失项“Cubism Editor rebuilds the atlas from canvas-resolution layers”）或 `native`（按原分辨率写入图层，未经编辑器实测），见[文档层](DOCUMENT_LAYER.md#逐层尺寸) |
+| `cmo3` | `timestamp`（毫秒，默认 0）、`clips`（是否写出 `.can3`，默认 true）；内部未公开的 `layer_art`：`canvas`（默认，密度不为 1 的图层以画布分辨率写入，高分辨率只留在纹理集页，并给出 `texture_size` / `approximated` 损失项“Cubism Editor rebuilds the atlas from canvas-resolution layers”）或 `native`（按原分辨率写入图层，未经编辑器实测），见[文档层](DOCUMENT_LAYER.md#逐层尺寸) |
 | `spine` | `binary`（写出二进制 `.skel` 而非 JSON，默认 false）、`clip_fps`（动作采样帧率，默认 15）、`clips`（是否写出动作，默认 true）、`key_tolerance`（关键帧精简容差，像素，默认 0.25）、`sample_pairs` |
 | `psd-pose` | `clip` 与 `time`（秒）按动作片段摆姿势，或 `pose`（`ParamAngleX=20,ParamEyeLOpen=0`，覆盖片段）；`scale`（0.25–2，默认 1） |
 | 视频类 | 同光栅类，另有 `ffmpeg`（ffmpeg 路径；缺省依次取环境变量 `PSD2LIVE_FFMPEG`、安装包自带的 `resources/ffmpeg/` 与 PATH） |
 | 光栅类 | `clip`（默认第一个片段，无片段时为静止姿势）、`fps`（默认片段帧率）、`size`（长边像素，默认 1024）、`background`（ARGB 十六进制，默认透明）、`physics`（默认 true） |
+
+## Cubism Animator
+
+`cmo3` 目标在写出 `<base>.cmo3` 的同时把 IR 的动作片段写成 `<base>.can3`（`Can3`，`:targets:cubism`），旧版“导出 Live2D 模型”在勾选 CMO3 时同样写出；“导出 motion3/动作”关闭或模型只有网格时没有片段，也就不写 can3。
+
+- **容器**：与 cmo3 相同的 CAFF，只有一个混淆、压缩的 `main.xml`。
+- **关联模型**：can3 不含模型。唯一的资源按文件名引用同目录的 `<base>.cmo3`；参数按 ID（`live2dParam_<Id>`）关联，部件透明度轨道带同一次导出的 cmo3 中该部件的 GUID。cmo3 的 GUID 每次导出都不同，因此 can3 只与同一次导出的 cmo3 配套。
+- **场景**：每个片段一个场景，名称为 `<base>.<file>`，与 moc3 导出的 motion3 文件名一致。场景沿用 Animator 固定的轨道结构：根组轨道与模型轨道，模型轨道上有视觉、参数、部件透明度、口型与眨眼五个效果。片段的时长、帧率、循环、淡入淡出与用户数据（事件）写入场景与模型轨道。
+- **曲线**：参数曲线进参数效果（显示名取参数名称，范围取参数范围并扩到覆盖全部关键点），部件透明度曲线进部件效果，整体透明度替换视觉效果的不透明度；曲线自己的淡入淡出写入轨道选项。关键点取整到最近的帧，贝塞尔控制点保留原时间（小数帧）作为两端的手柄，阶梯与反阶梯段保留类型。
+- **损失**：眨眼、口型效果曲线在 Animator 中没有对应轨道，与指向模型中不存在的参数或部件的曲线一同不写入，记为 `timeline` / `dropped`。
 
 ## Spine
 

@@ -69,7 +69,7 @@ The catalog has 19 topics. The beginner path contains the 18 lessons below; the 
 
 For hair and clothing simulation, pin weights, baking and checking the export, see the [illustrated simulation tutorial (Chinese)](../../zh/guide/SIMULATION_TUTORIAL.md).
 
-- **Save and export**: saving preserves the workspace and history; exporting delivers the model files the target software uses. `.psd2live.json` is a report, not a project.
+- **Save and export**: saving preserves the workspace and history; exporting delivers the model files the target software uses. `.psd2live.json` is a report, not a project. A CMO3 export also writes the model's motions to a `.can3` of the same name, which Cubism Editor's Animator opens and edits on the cmo3; keep both in the same folder and from the same export.
 - **Export complete**: when an export finishes (Live2D model, PSD or any Export as format), its dialog closes and **Export complete** shows where the files went, with the warnings or what the format could not keep, and offers **Open folder**. After **Close and don't show again**, exports report only in the log and status bar; **Settings › Prompts** lists every window with "Don't show again" (the start screen after an import too), to turn each back on or **Show all prompts again**.
 - **Keyforms and keyframes**: keyforms on parameter keys belong to modeling and interpolate model shapes between keys; keyframes sit on the animation timeline and record parameter values at points in time.
 - **Deform and Edit**: Deform changes shapes; Edit changes the structure of the control mesh. Paint changes pixels in an isolated apply/discard session.

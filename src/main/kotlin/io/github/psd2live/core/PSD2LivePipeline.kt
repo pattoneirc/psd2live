@@ -626,6 +626,8 @@ class PSD2LivePipeline {
 			files += writeContained(outputRoot, "$baseName.cmo3", bytes)
 			warnings += converted.report.notices.map { noticeText("CMO3", it) }
 			warnings += cmo3.textureLosses(ir, cmo3Options).map { "CMO3: ${it.objectId}: ${it.note}" }
+			cmo3.can3(ir, cmo3Options, converted)?.let { files += writeContained(outputRoot, "$baseName.can3", it) }
+			warnings += cmo3.can3Losses(ir, cmo3Options).map { "CAN3: ${it.objectId}: ${it.note}" }
 			val source = Cmo3.read(bytes).root as? CModelSource ?: error(tr("error.cmo3Root"))
 			val reimported = Cmo3Import.fromModelSource(source)
 			warnings += validateRigShape("CMO3", converted.puppet, reimported)

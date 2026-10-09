@@ -7,6 +7,8 @@ import org.umamo.format.cmo3.Cmo3
 import org.umamo.format.cmo3.model.custom.CModelSource
 import org.umamo.format.raster.RasterImage
 import org.umamo.interop.cmo3.Cmo3Conversion
+import org.umamo.interop.cmo3.Cmo3GraphIndex
+import org.umamo.interop.cmo3.Cmo3Import
 import org.umamo.render.restMeshesToCanvasSpace
 import org.umamo.runtime.model.AtlasTileId
 import org.umamo.runtime.model.ParameterId
@@ -18,6 +20,8 @@ import org.umamo.runtime.model.ParameterId
  * A cmo3 carries editor GUIDs, which Cubism Editor expects to be unique, so the file is not byte-stable
  * across exports; its content is. The `timestamp` setting (epoch milliseconds) sets the recorded export
  * time, 0 by default. [decorate] lets the host add editor-only metadata it alone knows.
+ *
+ * The rig's clips go to a Cubism Animator project beside it (`<base>.can3`, see [Can3]) unless `clips` is false.
  */
 public class Cmo3Target(
 	private val decorate: (CModelSource) -> Unit = {},
@@ -25,9 +29,9 @@ public class Cmo3Target(
 	override val id: String = "cmo3"
 	override val family: TargetFamily = TargetFamily.RIG
 	override val description: String = "Cubism Editor project (.cmo3)"
-	override val settings: List<TargetSetting> = listOf(TargetSetting.Text("timestamp", "epoch milliseconds"))
+	override val settings: List<TargetSetting> = listOf(TargetSetting.Text("timestamp", "epoch milliseconds"), TargetSetting.CLIPS)
 	override val capabilities: CapabilityProfile = CapabilityProfile(
-		warpLattice = true, parameterGrid = 3, blendShapes = true, timeline = false,
+		warpLattice = true, parameterGrid = 3, blendShapes = true, timeline = true,
 		physics = PhysicsSupport.PARAMETER_PENDULUM, blendModes = ColorBlend.entries.toSet(),
 		masks = MaskSupport.TEXTURE_ALPHA, keyedDrawOrder = true, glue = true,
 	)
@@ -51,6 +55,21 @@ public class Cmo3Target(
 	public fun textureLosses(ir: RigIR, options: ExportOptions): List<LossEntry> =
 		if (Cmo3LayerArt.of(options.setting(Cmo3LayerArt.SETTING)) == Cmo3LayerArt.NATIVE) emptyList()
 		else Cmo3LayerArtLowering.losses(Cmo3LayerArtLowering.canvasResolution(ir))
+
+	/**
+	 * The can3 of [ir]'s clips on [converted], the cmo3 of the same export; null when `clips` is false or no clip
+	 * has a curve the Animator holds.
+	 */
+	public fun can3(ir: RigIR, options: ExportOptions, converted: Cmo3Conversion.Result): ByteArray? {
+		if (!options.flag(TargetSetting.CLIPS.key, true)) return null
+		val parts = Cmo3GraphIndex(converted.model.root as CModelSource).partByIdStr
+		val partGuids = parts.mapNotNull { (id, part) -> Cmo3Import.uuidOf(part.guid)?.let { id to it } }.toMap()
+		return Can3.write(ir, options.baseName, partGuids)
+	}
+
+	/** What [can3] leaves out of [ir]'s clips. */
+	public fun can3Losses(ir: RigIR, options: ExportOptions): List<LossEntry> =
+		if (options.flag(TargetSetting.CLIPS.key, true)) Can3.losses(ir) else emptyList()
 
 	private fun convertLowered(ir: RigIR, options: ExportOptions, decorate: (CModelSource) -> Unit): Cmo3Conversion.Result {
 		val puppet = PuppetIr.toPuppet(ir)
@@ -77,10 +96,15 @@ public class Cmo3Target(
 
 	override fun plan(ir: RigIR, options: ExportOptions): LoweredExport {
 		val converted = convert(ir, options)
-		val losses = CapabilityScan.scan(ir, capabilities, options) + converted.report.notices.map(Moc3Target::loss) + textureLosses(ir, options)
+		val can3 = can3(ir, options, converted)
+		val losses = CapabilityScan.scan(ir, capabilities, options) + converted.report.notices.map(Moc3Target::loss) +
+			textureLosses(ir, options) + can3Losses(ir, options)
 		return object : LoweredExport {
 			override val losses: List<LossEntry> = losses
-			override fun write(sink: OutputSink) = sink.write("${options.baseName}.cmo3", Cmo3.write(converted.model))
+			override fun write(sink: OutputSink) {
+				sink.write("${options.baseName}.cmo3", Cmo3.write(converted.model))
+				can3?.let { sink.write("${options.baseName}.can3", it) }
+			}
 		}
 	}
 }
