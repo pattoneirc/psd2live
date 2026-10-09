@@ -1,6 +1,6 @@
 //! Live cloth and hair: the editor's 2D XPBD solver (`core/sim/XpbdSolver.kt`) ported line for line - same
-//! constraint order, the same alternating sweeps, f32 state with the JVM's double-precision transcendentals -
-//! so a scene steps here as it does in the editor. Space is world space: canvas x, negated canvas y (y up).
+//! constraint order, the same alternating sweeps, f32 state with the JVM's double-precision transcendentals
+//! (bends excepted, which take the editor's f32 atan2) - so a scene steps here as it does in the editor. Space is world space: canvas x, negated canvas y (y up).
 
 use crate::rig::Collider;
 
@@ -73,6 +73,34 @@ fn sqrt(x: f32) -> f32 {
 }
 fn atan2(y: f32, x: f32) -> f32 {
     (y as f64).atan2(x as f64) as f32
+}
+
+/// The editor's `fastAtan2` (`core/FastAngle.kt`) step for step in f32: folded into the first octant, past
+/// tan(π/8) turned back by π/4, then the Taylor series to t¹⁵. Bends take their angle from it.
+fn fast_atan2(y: f32, x: f32) -> f32 {
+    const PI_F: f32 = 3.1415927;
+    const HALF_PI: f32 = PI_F / 2.0;
+    const QUARTER_PI: f32 = PI_F / 4.0;
+    const TAN_PI_8: f32 = 0.41421357;
+    let (ax, ay) = (x.abs(), y.abs());
+    if ax == 0.0 && ay == 0.0 {
+        return 0.0;
+    }
+    let a = if ay <= ax { ay / ax } else { ax / ay };
+    let turned = a > TAN_PI_8;
+    let t = if turned { (a - 1.0) / (a + 1.0) } else { a };
+    let t2 = t * t;
+    let mut r = t * (1.0 + t2 * (-1.0 / 3.0 + t2 * (1.0 / 5.0 + t2 * (-1.0 / 7.0 + t2 * (1.0 / 9.0 + t2 * (-1.0 / 11.0 + t2 * (1.0 / 13.0 - t2 / 15.0)))))));
+    if turned {
+        r += QUARTER_PI;
+    }
+    if ay > ax {
+        r = HALF_PI - r;
+    }
+    if x < 0.0 {
+        r = PI_F - r;
+    }
+    if y < 0.0 { -r } else { r }
 }
 fn cos(x: f32) -> f32 {
     (x as f64).cos() as f32
@@ -389,14 +417,15 @@ impl Solver<'_> {
         s.y[c] += wc * delta * gcy;
     }
 
-    /// How far triangle [k] has turned from rest, with its gradient over corners a, b, c in `turn_grad`; NaN without a rest shape.
-    fn turn(&mut self, k: usize) -> f32 {
+    /// How far triangle [k] has turned from rest as an unnormalized (cos, sin), with the gradient of its angle over
+    /// corners a, b, c in `turn_grad`; None without a rest shape.
+    fn turn(&mut self, k: usize) -> Option<(f32, f32)> {
         let sim = self.sim;
         let s = &mut *self.state;
         let o = k * 4;
         let (p, q, r, t) = (s.rest_inverse[o], s.rest_inverse[o + 1], s.rest_inverse[o + 2], s.rest_inverse[o + 3]);
         if p == 0.0 && q == 0.0 && r == 0.0 && t == 0.0 {
-            return f32::NAN;
+            return None;
         }
         let (a, b, c) = (sim.tri_a[k] as usize, sim.tri_b[k] as usize, sim.tri_c[k] as usize);
         let (e1x, e1y) = (s.x[b] - s.x[a], s.y[b] - s.y[a]);
@@ -405,12 +434,12 @@ impl Solver<'_> {
         let sn = e1y * p + e2y * r - e1x * q - e2x * t;
         let norm = cs * cs + sn * sn;
         if norm < 1e-12 {
-            return f32::NAN;
+            return None;
         }
         let (bx, by) = ((cs * -q - sn * p) / norm, (cs * p - sn * q) / norm);
         let (cx, cy) = ((cs * -t - sn * r) / norm, (cs * r - sn * t) / norm);
         s.turn_grad = [-(bx + cx), -(by + cy), bx, by, cx, cy];
-        atan2(sn, cs)
+        Some((cs, sn))
     }
 
     fn solve_bends(&mut self, h: f32, reverse: bool) {
@@ -435,29 +464,22 @@ impl Solver<'_> {
                 gy[*n] = y;
                 *n += 1;
             };
-            let first = self.turn(t1);
-            if first.is_nan() {
+            let Some((c1, s1)) = self.turn(t1) else {
                 continue;
-            }
+            };
             let g = self.state.turn_grad;
             add(sim.tri_a[t1] as usize, g[0], g[1], &mut n);
             add(sim.tri_b[t1] as usize, g[2], g[3], &mut n);
             add(sim.tri_c[t1] as usize, g[4], g[5], &mut n);
-            let second = self.turn(t2);
-            if second.is_nan() {
+            let Some((c2, s2)) = self.turn(t2) else {
                 continue;
-            }
+            };
             let g = self.state.turn_grad;
             add(sim.tri_a[t2] as usize, -g[0], -g[1], &mut n);
             add(sim.tri_b[t2] as usize, -g[2], -g[3], &mut n);
             add(sim.tri_c[t2] as usize, -g[4], -g[5], &mut n);
-            let pi = std::f64::consts::PI as f32;
-            let mut constraint = first - second;
-            if constraint > pi {
-                constraint -= 2.0 * pi;
-            } else if constraint < -pi {
-                constraint += 2.0 * pi;
-            }
+            // The first rotation less the second, within ±π: one atan2 of the two (cos, sin) pairs' product.
+            let constraint = fast_atan2(s1 * c2 - c1 * s2, c1 * c2 + s1 * s2);
             let mut w = 0.0f32;
             for j in 0..n {
                 w += self.mobility(index[j]) * (gx[j] * gx[j] + gy[j] * gy[j]);

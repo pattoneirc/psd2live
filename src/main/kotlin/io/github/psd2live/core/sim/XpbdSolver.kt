@@ -1,8 +1,7 @@
 package io.github.psd2live.core.sim
 
-import kotlin.math.PI
+import io.github.psd2live.core.fastAtan2
 import kotlin.math.abs
-import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.max
@@ -250,6 +249,9 @@ class XpbdSolver(
     private val bendGx = FloatArray(6)
     private val bendGy = FloatArray(6)
     private val turnGrad = FloatArray(6)
+    /** The last [turn]'s rotation as an unnormalized (cos, sin): a bend takes one angle between two of them. */
+    private var turnCos = 0f
+    private var turnSin = 0f
 
     init {
         require(pinWeight.size == n && goalCompliance.size == n) { "Per-particle arrays must match the particle count" }
@@ -411,14 +413,14 @@ class XpbdSolver(
     }
 
     /**
-     * How far triangle [k] has turned from its rest shape, radians, with its gradient over its corners a, b,
-     * c in [turnGrad] (x, y each); NaN when it has no rest shape.
+     * How far triangle [k] has turned from its rest shape, as [turnCos] and [turnSin], with the gradient of
+     * its angle over its corners a, b, c in [turnGrad] (x, y each); false when it has no rest shape.
      */
-    private fun turn(k: Int): Float {
+    private fun turn(k: Int): Boolean {
         val s = state
         val o = k * 4
         val p = restInverse[o]; val q = restInverse[o + 1]; val r = restInverse[o + 2]; val t = restInverse[o + 3]
-        if (p == 0f && q == 0f && r == 0f && t == 0f) return Float.NaN
+        if (p == 0f && q == 0f && r == 0f && t == 0f) return false
         val a = triangles.a[k]; val b = triangles.b[k]; val c = triangles.c[k]
         val e1x = s.x[b] - s.x[a]; val e1y = s.y[b] - s.y[a]
         val e2x = s.x[c] - s.x[a]; val e2y = s.y[c] - s.y[a]
@@ -426,14 +428,15 @@ class XpbdSolver(
         val cs = e1x * p + e2x * r + e1y * q + e2y * t
         val sn = e1y * p + e2y * r - e1x * q - e2x * t
         val norm = cs * cs + sn * sn
-        if (norm < 1e-12f) return Float.NaN
+        if (norm < 1e-12f) return false
         // dθ = (cs·d sn - sn·d cs) / (cs² + sn²), both linear in the corners.
         val bx = (cs * -q - sn * p) / norm; val by = (cs * p - sn * q) / norm
         val cx = (cs * -t - sn * r) / norm; val cy = (cs * r - sn * t) / norm
         turnGrad[0] = -(bx + cx); turnGrad[1] = -(by + cy)
         turnGrad[2] = bx; turnGrad[3] = by
         turnGrad[4] = cx; turnGrad[5] = cy
-        return atan2(sn, cs)
+        turnCos = cs; turnSin = sn
+        return true
     }
 
     private fun solveBends(h: Float, reverse: Boolean) {
@@ -447,14 +450,14 @@ class XpbdSolver(
                 for (j in 0 until count) if (bendIndex[j] == i) { bendGx[j] += gx; bendGy[j] += gy; return }
                 bendIndex[count] = i; bendGx[count] = gx; bendGy[count] = gy; count++
             }
-            val first = turn(t1)
-            if (first.isNaN()) continue
+            if (!turn(t1)) continue
             add(triangles.a[t1], turnGrad[0], turnGrad[1]); add(triangles.b[t1], turnGrad[2], turnGrad[3]); add(triangles.c[t1], turnGrad[4], turnGrad[5])
-            val second = turn(t2)
-            if (second.isNaN()) continue
+            val c1 = turnCos; val s1 = turnSin
+            if (!turn(t2)) continue
             add(triangles.a[t2], -turnGrad[0], -turnGrad[1]); add(triangles.b[t2], -turnGrad[2], -turnGrad[3]); add(triangles.c[t2], -turnGrad[4], -turnGrad[5])
-            var constraint = first - second
-            if (constraint > PI.toFloat()) constraint -= 2f * PI.toFloat() else if (constraint < -PI.toFloat()) constraint += 2f * PI.toFloat()
+            // The first rotation less the second, within ±π: one atan2 of the two (cos, sin) pairs' product
+            // instead of one per triangle; the library's atan2 was most of a step's time.
+            val constraint = fastAtan2(s1 * turnCos - c1 * turnSin, c1 * turnCos + s1 * turnSin)
             var w = 0f
             for (j in 0 until count) w += mobility(bendIndex[j]) * (bendGx[j] * bendGx[j] + bendGy[j] * bendGy[j])
             if (w < 1e-12f) continue
@@ -615,5 +618,5 @@ class XpbdSolver(
     }
 
     /** Triangle [k]'s turn from rest and its gradient over corners a, b, c; for tests. */
-    internal fun turnOf(k: Int): Pair<Float, FloatArray> { measureRest(); val angle = turn(k); return angle to turnGrad.copyOf() }
+    internal fun turnOf(k: Int): Pair<Float, FloatArray> { measureRest(); val angle = if (turn(k)) fastAtan2(turnSin, turnCos) else Float.NaN; return angle to turnGrad.copyOf() }
 }

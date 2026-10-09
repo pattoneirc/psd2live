@@ -200,7 +200,7 @@ object SimBake {
      * Changes whenever the simulation itself moves differently for the same setup, so bakes made by an
      * earlier solver read as stale and are made again.
      */
-    private const val SOLVER_VERSION = "2"
+    private const val SOLVER_VERSION = "3"
 
     /**
      * What a bake of [edit] depends on in [model]: the settings, the targets' rest meshes, their vertex
