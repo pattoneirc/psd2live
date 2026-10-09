@@ -13,6 +13,10 @@ import org.umamo.runtime.model.PuppetModel
  * the previous generated rig G, the new one G' and the authored rig M merge ([RigRegeneration]) and the result is
  * stored as a `rig_checkpoint` ([RigCheckpoint]) where the previous journal ends, before the entries the edit adds.
  * Replay then starts there; the entries before it stay as history.
+ *
+ * After a generation migration the authored rig's meshes hang from renamed copies of the generated deformers
+ * ([RigGenerationFrames]); G and G' merge under those names ([RigGenerationFrames.named]), or every mesh would read as
+ * one the user re-parented and keep its old place. The checkpoint stores the generation as the generators made it.
  */
 internal object RigRegenerationCheckpoint {
 	/**
@@ -39,7 +43,8 @@ internal object RigRegenerationCheckpoint {
 			current.baseRig.primitiveSkins, base.resolvedPuppet(records.filter(ArtPrimitiveV2::isV2)), base.primitiveSkins, records)
 		if (PuppetIr.toIr(previous) == PuppetIr.toIr(seen)) return null
 		checkpoint()
-		val record = merged(previous, seen, current.authored, base, bindingKey, seen, checkpoint).record
+		val record = merged(RigGenerationFrames.named(previous, records), RigGenerationFrames.named(seen, records), current.authored, base,
+			bindingKey, seen, checkpoint).record
 		val journal = ArrayList<JsonObject>(after.authoringJournal).apply { add(boundary, record) }
 		return next.copy(rigEdits = after.copy(authoringJournal = journal))
 	}
@@ -67,7 +72,8 @@ internal object RigRegenerationCheckpoint {
 			replayOnPrevious = false)
 		if (PuppetIr.toIr(previous) == PuppetIr.toIr(now)) return null
 		checkpoint()
-		val merged = merged(previous, now, current.authored, base, bindingKey, base.resolvedPuppet(journal.filter(ArtPrimitiveV2::isV2)), checkpoint)
+		val merged = merged(RigGenerationFrames.named(previous, journal), RigGenerationFrames.named(now, journal), current.authored, base, bindingKey,
+			base.resolvedPuppet(journal.filter(ArtPrimitiveV2::isV2)), checkpoint)
 		return Update(current.config.copy(rigEdits = overlay.copy(authoringJournal = journal + merged.record)), merged.issues)
 	}
 

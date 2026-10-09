@@ -404,37 +404,64 @@ object RigRegeneration {
 				textureSourceId = pick(gd.textureSourceId, g2d.textureSourceId, md.textureSourceId, target, "textureSource"),
 				userData = pick(gd.userData, g2d.userData, md.userData, target, "userData"),
 			)
-			// Blend shapes: the user's own parameters stay; generated ones follow the three-way rule as a whole.
-			val generatedBlends = gd.blendShapes.mapTo(HashSet()) { it.parameterId }
-			val userBlends = md.blendShapes.filter { it.parameterId !in generatedBlends }
-			val generatedChanged = gi.shapes.filter { it.parameter in generatedBlends.map { p -> p.raw } } !=
-				mi.shapes.filter { it.parameter in generatedBlends.map { p -> p.raw } }
-			result = result.copy(blendShapes = (if (generatedChanged) md.blendShapes.filter { it.parameterId in generatedBlends } else g2d.blendShapes)
-				.filterNot { b -> userBlends.any { it.parameterId == b.parameterId } } + userBlends)
 			val parameters = frame.parameters.associateBy { it.id }
 			// Channels: the user's change on top of the new generated channels.
 			if (mi.channels != gi.channels) result = result.copy(channelGrids = if (g2i.channels == gi.channels) md.channelGrids else
 				PrimitiveResidual.composeChannels(parameters, result, PrimitiveResidual.channels(m, md, gd, checkpoint)))
-			// Geometry.
+			// Geometry, then the blend shapes in the space it ended in.
+			val geometry = mergeGeometry(frame, parameters, result, gd, g2d, md, gi, g2i, mi, migrations, userTopology)
+			return geometry.drawable.copy(blendShapes = mergeBlends(gd, g2d, md, gi, g2i, mi, geometry))
+		}
+
+		/**
+		 * A merged mesh's geometry and the space it is in: the user's parent and vertices ([user]), or the generators'.
+		 * [toNext] carries a delta from the user's space into the generators' (null: it cannot be carried); a delta
+		 * already in the result's space carries as it is.
+		 */
+		inner class Geometry(val drawable: Drawable, val user: Boolean, toNext: () -> ((FloatArray) -> FloatArray)?) {
+			val toNext by lazy(toNext)
+		}
+
+		fun mergeGeometry(frame: PuppetModel, parameters: Map<ParameterId, Parameter>, result: Drawable, gd: Drawable, g2d: Drawable, md: Drawable,
+		                  gi: io.github.psd2live.format.model.Mesh, g2i: io.github.psd2live.format.model.Mesh, mi: io.github.psd2live.format.model.Mesh,
+		                  migrations: MutableMap<DrawableId, Migration>, userTopology: MutableSet<DrawableId>): Geometry {
+			val target = "mesh:${gd.id.raw}"
+			val sameSpace = md.parentDeformerId == g2d.parentDeformerId && topology(md.mesh) == topology(g2d.mesh)
+			val unchanged: (FloatArray) -> FloatArray = { it }
+			// A delta in the user's space carried into the generators', the residual's way; null when it cannot be.
+			fun carrier(migration: Migration?): ((FloatArray) -> FloatArray)? = try {
+				val oldMesh = requireNotNull(md.mesh); val newMesh = requireNotNull(g2d.mesh)
+				val space = PrimitiveResidual.ParentSpace(m, md, frame.copy(drawables = listOf(g2d)), g2d,
+					if (migration == null) newMesh.positions else FloatArray(oldMesh.positions.size) { 0.5f })
+				val carry: (FloatArray) -> FloatArray = { values -> space.convert(values).let { moved -> migration?.let { PrimitiveResidual.transfer(moved, it.sources) } ?: moved } }
+				carry
+			} catch (failure: IllegalArgumentException) {
+				null
+			}
+			fun user(drawable: Drawable) = Geometry(drawable, true) { if (sameSpace) unchanged else null }
 			val userGeometry = mi.geometry != gi.geometry || mi.offsets != gi.offsets || mi.parent != gi.parent
-			if (!userGeometry) return result
+			if (!userGeometry) return Geometry(result, false) { when {
+				sameSpace -> unchanged
+				topology(md.mesh) == topology(g2d.mesh) -> carrier(null)
+				else -> migration(gd, g2d)?.let(::carrier)
+			} }
 			if (md.parentDeformerId != gd.parentDeformerId) {
 				if (g2i.geometry != gi.geometry || g2i.offsets != gi.offsets || g2i.parent != gi.parent)
 					issue(IssueKind.CONFLICT, target, "the user re-parented it; the generators' geometry is not applied")
-				return result.copy(parentDeformerId = md.parentDeformerId, mesh = md.mesh, geometryGrid = md.geometryGrid)
+				return user(result.copy(parentDeformerId = md.parentDeformerId, mesh = md.mesh, geometryGrid = md.geometryGrid))
 			}
 			if (topology(md.mesh) != topology(gd.mesh)) {
 				userTopology += gd.id
 				if (topology(g2d.mesh) != topology(gd.mesh) || g2i.parent != gi.parent) issue(IssueKind.TOPOLOGY_KEPT, target)
-				return result.copy(parentDeformerId = md.parentDeformerId, mesh = md.mesh, geometryGrid = md.geometryGrid)
+				return user(result.copy(parentDeformerId = md.parentDeformerId, mesh = md.mesh, geometryGrid = md.geometryGrid))
 			}
 			if (g2i.geometry == gi.geometry && g2i.offsets == gi.offsets && g2i.parent == gi.parent)
-				return result.copy(mesh = md.mesh, geometryGrid = md.geometryGrid)
+				return user(result.copy(mesh = md.mesh, geometryGrid = md.geometryGrid))
 			val oldMesh = requireNotNull(md.mesh); val newMesh = requireNotNull(g2d.mesh)
 			val migration = if (topology(newMesh) == topology(oldMesh)) null else migration(gd, g2d)
 			if (topology(newMesh) != topology(oldMesh) && migration == null) {
 				issue(IssueKind.CONFLICT, target, "the generators replaced its vertices and they could not be matched; the user's geometry is not applied")
-				return result
+				return Geometry(result, false) { null }
 			}
 			migration?.let { migrations[gd.id] = it; issue(IssueKind.TOPOLOGY_MIGRATED, target) }
 			if (g2d.parentDeformerId != gd.parentDeformerId) issue(IssueKind.REPARENTED, target, g2d.parentDeformerId?.raw.orEmpty())
@@ -446,11 +473,54 @@ object RigRegeneration {
 				val restMoved = space.convert(rest).let { moved -> FloatArray(moved.size) { -moved[it] } }
 				val newRest = carried(restMoved).let { d -> FloatArray(newMesh.positions.size) { newMesh.positions[it] + d[it] } }
 				val residual = PrimitiveResidual.carry(PrimitiveResidual.delta(m, md, g, gd, null, checkpoint)) { carried(space.convert(it)) }
-				result.copy(mesh = DrawableMesh(newRest, newMesh.uvs, newMesh.indices),
-					geometryGrid = sum(parameters, g2d.geometryGrid, residual, newMesh.positions.size))
+				Geometry(result.copy(mesh = DrawableMesh(newRest, newMesh.uvs, newMesh.indices),
+					geometryGrid = sum(parameters, g2d.geometryGrid, residual, newMesh.positions.size)), false) {
+					if (sameSpace) unchanged else { values -> carried(space.convert(values)) }
+				}
 			} catch (failure: IllegalArgumentException) {
 				issue(IssueKind.CONFLICT, target, "the user's geometry could not be moved into the new parent: ${failure.message}")
-				result
+				Geometry(result, false) { null }
+			}
+		}
+
+		/**
+		 * The blend shapes of a merged mesh, parameter by parameter: one the user left follows G', one the generators left
+		 * keeps the user's, one both changed keeps the user's; the user's own stay and the generators' new ones arrive.
+		 * A shape's deltas are in its mesh's parent space and on its vertices, so each must be in [geometry]'s: in the
+		 * generators' space the user's are carried there, and in the user's a generated shape made in another space is not
+		 * applied (the user's stays, if any) - its deltas there would throw the vertices across the canvas.
+		 */
+		fun mergeBlends(gd: Drawable, g2d: Drawable, md: Drawable, gi: io.github.psd2live.format.model.Mesh,
+		                g2i: io.github.psd2live.format.model.Mesh, mi: io.github.psd2live.format.model.Mesh, geometry: Geometry): List<BlendShapeBinding<MeshForm>> {
+			val target = "mesh:${gd.id.raw}"
+			val irG = gi.shapes.associateBy { it.parameter }; val irG2 = g2i.shapes.associateBy { it.parameter }; val irM = mi.shapes.associateBy { it.parameter }
+			val byG2 = g2d.blendShapes.associateBy { it.parameterId }; val byM = md.blendShapes.associateBy { it.parameterId }
+			val size = geometry.drawable.mesh?.positions?.size
+			// Each side's binding in the result's space; null when it cannot be put there.
+			fun generated(binding: BlendShapeBinding<MeshForm>) = binding.takeIf { !geometry.user || geometry.toNext != null }
+			fun authored(binding: BlendShapeBinding<MeshForm>): BlendShapeBinding<MeshForm>? = if (geometry.user) binding else
+				geometry.toNext?.let { carry -> binding.copy(forms = binding.forms.map { form ->
+					form?.let { MeshForm(carry(it.positionDeltas), it.drawOrder, it.opacity, it.multiplyColor, it.screenColor) }
+				}) }
+			val ids = (g2d.blendShapes.map { it.parameterId } + md.blendShapes.map { it.parameterId }).distinct()
+			return ids.mapNotNull { id ->
+				val gv = irG[id.raw]; val g2v = irG2[id.raw]; val mv = irM[id.raw]
+				// Whose version the three-way rule keeps: the user's (true), the generators' (false), or neither (null).
+				val users = when {
+					gv != null && g2v != null && mv != null -> when {
+						mv == gv -> false
+						g2v == gv || mv == g2v -> true
+						else -> { issue(IssueKind.CONFLICT, target, "blend shape ${id.raw}"); true }
+					}
+					gv != null && mv == null -> null // the user deleted it
+					gv != null -> if (mv != gv) true else null // the generators dropped it; the user's change stays
+					g2v != null -> { if (mv != null) issue(IssueKind.CONFLICT, target, "blend shape ${id.raw} added by both"); mv != null }
+					else -> true
+				} ?: return@mapNotNull null
+				val chosen = if (users) byM[id]?.let(::authored) ?: byG2[id]?.let(::generated)
+					else byG2[id]?.let(::generated) ?: byM[id]?.let(::authored)
+				if (chosen == null) issue(IssueKind.DROPPED, target, "blend shape ${id.raw}: made in another parent space")
+				chosen?.takeIf { binding -> binding.forms.all { it == null || it.positionDeltas.size == size } }
 			}
 		}
 

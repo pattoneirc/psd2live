@@ -16,9 +16,25 @@ internal object RigGenerationFrames {
                         val previousProjection: PuppetModel, val desiredProjection: PuppetModel,
                         val meshTransforms: Map<String, (FloatArray) -> FloatArray>)
 
-    fun previousIds(overlay: RigEditOverlay): Map<DeformerId, DeformerId> = overlay.authoringJournal.lastOrNull {
+    fun previousIds(overlay: RigEditOverlay): Map<DeformerId, DeformerId> = ids(overlay.authoringJournal)
+
+    /** The names the last frames entry of [journal] gave the generated deformers, by generated id; empty without one. */
+    fun ids(journal: List<JsonObject>): Map<DeformerId, DeformerId> = journal.lastOrNull {
         it["op"]?.jsonPrimitive?.contentOrNull == OP
     }?.getValue("frames")?.jsonObject?.map { (id, value) -> DeformerId(id) to DeformerId(value.jsonPrimitive.content) }?.toMap().orEmpty()
+
+    /**
+     * [generated] - a rig as the generators make it - with its deformers under the names [journal]'s last frames entry gave
+     * them, as the authored rig holds them: the generated frames' copies the meshes hang from. Deformers the entry did
+     * not name (one a later generator adds) keep their ids and hang from the renamed ones.
+     */
+    fun named(generated: PuppetModel, journal: List<JsonObject>): PuppetModel {
+        val ids = ids(journal)
+        if (ids.isEmpty()) return generated
+        fun id(deformer: DeformerId?) = deformer?.let { ids[it] ?: it }
+        return generated.copy(deformers = generated.deformers.map { parent(it, id(it.parent), id(it.id)!!) },
+            drawables = generated.drawables.map { it.copy(parentDeformerId = id(it.parentDeformerId)) })
+    }
 
     fun prepare(input: PuppetModel, previous: PuppetModel, desired: PuppetModel, savedIds: Map<DeformerId, DeformerId>,
                 epoch: Int, checkpoint: () -> Unit): Prepared {
